@@ -1,5 +1,4 @@
-
-name: Release Windows EXE
+name: Release Windows Installer
 
 on:
   push:
@@ -27,18 +26,47 @@ jobs:
       - run: flutter pub get
       - run: flutter build windows --release
 
-      - name: Package release as ZIP
+      - name: Resolve build output path
+        id: paths
         shell: pwsh
         run: |
           $src = "build\windows\x64\runner\Release"
           if (-not (Test-Path $src)) { $src = "build\windows\runner\Release" }
-          Write-Host "Packaging from: $src"
+          if (-not (Test-Path $src)) { throw "Could not find Flutter Windows build output." }
+          Write-Host "Build output: $src"
+          "BUILD_SRC=$src" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          if ([string]::IsNullOrWhiteSpace($version)) { $version = "0.0.0" }
+          Write-Host "Version: $version"
+          "APP_VERSION=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Package portable ZIP
+        shell: pwsh
+        run: |
+          $src = "${{ steps.paths.outputs.BUILD_SRC }}"
           Compress-Archive -Path "$src\*" -DestinationPath "naboo-windows.zip" -Force
           Get-ChildItem naboo-windows.zip | Format-List
 
-      - name: Create GitHub Release with Windows ZIP
+      - name: Build Inno Setup installer
+        shell: pwsh
+        run: |
+          $iscc = "$env:ProgramFiles (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            Write-Host "Inno Setup not found in default path; installing via Chocolatey..."
+            choco install innosetup -y --no-progress
+            $iscc = "$env:ProgramFiles (x86)\Inno Setup 6\ISCC.exe"
+          }
+          if (-not (Test-Path $iscc)) { throw "Inno Setup compiler (ISCC.exe) not found." }
+          $version = "${{ steps.paths.outputs.APP_VERSION }}"
+          $src = "${{ steps.paths.outputs.BUILD_SRC }}"
+          & $iscc "/DMyAppVersion=$version" "/DBuildSrc=$src" "/OOutput" "windows\installer\naboo-setup.iss"
+          Get-ChildItem Output | Format-List
+          Copy-Item "Output\naboo-windows-setup.exe" -Destination "naboo-windows-setup.exe" -Force
+
+      - name: Create GitHub Release with Windows artifacts
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           files: |
+            naboo-windows-setup.exe
             naboo-windows.zip
