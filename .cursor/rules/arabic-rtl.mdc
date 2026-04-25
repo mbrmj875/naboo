@@ -1,0 +1,59 @@
+---
+description: Arabic language and RTL conventions for this Flutter app
+alwaysApply: true
+---
+
+# Arabic & RTL Conventions
+
+This app's primary locale is `ar_SA`. All user-facing strings must be in Arabic, and all layouts must work correctly under RTL (right-to-left) directionality.
+
+## User-Facing Strings
+
+- Write every user-visible string in Arabic. No English UI text.
+- Keep debug/log messages and code identifiers (class, method, variable names) in English.
+
+```dart
+// BAD
+Text('Save')
+Text('Customer Name')
+
+// GOOD
+Text('حفظ')
+Text('اسم العميل')
+```
+
+## RTL-Safe Layout
+
+- Use logical directional properties instead of left/right.
+  - `EdgeInsetsDirectional` instead of `EdgeInsets.only(left/right: ...)`
+  - `AlignmentDirectional.centerStart/centerEnd` instead of `Alignment.centerLeft/centerRight`
+  - `PositionedDirectional` instead of `Positioned` when using `left`/`right`.
+  - `BorderRadiusDirectional` when the radius is side-specific.
+- Prefer `start`/`end` params in widgets (e.g., `Padding(padding: EdgeInsetsDirectional.only(start: 8))`).
+- Use `TextAlign.start` / `TextAlign.end` instead of `left` / `right`.
+- Do NOT wrap widgets in `Directionality(textDirection: TextDirection.ltr)` unless the content is inherently LTR (e.g., rendering a raw phone number, IBAN, barcode, or code snippet).
+
+```dart
+// BAD
+Padding(padding: EdgeInsets.only(left: 16), child: ...)
+Align(alignment: Alignment.centerLeft, child: ...)
+
+// GOOD
+Padding(padding: EdgeInsetsDirectional.only(start: 16), child: ...)
+Align(alignment: AlignmentDirectional.centerStart, child: ...)
+```
+
+## Icons
+
+- Use directional icon variants (`Icons.arrow_back_ios` → prefer `Icons.arrow_back_ios_new` only when non-directional; otherwise use `Icons.arrow_forward` so Flutter mirrors it under RTL automatically when the icon supports it).
+- For chevrons/arrows that must follow reading direction, rely on Flutter's auto-mirroring rather than hardcoding left/right.
+
+## Numbers, Dates, Currency
+
+- Display numbers using Western digits (0-9) unless the user explicitly requests Arabic-Indic digits.
+- Format currency and dates via `intl` with locale `ar_SA` when formatting is needed; never concatenate strings manually.
+
+## Do Not
+
+- Do NOT add new `supportedLocales` or change the app `locale` away from `ar_SA` without an explicit request.
+- Do NOT introduce hardcoded `TextDirection.ltr` at the screen or app level.

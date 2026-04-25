@@ -1,0 +1,104 @@
+name: naboo
+description: "Basra Store Manager — نظام إدارة متاجر البصرة"
+publish_to: 'none'
+version: 2.0.1
+
+environment:
+  sdk: ^3.11.4
+
+dependencies:
+  auto_size_text: ^3.0.0
+  flutter:
+    sdk: flutter
+
+  # Localization
+  flutter_localizations:
+    sdk: flutter
+
+  flutter_reorderable_grid_view: ^5.6.0
+  # UI
+  cupertino_icons: ^1.0.8
+
+  # Database & storage
+  sqflite: ^2.3.0
+  path: ^1.8.3
+  path_provider: ^2.1.2
+  shared_preferences: ^2.2.0
+  image_picker: ^1.0.7
+
+  # State management
+  provider: ^6.1.1
+
+  # Utilities
+  intl: ^0.20.2
+  crypto: ^3.0.6
+  app_links: ^6.3.3
+  archive: ^4.0.7
+
+  # Printing & barcode
+  printing: ^5.11.1
+  barcode: ^2.2.4
+  barcode_widget: ^2.0.4
+  mobile_scanner: ^7.2.0
+  google_fonts: ^8.0.2
+  pdf: ^3.12.0
+  device_info_plus: ^13.0.0
+  package_info_plus: ^10.1.0
+  http: ^1.6.0
+  supabase_flutter: ^2.9.1
+  audioplayers: ^6.1.0
+
+  # إشعارات شريط النظام على Android (وما يعادلها لاحقاً على iOS).
+  flutter_local_notifications: ^19.0.0
+
+  # مطلوب لـ lib/firebase_options.dart (FlutterFire)؛ التهيئة الفعلية اختيارية في main.
+  firebase_core: ^3.8.0
+  url_launcher: ^6.3.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.4
+  flutter_native_splash: ^2.4.6
+
+flutter_native_splash:
+  color: "#071A36"
+  image: assets/images/logo.png
+  android: true
+  ios: true
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/images/logo.png
+    - assets/images/app_icon.png
+    - assets/images/splash_bg.png
+    - assets/images/splash_logo_mark.png
+    - assets/sounds/stamp_sound.mp3
+  fonts:
+    - family: Tajawal
+      fonts:
+        - asset: assets/fonts/Tajawal-Regular.ttf
+        - asset: assets/fonts/Tajawal-Bold.ttf
+          weight: 700
+    - family: NotoNaskhArabic
+      fonts:
+        - asset: assets/fonts/NotoNaskhArabic-Regular.ttf
+        - asset: assets/fonts/NotoNaskhArabic-Bold.ttf
+          weight: 700
+
+flutter_launcher_icons:
+  android: "launcher_icon"
+  ios: true
+  image_path: "assets/images/app_icon.png"
+  remove_alpha_ios: true
+  min_sdk_android: 21
+  web:
+    generate: false
+  windows:
+    generate: true
+    image_path: "assets/images/app_icon.png"
+  macos:
+    generate: true
+    image_path: "assets/images/app_icon.png"

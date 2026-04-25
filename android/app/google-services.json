@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "201331038467",
+    "project_id": "naboo-m",
+    "storage_bucket": "naboo-m.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:201331038467:android:d59414d912d42bb8703136",
+        "android_client_info": {
+          "package_name": "com.yourdomain.your_app_name"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBJb21mA_icY3P0ykAhajKcfiLBRapgpYE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

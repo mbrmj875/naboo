@@ -1,0 +1,757 @@
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:device_info_plus/device_info_plus.dart';
+import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+
+// ── إعداد Supabase ────────────────────────────────────────────────────────────
+abstract class _Supabase {
+  static const url = 'https://rkofqwcuvbzrnmelvxhz.supabase.co';
+  static const key =
+      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJrb2Zxd2N1dmJ6cm5tZWx2eGh6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYzNDEyNjksImV4cCI6MjA5MTkxNzI2OX0.F5x59dpqtEqQn_MrxA7S07qw6HH136ZMW_P7nfgGFkQ';
+
+  static Map<String, String> get headers => {
+    'apikey': key,
+    'Authorization': 'Bearer $key',
+    'Content-Type': 'application/json',
+  };
+}
+
+// ── خطط الاشتراك ─────────────────────────────────────────────────────────────
+
+class SubscriptionPlan {
+  const SubscriptionPlan({
+    required this.key,
+    required this.nameAr,
+    required this.priceIQD,
+    required this.maxDevices,
+    required this.features,
+  });
+
+  final String key;
+  final String nameAr;
+  final int priceIQD;
+  final int maxDevices;
+  final List<String> features;
+
+  bool get isUnlimited => maxDevices == 0;
+
+  String get devicesLabel =>
+      isUnlimited ? 'أجهزة غير محدودة' : '$maxDevices أجهزة';
+
+  String get priceLabel => '${_fmt(priceIQD)} د.ع / شهر';
+
+  static String _fmt(int p) {
+    final s = p.toString();
+    final b = StringBuffer();
+    for (var i = 0; i < s.length; i++) {
+      if (i > 0 && (s.length - i) % 3 == 0) b.write(',');
+      b.write(s[i]);
+    }
+    return b.toString();
+  }
+
+  static const basic = SubscriptionPlan(
+    key: 'basic',
+    nameAr: 'الأساسية',
+    priceIQD: 15000,
+    maxDevices: 2,
+    features: [
+      'جهازان على نفس الحساب',
+      'جميع ميزات المخزون والفواتير',
+      'التقارير والتحليلات',
+      'دعم فني',
+    ],
+  );
+
+  static const pro = SubscriptionPlan(
+    key: 'pro',
+    nameAr: 'الاحترافية',
+    priceIQD: 30000,
+    maxDevices: 3,
+    features: [
+      '3 أجهزة على نفس الحساب',
+      'جميع ميزات الخطة الأساسية',
+      'أوامر الشراء وإدارة الموردين',
+      'تقارير متقدمة',
+      'أولوية في الدعم الفني',
+    ],
+  );
+
+  static const unlimited = SubscriptionPlan(
+    key: 'unlimited',
+    nameAr: 'غير المحدودة',
+    priceIQD: 50000,
+    maxDevices: 0,
+    features: [
+      'أجهزة غير محدودة على حساب واحد',
+      'جميع ميزات الخطة الاحترافية',
+      'متعدد الفروع',
+      'أولوية قصوى في الدعم',
+    ],
+  );
+
+  static const all = [basic, pro, unlimited];
+
+  static SubscriptionPlan fromKey(String? k) => switch (k) {
+    'basic' => basic,
+    'pro' => pro,
+    'unlimited' => unlimited,
+    _ => basic,
+  };
+}
+
+// ── مفاتيح الكاش ─────────────────────────────────────────────────────────────
+
+abstract class _Prefs {
+  static const licenseKey = 'lic.key';
+  static const deviceId = 'lic.device_id';
+  static const status = 'lic.status';
+  static const expiresAt = 'lic.expires_at';
+  static const lastCheckAt = 'lic.last_check';
+  static const businessName = 'lic.business_name';
+  static const trialEndsAt = 'lic.trial_ends_at';
+  static const localTrialStartAt = 'lic.local_trial_start_at';
+  static const useCloudTrial = 'lic.use_cloud_trial';
+  static const planKey = 'lic.plan';
+  static const maxDevices = 'lic.max_devices';
+  static const deviceCount = 'lic.device_count';
+}
+
+// ── حالة الترخيص ─────────────────────────────────────────────────────────────
+
+enum LicenseStatus {
+  trial,
+  active,
+  expired,
+  suspended,
+  none,
+  checking,
+  offline,
+}
+
+class LicenseState {
+  const LicenseState({
+    required this.status,
+    this.businessName,
+    this.expiresAt,
+    this.trialEndsAt,
+    this.daysLeft,
+    this.message,
+    this.plan,
+    this.registeredDeviceCount = 0,
+    this.maxDevices = 1,
+  });
+
+  final LicenseStatus status;
+  final String? businessName;
+  final DateTime? expiresAt;
+  final DateTime? trialEndsAt;
+  final int? daysLeft;
+  final String? message;
+  final SubscriptionPlan? plan;
+  final int registeredDeviceCount;
+  final int maxDevices;
+
+  bool get isAllowed =>
+      status == LicenseStatus.trial || status == LicenseStatus.active;
+  bool get isUnlimited => maxDevices == 0;
+  String get devicesInfo => isUnlimited
+      ? 'أجهزة غير محدودة'
+      : '$registeredDeviceCount / $maxDevices جهاز';
+
+  static const none = LicenseState(status: LicenseStatus.none);
+  static const checking = LicenseState(status: LicenseStatus.checking);
+}
+
+// ── الخدمة الرئيسية ───────────────────────────────────────────────────────────
+
+class LicenseService extends ChangeNotifier {
+  LicenseService._();
+  static final LicenseService instance = LicenseService._();
+
+  LicenseState _state = LicenseState.checking;
+  LicenseState get state => _state;
+  String? _cachedDeviceId;
+
+  // ── تهيئة ─────────────────────────────────────────────────────────────────
+
+  Future<void> initialize() => checkLicense();
+
+  // ── معرّف الجهاز ──────────────────────────────────────────────────────────
+
+  Future<String> getDeviceId() async {
+    if (_cachedDeviceId != null) return _cachedDeviceId!;
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getString(_Prefs.deviceId);
+    if (saved != null && saved.isNotEmpty) {
+      _cachedDeviceId = saved;
+      return saved;
+    }
+    String id = 'unknown-${DateTime.now().millisecondsSinceEpoch}';
+    try {
+      final p = DeviceInfoPlugin();
+      if (Platform.isMacOS) {
+        final i = await p.macOsInfo;
+        id = '${i.hostName}-${i.model}-${i.systemGUID ?? i.computerName}';
+      } else if (Platform.isAndroid) {
+        id = (await p.androidInfo).id;
+      } else if (Platform.isIOS) {
+        final i = await p.iosInfo;
+        id = i.identifierForVendor ?? i.name;
+      } else if (Platform.isWindows) {
+        id = (await p.windowsInfo).deviceId;
+      } else if (kIsWeb) {
+        id = 'web-${DateTime.now().millisecondsSinceEpoch}';
+      }
+    } catch (_) {}
+    id = id.replaceAll(RegExp(r'[^a-zA-Z0-9\-_]'), '-').toLowerCase();
+    if (id.length > 64) id = id.substring(0, 64);
+    _cachedDeviceId = id;
+    await prefs.setString(_Prefs.deviceId, id);
+    return id;
+  }
+
+  Future<String> getDeviceName() async {
+    try {
+      final p = DeviceInfoPlugin();
+      if (Platform.isMacOS) {
+        final i = await p.macOsInfo;
+        return '${i.model} (${i.computerName})';
+      } else if (Platform.isAndroid) {
+        final i = await p.androidInfo;
+        return '${i.brand} ${i.model}';
+      } else if (Platform.isIOS) {
+        final i = await p.iosInfo;
+        return '${i.name} (${i.model})';
+      } else if (Platform.isWindows) {
+        return (await p.windowsInfo).computerName;
+      }
+    } catch (_) {}
+    return 'Unknown Device';
+  }
+
+  // ── Supabase REST API ─────────────────────────────────────────────────────
+
+  Future<Map<String, dynamic>?> _fetchLicense(String key) async {
+    final uri = Uri.parse(
+      '${_Supabase.url}/rest/v1/licenses'
+      '?license_key=eq.${Uri.encodeComponent(key)}'
+      '&select=*',
+    );
+    final res = await http
+        .get(uri, headers: _Supabase.headers)
+        .timeout(const Duration(seconds: 12));
+    if (res.statusCode != 200) return null;
+    final list = jsonDecode(res.body) as List;
+    return list.isEmpty ? null : list.first as Map<String, dynamic>;
+  }
+
+  Future<void> _patchLicense(String key, Map<String, dynamic> data) async {
+    final uri = Uri.parse(
+      '${_Supabase.url}/rest/v1/licenses'
+      '?license_key=eq.${Uri.encodeComponent(key)}',
+    );
+    await http
+        .patch(
+          uri,
+          headers: {..._Supabase.headers, 'Prefer': 'return=minimal'},
+          body: jsonEncode(data),
+        )
+        .timeout(const Duration(seconds: 12));
+  }
+
+  // ── التحقق من الترخيص ─────────────────────────────────────────────────────
+
+  Future<void> checkLicense({bool forceRemote = false}) async {
+    _setState(LicenseState.checking);
+    final prefs = await SharedPreferences.getInstance();
+    final savedKey = prefs.getString(_Prefs.licenseKey);
+    if (savedKey == null || savedKey.isEmpty) {
+      _setState(_resolveLocalTrialState(prefs));
+      return;
+    }
+
+    final lastMs = prefs.getInt(_Prefs.lastCheckAt) ?? 0;
+    final since = DateTime.now().millisecondsSinceEpoch - lastMs;
+    final cacheValid = since < const Duration(hours: 1).inMilliseconds;
+
+    if (!forceRemote && cacheValid) {
+      final cached = await _loadFromCache(prefs);
+      if (cached != null) {
+        _setState(cached);
+        return;
+      }
+    }
+
+    try {
+      final data = await _fetchLicense(savedKey.trim().toUpperCase());
+      if (data == null) {
+        _setState(
+          const LicenseState(
+            status: LicenseStatus.none,
+            message: 'مفتاح الترخيص غير صالح',
+          ),
+        );
+        await prefs.remove(_Prefs.licenseKey);
+        return;
+      }
+
+      final deviceId = await getDeviceId();
+      final maxDev = (data['max_devices'] as num?)?.toInt() ?? 2;
+      final regDevices =
+          (data['registered_devices'] as Map?)?.cast<String, dynamic>() ?? {};
+      final isUnlimited = maxDev == 0;
+      final isRegistered = regDevices.containsKey(deviceId);
+
+      if (!isRegistered && !isUnlimited && regDevices.length >= maxDev) {
+        _setState(
+          LicenseState(
+            status: LicenseStatus.suspended,
+            plan: SubscriptionPlan.fromKey(data['plan'] as String?),
+            maxDevices: maxDev,
+            registeredDeviceCount: regDevices.length,
+            message:
+                'وصلت الحد الأقصى للأجهزة ($maxDev) في خطتك. رقِّ خطتك لإضافة أجهزة.',
+          ),
+        );
+        return;
+      }
+
+      final result = await _resolveState(
+        data,
+        savedKey,
+        prefs,
+        deviceId,
+        regDevices,
+      );
+      await _saveToCache(prefs, result, savedKey);
+      _setState(result);
+    } catch (_) {
+      final cached = await _loadFromCache(prefs);
+      _setState(
+        cached ??
+            const LicenseState(
+              status: LicenseStatus.offline,
+              message: 'لا يوجد اتصال بالإنترنت.',
+            ),
+      );
+    }
+  }
+
+  /// حساب الأيام المتبقية بشكل يوم كامل تقريبًا (لا يظهر «0» بينما لا يزال هناك وقت في نفس اليوم).
+  static int trialDaysLeftCalendar(DateTime trialEnd, DateTime now) {
+    if (!now.isBefore(trialEnd)) return 0;
+    final ms = trialEnd.millisecondsSinceEpoch - now.millisecondsSinceEpoch;
+    return ((ms + 86400000 - 1) ~/ 86400000).clamp(0, 9999);
+  }
+
+  LicenseState _stateFromTrialEndLocal(DateTime trialEnd, {required bool cloud}) {
+    final now = DateTime.now();
+    if (!now.isBefore(trialEnd)) {
+      return LicenseState(
+        status: LicenseStatus.expired,
+        trialEndsAt: trialEnd,
+        plan: SubscriptionPlan.basic,
+        maxDevices: SubscriptionPlan.basic.maxDevices,
+        registeredDeviceCount: 1,
+        message: 'انتهت التجربة المجانية (15 يوم). اختر خطة اشتراك للمتابعة.',
+      );
+    }
+    return LicenseState(
+      status: LicenseStatus.trial,
+      trialEndsAt: trialEnd,
+      daysLeft: trialDaysLeftCalendar(trialEnd, now).clamp(0, 15),
+      plan: SubscriptionPlan.basic,
+      maxDevices: SubscriptionPlan.basic.maxDevices,
+      registeredDeviceCount: 1,
+      message: cloud
+          ? 'تجربة مجانية 15 يوم من أول تسجيل Google لهذا الحساب (موحّدة لكل الأجهزة).'
+          : 'تجربة مجانية مفعلة لمدة 15 يوم من أول استخدام لهذا الجهاز.',
+    );
+  }
+
+  LicenseState _resolveLocalTrialState(SharedPreferences prefs) {
+    final useCloud = prefs.getBool(_Prefs.useCloudTrial) ?? false;
+    final endMs = prefs.getInt(_Prefs.trialEndsAt);
+    if (useCloud && endMs != null) {
+      final trialEnd = DateTime.fromMillisecondsSinceEpoch(endMs);
+      return _stateFromTrialEndLocal(trialEnd, cloud: true);
+    }
+
+    final trialStartMs =
+        prefs.getInt(_Prefs.localTrialStartAt) ??
+        DateTime.now().millisecondsSinceEpoch;
+    if (!prefs.containsKey(_Prefs.localTrialStartAt)) {
+      prefs.setInt(_Prefs.localTrialStartAt, trialStartMs);
+    }
+
+    final trialStart = DateTime.fromMillisecondsSinceEpoch(trialStartMs);
+    final trialEnd = trialStart.add(const Duration(days: 15));
+
+    return _stateFromTrialEndLocal(trialEnd, cloud: false);
+  }
+
+  /// بعد تسجيل Google: تاريخ بداية التجربة في `profiles.trial_started_at` (نفسه لكل الأجهزة).
+  ///
+  /// مهم: لا نستخدم `upsert` بحقول جزئية فقط — في PostgreSQL قد يصفّر ذلك
+  /// أعمدة أخرى مثل `trial_started_at` فيُعاد احتساب الـ 15 يوماً عند كل تسجيل دخول.
+  Future<void> applyTrialFromSupabaseProfile() async {
+    final user = Supabase.instance.client.auth.currentUser;
+    if (user == null) {
+      await ensureLocalTrialStarted();
+      return;
+    }
+    try {
+      final client = Supabase.instance.client;
+      var row = await client
+          .from('profiles')
+          .select('trial_started_at')
+          .eq('id', user.id)
+          .maybeSingle();
+
+      if (row == null) {
+        final nowIso = DateTime.now().toUtc().toIso8601String();
+        await client.from('profiles').insert({
+          'id': user.id,
+          'email': user.email,
+          'trial_started_at': nowIso,
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        });
+      } else {
+        await client.from('profiles').update({
+          'email': user.email,
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        }).eq('id', user.id);
+      }
+
+      row = await client
+          .from('profiles')
+          .select('trial_started_at')
+          .eq('id', user.id)
+          .maybeSingle();
+      dynamic ts = row?['trial_started_at'];
+      if (ts == null || ts.toString().isEmpty) {
+        final nowIso = DateTime.now().toUtc().toIso8601String();
+        await client.from('profiles').update({
+          'trial_started_at': nowIso,
+        }).eq('id', user.id);
+        ts = nowIso;
+      }
+      final start = DateTime.parse(ts.toString()).toUtc();
+      final endUtc = start.add(const Duration(days: 15));
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_Prefs.useCloudTrial, true);
+      await prefs.setInt(_Prefs.trialEndsAt, endUtc.millisecondsSinceEpoch);
+      await prefs.remove(_Prefs.localTrialStartAt);
+      _setState(_stateFromTrialEndLocal(endUtc.toLocal(), cloud: true));
+    } catch (_) {
+      await ensureLocalTrialStarted();
+    }
+  }
+
+  Future<void> ensureLocalTrialStarted() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_Prefs.useCloudTrial, false);
+    if (!prefs.containsKey(_Prefs.localTrialStartAt)) {
+      await prefs.setInt(
+        _Prefs.localTrialStartAt,
+        DateTime.now().millisecondsSinceEpoch,
+      );
+    }
+    if ((prefs.getString(_Prefs.licenseKey) ?? '').isEmpty) {
+      _setState(_resolveLocalTrialState(prefs));
+    }
+  }
+
+  Future<LicenseState> _resolveState(
+    Map<String, dynamic> data,
+    String licenseKey,
+    SharedPreferences prefs,
+    String deviceId,
+    Map<String, dynamic> regDevices,
+  ) async {
+    final status = (data['status'] as String?) ?? 'none';
+    final businessName = (data['business_name'] as String?) ?? '';
+    final plan = SubscriptionPlan.fromKey(data['plan'] as String?);
+    final maxDev = (data['max_devices'] as num?)?.toInt() ?? plan.maxDevices;
+    final isRegistered = regDevices.containsKey(deviceId);
+
+    // تسجيل الجهاز إذا جديد
+    if (!isRegistered) {
+      final deviceName = await getDeviceName();
+      final updated = Map<String, dynamic>.from(regDevices);
+      updated[deviceId] = {
+        'name': deviceName,
+        'registered_at': DateTime.now().toIso8601String(),
+        'last_seen_at': DateTime.now().toIso8601String(),
+      };
+      await _patchLicense(licenseKey, {'registered_devices': updated});
+    } else {
+      final updated = Map<String, dynamic>.from(regDevices);
+      if (updated[deviceId] is Map) {
+        (updated[deviceId] as Map)['last_seen_at'] = DateTime.now()
+            .toIso8601String();
+      }
+      await _patchLicense(licenseKey, {'registered_devices': updated});
+    }
+
+    final deviceCount = regDevices.length + (isRegistered ? 0 : 1);
+
+    switch (status) {
+      case 'suspended':
+        return LicenseState(
+          status: LicenseStatus.suspended,
+          businessName: businessName,
+          plan: plan,
+          maxDevices: maxDev,
+          registeredDeviceCount: deviceCount,
+          message: 'تم إيقاف الترخيص. تواصل مع الدعم.',
+        );
+
+      case 'expired':
+        return LicenseState(
+          status: LicenseStatus.expired,
+          businessName: businessName,
+          plan: plan,
+          maxDevices: maxDev,
+          registeredDeviceCount: deviceCount,
+          message: 'انتهى الاشتراك. جدّد للمتابعة.',
+        );
+
+      case 'trial':
+        {
+          final trialDays = (data['trial_days'] as num?)?.toInt() ?? 15;
+          String? trialStartedAtStr = data['trial_started_at'] as String?;
+          if (trialStartedAtStr == null || trialStartedAtStr.isEmpty) {
+            trialStartedAtStr = DateTime.now().toIso8601String();
+            await _patchLicense(licenseKey, {
+              'trial_started_at': trialStartedAtStr,
+            });
+          }
+          final trialStart = DateTime.parse(trialStartedAtStr);
+          final trialEnd = trialStart.add(Duration(days: trialDays));
+          final now = DateTime.now();
+          if (now.isAfter(trialEnd)) {
+            await _patchLicense(licenseKey, {'status': 'expired'});
+            return LicenseState(
+              status: LicenseStatus.expired,
+              businessName: businessName,
+              plan: plan,
+              maxDevices: maxDev,
+              registeredDeviceCount: deviceCount,
+              trialEndsAt: trialEnd,
+              message: 'انتهت فترة التجربة.',
+            );
+          }
+          return LicenseState(
+            status: LicenseStatus.trial,
+            businessName: businessName,
+            plan: plan,
+            maxDevices: maxDev,
+            registeredDeviceCount: deviceCount,
+            trialEndsAt: trialEnd,
+            daysLeft: trialDaysLeftCalendar(trialEnd, now).clamp(0, trialDays),
+          );
+        }
+
+      case 'active':
+        {
+          final expiresAtStr = data['expires_at'] as String?;
+          if (expiresAtStr == null || expiresAtStr.isEmpty) {
+            return LicenseState(
+              status: LicenseStatus.active,
+              businessName: businessName,
+              plan: plan,
+              maxDevices: maxDev,
+              registeredDeviceCount: deviceCount,
+            );
+          }
+          final expiresAt = DateTime.parse(expiresAtStr);
+          final now = DateTime.now();
+          if (now.isAfter(expiresAt)) {
+            await _patchLicense(licenseKey, {'status': 'expired'});
+            return LicenseState(
+              status: LicenseStatus.expired,
+              businessName: businessName,
+              plan: plan,
+              maxDevices: maxDev,
+              registeredDeviceCount: deviceCount,
+              expiresAt: expiresAt,
+            );
+          }
+          return LicenseState(
+            status: LicenseStatus.active,
+            businessName: businessName,
+            plan: plan,
+            maxDevices: maxDev,
+            registeredDeviceCount: deviceCount,
+            expiresAt: expiresAt,
+            daysLeft: expiresAt.difference(now).inDays,
+          );
+        }
+
+      default:
+        return LicenseState.none;
+    }
+  }
+
+  // ── تفعيل مفتاح جديد ─────────────────────────────────────────────────────
+
+  Future<({bool ok, String message})> activateLicense(String key) async {
+    final cleaned = key.trim().toUpperCase();
+    if (cleaned.isEmpty) return (ok: false, message: 'أدخل مفتاح الترخيص');
+    try {
+      final data = await _fetchLicense(cleaned);
+      if (data == null) {
+        return (
+          ok: false,
+          message: 'مفتاح الترخيص غير صالح. تحقق وأعد المحاولة.',
+        );
+      }
+      final statusVal = (data['status'] as String?) ?? '';
+      final maxDev = (data['max_devices'] as num?)?.toInt() ?? 2;
+      final regDevices =
+          (data['registered_devices'] as Map?)?.cast<String, dynamic>() ?? {};
+      final deviceId = await getDeviceId();
+      final isReg = regDevices.containsKey(deviceId);
+
+      if (statusVal == 'suspended') {
+        return (ok: false, message: 'هذا الترخيص موقوف. تواصل مع الدعم.');
+      }
+      if (statusVal == 'expired') {
+        return (ok: false, message: 'انتهى هذا الترخيص. تواصل لتجديده.');
+      }
+      if (!isReg && maxDev != 0 && regDevices.length >= maxDev) {
+        return (
+          ok: false,
+          message: 'وصل الحساب للحد الأقصى ($maxDev أجهزة). رقِّ خطتك.',
+        );
+      }
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_Prefs.licenseKey, cleaned);
+      await checkLicense(forceRemote: true);
+      if (state.isAllowed) {
+        return (ok: true, message: 'تم تفعيل الترخيص بنجاح!');
+      }
+      return (ok: false, message: state.message ?? 'حالة غير معروفة');
+    } catch (e) {
+      return (ok: false, message: 'خطأ: $e');
+    }
+  }
+
+  // ── إلغاء الترخيص ────────────────────────────────────────────────────────
+
+  Future<void> deactivate() async {
+    final prefs = await SharedPreferences.getInstance();
+    for (final k in [
+      _Prefs.licenseKey,
+      _Prefs.status,
+      _Prefs.expiresAt,
+      _Prefs.trialEndsAt,
+      _Prefs.useCloudTrial,
+      _Prefs.lastCheckAt,
+      _Prefs.businessName,
+      _Prefs.planKey,
+      _Prefs.maxDevices,
+      _Prefs.deviceCount,
+      _Prefs.localTrialStartAt,
+    ]) {
+      await prefs.remove(k);
+    }
+    _setState(LicenseState.none);
+  }
+
+  // ── الكاش المحلي ─────────────────────────────────────────────────────────
+
+  Future<LicenseState?> _loadFromCache(SharedPreferences prefs) async {
+    final s = prefs.getString(_Prefs.status);
+    if (s == null) return null;
+    LicenseStatus status;
+    try {
+      status = LicenseStatus.values.firstWhere((e) => e.name == s);
+    } catch (_) {
+      return null;
+    }
+    final businessName = prefs.getString(_Prefs.businessName);
+    final expiresMs = prefs.getInt(_Prefs.expiresAt);
+    final trialMs = prefs.getInt(_Prefs.trialEndsAt);
+    final planK = prefs.getString(_Prefs.planKey);
+    final maxDev = prefs.getInt(_Prefs.maxDevices) ?? 1;
+    final devCount = prefs.getInt(_Prefs.deviceCount) ?? 1;
+    final expiresAt = expiresMs != null
+        ? DateTime.fromMillisecondsSinceEpoch(expiresMs)
+        : null;
+    final trialEndsAt = trialMs != null
+        ? DateTime.fromMillisecondsSinceEpoch(trialMs)
+        : null;
+    int? daysLeft;
+    if (status == LicenseStatus.trial && trialEndsAt != null) {
+      if (DateTime.now().isAfter(trialEndsAt)) {
+        return const LicenseState(
+          status: LicenseStatus.expired,
+          message: 'انتهت فترة التجربة.',
+        );
+      }
+      daysLeft = trialDaysLeftCalendar(
+        trialEndsAt,
+        DateTime.now(),
+      ).clamp(0, 999);
+    } else if (status == LicenseStatus.active && expiresAt != null) {
+      if (DateTime.now().isAfter(expiresAt)) {
+        return const LicenseState(
+          status: LicenseStatus.expired,
+          message: 'انتهى الاشتراك.',
+        );
+      }
+      daysLeft = expiresAt.difference(DateTime.now()).inDays.clamp(0, 9999);
+    }
+    return LicenseState(
+      status: status,
+      businessName: businessName,
+      expiresAt: expiresAt,
+      trialEndsAt: trialEndsAt,
+      daysLeft: daysLeft,
+      plan: SubscriptionPlan.fromKey(planK),
+      maxDevices: maxDev,
+      registeredDeviceCount: devCount,
+    );
+  }
+
+  Future<void> _saveToCache(
+    SharedPreferences prefs,
+    LicenseState s,
+    String key,
+  ) async {
+    await prefs.setString(_Prefs.licenseKey, key);
+    await prefs.setString(_Prefs.status, s.status.name);
+    await prefs.setInt(
+      _Prefs.lastCheckAt,
+      DateTime.now().millisecondsSinceEpoch,
+    );
+    if (s.businessName != null) {
+      await prefs.setString(_Prefs.businessName, s.businessName!);
+    }
+    if (s.expiresAt != null) {
+      await prefs.setInt(_Prefs.expiresAt, s.expiresAt!.millisecondsSinceEpoch);
+    }
+    if (s.trialEndsAt != null) {
+      await prefs.setInt(
+        _Prefs.trialEndsAt,
+        s.trialEndsAt!.millisecondsSinceEpoch,
+      );
+    }
+    if (s.plan != null) await prefs.setString(_Prefs.planKey, s.plan!.key);
+    await prefs.setInt(_Prefs.maxDevices, s.maxDevices);
+    await prefs.setInt(_Prefs.deviceCount, s.registeredDeviceCount);
+  }
+
+  void _setState(LicenseState s) {
+    _state = s;
+    notifyListeners();
+  }
+}

@@ -1,0 +1,44 @@
+---
+description: منطق ERP والأداء وجودة الكود — تذكير سريع لكل ملف Dart
+globs: lib/**/*.dart
+alwaysApply: true
+---
+
+# منطق ERP + الأداء — تذكير سريع
+
+> للتفاصيل الكاملة والأمثلة: اقرأ skill `erp-logic-performance`
+> (الموجود في `.cursor/skills/erp-logic-performance/SKILL.md`).
+
+## الحزم الحالية (استعملها فقط)
+`provider` ^6.1.1 · `sqflite` ^2.3.0 · `http` ^1.6.0 · `supabase_flutter` ^2.9.1 · `shared_preferences` · `intl`
+
+**لا تُدخل** Riverpod / dio / go_router / connectivity_plus / flutter_secure_storage / logger بدون طلب صريح.
+
+## قواعد حمراء
+
+1. **المال:** `int fils` دائماً. لا `double`. العمود في DB = `INTEGER`.
+2. **Tenant:** كل استعلام sqflite يحتوي `WHERE tenant_id = ?`.
+3. **Soft delete:** السجلات المالية — `deleted_at` بدل `DELETE`.
+   كل قراءة: `AND deleted_at IS NULL`.
+4. **Pagination:** كل قائمة تستخدم `ListView.builder` + cursor (`afterId`).
+   لا `OFFSET` للبيانات الكبيرة.
+5. **الأداء:** أي عملية > 16ms في `compute()` أو `Isolate.run()`.
+   `import` الكبير داخل `db.transaction(...)` + `batch.commit(noResult: true)`.
+6. **الفاتورة:** استدعِ `validateInvoiceBalance(invoice)` قبل أي حفظ.
+7. **اللوغ:** `AppLogger` فقط. `print()` ممنوع. لا تُسجّل بيانات حساسة.
+8. **الشاشة:** كل Screen تعرض `loading` + `empty` + `error`.
+
+## قبل الحفظ / الإرسال
+
+```
+[ ] int fils لا double
+[ ] tenant_id في الاستعلام
+[ ] deleted_at IS NULL في القراءة
+[ ] ListView.builder + pagination
+[ ] loading/empty/error
+[ ] compute/isolate للعمليات الثقيلة
+[ ] validateInvoiceBalance قبل الحفظ
+[ ] audit log للعمليات المالية
+[ ] AppLogger بدل print
+[ ] اختُبر RTL + ثلاث مقاسات
+```

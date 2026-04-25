@@ -1,0 +1,563 @@
+part of 'database_helper.dart';
+
+// ── الفواتير ──────────────────────────────────────────────────────────────
+
+extension DbInvoices on DatabaseHelper {
+  /// استعلام صفحات للفواتير **بدون** بنودها (items) لتفادي تحميل ضخم للذاكرة.
+  ///
+  /// - [tabIndex] يطابق تبويبات شاشة الفواتير: 0 الكل، 1 مدفوعة، 2 غير مدفوعة،
+  ///   3 مرتجع، 4 تقسيط.
+  /// - [sort] يدعم: date_desc | date_asc | amount_desc | amount_asc
+  /// - [query] يبحث في: اسم العميل، رقم الفاتورة، هاتف العميل (إن وجد).
+  Future<List<Invoice>> queryInvoicesPage({
+    required int tabIndex,
+    required String sort,
+    required String query,
+    required int limit,
+    required int offset,
+  }) async {
+    final db = await database;
+    final q = query.trim();
+    final qLower = q.toLowerCase();
+    final qDigits = q.replaceAll(RegExp(r'\D'), '');
+
+    final where = <String>[];
+    final args = <Object?>[];
+
+    // تبويب
+    switch (tabIndex) {
+      case 1:
+        // مدفوعة: نقدي + تحصيل دين/قسط + ليست مرتجعة
+        where.add('i.isReturned = 0');
+        where.add('i.type IN (?,?,?)');
+        args.addAll([
+          InvoiceType.cash.index,
+          InvoiceType.debtCollection.index,
+          InvoiceType.installmentCollection.index,
+        ]);
+        break;
+      case 2:
+        // غير مدفوعة: آجل + ليست مرتجعة
+        where.add('i.isReturned = 0');
+        where.add('i.type = ?');
+        args.add(InvoiceType.credit.index);
+        break;
+      case 3:
+        where.add('i.isReturned = 1');
+        break;
+      case 4:
+        where.add('i.isReturned = 0');
+        where.add('i.type = ?');
+        args.add(InvoiceType.installment.index);
+        break;
+      default:
+        break;
+    }
+
+    // بحث
+    if (qLower.isNotEmpty) {
+      final or = <String>[
+        'LOWER(i.customerName) LIKE ?',
+        "CAST(i.id AS TEXT) LIKE ?",
+      ];
+      args.addAll(['%$qLower%', '%$qLower%']);
+      if (qDigits.length >= 2) {
+        // phone قد يحتوي رموز/مسافات؛ هذا LIKE بسيط لكنه عملي.
+        or.add('c.phone LIKE ?');
+        args.add('%$qDigits%');
+      }
+      where.add('(${or.join(' OR ')})');
+    }
+
+    final orderBy = switch (sort) {
+      'date_asc' => 'i.date ASC',
+      'amount_desc' => 'i.total DESC',
+      'amount_asc' => 'i.total ASC',
+      _ => 'i.date DESC',
+    };
+
+    final whereSql = where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}';
+    final rows = await db.rawQuery('''
+      SELECT
+        i.*,
+        c.phone AS customerPhone
+      FROM invoices i
+      LEFT JOIN customers c ON c.id = i.customerId
+      $whereSql
+      ORDER BY $orderBy
+      LIMIT ? OFFSET ?
+    ''', [...args, limit, offset]);
+
+    return rows.whereType<Map<String, dynamic>>().map((invoiceMap) {
+      return Invoice(
+        id: invoiceMap['id'] as int?,
+        customerName: invoiceMap['customerName'] as String? ?? '',
+        date: DateTime.tryParse((invoiceMap['date'] ?? '').toString()) ??
+            DateTime.fromMillisecondsSinceEpoch(0),
+        type: invoiceTypeFromDb(invoiceMap['type']),
+        items: const <InvoiceItem>[],
+        discount: (invoiceMap['discount'] as num?)?.toDouble() ?? 0,
+        tax: (invoiceMap['tax'] as num?)?.toDouble() ?? 0,
+        advancePayment:
+            (invoiceMap['advancePayment'] as num?)?.toDouble() ?? 0,
+        total: (invoiceMap['total'] as num?)?.toDouble() ?? 0,
+        isReturned: invoiceMap['isReturned'] == 1,
+        originalInvoiceId: invoiceMap['originalInvoiceId'] as int?,
+        deliveryAddress: invoiceMap['deliveryAddress'] as String?,
+        createdByUserName: invoiceMap['createdByUserName'] as String?,
+        discountPercent:
+            (invoiceMap['discountPercent'] as num?)?.toDouble() ?? 0,
+        workShiftId: invoiceMap['workShiftId'] as int?,
+        customerId: invoiceMap['customerId'] as int?,
+        loyaltyDiscount:
+            (invoiceMap['loyaltyDiscount'] as num?)?.toDouble() ?? 0,
+        loyaltyPointsRedeemed:
+            (invoiceMap['loyaltyPointsRedeemed'] as num?)?.toInt() ?? 0,
+        loyaltyPointsEarned:
+            (invoiceMap['loyaltyPointsEarned'] as num?)?.toInt() ?? 0,
+        installmentInterestPct:
+            (invoiceMap['installmentInterestPct'] as num?)?.toDouble() ?? 0,
+        installmentPlannedMonths:
+            (invoiceMap['installmentPlannedMonths'] as num?)?.toInt() ?? 0,
+        installmentFinancedAmount:
+            (invoiceMap['installmentFinancedAmount'] as num?)?.toDouble() ?? 0,
+        installmentInterestAmount:
+            (invoiceMap['installmentInterestAmount'] as num?)?.toDouble() ?? 0,
+        installmentTotalWithInterest:
+            (invoiceMap['installmentTotalWithInterest'] as num?)?.toDouble() ??
+                0,
+        installmentSuggestedMonthly:
+            (invoiceMap['installmentSuggestedMonthly'] as num?)?.toDouble() ??
+                0,
+      );
+    }).toList();
+  }
+
+  Future<int> countInvoicesForPageQuery({
+    required int tabIndex,
+    required String query,
+  }) async {
+    final db = await database;
+    final q = query.trim();
+    final qLower = q.toLowerCase();
+    final qDigits = q.replaceAll(RegExp(r'\D'), '');
+
+    final where = <String>[];
+    final args = <Object?>[];
+
+    switch (tabIndex) {
+      case 1:
+        where.add('i.isReturned = 0');
+        where.add('i.type IN (?,?,?)');
+        args.addAll([
+          InvoiceType.cash.index,
+          InvoiceType.debtCollection.index,
+          InvoiceType.installmentCollection.index,
+        ]);
+        break;
+      case 2:
+        where.add('i.isReturned = 0');
+        where.add('i.type = ?');
+        args.add(InvoiceType.credit.index);
+        break;
+      case 3:
+        where.add('i.isReturned = 1');
+        break;
+      case 4:
+        where.add('i.isReturned = 0');
+        where.add('i.type = ?');
+        args.add(InvoiceType.installment.index);
+        break;
+      default:
+        break;
+    }
+
+    if (qLower.isNotEmpty) {
+      final or = <String>[
+        'LOWER(i.customerName) LIKE ?',
+        "CAST(i.id AS TEXT) LIKE ?",
+      ];
+      args.addAll(['%$qLower%', '%$qLower%']);
+      if (qDigits.length >= 2) {
+        or.add('c.phone LIKE ?');
+        args.add('%$qDigits%');
+      }
+      where.add('(${or.join(' OR ')})');
+    }
+
+    final whereSql = where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}';
+    final rows = await db.rawQuery('''
+      SELECT COUNT(*) AS c
+      FROM invoices i
+      LEFT JOIN customers c ON c.id = i.customerId
+      $whereSql
+    ''', args);
+    if (rows.isEmpty) return 0;
+    final n = (rows.first['c'] as num?)?.toInt() ?? 0;
+    return n;
+  }
+
+  /// إدراج فاتورة داخل معاملة مفتوحة (بيع، أو سند قبض دين/قسط).
+  Future<int> _insertInvoiceInTransaction(
+    Transaction txn,
+    Invoice invoice,
+    LoyaltySettingsData loyaltySettings,
+  ) async {
+    final serviceReceipt =
+        invoice.type == InvoiceType.debtCollection ||
+        invoice.type == InvoiceType.installmentCollection ||
+        invoice.type == InvoiceType.supplierPayment;
+
+    final loyaltyActive =
+        loyaltySettings.enabled &&
+        invoice.customerId != null &&
+        !invoice.isReturned &&
+        !serviceReceipt;
+    final loyaltyDiscount = loyaltyActive ? invoice.loyaltyDiscount : 0.0;
+    final loyaltyRedeem = loyaltyActive ? invoice.loyaltyPointsRedeemed : 0;
+
+    final wsRows = await txn.query(
+      'work_shifts',
+      columns: ['id'],
+      where: 'closedAt IS NULL',
+      limit: 1,
+    );
+    final int? shiftId = wsRows.isNotEmpty
+        ? wsRows.first['id'] as int
+        : invoice.workShiftId;
+
+    final id = await txn.insert('invoices', {
+      'customerName': invoice.customerName,
+      'date': invoice.date.toIso8601String(),
+      'type': invoice.type.index,
+      'discount': invoice.discount,
+      'tax': invoice.tax,
+      'advancePayment': invoice.advancePayment,
+      'total': invoice.total,
+      'isReturned': invoice.isReturned ? 1 : 0,
+      'originalInvoiceId': invoice.originalInvoiceId,
+      'deliveryAddress': invoice.deliveryAddress,
+      'createdByUserName': invoice.createdByUserName,
+      'discountPercent': invoice.discountPercent,
+      'workShiftId': shiftId,
+      'customerId': invoice.customerId,
+      'loyaltyDiscount': loyaltyDiscount,
+      'loyaltyPointsRedeemed': loyaltyRedeem,
+      'loyaltyPointsEarned': 0,
+      'installmentInterestPct': invoice.installmentInterestPct,
+      'installmentPlannedMonths': invoice.installmentPlannedMonths,
+      'installmentFinancedAmount': invoice.installmentFinancedAmount,
+      'installmentInterestAmount': invoice.installmentInterestAmount,
+      'installmentTotalWithInterest': invoice.installmentTotalWithInterest,
+      'installmentSuggestedMonthly': invoice.installmentSuggestedMonthly,
+    });
+
+    for (final item in invoice.items) {
+      // تثبيت تكلفة الشراء لحظة البيع (Cost Stamping) — السلسلة:
+      // 1) WAC من product_batches (المتوسط المرجّح للدفعات حتى تاريخ الفاتورة)
+      // 2) products.buyPrice (آخر سعر شراء حالي)
+      // 3) 0 (يُعلَّم كسطر بدون تكلفة في تقارير الجودة)
+      double stampedUnitCost = 0.0;
+      if (item.productId != null) {
+        try {
+          final wacRows = await txn.rawQuery(
+            '''
+            SELECT SUM(unitCost * qty) AS totalCost, SUM(qty) AS totalQty
+            FROM product_batches
+            WHERE productId = ? AND createdAt <= ?
+            ''',
+            [item.productId, invoice.date.toIso8601String()],
+          );
+          if (wacRows.isNotEmpty) {
+            final tc = (wacRows.first['totalCost'] as num?)?.toDouble() ?? 0.0;
+            final tq = (wacRows.first['totalQty'] as num?)?.toDouble() ?? 0.0;
+            if (tq > 0) stampedUnitCost = tc / tq;
+          }
+        } catch (_) {}
+        if (stampedUnitCost <= 0) {
+          try {
+            final p = await txn.query(
+              'products',
+              columns: ['buyPrice'],
+              where: 'id = ?',
+              whereArgs: [item.productId],
+              limit: 1,
+            );
+            if (p.isNotEmpty) {
+              stampedUnitCost =
+                  (p.first['buyPrice'] as num?)?.toDouble() ?? 0.0;
+            }
+          } catch (_) {}
+        }
+      }
+      final base = item.baseQtyResolved;
+      await txn.insert('invoice_items', {
+        'invoiceId': id,
+        'productName': item.productName,
+        'quantity': base,
+        'price': item.price,
+        'total': item.total,
+        'productId': item.productId,
+        'unitCost': stampedUnitCost,
+        'unitVariantId': item.unitVariantId,
+        'unitLabel': item.unitLabel,
+        'unitFactor': item.unitFactor <= 0 ? 1.0 : item.unitFactor,
+        'enteredQty': item.enteredQtyResolved,
+        'baseQty': base,
+      });
+    }
+
+    if (!invoice.isReturned) {
+      if (!serviceReceipt) {
+        for (final item in invoice.items) {
+          final pid = item.productId;
+          if (pid == null) continue;
+          await txn.rawUpdate(
+            'UPDATE products SET qty = qty - ? WHERE id = ?',
+            [item.baseQtyResolved, pid],
+          );
+        }
+      }
+
+      if (invoice.type == InvoiceType.supplierPayment) {
+        if (invoice.supplierPaymentAffectsCash && invoice.total > 1e-9) {
+          final cust = invoice.customerName.isEmpty
+              ? 'مورد'
+              : invoice.customerName;
+          await txn.insert('cash_ledger', {
+            'transactionType': 'supplier_payment',
+            'amount': -invoice.total,
+            'description': 'دفع مورد — $cust (سند #${id.toString()})',
+            'invoiceId': id,
+            'workShiftId': shiftId,
+            'createdAt': DateTime.now().toIso8601String(),
+          });
+        }
+      } else {
+        final cashAmount = _cashAmountForInvoice(invoice);
+        if (cashAmount > 0) {
+          final String typeLabel;
+          if (invoice.type == InvoiceType.cash) {
+            typeLabel = 'sale_cash';
+          } else if (invoice.type == InvoiceType.debtCollection) {
+            typeLabel = 'debt_collection';
+          } else if (invoice.type == InvoiceType.installmentCollection) {
+            typeLabel = 'installment_collection';
+          } else {
+            typeLabel = invoice.advancePayment > 0
+                ? 'sale_advance'
+                : 'sale_other';
+          }
+          final cust = invoice.customerName.isEmpty
+              ? 'عميل'
+              : invoice.customerName;
+          final desc = serviceReceipt
+              ? (invoice.type == InvoiceType.debtCollection
+                    ? 'سند تحصيل دين #$id — $cust'
+                    : 'سند تسديد قسط #$id — $cust')
+              : 'فاتورة بيع #${id.toString()} — $cust';
+          await txn.insert('cash_ledger', {
+            'transactionType': typeLabel,
+            'amount': cashAmount,
+            'description': desc,
+            'invoiceId': id,
+            'workShiftId': shiftId,
+            'createdAt': DateTime.now().toIso8601String(),
+          });
+        }
+      }
+    } else {
+      if (!serviceReceipt) {
+        for (final item in invoice.items) {
+          final pid = item.productId;
+          if (pid == null) continue;
+          await txn.rawUpdate(
+            'UPDATE products SET qty = qty + ? WHERE id = ?',
+            [item.baseQtyResolved, pid],
+          );
+        }
+      }
+      final refund = _cashAmountForInvoice(invoice);
+      if (refund > 0) {
+        await txn.insert('cash_ledger', {
+          'transactionType': 'sale_return',
+          'amount': -refund,
+          'description':
+              'مرتجع فاتورة #${id.toString()}${invoice.originalInvoiceId != null ? ' (أصل #${invoice.originalInvoiceId})' : ''} — ${invoice.customerName.isEmpty ? 'عميل' : invoice.customerName}',
+          'invoiceId': id,
+          'workShiftId': shiftId,
+          'createdAt': DateTime.now().toIso8601String(),
+        });
+      }
+    }
+
+    if (loyaltyActive) {
+      await _applyLoyaltyForNewInvoice(
+        txn,
+        invoiceId: id,
+        invoice: invoice,
+        effectiveLoyaltyDiscount: loyaltyDiscount,
+        effectiveLoyaltyRedeem: loyaltyRedeem,
+        settings: loyaltySettings,
+      );
+    }
+
+    return id;
+  }
+
+  Future<int> insertInvoice(Invoice invoice) async {
+    final db = await database;
+    final loyaltySettings = await _readLoyaltySettings(db);
+    final id = await db.transaction<int>(
+      (txn) => _insertInvoiceInTransaction(txn, invoice, loyaltySettings),
+    );
+    CloudSyncService.instance.scheduleSyncSoon();
+    return id;
+  }
+
+  /// مبلغ نقدي يُحسب للفاتورة.
+  double _cashAmountForInvoice(Invoice invoice) {
+    switch (invoice.type) {
+      case InvoiceType.cash:
+        return invoice.total;
+      case InvoiceType.credit:
+      case InvoiceType.installment:
+        return invoice.advancePayment > 0 ? invoice.advancePayment : 0;
+      case InvoiceType.delivery:
+        return invoice.total;
+      case InvoiceType.debtCollection:
+      case InvoiceType.installmentCollection:
+        return invoice.total;
+      case InvoiceType.supplierPayment:
+        return 0;
+    }
+  }
+
+  /// فاتورة واحدة مع بنودها.
+  Future<Invoice?> getInvoiceById(int id) async {
+    final db = await database;
+    final maps = await db.query(
+      'invoices',
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    if (maps.isEmpty) return null;
+    final invoiceMap = maps.first;
+    final items = await db.query(
+      'invoice_items',
+      where: 'invoiceId = ?',
+      whereArgs: [id],
+    );
+    return Invoice(
+      id: invoiceMap['id'] as int?,
+      customerName: invoiceMap['customerName'] as String,
+      date: DateTime.parse(invoiceMap['date'] as String),
+      type: invoiceTypeFromDb(invoiceMap['type']),
+      items: items.map((i) => InvoiceItem.fromMap(i)).toList(),
+      discount: (invoiceMap['discount'] as num).toDouble(),
+      tax: (invoiceMap['tax'] as num).toDouble(),
+      advancePayment: (invoiceMap['advancePayment'] as num).toDouble(),
+      total: (invoiceMap['total'] as num).toDouble(),
+      isReturned: invoiceMap['isReturned'] == 1,
+      originalInvoiceId: invoiceMap['originalInvoiceId'] as int?,
+      deliveryAddress: invoiceMap['deliveryAddress'] as String?,
+      createdByUserName: invoiceMap['createdByUserName'] as String?,
+      discountPercent:
+          (invoiceMap['discountPercent'] as num?)?.toDouble() ?? 0,
+      workShiftId: invoiceMap['workShiftId'] as int?,
+      customerId: invoiceMap['customerId'] as int?,
+      loyaltyDiscount:
+          (invoiceMap['loyaltyDiscount'] as num?)?.toDouble() ?? 0,
+      loyaltyPointsRedeemed:
+          (invoiceMap['loyaltyPointsRedeemed'] as num?)?.toInt() ?? 0,
+      loyaltyPointsEarned:
+          (invoiceMap['loyaltyPointsEarned'] as num?)?.toInt() ?? 0,
+      installmentInterestPct:
+          (invoiceMap['installmentInterestPct'] as num?)?.toDouble() ?? 0,
+      installmentPlannedMonths:
+          (invoiceMap['installmentPlannedMonths'] as num?)?.toInt() ?? 0,
+      installmentFinancedAmount:
+          (invoiceMap['installmentFinancedAmount'] as num?)?.toDouble() ?? 0,
+      installmentInterestAmount:
+          (invoiceMap['installmentInterestAmount'] as num?)?.toDouble() ?? 0,
+      installmentTotalWithInterest:
+          (invoiceMap['installmentTotalWithInterest'] as num?)?.toDouble() ??
+          0,
+      installmentSuggestedMonthly:
+          (invoiceMap['installmentSuggestedMonthly'] as num?)?.toDouble() ??
+          0,
+    );
+  }
+
+  /// كل الفواتير (استعلام مجمّع لتفادي N+1).
+  Future<List<Invoice>> getInvoices() async {
+    final db = await database;
+    final invoiceMaps = await db.query('invoices');
+    if (invoiceMaps.isEmpty) return [];
+
+    final ids = invoiceMaps.map((m) => m['id'] as int).toList();
+    final itemsByInvoice = <int, List<Map<String, dynamic>>>{
+      for (final id in ids) id: <Map<String, dynamic>>[],
+    };
+
+    const chunk = 400;
+    for (var i = 0; i < ids.length; i += chunk) {
+      final part = ids.sublist(i, min(i + chunk, ids.length));
+      final ph = List.filled(part.length, '?').join(',');
+      final rows = await db.rawQuery('''
+        SELECT * FROM invoice_items
+        WHERE invoiceId IN ($ph)
+        ORDER BY invoiceId ASC, id ASC
+        ''', part);
+      for (final row in rows) {
+        final iid = row['invoiceId'] as int;
+        itemsByInvoice[iid]?.add(row);
+      }
+    }
+
+    return invoiceMaps.map((invoiceMap) {
+      final id = invoiceMap['id'] as int;
+      final items = itemsByInvoice[id] ?? const <Map<String, dynamic>>[];
+      return Invoice(
+        id: invoiceMap['id'] as int?,
+        customerName: invoiceMap['customerName'] as String,
+        date: DateTime.parse(invoiceMap['date'] as String),
+        type: invoiceTypeFromDb(invoiceMap['type']),
+        items: items.map((i) => InvoiceItem.fromMap(i)).toList(),
+        discount: (invoiceMap['discount'] as num).toDouble(),
+        tax: (invoiceMap['tax'] as num).toDouble(),
+        advancePayment: (invoiceMap['advancePayment'] as num).toDouble(),
+        total: (invoiceMap['total'] as num).toDouble(),
+        isReturned: invoiceMap['isReturned'] == 1,
+        originalInvoiceId: invoiceMap['originalInvoiceId'] as int?,
+        deliveryAddress: invoiceMap['deliveryAddress'] as String?,
+        createdByUserName: invoiceMap['createdByUserName'] as String?,
+        discountPercent:
+            (invoiceMap['discountPercent'] as num?)?.toDouble() ?? 0,
+        workShiftId: invoiceMap['workShiftId'] as int?,
+        customerId: invoiceMap['customerId'] as int?,
+        loyaltyDiscount:
+            (invoiceMap['loyaltyDiscount'] as num?)?.toDouble() ?? 0,
+        loyaltyPointsRedeemed:
+            (invoiceMap['loyaltyPointsRedeemed'] as num?)?.toInt() ?? 0,
+        loyaltyPointsEarned:
+            (invoiceMap['loyaltyPointsEarned'] as num?)?.toInt() ?? 0,
+        installmentInterestPct:
+            (invoiceMap['installmentInterestPct'] as num?)?.toDouble() ?? 0,
+        installmentPlannedMonths:
+            (invoiceMap['installmentPlannedMonths'] as num?)?.toInt() ?? 0,
+        installmentFinancedAmount:
+            (invoiceMap['installmentFinancedAmount'] as num?)?.toDouble() ?? 0,
+        installmentInterestAmount:
+            (invoiceMap['installmentInterestAmount'] as num?)?.toDouble() ?? 0,
+        installmentTotalWithInterest:
+            (invoiceMap['installmentTotalWithInterest'] as num?)?.toDouble() ??
+            0,
+        installmentSuggestedMonthly:
+            (invoiceMap['installmentSuggestedMonthly'] as num?)?.toDouble() ??
+            0,
+      );
+    }).toList();
+  }
+}
