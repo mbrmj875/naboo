@@ -34,11 +34,13 @@ jobs:
           if (-not (Test-Path $src)) { $src = "build\windows\runner\Release" }
           if (-not (Test-Path $src)) { throw "Could not find Flutter Windows build output." }
           Write-Host "Build output: $src"
-          "BUILD_SRC=$src" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           $version = "${{ github.ref_name }}".TrimStart('v')
           if ([string]::IsNullOrWhiteSpace($version)) { $version = "0.0.0" }
           Write-Host "Version: $version"
-          "APP_VERSION=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          # UTF-8 بدون BOM — Out-File الافتراضي قد يفسد parsing لـ GITHUB_OUTPUT
+          foreach ($line in @("BUILD_SRC=$src", "APP_VERSION=$version")) {
+            [System.IO.File]::AppendAllText($env:GITHUB_OUTPUT, "$line`n", [System.Text.UTF8Encoding]::new($false))
+          }
 
       - name: Package portable ZIP
         shell: pwsh
@@ -50,11 +52,11 @@ jobs:
       - name: Build Inno Setup installer
         shell: pwsh
         run: |
-          $iscc = "$env:ProgramFiles (x86)\Inno Setup 6\ISCC.exe"
+          $iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) {
             Write-Host "Inno Setup not found in default path; installing via Chocolatey..."
             choco install innosetup -y --no-progress
-            $iscc = "$env:ProgramFiles (x86)\Inno Setup 6\ISCC.exe"
+            $iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
           }
           if (-not (Test-Path $iscc)) { throw "Inno Setup compiler (ISCC.exe) not found." }
           $version = "${{ steps.paths.outputs.APP_VERSION }}"

@@ -41,10 +41,10 @@ SetupIconFile=windows\runner\resources\app_icon.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 UninstallDisplayName={#MyAppName}
 
-; دعم العربية + الإنجليزية
+; لغة معالج التثبيت: الإنجليزية فقط (موثوق في CI؛ Arabic.isl قد يغيب في Inno من Chocolatey).
+; التطبيق نفسه يبقى RTL وعربي حسب إعدادات Flutter.
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
-Name: "arabic";  MessagesFile: "compiler:Languages\Arabic.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: checkedonce
