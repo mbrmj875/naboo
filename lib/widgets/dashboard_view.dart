@@ -2401,49 +2401,61 @@ class _PinnedProductsRailState extends State<_PinnedProductsRail> {
                                     10,
                                     10,
                                   ),
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.stretch,
-                                    children: [
-                                      Text(
-                                        name,
-                                        maxLines: 2,
-                                        overflow: TextOverflow.ellipsis,
-                                        textAlign: TextAlign.center,
-                                        style: TextStyle(
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w800,
-                                          color: text1,
-                                          height: 1.15,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 6),
-                                      Text(
-                                        IraqiCurrencyFormat.formatIqd(sell),
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        textAlign: TextAlign.center,
-                                        style: TextStyle(
-                                          fontSize: 11.5,
-                                          fontWeight: FontWeight.w800,
-                                          color: widget.isDark
-                                              ? Colors.white70
-                                              : _kTeal,
-                                        ),
-                                      ),
-                                      const Spacer(),
-                                      Text(
-                                        stock,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        textAlign: TextAlign.center,
-                                        style: TextStyle(
-                                          fontSize: 10.5,
-                                          fontWeight: FontWeight.w700,
-                                          color: stockColor,
-                                        ),
-                                      ),
-                                    ],
+                                  child: LayoutBuilder(
+                                    builder: (context, box) {
+                                      // بعض البلاطات تُعرض بأبعاد صغيرة جداً (مثلاً أثناء تصغير النافذة)،
+                                      // فنعطي تخطيطاً متكيفاً لمنع overflow.
+                                      final tight = box.maxHeight < 72;
+                                      final nameStyle = TextStyle(
+                                        fontSize: tight ? 10.5 : 12,
+                                        fontWeight: FontWeight.w800,
+                                        color: text1,
+                                        height: 1.15,
+                                      );
+                                      final priceStyle = TextStyle(
+                                        fontSize: tight ? 10.0 : 11.5,
+                                        fontWeight: FontWeight.w800,
+                                        color:
+                                            widget.isDark ? Colors.white70 : _kTeal,
+                                      );
+                                      final stockStyle = TextStyle(
+                                        fontSize: tight ? 9.5 : 10.5,
+                                        fontWeight: FontWeight.w700,
+                                        color: stockColor,
+                                      );
+
+                                      return Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.stretch,
+                                        mainAxisSize: MainAxisSize.max,
+                                        children: [
+                                          Text(
+                                            name,
+                                            maxLines: tight ? 1 : 2,
+                                            overflow: TextOverflow.ellipsis,
+                                            textAlign: TextAlign.center,
+                                            style: nameStyle,
+                                          ),
+                                          SizedBox(height: tight ? 2 : 6),
+                                          Text(
+                                            IraqiCurrencyFormat.formatIqd(sell),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            textAlign: TextAlign.center,
+                                            style: priceStyle,
+                                          ),
+                                          if (!tight) const Spacer(),
+                                          if (!tight)
+                                            Text(
+                                              stock,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              textAlign: TextAlign.center,
+                                              style: stockStyle,
+                                            ),
+                                        ],
+                                      );
+                                    },
                                   ),
                                 ),
                               ),

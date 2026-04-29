@@ -2,94 +2,308 @@ part of 'database_helper.dart';
 
 // ── العملاء ───────────────────────────────────────────────────────────────
 
+({List<String> clauses, List<Object?> args}) _customerSearchWhereParts(
+  String rawQuery,
+) {
+  final q = rawQuery.trim().toLowerCase();
+  final qDigits = rawQuery.replaceAll(RegExp(r'\D'), '');
+  if (q.isEmpty) return (clauses: <String>[], args: <Object?>[]);
+
+  final clauses = <String>[];
+  final args = <Object?>[];
+  final or = <String>[
+    'LOWER(customers.name) LIKE ?',
+    "LOWER(IFNULL(customers.phone, '')) LIKE ?",
+    "LOWER(IFNULL(customers.email, '')) LIKE ?",
+    '''
+    EXISTS (
+      SELECT 1 FROM customer_extra_phones cep
+      WHERE cep.customerId = customers.id
+        AND LOWER(IFNULL(cep.phone, '')) LIKE ?
+    )
+    ''',
+  ];
+  args.addAll(['%$q%', '%$q%', '%$q%', '%$q%']);
+  if (qDigits.length >= 2) {
+    or.add("IFNULL(customers.phone, '') LIKE ?");
+    args.add('%$qDigits%');
+    or.add('''
+      EXISTS (
+        SELECT 1 FROM customer_extra_phones cep2
+        WHERE cep2.customerId = customers.id
+          AND IFNULL(cep2.phone, '') LIKE ?
+      )
+    ''');
+    args.add('%$qDigits%');
+  }
+  if (qDigits.isNotEmpty) {
+    or.add('CAST(customers.id AS TEXT) LIKE ?');
+    args.add('%$qDigits%');
+    or.add("printf('%06d', customers.id) LIKE ?");
+    args.add('%$qDigits%');
+  }
+  clauses.add('(${or.join(' OR ')})');
+  return (clauses: clauses, args: args);
+}
+
+/// فلترة التبويب: يجب أن تكون متّسقة مع [CustomerRecord.statusLabel].
+String? _customerTabBalancePredicate(String statusArabic) {
+  final st = statusArabic.trim();
+  if (st.isEmpty || st == 'الكل') return null;
+  if (st == 'مديون' || st.contains('مدين')) return 'customers.balance > 0.01';
+  if (st.contains('دائن')) return 'customers.balance < -0.01';
+  if (st.contains('مميز')) return 'ABS(customers.balance) < 1e-6';
+  if (st.contains('مصفّى') || st.contains('صفر')) {
+    return 'ABS(customers.balance) < 1e-9';
+  }
+  return null;
+}
+
+/// تطابق رقم عميل ورقُم كود ظاهر بعد إزالة غير الأرقام.
+void _appendCustomerIdExactIfPresent(
+  List<String> where,
+  List<Object?> args,
+  String raw,
+) {
+  final digitsOnly = raw.replaceAll(RegExp(r'[^0-9]'), '');
+  if (digitsOnly.isEmpty) return;
+  final id = int.tryParse(digitsOnly);
+  if (id == null) return;
+  where.add('customers.id = ?');
+  args.add(id);
+}
+
 extension DbCustomers on DatabaseHelper {
   Future<List<Map<String, dynamic>>> getAllCustomers() async {
     final db = await database;
     return db.query('customers', orderBy: 'name COLLATE NOCASE ASC');
   }
 
-  /// استعلام صفحات للعملاء (بدون تحميل كامل الجدول).
+  Future<int> countCustomersTotal() async {
+    final db = await database;
+    final r = await db.rawQuery('SELECT COUNT(*) AS c FROM customers');
+    if (r.isEmpty) return 0;
+    return (r.first['c'] as num?)?.toInt() ?? 0;
+  }
+
+  Future<
+      ({
+        int all,
+        int indebted,
+        int creditor,
+        int distinguished,
+      })> getCustomerTabCountsRaw() async {
+    final db = await database;
+    final rows = await db.rawQuery('''
+      SELECT
+        COUNT(*) AS all_c,
+        SUM(CASE WHEN balance > 0.01 THEN 1 ELSE 0 END) AS ind,
+        SUM(CASE WHEN balance < -0.01 THEN 1 ELSE 0 END) AS cred,
+        SUM(CASE WHEN ABS(balance) < 1e-6 THEN 1 ELSE 0 END) AS dist
+      FROM customers
+      ''');
+    int n(Map<String, Object?> row, String k) =>
+        row[k] == null ? 0 : (row[k] as num?)?.toInt() ?? 0;
+    final m = rows.isEmpty ? <String, Object?>{} : rows.first;
+    return (
+      all: n(m, 'all_c'),
+      indebted: n(m, 'ind'),
+      creditor: n(m, 'cred'),
+      distinguished: n(m, 'dist'),
+    );
+  }
+
+  Future<int> countCustomersMatching({
+    required String query,
+    required String statusArabic,
+    String idQuery = '',
+  }) async {
+    final sr = _customerSearchWhereParts(query);
+    final bal = _customerTabBalancePredicate(statusArabic);
+    final where = <String>[];
+    final args = <Object?>[];
+    final b = bal;
+    if (b != null) where.add(b);
+    where.addAll(sr.clauses);
+    args.addAll(sr.args);
+    _appendCustomerIdExactIfPresent(where, args, idQuery);
+    final whereSql = where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}';
+    final db = await database;
+    final out =
+        await db.rawQuery('SELECT COUNT(*) AS c FROM customers $whereSql', args);
+    if (out.isEmpty) return 0;
+    return (out.first['c'] as num?)?.toInt() ?? 0;
+  }
+
+  Future<Map<int, double>> sumSaleInvoiceTotalsForCustomerIds(
+    Iterable<int> ids,
+  ) async {
+    final idList = ids.toSet().toList();
+    if (idList.isEmpty) return {};
+    final db = await database;
+    final placeholders = List.filled(idList.length, '?').join(',');
+    final t = [
+      InvoiceType.cash.index,
+      InvoiceType.credit.index,
+      InvoiceType.installment.index,
+      InvoiceType.delivery.index,
+    ];
+    final typeList = '${t[0]},${t[1]},${t[2]},${t[3]}';
+    final rows = await db.rawQuery(
+      '''
+      SELECT inv.customerId AS cid,
+             SUM(
+               CASE
+                 WHEN IFNULL(inv.totalFils, 0) != 0
+                   THEN CAST(inv.totalFils AS REAL) / 1000.0
+                 ELSE IFNULL(inv.total, 0)
+               END
+             ) AS tot
+      FROM invoices inv
+      WHERE IFNULL(inv.isReturned, 0) = 0
+        AND inv.customerId IN ($placeholders)
+        AND inv.type IN ($typeList)
+      GROUP BY inv.customerId
+      ''',
+      idList,
+    );
+    final out = <int, double>{};
+    for (final r in rows) {
+      final cid = r['cid'] as int?;
+      if (cid == null) continue;
+      out[cid] = (r['tot'] as num?)?.toDouble() ?? 0;
+    }
+    return out;
+  }
+
+  Future<Map<String, Object?>?> findCustomerRowByInsensitiveNameDup(
+    String name, {
+    int? excludeId,
+  }) async {
+    final n = name.trim();
+    if (n.length < 2) return null;
+    final db = await database;
+    final wc = excludeId != null
+        ? 'WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) AND id <> ? LIMIT 1'
+        : 'WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) LIMIT 1';
+    final wa = excludeId != null ? <Object?>[n, excludeId] : <Object?>[n];
+    final rows =
+        await db.rawQuery('SELECT id, name FROM customers $wc', wa);
+    if (rows.isEmpty) return null;
+    return rows.first;
+  }
+
+  Future<Map<String, Object?>?> findCustomerRowByDupEmail(
+    String emailRaw, {
+    int? excludeId,
+  }) async {
+    final e = emailRaw.trim().toLowerCase();
+    if (!e.contains('@')) return null;
+    final db = await database;
+    final rows = excludeId == null
+        ? await db.rawQuery(
+            '''
+            SELECT id, name FROM customers
+            WHERE LOWER(TRIM(IFNULL(email, ''))) = ?
+            LIMIT 1
+            ''',
+            [e],
+          )
+        : await db.rawQuery(
+            '''
+            SELECT id, name FROM customers
+            WHERE LOWER(TRIM(IFNULL(email, ''))) = ? AND id <> ?
+            LIMIT 1
+            ''',
+            [e, excludeId],
+          );
+    if (rows.isEmpty) return null;
+    return rows.first;
+  }
+
+  /// استعلام صفحات للعملاء — مع مجموع مشتريات تقريبي لكل عميل إن أمكن.
   ///
-  /// - [statusArabic]: "الكل" أو قيمة [CustomerRecord.statusLabel] (مثلاً: "مدين"... حسب نموذجك).
-  /// - [sortKey]: name_asc | balance_desc | date_desc
+  /// - [sortKey]: `name_asc` \| `name_desc` \| `balance_desc` \| `date_desc`
+  ///                \| `total_purchases_desc`
   Future<List<Map<String, dynamic>>> queryCustomersPage({
     required String query,
     required String statusArabic,
     required String sortKey,
     required int limit,
     required int offset,
+    String idQuery = '',
   }) async {
-    final db = await database;
-    final q = query.trim().toLowerCase();
-    final qDigits = query.replaceAll(RegExp(r'\\D'), '');
-
+    final sr = _customerSearchWhereParts(query);
+    final bal = _customerTabBalancePredicate(statusArabic);
     final where = <String>[];
     final args = <Object?>[];
-
-    // فلترة حالة (نربطها عملياً بالرصيد لأن statusLabel مشتقة من balance عادةً)
-    // لو statusLabel عندك مبني على قواعد أخرى، سنربطه هنا لاحقاً.
-    if (statusArabic != 'الكل') {
-      if (statusArabic.contains('مدين')) {
-        where.add('balance > 0');
-      } else if (statusArabic.contains('دائن')) {
-        where.add('balance < 0');
-      } else if (statusArabic.contains('مصفّى') || statusArabic.contains('صفر')) {
-        where.add('ABS(balance) < 1e-9');
-      }
-    }
-
-    if (q.isNotEmpty) {
-      final or = <String>[
-        'LOWER(name) LIKE ?',
-        "LOWER(IFNULL(phone, '')) LIKE ?",
-        "LOWER(IFNULL(email, '')) LIKE ?",
-        '''
-        EXISTS (
-          SELECT 1 FROM customer_extra_phones cep
-          WHERE cep.customerId = customers.id
-            AND LOWER(IFNULL(cep.phone, '')) LIKE ?
-        )
-        ''',
-      ];
-      args.addAll(['%$q%', '%$q%', '%$q%', '%$q%']);
-      if (qDigits.length >= 2) {
-        or.add("IFNULL(phone, '') LIKE ?");
-        args.add('%$qDigits%');
-        or.add('''
-          EXISTS (
-            SELECT 1 FROM customer_extra_phones cep2
-            WHERE cep2.customerId = customers.id
-              AND IFNULL(cep2.phone, '') LIKE ?
-          )
-        ''');
-        args.add('%$qDigits%');
-      }
-      // دعم بحث "الكود/المعرف" كما يظهر في شاشة جهات الاتصال.
-      // - يطابق: 12 أو 000012 أو #000012
-      if (qDigits.isNotEmpty) {
-        or.add("CAST(id AS TEXT) LIKE ?");
-        args.add('%$qDigits%');
-        or.add("printf('%06d', id) LIKE ?");
-        args.add('%$qDigits%');
-      }
-      where.add('(${or.join(' OR ')})');
-    }
-
+    final bp = bal;
+    if (bp != null) where.add(bp);
+    where.addAll(sr.clauses);
+    args.addAll(sr.args);
+    _appendCustomerIdExactIfPresent(where, args, idQuery);
     final whereSql = where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}';
+
+    final t = [
+      InvoiceType.cash.index,
+      InvoiceType.credit.index,
+      InvoiceType.installment.index,
+      InvoiceType.delivery.index,
+    ];
+    final typeList = '${t[0]},${t[1]},${t[2]},${t[3]}';
+
+    final purchaseJoin = '''
+LEFT JOIN (
+  SELECT customerId AS cid,
+         SUM(
+           CASE
+             WHEN IFNULL(inv.totalFils, 0) != 0
+               THEN CAST(inv.totalFils AS REAL) / 1000.0
+             ELSE IFNULL(inv.total, 0)
+           END
+         ) AS purchaseTotal
+  FROM invoices inv
+  WHERE IFNULL(inv.isReturned, 0) = 0
+    AND inv.customerId IS NOT NULL
+    AND inv.type IN ($typeList)
+  GROUP BY inv.customerId
+) pur ON pur.cid = customers.id
+''';
+
     final orderBy = switch (sortKey) {
-      'balance_desc' => 'balance DESC, name COLLATE NOCASE ASC',
-      'date_desc' => 'createdAt DESC, name COLLATE NOCASE ASC',
-      _ => 'name COLLATE NOCASE ASC',
+      'balance_desc' =>
+        'customers.balance DESC, customers.name COLLATE NOCASE ASC',
+      'date_desc' =>
+        'customers.createdAt DESC, customers.name COLLATE NOCASE ASC',
+      'name_desc' => 'customers.name COLLATE NOCASE DESC',
+      'total_purchases_desc' =>
+        'IFNULL(pur.purchaseTotal, 0) DESC, customers.name COLLATE NOCASE ASC',
+      _ => 'customers.name COLLATE NOCASE ASC',
     };
 
-    return db.rawQuery('''
+    final db = await database;
+    return db.rawQuery(
+      '''
       SELECT
-        id, name, phone, email, address, notes, balance, loyaltyPoints, createdAt, updatedAt
+        customers.id,
+        customers.name,
+        customers.phone,
+        customers.email,
+        customers.address,
+        customers.notes,
+        customers.balance,
+        customers.loyaltyPoints,
+        customers.createdAt,
+        customers.updatedAt,
+        IFNULL(pur.purchaseTotal, 0) AS purchaseTotal
       FROM customers
+      $purchaseJoin
       $whereSql
       ORDER BY $orderBy
       LIMIT ? OFFSET ?
-    ''', [...args, limit, offset]);
+      ''',
+      [...args, limit, offset],
+    );
   }
 
   /// يعيد `id` العميل الذي يملك نفس تسلسل الأرقام (بعد التطبيع) في `customers.phone`

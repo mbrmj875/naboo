@@ -1,0 +1,5 @@
+# Copy to key.properties and fill in. Keep key.properties and upload-keystore.jks private.
+storePassword=
+keyPassword=
+keyAlias=naboo_upload
+storeFile=upload-keystore.jks

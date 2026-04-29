@@ -5,6 +5,7 @@ import '../../models/installment_settings_data.dart';
 import '../../services/cloud_sync_service.dart';
 import '../../services/database_helper.dart';
 import '../../theme/design_tokens.dart';
+import '../../utils/screen_layout.dart';
 
 final _pctFmt = NumberFormat('#,##0.#', 'en');
 
@@ -31,8 +32,7 @@ class _InstallmentSettingsScreenState extends State<InstallmentSettingsScreen> {
   Color get _surface => Theme.of(context).colorScheme.surface;
   Color get _primary => Theme.of(context).colorScheme.primary;
   Color get _onPrimary => Theme.of(context).colorScheme.onPrimary;
-  Color get _filterBg =>
-      Theme.of(context).colorScheme.surfaceContainerHighest;
+  Color get _filterBg => Theme.of(context).colorScheme.surfaceContainerHighest;
   Color get _textPrimary => Theme.of(context).colorScheme.onSurface;
   Color get _textSecondary => Theme.of(context).colorScheme.onSurfaceVariant;
   Color get _outline => Theme.of(context).colorScheme.outline;
@@ -102,8 +102,7 @@ class _InstallmentSettingsScreenState extends State<InstallmentSettingsScreen> {
     final cnt = int.tryParse(_defCount.text.trim()) ?? 1;
     final iv = int.tryParse(_interval.text.trim()) ?? 1;
     final saleInt =
-        double.tryParse(_saleDefInterest.text.replaceAll(',', '').trim()) ??
-            0;
+        double.tryParse(_saleDefInterest.text.replaceAll(',', '').trim()) ?? 0;
     if (minP < 0 || minP > 100) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('نسبة المقدّم يجب أن تكون بين 0 و 100')),
@@ -140,9 +139,9 @@ class _InstallmentSettingsScreenState extends State<InstallmentSettingsScreen> {
     CloudSyncService.instance.scheduleSyncSoon();
     if (!mounted) return;
     setState(() => _data = next);
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('تم حفظ إعدادات التقسيط')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('تم حفظ إعدادات التقسيط')));
   }
 
   PreferredSizeWidget _buildAppBar() {
@@ -217,7 +216,12 @@ class _InstallmentSettingsScreenState extends State<InstallmentSettingsScreen> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+            padding: EdgeInsetsDirectional.only(
+              start: ScreenLayout.of(context).pageHorizontalGap,
+              end: ScreenLayout.of(context).pageHorizontalGap,
+              top: 14,
+              bottom: 10,
+            ),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -283,11 +287,7 @@ class _InstallmentSettingsScreenState extends State<InstallmentSettingsScreen> {
         padding: const EdgeInsets.only(top: 6),
         child: Text(
           subtitle,
-          style: TextStyle(
-            fontSize: 12.5,
-            height: 1.4,
-            color: _textSecondary,
-          ),
+          style: TextStyle(fontSize: 12.5, height: 1.4, color: _textSecondary),
         ),
       ),
       value: value,
@@ -354,9 +354,10 @@ class _InstallmentSettingsScreenState extends State<InstallmentSettingsScreen> {
                             const SizedBox(height: 16),
                             TextField(
                               controller: _minPct,
-                              keyboardType: const TextInputType.numberWithOptions(
-                                decimal: true,
-                              ),
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(
+                                    decimal: true,
+                                  ),
                               decoration: _fieldDecoration(
                                 label: 'أقل نسبة مقدّم من إجمالي الفاتورة (%)',
                                 helper:
@@ -408,11 +409,13 @@ class _InstallmentSettingsScreenState extends State<InstallmentSettingsScreen> {
                             const SizedBox(height: 16),
                             TextField(
                               controller: _saleDefInterest,
-                              keyboardType: const TextInputType.numberWithOptions(
-                                decimal: true,
-                              ),
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(
+                                    decimal: true,
+                                  ),
                               decoration: _fieldDecoration(
-                                label: 'نسبة الفائدة الافتراضية في بيع التقسيط (%)',
+                                label:
+                                    'نسبة الفائدة الافتراضية في بيع التقسيط (%)',
                                 helper:
                                     'تُملأ خانة الفائدة عند اختيار «تقسيط»؛ وعند إخفاء البطاقة تُستخدم عند حفظ الفاتورة.',
                                 prefixIcon: Icon(
@@ -451,8 +454,9 @@ class _InstallmentSettingsScreenState extends State<InstallmentSettingsScreen> {
                                   'مفعّل: إضافة شهر تقويمي من تاريخ المرجع. معطّل: تقريب 30 يوماً لكل فترة.',
                               value: _data.useCalendarMonths,
                               onChanged: (v) => setState(
-                                () => _data =
-                                    _data.copyWith(useCalendarMonths: v),
+                                () => _data = _data.copyWith(
+                                  useCalendarMonths: v,
+                                ),
                               ),
                             ),
                             const SizedBox(height: 12),
@@ -466,7 +470,9 @@ class _InstallmentSettingsScreenState extends State<InstallmentSettingsScreen> {
                             ),
                             const SizedBox(height: 8),
                             DropdownButtonFormField<String>(
-                              key: ValueKey<String>(_data.defaultFirstDueAnchor),
+                              key: ValueKey<String>(
+                                _data.defaultFirstDueAnchor,
+                              ),
                               initialValue: _data.defaultFirstDueAnchor,
                               decoration: _fieldDecoration(
                                 label: 'الخيار',
@@ -474,19 +480,23 @@ class _InstallmentSettingsScreenState extends State<InstallmentSettingsScreen> {
                               ),
                               items: const [
                                 DropdownMenuItem(
-                                  value: InstallmentSettingsData.anchorInvoiceDate,
+                                  value:
+                                      InstallmentSettingsData.anchorInvoiceDate,
                                   child: Text('من تاريخ الفاتورة'),
                                 ),
                                 DropdownMenuItem(
                                   value: InstallmentSettingsData.anchorCustom,
-                                  child: Text('يحدده البائع من التقويم (اتفاق)'),
+                                  child: Text(
+                                    'يحدده البائع من التقويم (اتفاق)',
+                                  ),
                                 ),
                               ],
                               onChanged: (v) {
                                 if (v == null) return;
                                 setState(
-                                  () => _data =
-                                      _data.copyWith(defaultFirstDueAnchor: v),
+                                  () => _data = _data.copyWith(
+                                    defaultFirstDueAnchor: v,
+                                  ),
                                 );
                               },
                             ),

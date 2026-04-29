@@ -2,9 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
-import '../services/cloud_sync_service.dart';
 import '../widgets/app_brand_mark.dart';
-import 'auth/device_revoked_screen.dart';
+import '../widgets/inputs/app_input.dart';
+import '../theme/erp_input_constants.dart';
+import 'auth/email_otp_screen.dart';
+import 'auth/forgot_password_email_screen.dart';
+import '../services/app_settings_repository.dart';
+import '../services/business_setup_settings.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -31,7 +35,7 @@ class _LoginScreenState extends State<LoginScreen>
   bool _obscurePassword = true;
   bool _obscureSignupPassword = true;
   bool _obscureConfirmSignupPassword = true;
-  String _dialCode = '+964';
+  final String _dialCode = '+964';
 
   late AnimationController _animController;
   late Animation<double> _slideAnim;
@@ -41,7 +45,24 @@ class _LoginScreenState extends State<LoginScreen>
   static const Color _navy2 = Color(0xFF0D1F3C);
   static const Color _navy3 = Color(0xFF1A3A6B);
   static const Color _gold = Color(0xFFB8960C);
+  static const Color _navyPrimary = Color(0xFF1A2340);
+  static const Color _goldLink = Color(0xFFF5C518);
 
+  final _focusLoginUser = FocusNode();
+  final _focusLoginPass = FocusNode();
+  final _focusSignupName = FocusNode();
+  final _focusSignupEmail = FocusNode();
+  final _focusSignupPhone = FocusNode();
+  final _focusSignupPwd = FocusNode();
+  final _focusSignupConfirm = FocusNode();
+
+  bool _blurredLoginUser = false;
+  bool _blurredLoginPass = false;
+  bool _blurredSignupName = false;
+  bool _blurredSignupEmail = false;
+  bool _blurredSignupPhone = false;
+  bool _blurredSignupPwd = false;
+  bool _blurredSignupConfirm = false;
   bool get _hasMinLength => _signupPasswordController.text.length >= 8;
   bool get _hasUppercase =>
       RegExp(r'[A-Z]').hasMatch(_signupPasswordController.text);
@@ -52,13 +73,108 @@ class _LoginScreenState extends State<LoginScreen>
   bool get _hasSpecialChar => RegExp(
     r'[!@#\$%\^&\*\(\)_\+\-\=\[\]\{\};:,.<>\/\?\\|`~]',
   ).hasMatch(_signupPasswordController.text);
+  bool get _allPasswordRequirementsMet =>
+      _hasMinLength &&
+      _hasUppercase &&
+      _hasLowercase &&
+      _hasDigit &&
+      _hasSpecialChar;
+
+  bool get _showPasswordRequirementsPanel {
+    final t = _signupPasswordController.text;
+    if (t.isEmpty) return false;
+    if (_allPasswordRequirementsMet && !_focusSignupPwd.hasFocus) {
+      return false;
+    }
+    return true;
+  }
+
+  bool get _signupSubmissionReady {
+    if (_nameController.text.trim().length < 3) return false;
+    if (!_emailFormatOk(_emailController.text.trim())) return false;
+    if (!_iraqMobileOk(_phoneController.text.trim())) return false;
+    if (!_allPasswordRequirementsMet) return false;
+    final c = _confirmSignupPasswordController.text;
+    if (c.isEmpty || c != _signupPasswordController.text) return false;
+    return true;
+  }
+
+  bool _emailFormatOk(String t) {
+    if (t.isEmpty) return false;
+    return RegExp(
+      r'^[\w.\-+]+@[\w-]+\.[a-z]{2,}$',
+      caseSensitive: false,
+    ).hasMatch(t.trim());
+  }
+
+  bool _iraqMobileOk(String raw) => RegExp(r'^07\d{8}$').hasMatch(raw.trim());
+
   bool get _passwordsMatch =>
       _confirmSignupPasswordController.text.isNotEmpty &&
       _confirmSignupPasswordController.text == _signupPasswordController.text;
 
+  void _registerBlurListeners() {
+    void userTick() {
+      if (!_focusLoginUser.hasFocus && mounted) {
+        setState(() => _blurredLoginUser = true);
+      }
+    }
+
+    void passTick() {
+      if (!_focusLoginPass.hasFocus && mounted) {
+        setState(() => _blurredLoginPass = true);
+      }
+    }
+
+    _focusLoginUser.addListener(userTick);
+    _focusLoginPass.addListener(passTick);
+
+    void signupNameTick() {
+      if (!_focusSignupName.hasFocus && mounted) {
+        setState(() => _blurredSignupName = true);
+      }
+    }
+
+    void signupEmailTick() {
+      if (!_focusSignupEmail.hasFocus && mounted) {
+        setState(() => _blurredSignupEmail = true);
+      }
+    }
+
+    void signupPhoneTick() {
+      if (!_focusSignupPhone.hasFocus && mounted) {
+        setState(() => _blurredSignupPhone = true);
+      }
+    }
+
+    void signupPwdTick() {
+      if (!_focusSignupPwd.hasFocus && mounted) {
+        setState(() => _blurredSignupPwd = true);
+      } else if (mounted) {
+        setState(() {});
+      }
+    }
+
+    void signupConfirmTick() {
+      if (!_focusSignupConfirm.hasFocus && mounted) {
+        setState(() => _blurredSignupConfirm = true);
+      }
+    }
+
+    _focusSignupName.addListener(signupNameTick);
+    _focusSignupEmail.addListener(signupEmailTick);
+    _focusSignupPhone.addListener(signupPhoneTick);
+    _focusSignupPwd.addListener(signupPwdTick);
+    _focusSignupConfirm.addListener(signupConfirmTick);
+  }
+
   @override
   void initState() {
     super.initState();
+    _registerBlurListeners();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _focusLoginUser.requestFocus();
+    });
     _animController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 900),
@@ -73,6 +189,13 @@ class _LoginScreenState extends State<LoginScreen>
 
   @override
   void dispose() {
+    _focusLoginUser.dispose();
+    _focusLoginPass.dispose();
+    _focusSignupName.dispose();
+    _focusSignupEmail.dispose();
+    _focusSignupPhone.dispose();
+    _focusSignupPwd.dispose();
+    _focusSignupConfirm.dispose();
     _usernameController.dispose();
     _passwordController.dispose();
     _nameController.dispose();
@@ -87,10 +210,27 @@ class _LoginScreenState extends State<LoginScreen>
   void _toggleMode() {
     setState(() {
       _isSignUpMode = !_isSignUpMode;
+      _blurredSignupName = false;
+      _blurredSignupEmail = false;
+      _blurredSignupPhone = false;
+      _blurredSignupPwd = false;
+      _blurredSignupConfirm = false;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (_isSignUpMode) {
+        _focusSignupName.requestFocus();
+      } else {
+        _focusLoginUser.requestFocus();
+      }
     });
   }
 
   Future<void> _login() async {
+    setState(() {
+      _blurredLoginUser = true;
+      _blurredLoginPass = true;
+    });
     if (!_loginFormKey.currentState!.validate()) return;
     setState(() => _isLoading = true);
     final auth = context.read<AuthProvider>();
@@ -103,7 +243,14 @@ class _LoginScreenState extends State<LoginScreen>
     if (!mounted) return;
     setState(() => _isLoading = false);
     if (success) {
-      nav.pushReplacementNamed('/open-shift');
+      var target = '/open-shift';
+      try {
+        final completed = await BusinessSetupSettingsData.isCompleted(
+          AppSettingsRepository.instance,
+        );
+        if (!completed) target = '/onboarding';
+      } catch (_) {}
+      nav.pushReplacementNamed(target);
       return;
     }
     messenger.showSnackBar(
@@ -116,17 +263,20 @@ class _LoginScreenState extends State<LoginScreen>
   }
 
   Future<void> _signup() async {
+    setState(() {
+      _blurredSignupName = true;
+      _blurredSignupEmail = true;
+      _blurredSignupPhone = true;
+      _blurredSignupPwd = true;
+      _blurredSignupConfirm = true;
+    });
     if (!_signupFormKey.currentState!.validate()) return;
     setState(() => _isLoading = true);
     final auth = context.read<AuthProvider>();
     final nav = Navigator.of(context);
     final messenger = ScaffoldMessenger.of(context);
-    final err = await auth.register(
-      displayName: _nameController.text.trim(),
-      email: _emailController.text.trim(),
-      phone: '$_dialCode${_phoneController.text.trim()}',
-      password: _signupPasswordController.text,
-    );
+    final email = _emailController.text.trim();
+    final err = await auth.sendEmailOtp(email);
     if (!mounted) return;
     setState(() => _isLoading = false);
     if (err != null) {
@@ -139,58 +289,16 @@ class _LoginScreenState extends State<LoginScreen>
       );
       return;
     }
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text(
-          auth.isAdmin
-              ? 'تم إنشاء حساب المدير الأول وتسجيل الدخول'
-              : 'تم إنشاء الحساب وتسجيل الدخول',
+    await nav.push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => EmailOtpScreen(
+          email: email,
+          displayName: _nameController.text.trim(),
+          phone: '$_dialCode${_phoneController.text.trim()}',
+          password: _signupPasswordController.text,
         ),
-        backgroundColor: Colors.green.shade700,
-        behavior: SnackBarBehavior.floating,
       ),
     );
-    nav.pushReplacementNamed('/open-shift');
-  }
-
-  Future<void> _signInWithGoogle() async {
-    setState(() => _isLoading = true);
-    final auth = context.read<AuthProvider>();
-    final nav = Navigator.of(context);
-    final messenger = ScaffoldMessenger.of(context);
-    final err = await auth.signInWithGoogle();
-    if (!mounted) return;
-    setState(() => _isLoading = false);
-    if (err != null) {
-      if (err == kDeviceAccessRevokedCode) {
-        await Navigator.of(context).push<void>(
-          MaterialPageRoute<void>(
-            builder: (_) => const DeviceRevokedScreen(),
-          ),
-        );
-        return;
-      }
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(err),
-          backgroundColor: Colors.red.shade700,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-      return;
-    }
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text(
-          auth.isAdmin
-              ? 'تم تسجيل الدخول عبر Google كمدير'
-              : 'تم تسجيل الدخول عبر Google',
-        ),
-        backgroundColor: Colors.green.shade700,
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
-    nav.pushReplacementNamed('/open-shift');
   }
 
   @override
@@ -199,11 +307,26 @@ class _LoginScreenState extends State<LoginScreen>
     return Scaffold(
       backgroundColor: _navy1,
       body: isWide
-          ? Row(
-              children: [
-                Expanded(flex: 5, child: _brandPanel(isNarrow: false)),
-                Expanded(flex: 6, child: _formPanel(isNarrow: false)),
-              ],
+          ? Directionality(
+              textDirection: TextDirection.ltr,
+              child: Row(
+                children: [
+                  Expanded(
+                    flex: 6,
+                    child: Directionality(
+                      textDirection: TextDirection.rtl,
+                      child: _formPanel(isNarrow: false),
+                    ),
+                  ),
+                  Expanded(
+                    flex: 5,
+                    child: Directionality(
+                      textDirection: TextDirection.rtl,
+                      child: _brandPanel(isNarrow: false),
+                    ),
+                  ),
+                ],
+              ),
             )
           : Column(
               children: [
@@ -347,28 +470,12 @@ class _LoginScreenState extends State<LoginScreen>
                   const SizedBox(height: 8),
                   Text(
                     _isSignUpMode
-                        ? 'أنشئ حسابك الآن بدون الانتقال لصفحة أخرى'
-                        : 'أدخل البريد (أو اسم المستخدم) وكلمة السر، أو استخدم Google',
+                        ? 'سيصلك رمز تحقق على بريدك الإلكتروني لتأكيد حسابك'
+                        : 'أدخل البريد الإلكتروني وكلمة السر للدخول',
                     textAlign: TextAlign.center,
                     style: TextStyle(fontSize: 13, color: Colors.grey.shade500),
                   ),
-                  const SizedBox(height: 16),
-                  OutlinedButton.icon(
-                    onPressed: _isLoading ? null : _signInWithGoogle,
-                    icon: const Icon(Icons.g_mobiledata_rounded, size: 24),
-                    label: Text(
-                      _isSignUpMode
-                          ? 'التسجيل عبر Google'
-                          : 'الدخول عبر Google',
-                    ),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: _navy2,
-                      side: BorderSide(color: Colors.grey.shade300),
-                      backgroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
+                  const SizedBox(height: 20),
                   AnimatedSwitcher(
                     duration: const Duration(milliseconds: 260),
                     child: _isSignUpMode ? _signUpForm() : _loginForm(),
@@ -381,7 +488,7 @@ class _LoginScreenState extends State<LoginScreen>
                           ? 'لديك حساب؟ العودة إلى تسجيل الدخول'
                           : 'ليس لديك حساب؟ إنشاء حساب جديد',
                       style: const TextStyle(
-                        color: _gold,
+                        color: _goldLink,
                         fontWeight: FontWeight.w700,
                       ),
                     ),
@@ -396,47 +503,107 @@ class _LoginScreenState extends State<LoginScreen>
   }
 
   Widget _loginForm() {
+    String? validateUser(String? value) {
+      final t = (value ?? '').trim();
+      if (!_blurredLoginUser) return null;
+      if (t.isEmpty) return 'هذا الحقل مطلوب';
+      if (t.length < 3) return 'يجب أن يكون 3 أحرف على الأقل';
+      return null;
+    }
+
+    String? validatePass(String? value) {
+      if (!_blurredLoginPass) return null;
+      if ((value ?? '').trim().isEmpty) return 'هذا الحقل مطلوب';
+      return null;
+    }
+
     return Form(
       key: _loginFormKey,
       child: Column(
         key: const ValueKey('login'),
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _label('البريد أو اسم المستخدم'),
-          const SizedBox(height: 8),
-          TextFormField(
+          AppInput(
+            label: 'البريد أو اسم المستخدم',
+            labelFontWeight: FontWeight.w700,
+            isRequired: true,
+            hint: 'البريد أو اسم الدخول',
             controller: _usernameController,
-            keyboardType: TextInputType.emailAddress,
-            textDirection: TextDirection.ltr,
-            decoration: _dec(
-              'البريد أو اسم الدخول',
+            focusNode: _focusLoginUser,
+            fillColor: Colors.white,
+            cursorColor: _navy2,
+            suffixIcon: Icon(
               Icons.person_outline_rounded,
+              color: _navy3,
+              size: 20,
             ),
-            validator: (v) => v == null || v.trim().isEmpty
-                ? 'أدخل البريد أو اسم المستخدم'
-                : null,
+            keyboardType: TextInputType.text,
+            textInputAction: TextInputAction.next,
+            onFieldSubmitted: (_) =>
+                FocusScope.of(context).requestFocus(_focusLoginPass),
+            validator: validateUser,
           ),
           const SizedBox(height: 14),
-          _label('رمز الدخول'),
-          const SizedBox(height: 8),
-          TextFormField(
+          AppInput(
+            label: 'رمز الدخول',
+            labelFontWeight: FontWeight.w700,
+            isRequired: true,
+            hint: 'أدخل رمز الدخول',
             controller: _passwordController,
+            focusNode: _focusLoginPass,
             obscureText: _obscurePassword,
-            decoration: _dec(
-              'أدخل رمز الدخول',
+            fillColor: Colors.white,
+            cursorColor: _navy2,
+            textDirection: TextDirection.ltr,
+            densePrefixConstraints: const BoxConstraints(
+              minHeight: 48,
+              minWidth: 48,
+            ),
+            prefixIcon: IconButton(
+              tooltip: _obscurePassword ? 'إظهار الرمز' : 'إخفاء الرمز',
+              splashRadius: 22,
+              icon: Icon(
+                _obscurePassword
+                    ? Icons.visibility_off_outlined
+                    : Icons.visibility_outlined,
+                color: _navy3,
+              ),
+              onPressed: () =>
+                  setState(() => _obscurePassword = !_obscurePassword),
+            ),
+            suffixIcon: Icon(
               Icons.lock_outline_rounded,
-              suffix: IconButton(
-                icon: Icon(
-                  _obscurePassword
-                      ? Icons.visibility_off_outlined
-                      : Icons.visibility_outlined,
-                ),
-                onPressed: () =>
-                    setState(() => _obscurePassword = !_obscurePassword),
+              color: _navy3,
+              size: 20,
+            ),
+            textInputAction: TextInputAction.done,
+            onFieldSubmitted: (_) {
+              if (!_isLoading) _login();
+            },
+            validator: validatePass,
+          ),
+          const SizedBox(height: 8),
+          Align(
+            alignment: AlignmentDirectional.centerStart,
+            child: TextButton(
+              onPressed: _isLoading
+                  ? null
+                  : () async {
+                      await Navigator.of(context).push<void>(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const ForgotPasswordEmailScreen(),
+                        ),
+                      );
+                    },
+              style: TextButton.styleFrom(
+                padding: EdgeInsetsDirectional.zero,
+                foregroundColor: _goldLink,
+              ),
+              child: const Text(
+                'نسيت رمز الدخول؟',
+                style: TextStyle(fontWeight: FontWeight.w700),
               ),
             ),
-            validator: (v) =>
-                v == null || v.trim().isEmpty ? 'أدخل رمز الدخول' : null,
           ),
           const SizedBox(height: 20),
           SizedBox(
@@ -444,7 +611,7 @@ class _LoginScreenState extends State<LoginScreen>
             child: ElevatedButton(
               onPressed: _isLoading ? null : _login,
               style: ElevatedButton.styleFrom(
-                backgroundColor: _navy2,
+                backgroundColor: _navyPrimary,
                 foregroundColor: Colors.white,
               ),
               child: _isLoading
@@ -464,152 +631,366 @@ class _LoginScreenState extends State<LoginScreen>
     );
   }
 
+  Widget _iraqDialChip() {
+    return Tooltip(
+      message: '+964 العراق — سيتوفر اختيار دول أخرى لاحقاً',
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () {},
+          borderRadius: ErpInputConstants.borderRadius,
+          child: Container(
+            constraints: BoxConstraints(
+              minHeight: ErpInputConstants.minHeightSingleLine + 14,
+            ),
+            padding: const EdgeInsetsDirectional.symmetric(horizontal: 10),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: ErpInputConstants.borderRadius,
+              border: Border.all(color: Colors.grey.shade300, width: 1.25),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '🇮🇶',
+                  style: TextStyle(
+                    fontSize: 22,
+                    height: 1,
+                    fontFamilyFallback: const [
+                      'Segoe UI Emoji',
+                      'Apple Color Emoji',
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                const Text('+964'),
+                Icon(
+                  Icons.keyboard_arrow_down_rounded,
+                  color: _navy3,
+                  size: 22,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _signUpForm() {
+    String? validateSignupName(String? value) {
+      final t = (value ?? '').trim();
+      if (!_blurredSignupName) return null;
+      if (t.isEmpty) return 'الاسم مطلوب';
+      if (t.length < 3) return 'الاسم مطلوب (3 أحرف على الأقل)';
+      return null;
+    }
+
+    String? validateSignupEmail(String? value) {
+      final t = (value ?? '').trim();
+      if (!_blurredSignupEmail) return null;
+      if (t.isEmpty) return 'البريد مطلوب';
+      if (!_emailFormatOk(t)) return 'صيغة البريد غير صحيحة';
+      return null;
+    }
+
+    String? validateSignupPhone(String? value) {
+      final raw = (value ?? '').trim();
+      if (!_blurredSignupPhone) return null;
+      if (!_iraqMobileOk(raw)) return 'رقم الجوال غير صحيح';
+      return null;
+    }
+
+    String? validateSignupPassword(String? value) {
+      final t = value ?? '';
+      if (t.isEmpty) {
+        if (!_blurredSignupPwd) return null;
+        return 'كلمة السر مطلوبة';
+      }
+      if (!_allPasswordRequirementsMet) {
+        return 'كلمة السر لا تحقق الشروط المطلوبة';
+      }
+      return null;
+    }
+
+    String? validateConfirm(String? value) {
+      final t = value ?? '';
+      if (t.isNotEmpty && !_passwordsMatch) {
+        return 'كلمتا السر غير متطابقتين';
+      }
+      if (t.isEmpty) {
+        if (!_blurredSignupConfirm) return null;
+        return 'الرجاء إعادة كتابة كلمة السر';
+      }
+      return null;
+    }
+
+    final confirmHasText = _confirmSignupPasswordController.text.isNotEmpty;
+    final mismatchLabelVisible = confirmHasText && !_passwordsMatch;
+
     return Form(
       key: _signupFormKey,
-      autovalidateMode: AutovalidateMode.onUserInteraction,
+      autovalidateMode: AutovalidateMode.always,
       child: Column(
         key: const ValueKey('signup'),
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _label('الاسم التجاري/الشخصي'),
-          const SizedBox(height: 8),
-          TextFormField(
+          AppInput(
+            label: 'الاسم التجاري/الشخصي',
+            labelFontWeight: FontWeight.w700,
+            isRequired: true,
+            hint: 'أدخل الاسم',
             controller: _nameController,
-            decoration: _dec('أدخل الاسم', Icons.storefront_outlined),
-            validator: (v) => v == null || v.trim().length < 3
-                ? 'الاسم مطلوب (3 أحرف على الأقل)'
-                : null,
+            focusNode: _focusSignupName,
+            fillColor: Colors.white,
+            cursorColor: _navy2,
+            suffixIcon: Icon(
+              Icons.storefront_outlined,
+              color: _navy3,
+              size: 20,
+            ),
+            keyboardType: TextInputType.text,
+            textInputAction: TextInputAction.next,
+            onFieldSubmitted: (_) =>
+                FocusScope.of(context).requestFocus(_focusSignupEmail),
+            validator: validateSignupName,
           ),
-          const SizedBox(height: 12),
-          _label('البريد الإلكتروني'),
-          const SizedBox(height: 8),
-          TextFormField(
+          const SizedBox(height: 14),
+          AppInput(
+            label: 'البريد الإلكتروني',
+            labelFontWeight: FontWeight.w700,
+            isRequired: true,
+            hint: 'example@domain.com',
             controller: _emailController,
+            focusNode: _focusSignupEmail,
+            fillColor: Colors.white,
+            cursorColor: _navy2,
+            suffixIcon: Icon(Icons.email_outlined, color: _navy3, size: 20),
             keyboardType: TextInputType.emailAddress,
             textDirection: TextDirection.ltr,
-            decoration: _dec('example@domain.com', Icons.email_outlined),
-            validator: (v) {
-              if (v == null || v.trim().isEmpty) return 'البريد مطلوب';
-              final ok = RegExp(
-                r'^[\w\.\-]+@[\w\-]+\.[a-z]{2,}$',
-                caseSensitive: false,
-              ).hasMatch(v.trim());
-              return ok ? null : 'البريد غير صحيح';
-            },
+            textInputAction: TextInputAction.next,
+            onFieldSubmitted: (_) =>
+                FocusScope.of(context).requestFocus(_focusSignupPhone),
+            validator: validateSignupEmail,
           ),
-          const SizedBox(height: 12),
-          _label('رقم الجوال'),
-          const SizedBox(height: 8),
+          const SizedBox(height: 14),
           Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Container(
-                height: 52,
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  border: Border.all(color: Colors.grey.shade300),
-                  borderRadius: BorderRadius.zero,
-                ),
-                child: DropdownButtonHideUnderline(
-                  child: DropdownButton<String>(
-                    value: _dialCode,
-                    items: const ['+964', '+966', '+971', '+965', '+20', '+1']
-                        .map((c) => DropdownMenuItem(value: c, child: Text(c)))
-                        .toList(),
-                    onChanged: (v) => setState(() => _dialCode = v!),
+              Flexible(
+                child: Text(
+                  'رقم الجوال',
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: _navy2,
                   ),
+                  maxLines: 2,
+                  textAlign: TextAlign.end,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: TextFormField(
-                  controller: _phoneController,
-                  keyboardType: TextInputType.phone,
-                  textDirection: TextDirection.ltr,
-                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                  decoration: _dec('7700000000', Icons.phone_outlined),
-                  validator: (v) => v == null || v.trim().length < 7
-                      ? 'رقم الجوال غير صحيح'
-                      : null,
+              Padding(
+                padding: const EdgeInsetsDirectional.only(start: 4),
+                child: Text(
+                  '*',
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontSize: 13,
+                    color: Colors.red.shade700,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 12),
-          _label('كلمة السر'),
-          const SizedBox(height: 8),
-          TextFormField(
-            controller: _signupPasswordController,
-            obscureText: _obscureSignupPassword,
-            onChanged: (_) => setState(() {}),
-            decoration: _dec(
-              '8 أحرف على الأقل',
-              Icons.lock_outline_rounded,
-              suffix: IconButton(
-                icon: Icon(
-                  _obscureSignupPassword
-                      ? Icons.visibility_off_outlined
-                      : Icons.visibility_outlined,
+          const SizedBox(height: 6),
+          Directionality(
+            textDirection: TextDirection.ltr,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _iraqDialChip(),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: AppInput(
+                    label: ' ',
+                    showLabel: false,
+                    hint: '7700000000',
+                    controller: _phoneController,
+                    focusNode: _focusSignupPhone,
+                    fillColor: Colors.white,
+                    cursorColor: _navy2,
+                    suffixIcon: Icon(
+                      Icons.phone_outlined,
+                      color: _navy3,
+                      size: 20,
+                    ),
+                    keyboardType: TextInputType.number,
+                    textDirection: TextDirection.ltr,
+                    textInputAction: TextInputAction.next,
+                    inputFormatters: [
+                      FilteringTextInputFormatter.digitsOnly,
+                      LengthLimitingTextInputFormatter(10),
+                    ],
+                    overlayShadowOnFocus: false,
+                    onChanged: (_) => setState(() {}),
+                    onFieldSubmitted: (_) =>
+                        FocusScope.of(context).requestFocus(_focusSignupPwd),
+                    validator: validateSignupPhone,
+                  ),
                 ),
-                onPressed: () => setState(
-                  () => _obscureSignupPassword = !_obscureSignupPassword,
-                ),
-              ),
+              ],
             ),
-            validator: (v) {
-              if (v == null || v.isEmpty) return 'كلمة السر مطلوبة';
-              if (!_hasMinLength ||
-                  !_hasUppercase ||
-                  !_hasLowercase ||
-                  !_hasDigit ||
-                  !_hasSpecialChar) {
-                return 'كلمة السر لا تحقق الشروط المطلوبة';
-              }
-              return null;
-            },
           ),
-          const SizedBox(height: 10),
-          _passwordRulesCard(),
-          const SizedBox(height: 12),
-          _label('إعادة كتابة رمز الدخول'),
-          const SizedBox(height: 8),
-          TextFormField(
-            controller: _confirmSignupPasswordController,
-            obscureText: _obscureConfirmSignupPassword,
-            onChanged: (_) => setState(() {}),
-            decoration: _dec(
-              'أعد كتابة كلمة السر',
-              Icons.lock_reset_rounded,
-              suffix: IconButton(
-                icon: Icon(
-                  _obscureConfirmSignupPassword
-                      ? Icons.visibility_off_outlined
-                      : Icons.visibility_outlined,
-                ),
-                onPressed: () => setState(
-                  () => _obscureConfirmSignupPassword =
-                      !_obscureConfirmSignupPassword,
-                ),
+          const SizedBox(height: 14),
+          AppInput(
+            label: 'كلمة السر',
+            labelFontWeight: FontWeight.w700,
+            isRequired: true,
+            hint: '8 أحرف على الأقل',
+            controller: _signupPasswordController,
+            focusNode: _focusSignupPwd,
+            obscureText: _obscureSignupPassword,
+            fillColor: Colors.white,
+            cursorColor: _navy2,
+            textDirection: TextDirection.ltr,
+            densePrefixConstraints: const BoxConstraints(
+              minHeight: 48,
+              minWidth: 48,
+            ),
+            prefixIcon: IconButton(
+              tooltip: _obscureSignupPassword ? 'إظهار الرمز' : 'إخفاء الرمز',
+              splashRadius: 22,
+              icon: Icon(
+                _obscureSignupPassword
+                    ? Icons.visibility_off_outlined
+                    : Icons.visibility_outlined,
+                color: _navy3,
+              ),
+              onPressed: () => setState(
+                () => _obscureSignupPassword = !_obscureSignupPassword,
               ),
             ),
-            validator: (v) {
-              if (v == null || v.isEmpty) return 'الرجاء إعادة كتابة كلمة السر';
-              if (v != _signupPasswordController.text) {
-                return 'كلمتا السر غير متطابقتين';
-              }
-              return null;
-            },
+            suffixIcon: Icon(
+              Icons.lock_outline_rounded,
+              color: _navy3,
+              size: 20,
+            ),
+            textInputAction: TextInputAction.next,
+            onChanged: (_) => setState(() {}),
+            onFieldSubmitted: (_) =>
+                FocusScope.of(context).requestFocus(_focusSignupConfirm),
+            validator: validateSignupPassword,
+          ),
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 260),
+            switchInCurve: Curves.easeOutCubic,
+            switchOutCurve: Curves.easeInCubic,
+            child: _showPasswordRequirementsPanel
+                ? Padding(
+                    key: const ValueKey('pwdRules'),
+                    padding: const EdgeInsets.only(top: 10),
+                    child: _passwordRulesCard(),
+                  )
+                : const SizedBox(height: 0, key: ValueKey('noPwd')),
+          ),
+          const SizedBox(height: 14),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              Flexible(
+                child: Text(
+                  'إعادة كتابة رمز الدخول',
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: mismatchLabelVisible ? Colors.red.shade700 : _navy2,
+                  ),
+                  textAlign: TextAlign.end,
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsetsDirectional.only(start: 4),
+                child: Text(
+                  '*',
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontSize: 13,
+                    color: Colors.red.shade700,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 6),
-          _liveMatchHint(),
-          const SizedBox(height: 18),
+          AppInput(
+            label: ' ',
+            showLabel: false,
+            hint: 'أعد كتابة كلمة السر',
+            controller: _confirmSignupPasswordController,
+            focusNode: _focusSignupConfirm,
+            obscureText: _obscureConfirmSignupPassword,
+            fillColor: Colors.white,
+            cursorColor: _navy2,
+            textDirection: TextDirection.ltr,
+            densePrefixConstraints: BoxConstraints(
+              minWidth: confirmHasText ? 112 : 48,
+              minHeight: 48,
+            ),
+            prefixIcon: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  tooltip: _obscureConfirmSignupPassword
+                      ? 'إظهار الرمز'
+                      : 'إخفاء الرمز',
+                  splashRadius: 22,
+                  icon: Icon(
+                    _obscureConfirmSignupPassword
+                        ? Icons.visibility_off_outlined
+                        : Icons.visibility_outlined,
+                    color: _navy3,
+                  ),
+                  onPressed: () => setState(
+                    () => _obscureConfirmSignupPassword =
+                        !_obscureConfirmSignupPassword,
+                  ),
+                ),
+                if (confirmHasText)
+                  IconButton(
+                    tooltip: 'مسح',
+                    splashRadius: 22,
+                    icon: Icon(
+                      Icons.cancel_rounded,
+                      color: Colors.red.shade600,
+                      size: 22,
+                    ),
+                    onPressed: () {
+                      _confirmSignupPasswordController.clear();
+                      setState(() {});
+                    },
+                  ),
+              ],
+            ),
+            suffixIcon: Icon(Icons.task_alt_rounded, color: _navy3, size: 20),
+            textInputAction: TextInputAction.done,
+            onChanged: (_) => setState(() {}),
+            onFieldSubmitted: (_) {
+              if (!_isLoading && _signupSubmissionReady) _signup();
+            },
+            validator: validateConfirm,
+          ),
+          const SizedBox(height: 20),
           SizedBox(
             height: 52,
             child: ElevatedButton(
-              onPressed: _isLoading ? null : _signup,
+              onPressed: (_isLoading || !_signupSubmissionReady)
+                  ? null
+                  : _signup,
               style: ElevatedButton.styleFrom(
-                backgroundColor: _navy2,
+                backgroundColor: _navyPrimary,
                 foregroundColor: Colors.white,
               ),
               child: _isLoading
@@ -629,30 +1010,19 @@ class _LoginScreenState extends State<LoginScreen>
     );
   }
 
-  Widget _label(String text) {
-    return Text(
-      text,
-      style: const TextStyle(
-        fontSize: 13,
-        fontWeight: FontWeight.w600,
-        color: _navy2,
-      ),
-    );
-  }
-
   Widget _passwordRulesCard() {
     return Container(
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
         color: const Color(0xFFF8FAFC),
-        borderRadius: BorderRadius.zero,
+        borderRadius: ErpInputConstants.borderRadius,
         border: Border.all(color: Colors.grey.shade300),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
-            'شروط كلمة السر (احترافي):',
+            'شروط كلمة السر (احترافي)',
             style: TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w700,
@@ -664,21 +1034,22 @@ class _LoginScreenState extends State<LoginScreen>
           _ruleItem(_hasUppercase, 'حرف كبير واحد على الأقل (A-Z)'),
           _ruleItem(_hasLowercase, 'حرف صغير واحد على الأقل (a-z)'),
           _ruleItem(_hasDigit, 'رقم واحد على الأقل (0-9)'),
-          _ruleItem(_hasSpecialChar, 'رمز خاص واحد على الأقل (!@#...)'),
+          _ruleItem(_hasSpecialChar, 'رمز خاص واحد على الأقل (@#!...)'),
         ],
       ),
     );
   }
 
   Widget _ruleItem(bool ok, String label) {
+    const amberUnmet = Color(0xFFF59E0B);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: Row(
         children: [
           Icon(
-            ok ? Icons.check_circle_rounded : Icons.radio_button_unchecked,
+            ok ? Icons.check_circle_rounded : Icons.cancel_rounded,
             size: 16,
-            color: ok ? Colors.green.shade700 : Colors.grey.shade500,
+            color: ok ? Colors.green.shade700 : amberUnmet,
           ),
           const SizedBox(width: 8),
           Text(
@@ -690,64 +1061,6 @@ class _LoginScreenState extends State<LoginScreen>
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _liveMatchHint() {
-    if (_confirmSignupPasswordController.text.isEmpty) {
-      return const SizedBox.shrink();
-    }
-    return Row(
-      children: [
-        Icon(
-          _passwordsMatch ? Icons.check_circle_rounded : Icons.cancel_rounded,
-          size: 16,
-          color: _passwordsMatch ? Colors.green.shade700 : Colors.red.shade700,
-        ),
-        const SizedBox(width: 6),
-        Text(
-          _passwordsMatch ? 'كلمتا السر متطابقتان' : 'كلمتا السر غير متطابقتين',
-          style: TextStyle(
-            fontSize: 12,
-            color: _passwordsMatch
-                ? Colors.green.shade700
-                : Colors.red.shade700,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-      ],
-    );
-  }
-
-  InputDecoration _dec(String hint, IconData icon, {Widget? suffix}) {
-    return InputDecoration(
-      hintText: hint,
-      hintStyle: TextStyle(color: Colors.grey.shade400, fontSize: 13),
-      prefixIcon: Icon(icon, color: _navy3, size: 20),
-      suffixIcon: suffix,
-      filled: true,
-      fillColor: Colors.white,
-      contentPadding: const EdgeInsets.symmetric(vertical: 15, horizontal: 14),
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.zero,
-        borderSide: BorderSide(color: Colors.grey.shade300),
-      ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.zero,
-        borderSide: BorderSide(color: Colors.grey.shade300),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.zero,
-        borderSide: const BorderSide(color: _navy3, width: 1.5),
-      ),
-      errorBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.zero,
-        borderSide: const BorderSide(color: Colors.red),
-      ),
-      focusedErrorBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.zero,
-        borderSide: const BorderSide(color: Colors.red, width: 1.5),
       ),
     );
   }

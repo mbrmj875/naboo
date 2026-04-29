@@ -1,16 +1,16 @@
 import 'package:flutter/material.dart';
 
-const _navy   = Color(0xFF1E3A5F);
-const _teal   = Color(0xFF0D9488);
-const _bg     = Color(0xFFF1F5F9);
-const _card   = Colors.white;
+const _navy = Color(0xFF1E3A5F);
+const _teal = Color(0xFF0D9488);
+const _bg = Color(0xFFF1F5F9);
+const _card = Colors.white;
 const _border = Color(0xFFE2E8F0);
-const _t1     = Color(0xFF0F172A);
-const _t2     = Color(0xFF64748B);
-const _green  = Color(0xFF10B981);
+const _t1 = Color(0xFF0F172A);
+const _t2 = Color(0xFF64748B);
+const _green = Color(0xFF10B981);
 const _orange = Color(0xFFF97316);
-const _blue   = Color(0xFF3B82F6);
-const _red    = Color(0xFFEF4444);
+const _blue = Color(0xFF3B82F6);
+const _red = Color(0xFFEF4444);
 const _purple = Color(0xFF8B5CF6);
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -71,8 +71,8 @@ class _PriceListsScreenState extends State<PriceListsScreen>
   }
 
   void _setDefault(int id) => setState(() {
-        for (final l in _lists) l['isDefault'] = l['id'] == id;
-      });
+    for (final l in _lists) l['isDefault'] = l['id'] == id;
+  });
 
   Future<void> _openForm([Map<String, dynamic>? existing]) async {
     final result = await showModalBottomSheet<Map<String, dynamic>>(
@@ -100,8 +100,9 @@ class _PriceListsScreenState extends State<PriceListsScreen>
 
   Future<void> _delete(Map<String, dynamic> l) async {
     if (l['isDefault'] == true) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('لا يمكن حذف قائمة الأسعار الافتراضية')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('لا يمكن حذف قائمة الأسعار الافتراضية')),
+      );
       return;
     }
     final ok = await showDialog<bool>(
@@ -111,12 +112,14 @@ class _PriceListsScreenState extends State<PriceListsScreen>
         content: Text('هل تريد حذف «${l['name']}»؟'),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('إلغاء')),
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('إلغاء'),
+          ),
           TextButton(
-              style: TextButton.styleFrom(foregroundColor: _red),
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('حذف')),
+            style: TextButton.styleFrom(foregroundColor: _red),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('حذف'),
+          ),
         ],
       ),
     );
@@ -132,8 +135,10 @@ class _PriceListsScreenState extends State<PriceListsScreen>
       child: Scaffold(
         backgroundColor: _bg,
         appBar: AppBar(
-          title: const Text('فوائم الأسعار',
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17)),
+          title: const Text(
+            'فوائم الأسعار',
+            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17),
+          ),
           backgroundColor: _navy,
           foregroundColor: Colors.white,
           elevation: 0,
@@ -152,9 +157,10 @@ class _PriceListsScreenState extends State<PriceListsScreen>
           backgroundColor: _teal,
           onPressed: _openForm,
           icon: const Icon(Icons.add_rounded, color: Colors.white),
-          label: const Text('قائمة جديدة',
-              style:
-                  TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          label: const Text(
+            'قائمة جديدة',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+          ),
         ),
         body: TabBarView(
           controller: _tab,
@@ -169,8 +175,7 @@ class _PriceListsScreenState extends State<PriceListsScreen>
                 onEdit: () => _openForm(_lists[i]),
                 onDelete: () => _delete(_lists[i]),
                 onSetDefault: () => _setDefault(_lists[i]['id'] as int),
-                onViewItems: () =>
-                    _showItems(context, _lists[i]),
+                onViewItems: () => _showItems(context, _lists[i]),
               ),
             ),
 
@@ -219,13 +224,15 @@ class _PriceListCard extends StatelessWidget {
         color: _card,
         borderRadius: BorderRadius.zero,
         border: Border.all(
-            color: isDefault ? color.withValues(alpha: 0.5) : _border,
-            width: isDefault ? 1.5 : 1),
+          color: isDefault ? color.withValues(alpha: 0.5) : _border,
+          width: isDefault ? 1.5 : 1,
+        ),
         boxShadow: [
           BoxShadow(
-              color: Colors.black.withValues(alpha: 0.04),
-              blurRadius: 8,
-              offset: const Offset(0, 2))
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
         ],
       ),
       child: Column(
@@ -246,8 +253,11 @@ class _PriceListCard extends StatelessWidget {
                     color: color.withValues(alpha: 0.15),
                     borderRadius: BorderRadius.zero,
                   ),
-                  child: Icon(Icons.price_change_outlined,
-                      color: color, size: 24),
+                  child: Icon(
+                    Icons.price_change_outlined,
+                    color: color,
+                    size: 24,
+                  ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -257,35 +267,46 @@ class _PriceListCard extends StatelessWidget {
                       Row(
                         children: [
                           Expanded(
-                            child: Text(data['name'],
-                                style: const TextStyle(
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.bold,
-                                    color: _t1)),
+                            child: Text(
+                              data['name'],
+                              style: const TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.bold,
+                                color: _t1,
+                              ),
+                            ),
                           ),
                           if (isDefault)
                             Container(
                               padding: const EdgeInsets.symmetric(
-                                  horizontal: 8, vertical: 3),
+                                horizontal: 8,
+                                vertical: 3,
+                              ),
                               decoration: BoxDecoration(
                                 color: _teal.withValues(alpha: 0.1),
                                 borderRadius: BorderRadius.zero,
                                 border: Border.all(
-                                    color: _teal.withValues(alpha: 0.4)),
+                                  color: _teal.withValues(alpha: 0.4),
+                                ),
                               ),
-                              child: const Text('افتراضي',
-                                  style: TextStyle(
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.bold,
-                                      color: _teal)),
+                              child: const Text(
+                                'افتراضي',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                  color: _teal,
+                                ),
+                              ),
                             ),
                         ],
                       ),
                       const SizedBox(height: 3),
-                      Text(data['description'],
-                          style: const TextStyle(fontSize: 12, color: _t2),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis),
+                      Text(
+                        data['description'],
+                        style: const TextStyle(fontSize: 12, color: _t2),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ],
                   ),
                 ),
@@ -297,28 +318,40 @@ class _PriceListCard extends StatelessWidget {
                   },
                   itemBuilder: (_) => [
                     const PopupMenuItem(
-                        value: 'edit',
-                        child: Row(children: [
+                      value: 'edit',
+                      child: Row(
+                        children: [
                           Icon(Icons.edit_outlined, size: 18),
                           SizedBox(width: 8),
-                          Text('تعديل')
-                        ])),
+                          Text('تعديل'),
+                        ],
+                      ),
+                    ),
                     if (!isDefault)
                       const PopupMenuItem(
-                          value: 'default',
-                          child: Row(children: [
+                        value: 'default',
+                        child: Row(
+                          children: [
                             Icon(Icons.star_outline_rounded, size: 18),
                             SizedBox(width: 8),
-                            Text('تعيين كافتراضي')
-                          ])),
+                            Text('تعيين كافتراضي'),
+                          ],
+                        ),
+                      ),
                     const PopupMenuItem(
-                        value: 'delete',
-                        child: Row(children: [
-                          Icon(Icons.delete_outline_rounded,
-                              size: 18, color: _red),
+                      value: 'delete',
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.delete_outline_rounded,
+                            size: 18,
+                            color: _red,
+                          ),
                           SizedBox(width: 8),
-                          Text('حذف', style: TextStyle(color: _red))
-                        ])),
+                          Text('حذف', style: TextStyle(color: _red)),
+                        ],
+                      ),
+                    ),
                   ],
                 ),
               ],
@@ -327,29 +360,33 @@ class _PriceListCard extends StatelessWidget {
 
           // ── Footer ────────────────────────────────────────────────────────
           Padding(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
             child: Row(
               children: [
                 Icon(Icons.inventory_2_outlined, size: 15, color: color),
                 const SizedBox(width: 6),
-                Text('${data['itemsCount']} صنف',
-                    style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.bold,
-                        color: color)),
+                Text(
+                  '${data['itemsCount']} صنف',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                    color: color,
+                  ),
+                ),
                 const SizedBox(width: 16),
-                const Icon(Icons.calendar_today_outlined,
-                    size: 14, color: _t2),
+                const Icon(Icons.calendar_today_outlined, size: 14, color: _t2),
                 const SizedBox(width: 4),
-                Text(data['createdAt'],
-                    style: const TextStyle(fontSize: 12, color: _t2)),
+                Text(
+                  data['createdAt'],
+                  style: const TextStyle(fontSize: 12, color: _t2),
+                ),
                 const Spacer(),
                 TextButton(
                   onPressed: onViewItems,
-                  child: Text('إدارة الأسعار',
-                      style:
-                          TextStyle(fontSize: 12, color: color)),
+                  child: Text(
+                    'إدارة الأسعار',
+                    style: TextStyle(fontSize: 12, color: color),
+                  ),
                 ),
               ],
             ),
@@ -389,26 +426,71 @@ class _ProductPriceTable extends StatelessWidget {
         child: DataTable(
           headingRowColor: WidgetStateProperty.all(const Color(0xFFF8FAFC)),
           columns: [
-            const DataColumn(label: Text('المنتج', style: TextStyle(fontWeight: FontWeight.bold))),
-            const DataColumn(label: Text('سعر الشراء', style: TextStyle(fontWeight: FontWeight.bold))),
+            const DataColumn(
+              label: Text(
+                'المنتج',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ),
+            const DataColumn(
+              label: Text(
+                'سعر الشراء',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ),
             for (final l in priceLists)
-              DataColumn(label: Text(l['name'], style: const TextStyle(fontWeight: FontWeight.bold))),
+              DataColumn(
+                label: Text(
+                  l['name'],
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+              ),
           ],
           rows: _products.map((p) {
-            return DataRow(cells: [
-              DataCell(Text(p.$1, style: const TextStyle(fontSize: 13))),
-              DataCell(Text('${p.$2.toInt()} د.ع',
-                  style: const TextStyle(fontSize: 13, color: _t2))),
-              // Retail: +30%
-              DataCell(Text('${(p.$2 * 1.30).toInt()} د.ع',
-                  style: const TextStyle(fontSize: 13, color: _blue, fontWeight: FontWeight.bold))),
-              // Wholesale: +15%
-              DataCell(Text('${(p.$2 * 1.15).toInt()} د.ع',
-                  style: const TextStyle(fontSize: 13, color: _green, fontWeight: FontWeight.bold))),
-              // VIP: +20%
-              DataCell(Text('${(p.$2 * 1.20).toInt()} د.ع',
-                  style: const TextStyle(fontSize: 13, color: _purple, fontWeight: FontWeight.bold))),
-            ]);
+            return DataRow(
+              cells: [
+                DataCell(Text(p.$1, style: const TextStyle(fontSize: 13))),
+                DataCell(
+                  Text(
+                    '${p.$2.toInt()} د.ع',
+                    style: const TextStyle(fontSize: 13, color: _t2),
+                  ),
+                ),
+                // Retail: +30%
+                DataCell(
+                  Text(
+                    '${(p.$2 * 1.30).toInt()} د.ع',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      color: _blue,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                // Wholesale: +15%
+                DataCell(
+                  Text(
+                    '${(p.$2 * 1.15).toInt()} د.ع',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      color: _green,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                // VIP: +20%
+                DataCell(
+                  Text(
+                    '${(p.$2 * 1.20).toInt()} د.ع',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      color: _purple,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            );
           }).toList(),
         ),
       ),
@@ -450,8 +532,9 @@ class _PriceItemsSheet extends StatelessWidget {
                 width: 40,
                 height: 4,
                 decoration: BoxDecoration(
-                    color: Colors.grey.shade300,
-                    borderRadius: BorderRadius.zero),
+                  color: Colors.grey.shade300,
+                  borderRadius: BorderRadius.zero,
+                ),
               ),
             ),
             Padding(
@@ -461,44 +544,58 @@ class _PriceItemsSheet extends StatelessWidget {
                   Icon(Icons.price_change_outlined, color: color, size: 22),
                   const SizedBox(width: 10),
                   Expanded(
-                    child: Text('أسعار ${list['name']}',
-                        style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                            color: _t1)),
+                    child: Text(
+                      'أسعار ${list['name']}',
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: _t1,
+                      ),
+                    ),
                   ),
                 ],
               ),
             ),
             const Divider(height: 1, color: _border),
             Padding(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: Row(
                 children: [
                   const Expanded(
-                      flex: 4,
-                      child: Text('المنتج',
-                          style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                              color: _t2))),
+                    flex: 4,
+                    child: Text(
+                      'المنتج',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: _t2,
+                      ),
+                    ),
+                  ),
                   const Expanded(
-                      flex: 3,
-                      child: Text('سعر البيع',
-                          style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                              color: _t2),
-                          textAlign: TextAlign.center)),
+                    flex: 3,
+                    child: Text(
+                      'سعر البيع',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: _t2,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
                   const Expanded(
-                      flex: 3,
-                      child: Text('سعر الشراء',
-                          style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                              color: _t2),
-                          textAlign: TextAlign.center)),
+                    flex: 3,
+                    child: Text(
+                      'سعر الشراء',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: _t2,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
                   const SizedBox(width: 36),
                 ],
               ),
@@ -514,36 +611,48 @@ class _PriceItemsSheet extends StatelessWidget {
                   final item = _items[i];
                   return Padding(
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 10),
+                      horizontal: 16,
+                      vertical: 10,
+                    ),
                     child: Row(
                       children: [
                         Expanded(
                           flex: 4,
-                          child: Text(item.$1,
-                              style: const TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                  color: _t1)),
+                          child: Text(
+                            item.$1,
+                            style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: _t1,
+                            ),
+                          ),
                         ),
                         Expanded(
                           flex: 3,
-                          child: Text('${item.$2} د.ع',
-                              style: TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.bold,
-                                  color: color),
-                              textAlign: TextAlign.center),
+                          child: Text(
+                            '${item.$2} د.ع',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.bold,
+                              color: color,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
                         ),
                         Expanded(
                           flex: 3,
-                          child: Text('${item.$3} د.ع',
-                              style: const TextStyle(
-                                  fontSize: 12, color: _t2),
-                              textAlign: TextAlign.center),
+                          child: Text(
+                            '${item.$3} د.ع',
+                            style: const TextStyle(fontSize: 12, color: _t2),
+                            textAlign: TextAlign.center,
+                          ),
                         ),
                         IconButton(
-                          icon: const Icon(Icons.edit_outlined,
-                              size: 18, color: _t2),
+                          icon: const Icon(
+                            Icons.edit_outlined,
+                            size: 18,
+                            color: _t2,
+                          ),
                           onPressed: () {},
                           padding: EdgeInsets.zero,
                           constraints: const BoxConstraints(),
@@ -621,37 +730,41 @@ class _PriceListFormState extends State<_PriceListForm> {
                   width: 40,
                   height: 4,
                   decoration: BoxDecoration(
-                      color: Colors.grey.shade300,
-                      borderRadius: BorderRadius.zero),
+                    color: Colors.grey.shade300,
+                    borderRadius: BorderRadius.zero,
+                  ),
                 ),
               ),
               const SizedBox(height: 16),
               Text(
-                  widget.existing != null
-                      ? 'تعديل القائمة'
-                      : 'قائمة أسعار جديدة',
-                  style: const TextStyle(
-                      fontSize: 17,
-                      fontWeight: FontWeight.bold,
-                      color: _t1)),
+                widget.existing != null ? 'تعديل القائمة' : 'قائمة أسعار جديدة',
+                style: const TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.bold,
+                  color: _t1,
+                ),
+              ),
               const SizedBox(height: 20),
               TextFormField(
                 controller: _name,
                 decoration: InputDecoration(
                   labelText: 'اسم القائمة *',
-                  prefixIcon:
-                      const Icon(Icons.label_outline, size: 20, color: _t2),
+                  prefixIcon: const Icon(
+                    Icons.label_outline,
+                    size: 20,
+                    color: _t2,
+                  ),
                   filled: true,
                   fillColor: const Color(0xFFF8FAFC),
-                  border: OutlineInputBorder(
-                      borderRadius: BorderRadius.zero),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.zero),
                   enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.zero,
-                      borderSide: const BorderSide(color: _border)),
+                    borderRadius: BorderRadius.zero,
+                    borderSide: const BorderSide(color: _border),
+                  ),
                   focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.zero,
-                      borderSide:
-                          const BorderSide(color: _navy, width: 1.5)),
+                    borderRadius: BorderRadius.zero,
+                    borderSide: const BorderSide(color: _navy, width: 1.5),
+                  ),
                 ),
                 validator: (v) =>
                     (v == null || v.trim().isEmpty) ? 'مطلوب' : null,
@@ -662,49 +775,59 @@ class _PriceListFormState extends State<_PriceListForm> {
                 maxLines: 2,
                 decoration: InputDecoration(
                   labelText: 'الوصف',
-                  prefixIcon: const Icon(Icons.description_outlined,
-                      size: 20, color: _t2),
+                  prefixIcon: const Icon(
+                    Icons.description_outlined,
+                    size: 20,
+                    color: _t2,
+                  ),
                   filled: true,
                   fillColor: const Color(0xFFF8FAFC),
-                  border: OutlineInputBorder(
-                      borderRadius: BorderRadius.zero),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.zero),
                   enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.zero,
-                      borderSide: const BorderSide(color: _border)),
+                    borderRadius: BorderRadius.zero,
+                    borderSide: const BorderSide(color: _border),
+                  ),
                   focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.zero,
-                      borderSide:
-                          const BorderSide(color: _navy, width: 1.5)),
+                    borderRadius: BorderRadius.zero,
+                    borderSide: const BorderSide(color: _navy, width: 1.5),
+                  ),
                 ),
               ),
               const SizedBox(height: 14),
-              const Text('لون القائمة:',
-                  style: TextStyle(fontSize: 13, color: _t2)),
+              const Text(
+                'لون القائمة:',
+                style: TextStyle(fontSize: 13, color: _t2),
+              ),
               const SizedBox(height: 8),
               Row(
                 children: [_blue, _green, _purple, _orange, _teal]
-                    .map((c) => GestureDetector(
-                          onTap: () => setState(() => _color = c),
-                          child: Container(
-                            width: 34,
-                            height: 34,
-                            margin: const EdgeInsets.only(left: 8),
-                            decoration: BoxDecoration(
-                              color: c,
-                              shape: BoxShape.circle,
-                              border: Border.all(
-                                color: _color == c
-                                    ? Colors.black54
-                                    : Colors.transparent,
-                                width: 2.5,
-                              ),
+                    .map(
+                      (c) => GestureDetector(
+                        onTap: () => setState(() => _color = c),
+                        child: Container(
+                          width: 34,
+                          height: 34,
+                          margin: const EdgeInsetsDirectional.only(start: 8),
+                          decoration: BoxDecoration(
+                            color: c,
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: _color == c
+                                  ? Colors.black54
+                                  : Colors.transparent,
+                              width: 2.5,
                             ),
-                            child: _color == c
-                                ? const Icon(Icons.check,
-                                    color: Colors.white, size: 18)
-                                : null,
                           ),
-                        ))
+                          child: _color == c
+                              ? const Icon(
+                                  Icons.check,
+                                  color: Colors.white,
+                                  size: 18,
+                                )
+                              : null,
+                        ),
+                      ),
+                    )
                     .toList(),
               ),
               const SizedBox(height: 20),
@@ -723,14 +846,16 @@ class _PriceListFormState extends State<_PriceListForm> {
                   foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(vertical: 14),
                   shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.zero),
+                    borderRadius: BorderRadius.zero,
+                  ),
                 ),
                 child: Text(
-                    widget.existing != null
-                        ? 'حفظ التعديلات'
-                        : 'إنشاء القائمة',
-                    style: const TextStyle(
-                        fontWeight: FontWeight.bold, fontSize: 15)),
+                  widget.existing != null ? 'حفظ التعديلات' : 'إنشاء القائمة',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 15,
+                  ),
+                ),
               ),
             ],
           ),

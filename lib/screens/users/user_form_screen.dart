@@ -6,7 +6,9 @@ import '../../services/database_helper.dart';
 import '../../services/password_hashing.dart';
 import '../../services/permission_service.dart';
 import '../../theme/design_tokens.dart';
+import '../../utils/screen_layout.dart';
 import '../../utils/customer_validation.dart';
+
 /// التحقق من هاتف عراقي شائع (اختياري): أرقام فقط، طول معقول.
 String? _iraqPhoneOptional(String? v) {
   final t = v?.trim() ?? '';
@@ -54,8 +56,7 @@ class _UserFormScreenState extends State<UserFormScreen> {
   Color get _surface => Theme.of(context).colorScheme.surface;
   Color get _primary => Theme.of(context).colorScheme.primary;
   Color get _onPrimary => Theme.of(context).colorScheme.onPrimary;
-  Color get _filterBg =>
-      Theme.of(context).colorScheme.surfaceContainerHighest;
+  Color get _filterBg => Theme.of(context).colorScheme.surfaceContainerHighest;
   Color get _textPrimary => Theme.of(context).colorScheme.onSurface;
   Color get _textSecondary => Theme.of(context).colorScheme.onSurfaceVariant;
   Color get _outline => Theme.of(context).colorScheme.outline;
@@ -64,7 +65,9 @@ class _UserFormScreenState extends State<UserFormScreen> {
   void initState() {
     super.initState();
     final e = widget.existing;
-    _nameCtrl = TextEditingController(text: e?['displayName']?.toString() ?? '');
+    _nameCtrl = TextEditingController(
+      text: e?['displayName']?.toString() ?? '',
+    );
     _emailCtrl = TextEditingController(text: e?['email']?.toString() ?? '');
     _phoneCtrl = TextEditingController(text: e?['phone']?.toString() ?? '');
     _phone2Ctrl = TextEditingController(text: e?['phone2']?.toString() ?? '');
@@ -260,9 +263,9 @@ class _UserFormScreenState extends State<UserFormScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('تعذر الحفظ: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('تعذر الحفظ: $e')));
       }
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -345,8 +348,8 @@ class _UserFormScreenState extends State<UserFormScreen> {
                                 ),
                                 validator: (v) =>
                                     (v == null || v.trim().isEmpty)
-                                        ? 'مطلوب'
-                                        : null,
+                                    ? 'مطلوب'
+                                    : null,
                               ),
                               const SizedBox(height: 14),
                               TextFormField(
@@ -547,8 +550,9 @@ class _UserFormScreenState extends State<UserFormScreen> {
                             ),
                           ),
                           TextButton(
-                            onPressed:
-                                _saving ? null : () => Navigator.pop(context),
+                            onPressed: _saving
+                                ? null
+                                : () => Navigator.pop(context),
                             child: const Text('إلغاء'),
                           ),
                         ],
@@ -643,7 +647,11 @@ class _UserFormScreenState extends State<UserFormScreen> {
       ),
       child: ExpansionTile(
         tilePadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-        childrenPadding: const EdgeInsets.only(bottom: 8, left: 8, right: 8),
+        childrenPadding: EdgeInsetsDirectional.only(
+          bottom: 8,
+          start: ScreenLayout.of(context).pageHorizontalGap * 0.5,
+          end: ScreenLayout.of(context).pageHorizontalGap * 0.5,
+        ),
         title: Text(
           g.title,
           style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14),

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 
 import '../../services/database_helper.dart';
+import '../../utils/screen_layout.dart';
 
 final _dtFmt = DateFormat('dd/MM/yyyy HH:mm', 'ar');
 
@@ -35,10 +36,7 @@ class _WorkShiftsCalendarScreenState extends State<WorkShiftsCalendarScreen> {
       _month.year,
       _month.month,
     );
-    final ids = rows
-        .map((r) => r['id'] as int?)
-        .whereType<int>()
-        .toSet();
+    final ids = rows.map((r) => r['id'] as int?).whereType<int>().toSet();
     final counts = await _db.getInvoiceTotalCountsByShiftIds(ids);
     if (!mounted) return;
     setState(() {
@@ -90,7 +88,10 @@ class _WorkShiftsCalendarScreenState extends State<WorkShiftsCalendarScreen> {
               color: isDark ? const Color(0xFF1E1E2E) : Colors.white,
               elevation: 1,
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 8,
+                  vertical: 10,
+                ),
                 child: Row(
                   children: [
                     IconButton(
@@ -118,7 +119,12 @@ class _WorkShiftsCalendarScreenState extends State<WorkShiftsCalendarScreen> {
               ),
             ),
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+              padding: EdgeInsetsDirectional.only(
+                start: ScreenLayout.of(context).pageHorizontalGap,
+                end: ScreenLayout.of(context).pageHorizontalGap,
+                top: 12,
+                bottom: 8,
+              ),
               child: Text(
                 'تظهر الورديات التي بدأت أو انتهت ضمن هذا الشهر (أو ما زالت مفتوحة وتمرّ بها). اسم «موظف الوردية» هو ما أُدخل عند فتح الوردية.',
                 style: TextStyle(
@@ -132,109 +138,113 @@ class _WorkShiftsCalendarScreenState extends State<WorkShiftsCalendarScreen> {
               child: _loading
                   ? const Center(child: CircularProgressIndicator())
                   : _rows.isEmpty
-                      ? Center(
-                          child: Text(
-                            'لا توجد ورديات في هذا الشهر',
-                            style: TextStyle(
-                              color: Theme.of(context).hintColor,
-                              fontSize: 15,
+                  ? Center(
+                      child: Text(
+                        'لا توجد ورديات في هذا الشهر',
+                        style: TextStyle(
+                          color: Theme.of(context).hintColor,
+                          fontSize: 15,
+                        ),
+                      ),
+                    )
+                  : ListView.separated(
+                      padding: EdgeInsetsDirectional.only(
+                        start: ScreenLayout.of(context).pageHorizontalGap,
+                        end: ScreenLayout.of(context).pageHorizontalGap,
+                        top: 0,
+                        bottom: 24,
+                      ),
+                      itemCount: _rows.length,
+                      separatorBuilder: (context, index) =>
+                          const SizedBox(height: 10),
+                      itemBuilder: (context, i) {
+                        final r = _rows[i];
+                        final id = r['id'] as int;
+                        final name =
+                            (r['shiftStaffName'] as String?)?.trim() ?? '—';
+                        final opened =
+                            DateTime.tryParse(
+                              r['openedAt']?.toString() ?? '',
+                            ) ??
+                            DateTime.now();
+                        final closedRaw = r['closedAt']?.toString();
+                        final closed = closedRaw != null && closedRaw.isNotEmpty
+                            ? DateTime.tryParse(closedRaw)
+                            : null;
+                        final invN = _invoiceCounts[id] ?? 0;
+                        final openStr = _dtFmt.format(opened);
+                        final closeStr = closed != null
+                            ? _dtFmt.format(closed)
+                            : 'مفتوحة (لم تُغلق)';
+
+                        return Container(
+                          decoration: BoxDecoration(
+                            color: isDark
+                                ? const Color(0xFF1E1E2E)
+                                : Colors.white,
+                            border: Border.all(
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.outlineVariant,
                             ),
                           ),
-                        )
-                      : ListView.separated(
-                          padding: const EdgeInsets.fromLTRB(14, 0, 14, 24),
-                          itemCount: _rows.length,
-                          separatorBuilder: (context, index) =>
-                              const SizedBox(height: 10),
-                          itemBuilder: (context, i) {
-                            final r = _rows[i];
-                            final id = r['id'] as int;
-                            final name =
-                                (r['shiftStaffName'] as String?)?.trim() ??
-                                    '—';
-                            final opened = DateTime.tryParse(
-                                  r['openedAt']?.toString() ?? '',
-                                ) ??
-                                DateTime.now();
-                            final closedRaw = r['closedAt']?.toString();
-                            final closed = closedRaw != null &&
-                                    closedRaw.isNotEmpty
-                                ? DateTime.tryParse(closedRaw)
-                                : null;
-                            final invN = _invoiceCounts[id] ?? 0;
-                            final openStr = _dtFmt.format(opened);
-                            final closeStr = closed != null
-                                ? _dtFmt.format(closed)
-                                : 'مفتوحة (لم تُغلق)';
-
-                            return Container(
-                              decoration: BoxDecoration(
-                                color: isDark
-                                    ? const Color(0xFF1E1E2E)
-                                    : Colors.white,
-                                border: Border.all(
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .outlineVariant,
-                                ),
-                              ),
-                              child: Padding(
-                                padding: const EdgeInsets.all(14),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
+                          child: Padding(
+                            padding: const EdgeInsets.all(14),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
                                   children: [
-                                    Row(
-                                      children: [
-                                        Container(
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 8,
-                                            vertical: 4,
-                                          ),
-                                          color: navy.withValues(alpha: 0.1),
-                                          child: Text(
-                                            '#$id',
-                                            style: const TextStyle(
-                                              fontWeight: FontWeight.w800,
-                                              color: navy,
-                                            ),
-                                          ),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 8,
+                                        vertical: 4,
+                                      ),
+                                      color: navy.withValues(alpha: 0.1),
+                                      child: Text(
+                                        '#$id',
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w800,
+                                          color: navy,
                                         ),
-                                        const SizedBox(width: 10),
-                                        Expanded(
-                                          child: Text(
-                                            name,
-                                            style: const TextStyle(
-                                              fontWeight: FontWeight.bold,
-                                              fontSize: 16,
-                                            ),
-                                          ),
-                                        ),
-                                        Text(
-                                          '$invN فاتورة',
-                                          style: TextStyle(
-                                            fontSize: 13,
-                                            color: Theme.of(context)
-                                                .colorScheme
-                                                .primary,
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                        ),
-                                      ],
+                                      ),
                                     ),
-                                    const SizedBox(height: 10),
-                                    _rowLine(Icons.login_rounded, 'فتح', openStr),
-                                    const SizedBox(height: 6),
-                                    _rowLine(
-                                      Icons.logout_rounded,
-                                      'إغلاق',
-                                      closeStr,
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: Text(
+                                        name,
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 16,
+                                        ),
+                                      ),
+                                    ),
+                                    Text(
+                                      '$invN فاتورة',
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        color: Theme.of(
+                                          context,
+                                        ).colorScheme.primary,
+                                        fontWeight: FontWeight.w600,
+                                      ),
                                     ),
                                   ],
                                 ),
-                              ),
-                            );
-                          },
-                        ),
+                                const SizedBox(height: 10),
+                                _rowLine(Icons.login_rounded, 'فتح', openStr),
+                                const SizedBox(height: 6),
+                                _rowLine(
+                                  Icons.logout_rounded,
+                                  'إغلاق',
+                                  closeStr,
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
             ),
           ],
         ),
@@ -257,10 +267,7 @@ class _WorkShiftsCalendarScreenState extends State<WorkShiftsCalendarScreen> {
           ),
         ),
         Expanded(
-          child: Text(
-            value,
-            style: const TextStyle(fontSize: 13, height: 1.3),
-          ),
+          child: Text(value, style: const TextStyle(fontSize: 13, height: 1.3)),
         ),
       ],
     );

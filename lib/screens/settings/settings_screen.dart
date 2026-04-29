@@ -19,9 +19,9 @@ import '../../utils/screen_layout.dart';
 import '../invoices/sale_pos_settings_screen.dart';
 import '../printing/printing_screen.dart';
 import 'dashboard_layout_settings_screen.dart';
+import 'market_pos_import_screen.dart';
 
 const _kTeal = Color(0xFF0D9488);
-const _kGreen = Color(0xFF22C55E);
 const _kAmber = Color(0xFFF59E0B);
 const _kRed = Color(0xFFEF4444);
 
@@ -73,6 +73,7 @@ class SettingsScreen extends StatelessWidget {
           builder: (context, constraints) {
             /// يمنع كسر [ListTile] عند عرض أقل من ~72 (مثلاً أثناء أنيميشن التصغير).
             final minW = math.max(constraints.maxWidth, 300.0);
+            final gap = ScreenLayout.of(context).pageHorizontalGap;
             return Scrollbar(
               child: SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
@@ -80,7 +81,10 @@ class SettingsScreen extends StatelessWidget {
                   child: SizedBox(
                     width: minW,
                     child: Padding(
-                      padding: const EdgeInsets.all(16),
+                      padding: EdgeInsets.symmetric(
+                        horizontal: gap,
+                        vertical: 16,
+                      ),
                       child: Column(
                         children: [
                           // ── بطاقة الشركة ─────────────────────────────────────────────
@@ -115,49 +119,6 @@ class SettingsScreen extends StatelessWidget {
                                   routeId: AppContentRoutes.settingsInvoice,
                                   breadcrumbTitle: 'إعدادات الفواتير',
                                 ),
-                              ),
-                              _SettingItem(
-                                icon: Icons.inventory_2_rounded,
-                                iconColor: _kAmber,
-                                title: 'إعدادات المخزون',
-                                subtitle: 'التنبيهات، الوحدات، الباركود',
-                                onTap: () {},
-                              ),
-                              _SettingItem(
-                                icon: Icons.local_offer_rounded,
-                                iconColor: _kGreen,
-                                title: 'العملات والأسعار',
-                                subtitle: 'عملة العرض، صيغة الأرقام',
-                                onTap: () {},
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 14),
-                          _SettingsGroup(
-                            title: 'المستخدمون والصلاحيات',
-                            isDark: isDark,
-                            items: [
-                              _SettingItem(
-                                icon: Icons.group_rounded,
-                                iconColor: _kBlue,
-                                title: 'المستخدمون',
-                                subtitle: 'إدارة الموظفين وصلاحياتهم',
-                                onTap: () {},
-                              ),
-                              _SettingItem(
-                                icon: Icons.admin_panel_settings_rounded,
-                                iconColor: cs.primary,
-                                title: 'الأدوار والصلاحيات',
-                                subtitle: 'تخصيص الوصول لكل دور',
-                                onTap: () {},
-                              ),
-                              _SettingItem(
-                                icon: Icons.lock_rounded,
-                                iconColor: _kRed,
-                                title: 'كلمة المرور والأمان',
-                                subtitle:
-                                    'تغيير كلمة المرور والمصادقة الثنائية',
-                                onTap: () {},
                               ),
                             ],
                           ),
@@ -249,33 +210,16 @@ class SettingsScreen extends StatelessWidget {
                             isDark: isDark,
                             items: [
                               _SettingItem(
-                                icon: Icons.backup_rounded,
-                                iconColor: _kGreen,
-                                title: 'النسخ الاحتياطي',
-                                subtitle: 'آخر نسخة: لم يتم بعد',
-                                onTap: () {},
-                              ),
-                              _SettingItem(
                                 icon: Icons.restore_rounded,
                                 iconColor: _kBlue,
                                 title: 'استعادة البيانات',
                                 subtitle: 'من ملف أو سحابة',
-                                onTap: () {},
-                              ),
-                              _SettingItem(
-                                icon: Icons.download_rounded,
-                                iconColor: _kTeal,
-                                title: 'تصدير البيانات',
-                                subtitle: 'Excel، CSV، PDF',
-                                onTap: () {},
-                              ),
-                              _SettingItem(
-                                icon: Icons.delete_outline_rounded,
-                                iconColor: _kRed,
-                                title: 'مسح بيانات المعاينة',
-                                subtitle: 'حذف البيانات التجريبية',
-                                onTap: () => _confirmDelete(context),
-                                isDestructive: true,
+                                onTap: () => _goTo(
+                                  context,
+                                  const MarketPosImportScreen(),
+                                  routeId: AppContentRoutes.settingsRestore,
+                                  breadcrumbTitle: 'استيراد مواد وأسعار',
+                                ),
                               ),
                             ],
                           ),
@@ -290,24 +234,7 @@ class SettingsScreen extends StatelessWidget {
                                 title: 'خطة الاشتراك',
                                 subtitle:
                                     'الحساب، الأجهزة، والمزامنة التلقائية',
-                                trailing: Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 8,
-                                    vertical: 3,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: cs.tertiary.withValues(alpha: 0.22),
-                                    borderRadius: context.appCorners.sm,
-                                  ),
-                                  child: Text(
-                                    'تجريبية',
-                                    style: TextStyle(
-                                      color: cs.tertiary,
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ),
+                                trailing: const _SubscriptionPlanTrailingBadge(),
                                 onTap: () => _goTo(
                                   context,
                                   const _AccountSubscriptionScreen(),
@@ -367,38 +294,21 @@ class SettingsScreen extends StatelessWidget {
     );
   }
 
-  void _confirmDelete(BuildContext context) {
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('تأكيد الحذف'),
-        content: const Text(
-          'هل أنت متأكد من حذف بيانات المعاينة؟ لا يمكن التراجع عن هذا.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('إلغاء'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: _kRed,
-              foregroundColor: Colors.white,
-            ),
-            child: const Text('حذف'),
-          ),
-        ],
-      ),
-    );
-  }
-
   void _showAbout(BuildContext context) {
     showAboutDialog(
       context: context,
-      applicationName: 'NaBoo Store Manager',
-      applicationVersion: '1.0.0',
-      applicationLegalese: '© 2026 NaBoo. جميع الحقوق محفوظة.',
+      applicationName: 'نابو لإدارة المتاجر',
+      applicationVersion: 'الإصدار 1.0.0',
+      applicationLegalese: '© 2026 نابو. جميع الحقوق محفوظة.',
+      children: const [
+        Padding(
+          padding: EdgeInsetsDirectional.only(top: 8),
+          child: Text(
+            'تطبيق متكامل لإدارة المبيعات والمخزون والحسابات.',
+            textAlign: TextAlign.start,
+          ),
+        ),
+      ],
     );
   }
 }
@@ -411,6 +321,7 @@ class _CompanyCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final ac = context.appCorners;
+    final gap = ScreenLayout.of(context).pageHorizontalGap;
     return GestureDetector(
       onLongPress: () {
         // مدخل مخفي لأدوات الاختبار (Dev only screen will block in release anyway).
@@ -423,7 +334,7 @@ class _CompanyCard extends StatelessWidget {
         Navigator.of(context, rootNavigator: true).pushNamed('/dev/stress');
       },
       child: Container(
-        padding: const EdgeInsets.all(16),
+        padding: EdgeInsets.symmetric(horizontal: gap, vertical: 16),
         decoration: BoxDecoration(
         gradient: LinearGradient(
           colors: [
@@ -581,6 +492,67 @@ class _SettingsGroup extends StatelessWidget {
   }
 }
 
+/// شارة بجانب «خطة الاشتراك» في الإعدادات — تتبع [LicenseService] وليست نصاً ثابتاً («تجريبية»).
+class _SubscriptionPlanTrailingBadge extends StatelessWidget {
+  const _SubscriptionPlanTrailingBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final ac = context.appCorners;
+    return ListenableBuilder(
+      listenable: LicenseService.instance,
+      builder: (context, _) {
+        final s = LicenseService.instance.state;
+        late final String label;
+        late final Color fg;
+        late final Color bg;
+        if (s.status == LicenseStatus.active) {
+          label = s.plan?.nameAr ?? 'مفعّل';
+          fg = cs.primary;
+          bg = cs.primary.withValues(alpha: 0.12);
+        } else if (s.status == LicenseStatus.trial) {
+          label = 'تجريبية';
+          fg = cs.tertiary;
+          bg = cs.tertiary.withValues(alpha: 0.22);
+        } else if (s.status == LicenseStatus.expired ||
+            s.status == LicenseStatus.suspended) {
+          label = 'غير نشط';
+          fg = _kRed;
+          bg = _kRed.withValues(alpha: 0.12);
+        } else if (s.status == LicenseStatus.offline) {
+          label = 'غير متصّل';
+          fg = Colors.orange.shade800;
+          bg = Colors.orange.withValues(alpha: 0.18);
+        } else if (s.status == LicenseStatus.checking) {
+          label = '…';
+          fg = Colors.grey.shade700;
+          bg = Colors.grey.withValues(alpha: 0.2);
+        } else {
+          label = 'بدون ترخيص';
+          fg = Colors.grey.shade700;
+          bg = Colors.grey.withValues(alpha: 0.2);
+        }
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: ac.sm,
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              color: fg,
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
 // ── عنصر الإعداد ──────────────────────────────────────────────────────────────
 class _SettingItem extends StatelessWidget {
   final IconData icon;
@@ -589,7 +561,6 @@ class _SettingItem extends StatelessWidget {
   final String subtitle;
   final Widget? trailing;
   final VoidCallback onTap;
-  final bool isDestructive;
 
   const _SettingItem({
     required this.icon,
@@ -598,14 +569,12 @@ class _SettingItem extends StatelessWidget {
     required this.subtitle,
     required this.onTap,
     this.trailing,
-    this.isDestructive = false,
   });
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final ac = context.appCorners;
-    final titleColor = isDestructive ? cs.error : null;
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
       leading: Container(
@@ -622,7 +591,7 @@ class _SettingItem extends StatelessWidget {
         style: TextStyle(
           fontWeight: FontWeight.w600,
           fontSize: 14,
-          color: titleColor ?? cs.onSurface,
+          color: cs.onSurface,
         ),
       ),
       subtitle: Text(
@@ -895,6 +864,9 @@ class _AccountSubscriptionScreenState
       setState(() => _currentDeviceId = id);
     });
     _refresh();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      LicenseService.instance.checkLicense(forceRemote: true);
+    });
   }
 
   Future<void> _refresh() async {
@@ -913,7 +885,12 @@ class _AccountSubscriptionScreenState
       _busy = true;
       _message = null;
     });
-    await CloudSyncService.instance.syncNow();
+    await CloudSyncService.instance.syncNow(
+      forcePull: true,
+      forcePush: true,
+      forceImportOnPull: true,
+    );
+    await LicenseService.instance.checkLicense(forceRemote: true);
     final err = CloudSyncService.instance.lastError.value;
     if (!mounted) return;
     setState(() {
@@ -1025,7 +1002,6 @@ class _AccountSubscriptionScreenState
 
   @override
   Widget build(BuildContext context) {
-    final plan = LicenseService.instance.state.plan ?? SubscriptionPlan.basic;
     final auth = context.watch<AuthProvider>();
     return Directionality(
       textDirection: TextDirection.rtl,
@@ -1036,8 +1012,10 @@ class _AccountSubscriptionScreenState
           listenable: LicenseService.instance,
           builder: (context, _) {
             final lic = LicenseService.instance.state;
+            final displayPlan = lic.plan ?? SubscriptionPlan.basic;
+            final gap = ScreenLayout.of(context).pageHorizontalGap;
             return ListView(
-              padding: const EdgeInsets.all(16),
+              padding: EdgeInsets.symmetric(horizontal: gap, vertical: 16),
               children: [
             _SectionCard(
               isDark: Theme.of(context).brightness == Brightness.dark,
@@ -1053,9 +1031,19 @@ class _AccountSubscriptionScreenState
                   const SizedBox(height: 6),
                   Text('البريد: ${auth.email.isEmpty ? '—' : auth.email}'),
                   const SizedBox(height: 6),
-                  Text('الخطة الحالية: ${plan.nameAr}'),
+                  Text('الخطة الحالية: ${displayPlan.nameAr}'),
                   const SizedBox(height: 6),
-                  Text('حد الأجهزة: ${plan.devicesLabel}'),
+                  Text('حد الأجهزة: ${displayPlan.devicesLabel}'),
+                  if (lic.status == LicenseStatus.active) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      lic.devicesInfo,
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: Colors.grey.shade700,
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -1087,6 +1075,45 @@ class _AccountSubscriptionScreenState
                         color: Colors.grey.shade700,
                       ),
                     ),
+                  ],
+                ),
+              ),
+            ],
+            if (lic.status == LicenseStatus.active) ...[
+              const SizedBox(height: 12),
+              _SectionCard(
+                isDark: Theme.of(context).brightness == Brightness.dark,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'الاشتراك',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    if (lic.expiresAt != null) ...[
+                      Text(
+                        'ينتهي الاشتراك في: ${_fmtDate(lic.expiresAt)}',
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      if (lic.daysLeft != null) ...[
+                        const SizedBox(height: 6),
+                        Text(
+                          'متبقٍ تقريباً: ${lic.daysLeft} يوماً',
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: Colors.grey.shade700,
+                          ),
+                        ),
+                      ],
+                    ] else
+                      const Text(
+                        'اشتراك مفعّل بلا تاريخ انتهاء محدد في السحابة.',
+                        style: TextStyle(fontSize: 14),
+                      ),
                   ],
                 ),
               ),
@@ -1282,8 +1309,9 @@ class _AccountSubscriptionScreenState
                         name: AppContentRoutes.subscriptionPlans,
                         arguments: BreadcrumbMeta('خطط الاشتراك'),
                       ),
-                      builder: (_) =>
-                          SubscriptionPlansScreen(currentPlan: plan),
+                      builder: (_) => SubscriptionPlansScreen(
+                            currentPlan: displayPlan,
+                          ),
                     ),
                   );
                 },
@@ -1341,7 +1369,10 @@ class _StoreInfoScreenState extends State<_StoreInfoScreen> {
           ],
         ),
         body: SingleChildScrollView(
-          padding: const EdgeInsets.all(16),
+          padding: EdgeInsets.symmetric(
+            horizontal: ScreenLayout.of(context).pageHorizontalGap,
+            vertical: 16,
+          ),
           child: Column(
             children: [
               // شعار المتجر
@@ -1361,9 +1392,9 @@ class _StoreInfoScreenState extends State<_StoreInfoScreen> {
                         color: cs.primary,
                       ),
                     ),
-                    Positioned(
+                    PositionedDirectional(
                       bottom: 0,
-                      left: 0,
+                      start: 0,
                       child: Container(
                         width: 28,
                         height: 28,
@@ -1453,7 +1484,10 @@ class _InvoiceSettingsScreenState extends State<_InvoiceSettingsScreen> {
           ],
         ),
         body: SingleChildScrollView(
-          padding: const EdgeInsets.all(16),
+          padding: EdgeInsets.symmetric(
+            horizontal: ScreenLayout.of(context).pageHorizontalGap,
+            vertical: 16,
+          ),
           child: Column(
             children: [
               _SwitchTile(
@@ -1618,7 +1652,10 @@ class _NotificationsScreenState extends State<_NotificationsScreen> {
         body: !_prefsLoaded
             ? const Center(child: CircularProgressIndicator())
             : SingleChildScrollView(
-                padding: const EdgeInsets.all(16),
+                padding: EdgeInsets.symmetric(
+                  horizontal: ScreenLayout.of(context).pageHorizontalGap,
+                  vertical: 16,
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [

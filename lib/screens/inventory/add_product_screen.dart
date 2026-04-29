@@ -22,8 +22,14 @@ import '../../services/inventory_product_settings.dart';
 import '../../theme/app_corner_style.dart';
 import '../../widgets/barcode_input_launcher.dart';
 import '../../utils/barcode_prefill.dart';
+import '../../utils/iraqi_currency_format.dart';
+import '../../utils/numeric_format.dart';
+import '../../utils/screen_layout.dart';
+import '../../widgets/inputs/app_input.dart';
+import '../../widgets/inputs/app_price_input.dart';
 
 const Color _kGreen = Color(0xFF15803D);
+const String _hintIqd = '0 د.ع';
 
 class _ExtraUnitVariantDraft {
   _ExtraUnitVariantDraft()
@@ -114,6 +120,21 @@ class _AddProductScreenState extends State<AddProductScreen> {
 
   final List<_ExtraUnitVariantDraft> _extraUnitVariants = [];
 
+  final FocusNode _focusName = FocusNode();
+  final FocusNode _focusDesc = FocusNode();
+  final FocusNode _focusCategory = FocusNode();
+  final FocusNode _focusBrand = FocusNode();
+  final FocusNode _focusSupplier = FocusNode();
+  final FocusNode _focusSupplierCode = FocusNode();
+  final FocusNode _focusBarcodeField = FocusNode();
+  final FocusNode _focusBuy = FocusNode();
+  final FocusNode _focusSell = FocusNode();
+  final FocusNode _focusCustomTax = FocusNode();
+  final FocusNode _focusDiscount = FocusNode();
+  final FocusNode _focusMin = FocusNode();
+  final FocusNode _focusQty = FocusNode();
+  final FocusNode _focusLow = FocusNode();
+
   String? _imagePath;
 
   /// من إعدادات المخزون: `code128` | `ean13`
@@ -122,10 +143,25 @@ class _AddProductScreenState extends State<AddProductScreen> {
       InventoryProductSettingsData.fromRaw(const <String, String?>{});
 
   double get _profitMarginPct {
-    final b = double.tryParse(_buyPriceCtrl.text.replaceAll(',', '.')) ?? 0;
-    final s = double.tryParse(_sellPriceCtrl.text.replaceAll(',', '.')) ?? 0;
+    final b = IraqiCurrencyFormat.parseIqdInt(_buyPriceCtrl.text).toDouble();
+    final s = IraqiCurrencyFormat.parseIqdInt(_sellPriceCtrl.text).toDouble();
     if (b <= 0) return 0;
     return (s - b) / b * 100;
+  }
+
+  /// سعر البيع أقل من تكلفة الشراء — للتحذير المرئي.
+  bool get _sellBelowBuy {
+    final b = IraqiCurrencyFormat.parseIqdInt(_buyPriceCtrl.text);
+    final s = IraqiCurrencyFormat.parseIqdInt(_sellPriceCtrl.text);
+    return b > 0 && s > 0 && s < b;
+  }
+
+  /// تقريبي: السعر الأساسي المُدخل × (1 + الضريبة).
+  int get _sellAfterTaxApprox {
+    final sell = IraqiCurrencyFormat.parseIqdInt(_sellPriceCtrl.text);
+    final t = _effectiveTaxPercent;
+    final m = (1.0 + t / 100.0).clamp(0.0, 999.99);
+    return ((sell * m)).round();
   }
 
   /// عند تفعيل «التسعير المتقدم» في إعدادات المنتجات: ربط تلقائي بين تكلفة الشراء وأسعار البيع.
@@ -158,7 +194,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
 
   void _applySuggestedPricesFromCost() {
     if (!_uiSettings.advancedPricing || !_costDrivesSuggestedPrices) return;
-    final buy = _parseMoney(_buyPriceCtrl.text);
+    final buy = _parseIqdMoney(_buyPriceCtrl.text);
     if (buy <= 0) return;
     final marginPct = _uiSettings.suggestedMarginPercent;
     final sellD = buy * (1.0 + marginPct / 100.0);
@@ -168,9 +204,68 @@ class _AddProductScreenState extends State<AddProductScreen> {
     final minD = sell * (minPct / 100.0);
     final minS = minD.isFinite ? minD.round().clamp(0, sell) : sell;
     _applyingSuggestedPrices = true;
-    _sellPriceCtrl.text = sell.toString();
-    _minSellPriceCtrl.text = minS.toString();
+    _sellPriceCtrl.text = IraqiCurrencyFormat.formatInt(sell);
+    _minSellPriceCtrl.text = IraqiCurrencyFormat.formatInt(minS);
     _applyingSuggestedPrices = false;
+  }
+
+  double _parseIqdMoney(String text) =>
+      IraqiCurrencyFormat.parseIqdInt(text).toDouble();
+
+  double _parseQuantity(String text) {
+    final t = text.trim().replaceAll(',', '.');
+    return double.tryParse(t) ?? 0;
+  }
+
+  double _parseDiscountValue() {
+    if (!_uiSettings.addShowAdvancedPricing ||
+        !_uiSettings.addShowDiscountFields) {
+      return 0;
+    }
+    if (_discountType == '%') {
+      return double.tryParse(_discountCtrl.text.trim().replaceAll(',', '.')) ??
+          0;
+    }
+    return _parseIqdMoney(_discountCtrl.text);
+  }
+
+  void _goAfterSupplierCode() {
+    if (_uiSettings.addShowBarcodeField) {
+      _focusBarcodeField.requestFocus();
+    } else {
+      _focusBuy.requestFocus();
+    }
+  }
+
+  void _goAfterSell() {
+    if (_uiSettings.addShowAdvancedPricing &&
+        _uiSettings.addShowTaxField &&
+        _taxMode == 'مخصص') {
+      _focusCustomTax.requestFocus();
+    } else {
+      _goAfterTaxTowardDiscountThenMin();
+    }
+  }
+
+  void _goAfterTaxTowardDiscountThenMin() {
+    if (_uiSettings.addShowAdvancedPricing &&
+        _uiSettings.addShowDiscountFields) {
+      _focusDiscount.requestFocus();
+    } else {
+      _focusMin.requestFocus();
+    }
+  }
+
+  void _goAfterCustomTax() => _goAfterTaxTowardDiscountThenMin();
+
+  void _goAfterDiscount() => _focusMin.requestFocus();
+
+  void _goAfterMin() {
+    if (_trackInventory) {
+      _focusQty.requestFocus();
+    } else {
+      FocusScope.of(context).unfocus();
+    }
   }
 
   void _relinkSuggestedPricesToCost() {
@@ -399,6 +494,20 @@ class _AddProductScreenState extends State<AddProductScreen> {
     _sellPriceCtrl.removeListener(_onSellOrMinManualEdit);
     _minSellPriceCtrl.removeListener(_onSellOrMinManualEdit);
     _costSuggestDebounce?.cancel();
+    _focusName.dispose();
+    _focusDesc.dispose();
+    _focusCategory.dispose();
+    _focusBrand.dispose();
+    _focusSupplier.dispose();
+    _focusSupplierCode.dispose();
+    _focusBarcodeField.dispose();
+    _focusBuy.dispose();
+    _focusSell.dispose();
+    _focusCustomTax.dispose();
+    _focusDiscount.dispose();
+    _focusMin.dispose();
+    _focusQty.dispose();
+    _focusLow.dispose();
     _nameCtrl.dispose();
     _descCtrl.dispose();
     _barcodeCtrl.dispose();
@@ -424,11 +533,6 @@ class _AddProductScreenState extends State<AddProductScreen> {
     }
     super.dispose();
     // _grade is a String? — no dispose needed
-  }
-
-  double _parseMoney(String text) {
-    final t = text.trim().replaceAll(',', '.');
-    return double.tryParse(t) ?? 0;
   }
 
   void _regenerateBarcode() {
@@ -475,18 +579,36 @@ class _AddProductScreenState extends State<AddProductScreen> {
     if (_saving) return;
     if (!(_formKey.currentState?.validate() ?? false)) return;
 
-    final buy = _parseMoney(_buyPriceCtrl.text);
-    final sell = _parseMoney(_sellPriceCtrl.text);
+    if (_uiSettings.addShowAdvancedPricing &&
+        _uiSettings.addShowDiscountFields &&
+        _discountType == '%') {
+      final raw = _discountCtrl.text.trim();
+      if (raw.isNotEmpty) {
+        final p = double.tryParse(raw.replaceAll(',', '.'));
+        if (p != null && p > 100) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('خصم النسبة المئوية لا يمكن أن يتعدّى 100٪.'),
+              backgroundColor: Colors.red.shade700,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+          return;
+        }
+      }
+    }
+
+    final buy = _parseIqdMoney(_buyPriceCtrl.text);
+    final sell = _parseIqdMoney(_sellPriceCtrl.text);
     final minSellRaw = _minSellPriceCtrl.text.trim();
-    final double? minSell = minSellRaw.isEmpty
-        ? null
-        : _parseMoney(_minSellPriceCtrl.text);
+    final double? minSell =
+        minSellRaw.isEmpty ? null : _parseIqdMoney(_minSellPriceCtrl.text);
 
     double qty = 0;
     double low = 0;
     if (_trackInventory) {
-      qty = _parseMoney(_qtyCtrl.text);
-      low = _parseMoney(_lowStockCtrl.text);
+      qty = _parseQuantity(_qtyCtrl.text);
+      low = _parseQuantity(_lowStockCtrl.text);
     }
 
     final barcode = _barcodeCtrl.text.trim();
@@ -495,8 +617,8 @@ class _AddProductScreenState extends State<AddProductScreen> {
     final supplier = _supplierCtrl.text.trim();
     final disc =
         _uiSettings.addShowAdvancedPricing && _uiSettings.addShowDiscountFields
-        ? _parseMoney(_discountCtrl.text)
-        : 0.0;
+            ? _parseDiscountValue()
+            : 0.0;
 
     if (_uiSettings.addShowBarcodeField &&
         _uiSettings.addRequireBarcode &&
@@ -633,9 +755,9 @@ class _AddProductScreenState extends State<AddProductScreen> {
       final s = row.sell.text.trim();
       final ms = row.minSell.text.trim();
       final sellV =
-          s.isEmpty ? null : double.tryParse(s.replaceAll(',', '.'));
+          s.isEmpty ? null : IraqiCurrencyFormat.parseIqdInt(s).toDouble();
       final minSellV =
-          ms.isEmpty ? null : double.tryParse(ms.replaceAll(',', '.'));
+          ms.isEmpty ? null : IraqiCurrencyFormat.parseIqdInt(ms).toDouble();
       extraUnits.add(
         NewProductExtraUnit(
           unitName: unit,
@@ -834,6 +956,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final layout = context.screenLayout;
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
 
@@ -870,9 +993,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                     Widget mainFields() {
                       return Padding(
                         padding: EdgeInsets.symmetric(
-                          horizontal: MediaQuery.sizeOf(context).width < 600
-                              ? 12
-                              : 24,
+                          horizontal: layout.pageHorizontalGap,
                           vertical: 16,
                         ),
                         child: Center(
@@ -920,6 +1041,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
 
                     return Form(
                       key: _formKey,
+                      autovalidateMode: AutovalidateMode.onUserInteraction,
                       child: boundedH
                           ? Column(
                               children: [
@@ -1033,18 +1155,16 @@ class _AddProductScreenState extends State<AddProductScreen> {
             children: [
               Expanded(
                 flex: 3,
-                child: _labeledField(
-                  context,
+                child: AppInput(
                   label: 'اسم المنتج',
-                  requiredField: true,
-                  child: TextFormField(
-                    controller: _nameCtrl,
-                    textAlign: TextAlign.right,
-                    style: _inputStyleOf(context),
-                    decoration: _inputDecOf(context, hint: ''),
-                    validator: (v) =>
-                        (v == null || v.trim().isEmpty) ? 'الاسم مطلوب' : null,
-                  ),
+                  isRequired: true,
+                  controller: _nameCtrl,
+                  focusNode: _focusName,
+                  textInputAction: TextInputAction.next,
+                  onFieldSubmitted: (_) => _focusDesc.requestFocus(),
+                  textAlign: TextAlign.right,
+                  validator: (v) =>
+                      (v == null || v.trim().isEmpty) ? 'الاسم مطلوب' : null,
                 ),
               ),
               const SizedBox(width: 12),
@@ -1053,20 +1173,20 @@ class _AddProductScreenState extends State<AddProductScreen> {
                 child: _labeledField(
                   context,
                   label: 'SKU',
-                  child: Container(
-                    height: 48,
-                    alignment: Alignment.center,
-                    padding: const EdgeInsets.symmetric(horizontal: 6),
-                    decoration: BoxDecoration(
-                      color: Theme.of(context)
-                          .colorScheme
-                          .surfaceContainerHighest
-                          .withValues(alpha: 0.5),
-                      borderRadius: BorderRadius.zero,
-                      border: Border.all(
-                        color: Theme.of(context).colorScheme.outlineVariant,
-                      ),
+                child: Container(
+                  height: 42,
+                  alignment: Alignment.center,
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context)
+                        .colorScheme
+                        .surfaceContainerHighest
+                        .withValues(alpha: 0.5),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: Theme.of(context).colorScheme.outlineVariant,
                     ),
+                  ),
                     child: Text(
                       _productCodeHint,
                       textAlign: TextAlign.center,
@@ -1084,17 +1204,13 @@ class _AddProductScreenState extends State<AddProductScreen> {
             ],
           ),
           const SizedBox(height: 14),
-          _labeledField(
-            context,
+          AppInput(
             label: 'الوصف',
-            child: TextFormField(
-              controller: _descCtrl,
-              textAlign: TextAlign.right,
-              minLines: 2,
-              maxLines: 4,
-              style: _inputStyleOf(context),
-              decoration: _inputDecOf(context, hint: 'وصف مختصر للمنتج'),
-            ),
+            controller: _descCtrl,
+            focusNode: _focusDesc,
+            textAlign: TextAlign.right,
+            minLines: 2,
+            maxLines: 4,
           ),
           const SizedBox(height: 14),
           if (_uiSettings.addShowImageField) ...[
@@ -1115,6 +1231,8 @@ class _AddProductScreenState extends State<AddProductScreen> {
                 controller: _categoryCtrl,
                 options: _categoryOptions,
                 hint: 'اكتب أو اختر من القائمة',
+                focusNode: _focusCategory,
+                onFieldSubmitted: (_) => _focusBrand.requestFocus(),
               );
               final br = _comboField(
                 context,
@@ -1122,6 +1240,8 @@ class _AddProductScreenState extends State<AddProductScreen> {
                 controller: _brandCtrl,
                 options: _brandOptions,
                 hint: 'اكتب أو اختر من القائمة',
+                focusNode: _focusBrand,
+                onFieldSubmitted: (_) => _focusSupplier.requestFocus(),
               );
               if (row) {
                 return Row(
@@ -1251,16 +1371,21 @@ class _AddProductScreenState extends State<AddProductScreen> {
             options: _supplierOptions,
             hint: 'اكتب أو اختر من السجل',
             requiredField: _uiSettings.addRequireSupplier,
+            focusNode: _focusSupplier,
+            onFieldSubmitted: (_) => _focusSupplierCode.requestFocus(),
           ),
           const SizedBox(height: 14),
           _labeledField(
             context,
             label: 'كود المورد (اختياري)',
-            child: TextFormField(
+            child: AppInput(
+              label: '',
+              showLabel: false,
               controller: _supplierCodeCtrl,
+              focusNode: _focusSupplierCode,
               textAlign: TextAlign.right,
-              style: _inputStyleOf(context),
-              decoration: _inputDecOf(context, hint: ''),
+              textInputAction: TextInputAction.next,
+              onFieldSubmitted: (_) => _goAfterSupplierCode(),
             ),
           ),
           const SizedBox(height: 18),
@@ -1298,7 +1423,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
           ),
           const SizedBox(height: 10),
           Align(
-            alignment: Alignment.centerRight,
+            alignment: AlignmentDirectional.centerEnd,
             child: OutlinedButton.icon(
               onPressed: () => setState(
                 () => _extraUnitVariants.add(_ExtraUnitVariantDraft()),
@@ -1359,24 +1484,23 @@ class _AddProductScreenState extends State<AddProductScreen> {
                           children: [
                             Expanded(
                               flex: 3,
-                              child: TextFormField(
+                              child: AppInput(
+                                label: '',
+                                showLabel: false,
                                 controller: row.unitName,
                                 textAlign: TextAlign.right,
-                                style: _inputStyleOf(context),
-                                decoration: _inputDecOf(
-                                  context,
-                                  hint: 'اسم الوحدة',
-                                ),
+                                hint: 'اسم الوحدة',
                               ),
                             ),
                             const SizedBox(width: 8),
                             Expanded(
                               flex: 2,
-                              child: TextFormField(
+                              child: AppInput(
+                                label: '',
+                                showLabel: false,
                                 controller: row.unitSymbol,
                                 textAlign: TextAlign.right,
-                                style: _inputStyleOf(context),
-                                decoration: _inputDecOf(context, hint: 'رمز'),
+                                hint: 'رمز',
                               ),
                             ),
                           ],
@@ -1385,30 +1509,25 @@ class _AddProductScreenState extends State<AddProductScreen> {
                         Row(
                           children: [
                             Expanded(
-                              child: TextFormField(
+                              child: AppInput(
+                                label: '',
+                                showLabel: false,
                                 controller: row.factor,
                                 textAlign: TextAlign.right,
-                                keyboardType:
-                                    const TextInputType.numberWithOptions(
-                                      decimal: true,
-                                    ),
-                                style: _inputStyleOf(context),
-                                decoration: _inputDecOf(
-                                  context,
-                                  hint: 'عامل التحويل إلى الأساس',
+                                keyboardType: const TextInputType.numberWithOptions(
+                                  decimal: true,
                                 ),
+                                hint: 'عامل التحويل إلى الأساس',
                               ),
                             ),
                             const SizedBox(width: 8),
                             Expanded(
-                              child: TextFormField(
+                              child: AppInput(
+                                label: '',
+                                showLabel: false,
                                 controller: row.barcode,
                                 textAlign: TextAlign.right,
-                                style: _inputStyleOf(context),
-                                decoration: _inputDecOf(
-                                  context,
-                                  hint: 'باركود (اختياري)',
-                                ),
+                                hint: 'باركود (اختياري)',
                               ),
                             ),
                           ],
@@ -1417,28 +1536,20 @@ class _AddProductScreenState extends State<AddProductScreen> {
                         Row(
                           children: [
                             Expanded(
-                              child: TextFormField(
+                              child: AppPriceInput(
+                                label: '',
+                                paddingZeroOverride: true,
+                                hint: 'اختياري — $_hintIqd',
                                 controller: row.sell,
-                                textAlign: TextAlign.right,
-                                keyboardType: TextInputType.number,
-                                style: _inputStyleOf(context),
-                                decoration: _inputDecOf(
-                                  context,
-                                  hint: 'سعر بيع الوحدة (اختياري)',
-                                ),
                               ),
                             ),
                             const SizedBox(width: 8),
                             Expanded(
-                              child: TextFormField(
+                              child: AppPriceInput(
+                                label: '',
+                                paddingZeroOverride: true,
+                                hint: 'أدنى سعر بيع — $_hintIqd',
                                 controller: row.minSell,
-                                textAlign: TextAlign.right,
-                                keyboardType: TextInputType.number,
-                                style: _inputStyleOf(context),
-                                decoration: _inputDecOf(
-                                  context,
-                                  hint: 'أدنى سعر (اختياري)',
-                                ),
                               ),
                             ),
                           ],
@@ -1537,26 +1648,29 @@ class _AddProductScreenState extends State<AddProductScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Expanded(
-              child: TextFormField(
+              child: AppInput(
+                label: '',
+                showLabel: false,
                 controller: _barcodeCtrl,
+                focusNode: _focusBarcodeField,
                 textAlign: TextAlign.right,
-                keyboardType: isEan ? TextInputType.number : TextInputType.text,
+                textInputAction: TextInputAction.next,
+                onFieldSubmitted: (_) => _focusBuy.requestFocus(),
+                keyboardType:
+                    isEan ? TextInputType.number : TextInputType.text,
                 inputFormatters: isEan
                     ? [
                         FilteringTextInputFormatter.digitsOnly,
                         LengthLimitingTextInputFormatter(13),
                       ]
                     : [LengthLimitingTextInputFormatter(48)],
+                hint: 'قيمة الباركود',
+                prefixIcon: Icon(
+                  Icons.barcode_reader,
+                  color: cs.onSurfaceVariant,
+                  size: 22,
+                ),
                 onChanged: (_) => setState(() {}),
-                style: _inputStyleOf(context),
-                decoration: _inputDecOf(context, hint: 'قيمة الباركود')
-                    .copyWith(
-                      prefixIcon: Icon(
-                        Icons.barcode_reader,
-                        color: cs.onSurfaceVariant,
-                        size: 22,
-                      ),
-                    ),
               ),
             ),
             const SizedBox(width: 12),
@@ -1633,15 +1747,15 @@ class _AddProductScreenState extends State<AddProductScreen> {
             context,
             label: 'سعر الشراء',
             subtitle: perKgHint,
-            child: TextFormField(
+            child: AppPriceInput(
+              label: '',
+              paddingZeroOverride: true,
+              hint: _hintIqd,
               controller: _buyPriceCtrl,
-              textAlign: TextAlign.right,
-              keyboardType: const TextInputType.numberWithOptions(
-                decimal: true,
-              ),
-              onChanged: (_) => setState(() {}),
-              style: _inputStyleOf(context),
-              decoration: _inputDecOf(context, hint: '0'),
+              focusNode: _focusBuy,
+              textInputAction: TextInputAction.next,
+              onFieldSubmitted: (_) => _focusSell.requestFocus(),
+              onParsedChanged: (_) => setState(() {}),
             ),
           ),
           if (_uiSettings.advancedPricing) ...[
@@ -1697,7 +1811,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                     if (!_costDrivesSuggestedPrices) ...[
                       const SizedBox(height: 8),
                       Align(
-                        alignment: Alignment.centerLeft,
+                        alignment: AlignmentDirectional.centerStart,
                         child: TextButton.icon(
                           onPressed: _relinkSuggestedPricesToCost,
                           icon: const Icon(Icons.link_rounded, size: 18),
@@ -1715,15 +1829,18 @@ class _AddProductScreenState extends State<AddProductScreen> {
             context,
             label: 'سعر البيع',
             subtitle: perKgHint,
-            child: TextFormField(
+            child: AppPriceInput(
+              label: '',
+              paddingZeroOverride: true,
+              hint: _hintIqd,
               controller: _sellPriceCtrl,
-              textAlign: TextAlign.right,
-              keyboardType: const TextInputType.numberWithOptions(
-                decimal: true,
-              ),
-              onChanged: (_) => setState(() {}),
-              style: _inputStyleOf(context),
-              decoration: _inputDecOf(context, hint: '0'),
+              focusNode: _focusSell,
+              textInputAction: TextInputAction.next,
+              onFieldSubmitted: (_) => _goAfterSell(),
+              warningText: _sellBelowBuy
+                  ? 'تحذير: سعر البيع أقل من سعر الشراء (يمكن الإكمال).'
+                  : null,
+              onParsedChanged: (_) => setState(() {}),
             ),
           ),
           const SizedBox(height: 16),
@@ -1747,8 +1864,9 @@ class _AddProductScreenState extends State<AddProductScreen> {
                             ButtonSegment(value: 'مخصص', label: Text('مخصص')),
                           ],
                           selected: {_taxMode},
-                          onSelectionChanged: (s) =>
-                              setState(() => _taxMode = s.first),
+                          onSelectionChanged: (s) {
+                            setState(() => _taxMode = s.first);
+                          },
                         );
                       }
                       return DropdownButtonFormField<String>(
@@ -1774,21 +1892,43 @@ class _AddProductScreenState extends State<AddProductScreen> {
                             child: Text('نسبة مخصصة'),
                           ),
                         ],
-                        onChanged: (v) =>
-                            setState(() => _taxMode = v ?? 'معفى'),
+                        onChanged: (v) {
+                          setState(() => _taxMode = v ?? 'معفى');
+                        },
                       );
                     },
                   ),
                   if (_taxMode == 'مخصص') ...[
                     const SizedBox(height: 10),
-                    TextFormField(
+                    AppInput(
+                      label: '',
+                      showLabel: false,
                       controller: _customTaxCtrl,
-                      textAlign: TextAlign.right,
+                      focusNode: _focusCustomTax,
+                      textAlign: TextAlign.end,
+                      textDirection: TextDirection.ltr,
+                      textInputAction: TextInputAction.next,
+                      onFieldSubmitted: (_) => _goAfterCustomTax(),
                       keyboardType: const TextInputType.numberWithOptions(
                         decimal: true,
                       ),
-                      style: _inputStyleOf(context),
-                      decoration: _inputDecOf(context, hint: 'نسبة الضريبة %'),
+                      inputFormatters: [
+                        FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+                      ],
+                      hint: 'نسبة الضريبة %',
+                      onChanged: (_) => setState(() {}),
+                    ),
+                  ],
+                  if (_effectiveTaxPercent > 0) ...[
+                    const SizedBox(height: 10),
+                    Text(
+                      'البيع شاملاً الضريبة (تقريبي): ${IraqiCurrencyFormat.formatIqd(_sellAfterTaxApprox)}',
+                      textAlign: TextAlign.right,
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600,
+                        color: cs.primary,
+                      ),
                     ),
                   ],
                 ],
@@ -1857,47 +1997,57 @@ class _AddProductScreenState extends State<AddProductScreen> {
                         ),
                       ),
                     ],
-                    onChanged: (v) => setState(() => _discountType = v ?? '%'),
+                    onChanged: (v) {
+                      setState(() {
+                        final next = v ?? '%';
+                        if (next != _discountType) {
+                          _discountCtrl.clear();
+                        }
+                        _discountType = next;
+                      });
+                    },
                   ),
                 ],
               );
               final discVal = _labeledField(
                 context,
                 label: 'قيمة الخصم',
-                child: TextFormField(
+                child: AppInput(
+                  label: '',
+                  showLabel: false,
                   controller: _discountCtrl,
-                  textAlign: TextAlign.right,
-                  keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true,
-                  ),
-                  style: _inputStyleOf(context),
-                  decoration:
-                      _inputDecOf(
-                        context,
-                        hint: _discountType == '%' ? '0 — 100' : '0',
-                      ).copyWith(
-                        suffixText: _discountType == '%' ? '٪' : 'د.ع',
-                        suffixStyle: TextStyle(
-                          fontWeight: FontWeight.w700,
-                          color: cs.primary,
-                          fontSize: 15,
-                        ),
-                      ),
+                  focusNode: _focusDiscount,
+                  textAlign: TextAlign.end,
+                  textDirection: TextDirection.ltr,
+                  textInputAction: TextInputAction.next,
+                  selectAllOnFocus: true,
+                  onFieldSubmitted: (_) => _goAfterDiscount(),
+                  keyboardType: _discountType == '%'
+                      ? const TextInputType.numberWithOptions(decimal: true)
+                      : const TextInputType.numberWithOptions(decimal: false),
+                  inputFormatters: _discountType == '%'
+                      ? [
+                          FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+                        ]
+                      : [IraqiCurrencyFormat.moneyInputFormatter()],
+                  hint: _discountType == '%' ? 'مثال: 15' : _hintIqd,
+                  suffixText: _discountType == '%' ? '٪' : 'د.ع',
                 ),
               );
               final minP = _labeledField(
                 context,
                 label: 'أقل سعر بيع',
                 subtitle: perKgHint,
-                child: TextFormField(
+                child: AppPriceInput(
+                  label: '',
+                  paddingZeroOverride: true,
+                  hint: 'اختياري',
                   controller: _minSellPriceCtrl,
-                  textAlign: TextAlign.right,
-                  keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true,
-                  ),
-                  onChanged: (_) => setState(() {}),
-                  style: _inputStyleOf(context),
-                  decoration: _inputDecOf(context, hint: 'اختياري'),
+                  focusNode: _focusMin,
+                  isOptional: true,
+                  textInputAction: TextInputAction.next,
+                  onFieldSubmitted: (_) => _goAfterMin(),
+                  onParsedChanged: (_) => setState(() {}),
                 ),
               );
               if (!_uiSettings.addShowAdvancedPricing ||
@@ -1933,27 +2083,39 @@ class _AddProductScreenState extends State<AddProductScreen> {
             _labeledField(
               context,
               label: 'هامش الربح (سعر البيع مقابل الشراء)',
-              child: Container(
-                height: 48,
-                alignment: Alignment.centerRight,
-                padding: const EdgeInsets.symmetric(horizontal: 14),
-                decoration: BoxDecoration(
-                  color: cs.surfaceContainerHighest.withValues(alpha: 0.4),
-                  borderRadius: BorderRadius.zero,
-                  border: Border.all(color: cs.outlineVariant),
-                ),
-                child: Text(
-                  _profitMarginPct != 0
-                      ? '${_profitMarginPct.toStringAsFixed(1)}٪'
-                      : '—',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 14,
-                    color: _profitMarginPct >= 0
-                        ? _kGreen
-                        : Colors.red.shade700,
-                  ),
-                ),
+              child: Builder(
+                builder: (context) {
+                  final buyN = NumericFormat.parseNumber(_buyPriceCtrl.text);
+                  final cs2 = Theme.of(context).colorScheme;
+                  Color tone;
+                  if (buyN <= 0) {
+                    tone = cs2.onSurfaceVariant;
+                  } else if (_profitMarginPct < 0) {
+                    tone = Colors.red.shade700;
+                  } else if (_profitMarginPct < 5) {
+                    tone = const Color(0xFFF59E0B);
+                  } else {
+                    tone = _kGreen;
+                  }
+                  return Container(
+                    height: 42,
+                    alignment: AlignmentDirectional.centerEnd,
+                    padding: const EdgeInsets.symmetric(horizontal: 14),
+                    decoration: BoxDecoration(
+                      color: cs2.surfaceContainerHighest.withValues(alpha: 0.45),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: cs2.outlineVariant),
+                    ),
+                    child: Text(
+                      buyN > 0 ? '${_profitMarginPct.toStringAsFixed(1)}٪' : '—',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14,
+                        color: tone,
+                      ),
+                    ),
+                  );
+                },
               ),
             ),
           ],
@@ -1998,28 +2160,38 @@ class _AddProductScreenState extends State<AddProductScreen> {
                 final q = _labeledField(
                   context,
                   label: 'الكمية في المخزون',
-                  child: TextFormField(
+                  child: AppInput(
+                    label: '',
+                    showLabel: false,
                     controller: _qtyCtrl,
-                    textAlign: TextAlign.right,
+                    focusNode: _focusQty,
+                    textAlign: TextAlign.end,
+                    textDirection: TextDirection.ltr,
+                    textInputAction: TextInputAction.next,
+                    selectAllOnFocus: true,
+                    onFieldSubmitted: (_) => _focusLow.requestFocus(),
                     keyboardType: const TextInputType.numberWithOptions(
                       decimal: true,
                     ),
-                    style: _inputStyleOf(context),
-                    decoration: _inputDecOf(context, hint: '0'),
+                    hint: '0',
                   ),
                   subtitle: qtyHint,
                 );
                 final low = _labeledField(
                   context,
                   label: 'تنبيه عند أقل من',
-                  child: TextFormField(
+                  child: AppInput(
+                    label: '',
+                    showLabel: false,
                     controller: _lowStockCtrl,
-                    textAlign: TextAlign.right,
+                    focusNode: _focusLow,
+                    textAlign: TextAlign.end,
+                    textDirection: TextDirection.ltr,
+                    selectAllOnFocus: true,
                     keyboardType: const TextInputType.numberWithOptions(
                       decimal: true,
                     ),
-                    style: _inputStyleOf(context),
-                    decoration: _inputDecOf(context, hint: '0'),
+                    hint: '0',
                   ),
                   subtitle: lowHint,
                 );
@@ -2041,17 +2213,14 @@ class _AddProductScreenState extends State<AddProductScreen> {
             _labeledField(
               context,
               label: 'الوزن الصافي (غرام) — اختياري',
-              child: TextFormField(
+              child: AppInput(
+                label: '',
+                showLabel: false,
                 controller: _netWeightGramsCtrl,
                 textAlign: TextAlign.right,
-                keyboardType: const TextInputType.numberWithOptions(
-                  decimal: true,
-                ),
-                style: _inputStyleOf(context),
-                decoration: _inputDecOf(
-                  context,
-                  hint: 'يُملأ تلقائياً من باركود GS1 أو الوزن المدمج',
-                ),
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                hint: 'يُملأ تلقائياً من باركود GS1 أو الوزن المدمج',
               ),
             ),
             const SizedBox(height: 12),
@@ -2061,41 +2230,39 @@ class _AddProductScreenState extends State<AddProductScreen> {
                 Widget mfgField() => _labeledField(
                   context,
                   label: 'تاريخ الإنتاج — اختياري',
-                  child: TextFormField(
+                  child: AppInput(
+                    label: '',
+                    showLabel: false,
                     controller: _mfgDateCtrl,
                     textAlign: TextAlign.right,
-                    style: _inputStyleOf(context),
-                    decoration: _inputDecOf(context, hint: 'يوم/شهر/سنة')
-                        .copyWith(
-                          suffixIcon: IconButton(
-                            icon: const Icon(
-                              Icons.calendar_today_outlined,
-                              size: 20,
-                            ),
-                            onPressed: () => _pickProductDate(_mfgDateCtrl),
-                            tooltip: 'اختر من التقويم',
-                          ),
-                        ),
+                    suffixIcon: IconButton(
+                      icon: const Icon(
+                        Icons.calendar_today_outlined,
+                        size: 20,
+                      ),
+                      onPressed: () => _pickProductDate(_mfgDateCtrl),
+                      tooltip: 'اختر من التقويم',
+                    ),
+                    hint: 'يوم/شهر/سنة',
                   ),
                 );
                 Widget expField() => _labeledField(
                   context,
                   label: 'تاريخ الانتهاء — اختياري',
-                  child: TextFormField(
+                  child: AppInput(
+                    label: '',
+                    showLabel: false,
                     controller: _expDateCtrl,
                     textAlign: TextAlign.right,
-                    style: _inputStyleOf(context),
-                    decoration: _inputDecOf(context, hint: 'يوم/شهر/سنة')
-                        .copyWith(
-                          suffixIcon: IconButton(
-                            icon: const Icon(
-                              Icons.calendar_today_outlined,
-                              size: 20,
-                            ),
-                            onPressed: () => _pickProductDate(_expDateCtrl),
-                            tooltip: 'اختر من التقويم',
-                          ),
-                        ),
+                    suffixIcon: IconButton(
+                      icon: const Icon(
+                        Icons.calendar_today_outlined,
+                        size: 20,
+                      ),
+                      onPressed: () => _pickProductDate(_expDateCtrl),
+                      tooltip: 'اختر من التقويم',
+                    ),
+                    hint: 'يوم/شهر/سنة',
                   ),
                 );
                 if (row) {
@@ -2121,18 +2288,15 @@ class _AddProductScreenState extends State<AddProductScreen> {
             _labeledField(
               context,
               label: 'تنبيه قبل انتهاء الصلاحية (عدد الأيام)',
-              child: TextFormField(
+              child: AppInput(
+                label: '',
+                showLabel: false,
                 controller: _expiryAlertDaysCtrl,
                 textAlign: TextAlign.right,
-                keyboardType: const TextInputType.numberWithOptions(
-                  decimal: false,
-                ),
-                style: _inputStyleOf(context),
-                decoration: _inputDecOf(
-                  context,
-                  hint:
-                      'عند تسجيل تاريخ انتهاء: 1–365 (فارغ = الافتراضي من الإعدادات)',
-                ),
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: false),
+                hint:
+                    'عند تسجيل تاريخ انتهاء: 1–365 (فارغ = الافتراضي من الإعدادات)',
               ),
             ),
             Padding(
@@ -2151,30 +2315,26 @@ class _AddProductScreenState extends State<AddProductScreen> {
             _labeledField(
               context,
               label: 'ملاحظات داخلية',
-              child: TextFormField(
+              child: AppInput(
+                label: '',
+                showLabel: false,
                 controller: _internalNotesCtrl,
                 textAlign: TextAlign.right,
                 minLines: 2,
                 maxLines: 4,
-                style: _inputStyleOf(context),
-                decoration: _inputDecOf(
-                  context,
-                  hint: 'لا تظهر للعميل — للفريق فقط',
-                ),
+                hint: 'لا تظهر للعميل — للفريق فقط',
               ),
             ),
             const SizedBox(height: 14),
             _labeledField(
               context,
               label: 'وسوم',
-              child: TextFormField(
+              child: AppInput(
+                label: '',
+                showLabel: false,
                 controller: _tagsCtrl,
                 textAlign: TextAlign.right,
-                style: _inputStyleOf(context),
-                decoration: _inputDecOf(
-                  context,
-                  hint: 'مفصولة بفواصل أو مسافات — للبحث والتصفية',
-                ),
+                hint: 'مفصولة بفواصل أو مسافات — للبحث والتصفية',
               ),
             ),
           ],
@@ -2276,36 +2436,37 @@ class _AddProductScreenState extends State<AddProductScreen> {
     required List<String> options,
     required String hint,
     bool requiredField = false,
+    FocusNode? focusNode,
+    void Function(String)? onFieldSubmitted,
   }) {
     final cs = Theme.of(context).colorScheme;
-    return _labeledField(
-      context,
+    return AppInput(
       label: label,
-      requiredField: requiredField,
-      child: TextField(
-        controller: controller,
-        textAlign: TextAlign.right,
-        style: _inputStyleOf(context),
-        onChanged: (_) => setState(() {}),
-        decoration: _inputDecOf(context, hint: hint).copyWith(
-          suffixIcon: options.isEmpty
-              ? null
-              : PopupMenuButton<String>(
-                  icon: Icon(
-                    Icons.arrow_drop_down_circle_outlined,
-                    color: cs.onSurfaceVariant,
-                  ),
-                  tooltip: 'اختر من القائمة',
-                  itemBuilder: (ctx) => options
-                      .map((e) => PopupMenuItem(value: e, child: Text(e)))
-                      .toList(),
-                  onSelected: (v) {
-                    controller.text = v;
-                    setState(() {});
-                  },
-                ),
-        ),
-      ),
+      isRequired: requiredField,
+      hint: hint,
+      controller: controller,
+      focusNode: focusNode,
+      textAlign: TextAlign.right,
+      textInputAction: onFieldSubmitted != null
+          ? TextInputAction.next
+          : TextInputAction.done,
+      onFieldSubmitted: onFieldSubmitted,
+      suffixIcon: options.isEmpty
+          ? null
+          : PopupMenuButton<String>(
+              icon: Icon(
+                Icons.arrow_drop_down_circle_outlined,
+                color: cs.onSurfaceVariant,
+              ),
+              tooltip: 'اختر من القائمة',
+              itemBuilder: (ctx) =>
+                  options.map((e) => PopupMenuItem(value: e, child: Text(e))).toList(),
+              onSelected: (v) {
+                controller.text = v;
+                setState(() {});
+              },
+            ),
+      onChanged: (_) => setState(() {}),
     );
   }
 
@@ -2375,17 +2536,9 @@ class _AddProductScreenState extends State<AddProductScreen> {
     );
   }
 
-  TextStyle _inputStyleOf(BuildContext context) {
-    return TextStyle(
-      fontSize: 14,
-      color: Theme.of(context).colorScheme.onSurface,
-      height: 1.25,
-    );
-  }
-
   InputDecoration _inputDecOf(BuildContext context, {required String hint}) {
     final cs = Theme.of(context).colorScheme;
-    final r = BorderRadius.zero;
+    const r = BorderRadius.all(Radius.circular(8));
     return InputDecoration(
       hintText: hint.isEmpty ? null : hint,
       hintStyle: TextStyle(
@@ -2395,18 +2548,19 @@ class _AddProductScreenState extends State<AddProductScreen> {
       filled: true,
       fillColor: cs.surfaceContainerHighest.withValues(alpha: 0.35),
       isDense: true,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+      contentPadding:
+          const EdgeInsetsDirectional.symmetric(horizontal: 14, vertical: 10),
       border: OutlineInputBorder(
         borderRadius: r,
-        borderSide: BorderSide(color: cs.outlineVariant),
+        borderSide: BorderSide(color: cs.outlineVariant, width: 1.5),
       ),
       enabledBorder: OutlineInputBorder(
         borderRadius: r,
-        borderSide: BorderSide(color: cs.outlineVariant),
+        borderSide: BorderSide(color: cs.outlineVariant, width: 1.5),
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: r,
-        borderSide: BorderSide(color: cs.primary, width: 1.5),
+        borderSide: BorderSide(color: cs.primary, width: 2),
       ),
     );
   }

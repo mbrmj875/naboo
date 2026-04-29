@@ -1,17 +1,18 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { cookieName, verifySessionToken } from "@/lib/session";
+import { withSecurityHeaders } from "@/lib/security-headers";
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   if (pathname.startsWith("/login") || pathname.startsWith("/api/login")) {
-    return NextResponse.next();
+    return withSecurityHeaders(NextResponse.next());
   }
   if (
     pathname.startsWith("/_next") ||
     pathname.startsWith("/favicon") ||
     (pathname.includes(".") && !pathname.startsWith("/api/"))
   ) {
-    return NextResponse.next();
+    return withSecurityHeaders(NextResponse.next());
   }
 
   let ok = false;
@@ -23,19 +24,21 @@ export async function middleware(request: NextRequest) {
 
   if (pathname.startsWith("/api/")) {
     if (!ok) {
-      return NextResponse.json({ error: "غير مصرّح" }, { status: 401 });
+      return withSecurityHeaders(
+        NextResponse.json({ error: "غير مصرّح" }, { status: 401 }),
+      );
     }
-    return NextResponse.next();
+    return withSecurityHeaders(NextResponse.next());
   }
 
   if (!ok) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     url.searchParams.set("next", pathname);
-    return NextResponse.redirect(url);
+    return withSecurityHeaders(NextResponse.redirect(url));
   }
 
-  return NextResponse.next();
+  return withSecurityHeaders(NextResponse.next());
 }
 
 export const config = {

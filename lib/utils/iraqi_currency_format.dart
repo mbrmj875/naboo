@@ -35,6 +35,32 @@ abstract final class IraqiCurrencyFormat {
 
   /// مبلغ بفواصل + «د.ع».
   static String formatIqd(num value) => '${formatInt(value)} د.ع';
+
+  /// عرض مخزني/إجمالي: آلاف بالفاصلة؛ الملايين/المليارات بصيغة مختصرة (مثل 1.5M د.ع).
+  ///
+  /// [value] هي قيمة مالية خام (مثل حاصل جمع الأسعار)، تُقرّب لأقرب دينار.
+  static String formatCompactWarehouseValue(num value) {
+    if (value.isNaN || value.isInfinite) return '—';
+    final vr = value.round();
+    final rounded = vr.abs();
+    final sign = vr < 0 ? '-' : '';
+
+    if (rounded >= 1000000000) {
+      final d = rounded / 1000000000.0;
+      return '$sign${_trimOneDecimalTrailing(d)}B د.ع';
+    }
+    if (rounded >= 1000000) {
+      final d = rounded / 1000000.0;
+      return '$sign${_trimOneDecimalTrailing(d)}M د.ع';
+    }
+    return '$sign${formatInt(vr)} د.ع';
+  }
+
+  static String _trimOneDecimalTrailing(double d) {
+    final s = d.toStringAsFixed(1);
+    if (s.endsWith('.0')) return s.substring(0, s.length - 2);
+    return s;
+  }
 }
 
 class _IqdGroupedIntTextInputFormatter extends TextInputFormatter {

@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../providers/auth_provider.dart';
+import '../../services/cloud_sync_service.dart';
 import '../../services/database_helper.dart';
+import '../../utils/screen_layout.dart';
 import 'employee_identity_screen.dart';
 import 'user_form_screen.dart';
 
@@ -42,6 +44,16 @@ class _UsersScreenState extends State<UsersScreen> {
     }
   }
 
+  Future<void> _refreshFromServer() async {
+    await CloudSyncService.instance.syncNow(
+      forcePull: true,
+      forcePush: true,
+      forceImportOnPull: true,
+    );
+    if (!mounted) return;
+    await _load();
+  }
+
   String _roleAr(String? r) {
     switch (r) {
       case 'admin':
@@ -55,7 +67,9 @@ class _UsersScreenState extends State<UsersScreen> {
     final auth = context.read<AuthProvider>();
     if (!auth.isAdmin) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('لا صلاحية — المدير فقط يضيف أو يعدّل المستخدمين')),
+        const SnackBar(
+          content: Text('لا صلاحية — المدير فقط يضيف أو يعدّل المستخدمين'),
+        ),
       );
       return;
     }
@@ -107,7 +121,10 @@ class _UsersScreenState extends State<UsersScreen> {
           title: const Text('تعطيل المستخدم'),
           content: const Text('سيتم إيقاف الحساب ولن يستطيع تسجيل الدخول.'),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('إلغاء'),
+            ),
             FilledButton(
               onPressed: () => Navigator.pop(ctx, true),
               style: FilledButton.styleFrom(backgroundColor: Colors.red),
@@ -120,7 +137,9 @@ class _UsersScreenState extends State<UsersScreen> {
     if (ok != true || !mounted) return;
     await _db.deactivateUser(id);
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('تم التعطيل')));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('تم التعطيل')));
     await _load();
   }
 
@@ -129,6 +148,7 @@ class _UsersScreenState extends State<UsersScreen> {
     final auth = context.watch<AuthProvider>();
 
     final cs = Theme.of(context).colorScheme;
+    final gap = ScreenLayout.of(context).pageHorizontalGap;
 
     return Directionality(
       textDirection: TextDirection.rtl,
@@ -146,7 +166,7 @@ class _UsersScreenState extends State<UsersScreen> {
             IconButton(
               icon: const Icon(Icons.refresh_rounded),
               tooltip: 'تحديث',
-              onPressed: _loading ? null : _load,
+              onPressed: _loading ? null : _refreshFromServer,
             ),
             const SizedBox(width: 4),
           ],
@@ -154,22 +174,25 @@ class _UsersScreenState extends State<UsersScreen> {
         body: _loading
             ? const Center(child: CircularProgressIndicator())
             : _rows.isEmpty
-                ? _buildEmptyState()
-                : RefreshIndicator(
-                    onRefresh: _load,
-                    child: ListView.separated(
-                      padding: const EdgeInsets.all(16),
-                      itemCount: _rows.length,
-                      separatorBuilder: (_, _) => const SizedBox(height: 10),
-                      itemBuilder: (context, i) => _buildUserCard(_rows[i], auth),
-                    ),
-                  ),
+            ? _buildEmptyState()
+            : RefreshIndicator(
+                onRefresh: _refreshFromServer,
+                child: ListView.separated(
+                  padding: EdgeInsets.symmetric(horizontal: gap, vertical: 16),
+                  itemCount: _rows.length,
+                  separatorBuilder: (_, _) => const SizedBox(height: 10),
+                  itemBuilder: (context, i) => _buildUserCard(_rows[i], auth),
+                ),
+              ),
         floatingActionButton: auth.isAdmin
             ? FloatingActionButton.extended(
                 onPressed: () => _openEditor(),
                 backgroundColor: cs.primary,
                 foregroundColor: cs.onPrimary,
-                icon: Icon(Icons.person_add_alt_1_outlined, color: cs.onPrimary),
+                icon: Icon(
+                  Icons.person_add_alt_1_outlined,
+                  color: cs.onPrimary,
+                ),
                 label: Text(
                   'مستخدم جديد',
                   style: TextStyle(
@@ -184,29 +207,33 @@ class _UsersScreenState extends State<UsersScreen> {
   }
 
   Widget _buildEmptyState() {
+    final gap = ScreenLayout.of(context).pageHorizontalGap;
     return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.people_outline, size: 80, color: Colors.grey.shade400),
-          const SizedBox(height: 16),
-          Text(
-            'لا يوجد مستخدمون نشطون',
-            style: TextStyle(fontSize: 18, color: Colors.grey.shade600),
-          ),
-          const SizedBox(height: 8),
-          Builder(
-            builder: (context) {
-              final admin = context.watch<AuthProvider>().isAdmin;
-              return Text(
-                admin
-                    ? 'اضغط على زر الإضافة لإنشاء مستخدم جديد'
-                    : 'سجّل دخول المدير لإضافة مستخدمين',
-                style: TextStyle(fontSize: 13, color: Colors.grey.shade400),
-              );
-            },
-          ),
-        ],
+      child: Padding(
+        padding: EdgeInsets.symmetric(horizontal: gap),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.people_outline, size: 80, color: Colors.grey.shade400),
+            const SizedBox(height: 16),
+            Text(
+              'لا يوجد مستخدمون نشطون',
+              style: TextStyle(fontSize: 18, color: Colors.grey.shade600),
+            ),
+            const SizedBox(height: 8),
+            Builder(
+              builder: (context) {
+                final admin = context.watch<AuthProvider>().isAdmin;
+                return Text(
+                  admin
+                      ? 'اضغط على زر الإضافة لإنشاء مستخدم جديد'
+                      : 'سجّل دخول المدير لإضافة مستخدمين',
+                  style: TextStyle(fontSize: 13, color: Colors.grey.shade400),
+                );
+              },
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -218,6 +245,7 @@ class _UsersScreenState extends State<UsersScreen> {
         : (user['username'] as String? ?? '—');
     final email = user['email'] as String? ?? '';
     final roleKey = user['role'] as String? ?? 'staff';
+    final gap = ScreenLayout.of(context).pageHorizontalGap;
 
     return Container(
       decoration: BoxDecoration(
@@ -235,7 +263,7 @@ class _UsersScreenState extends State<UsersScreen> {
         ],
       ),
       child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        contentPadding: EdgeInsets.symmetric(horizontal: gap, vertical: 8),
         leading: CircleAvatar(
           radius: 24,
           backgroundColor: primary.withValues(alpha: 0.12),
@@ -274,7 +302,8 @@ class _UsersScreenState extends State<UsersScreen> {
           },
           itemBuilder: (_) => [
             const PopupMenuItem(value: 'identity', child: Text('بطاقة الهوية')),
-            if (auth.isAdmin) const PopupMenuItem(value: 'edit', child: Text('تعديل')),
+            if (auth.isAdmin)
+              const PopupMenuItem(value: 'edit', child: Text('تعديل')),
             if (auth.isAdmin)
               const PopupMenuItem(
                 value: 'delete',

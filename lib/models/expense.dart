@@ -52,6 +52,9 @@ class ExpenseEntry {
     required this.recurringOriginId,
     required this.attachmentPath,
     required this.affectsCash,
+    this.invoiceRef,
+    this.landlordOrProperty,
+    this.taxKind,
   });
 
   final int id;
@@ -68,6 +71,10 @@ class ExpenseEntry {
   final int? recurringOriginId;
   final String? attachmentPath;
   final bool affectsCash;
+  /// حقول مساعدة حسب نوع المصروف (ماء، كهرباء، إيجار، ضرائب).
+  final String? invoiceRef;
+  final String? landlordOrProperty;
+  final String? taxKind;
 
   factory ExpenseEntry.fromJoinedRow(Map<String, dynamic> m) {
     final empDisplay = (m['employeeDisplayName'] as String?)?.trim();
@@ -91,6 +98,14 @@ class ExpenseEntry {
       recurringOriginId: (m['recurringOriginId'] as num?)?.toInt(),
       attachmentPath: (m['attachmentPath'] as String?)?.trim(),
       affectsCash: ((m['affectsCash'] as num?)?.toInt() ?? 1) == 1,
+      invoiceRef: (m['invoiceRef']?.toString().trim().isNotEmpty ?? false)
+          ? m['invoiceRef']?.toString().trim()
+          : null,
+      landlordOrProperty: (m['landlordOrProperty']?.toString().trim().isNotEmpty ?? false)
+          ? m['landlordOrProperty']?.toString().trim()
+          : null,
+      taxKind:
+          (m['taxKind']?.toString().trim().isNotEmpty ?? false) ? m['taxKind']?.toString().trim() : null,
     );
   }
 }
@@ -135,7 +150,7 @@ class ExpenseEmployeeOption {
 }
 
 bool expenseCategoryRequiresEmployee(String categoryName) {
-  return categoryName.trim() == 'رواتب';
+  return false;
 }
 
 bool expenseCategorySuggestsRecurring(String categoryName) {

@@ -9,6 +9,7 @@ class CustomerRecord {
     this.notes,
     required this.balance,
     required this.loyaltyPoints,
+    this.purchaseTotalApprox = 0,
     this.createdAt,
     this.updatedAt,
   });
@@ -21,6 +22,8 @@ class CustomerRecord {
   final String? notes;
   final double balance;
   final int loyaltyPoints;
+  /// مجموع تقريبي لفواتير البيع الرئيسية (غير مرتجعة)؛ يُحمّل من الاستعلام المجمّع عند وجود عمودها.
+  final double purchaseTotalApprox;
   final DateTime? createdAt;
   final DateTime? updatedAt;
 
@@ -51,6 +54,10 @@ class CustomerRecord {
           : row['notes']?.toString().trim(),
       balance: (row['balance'] as num?)?.toDouble() ?? 0,
       loyaltyPoints: (row['loyaltyPoints'] as num?)?.toInt() ?? 0,
+      purchaseTotalApprox:
+          (row['purchaseTotal'] as num?)?.toDouble() ??
+          (row['purchaseTotalApprox'] as num?)?.toDouble() ??
+          0,
       createdAt: parseDt(row['createdAt']),
       updatedAt: parseDt(row['updatedAt']),
     );

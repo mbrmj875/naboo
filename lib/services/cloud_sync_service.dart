@@ -32,11 +32,11 @@ class AccountDevice {
   final String platform;
   final DateTime? lastSeenAt;
   final DateTime? createdAt;
+
   /// `active` أو `revoked` (مفصول — يحتاج موافقة من جهاز نشط).
   final String accessStatus;
 
-  bool get isRevoked =>
-      accessStatus.toLowerCase() == 'revoked';
+  bool get isRevoked => accessStatus.toLowerCase() == 'revoked';
 
   static AccountDevice fromMap(Map<String, dynamic> map) {
     DateTime? parseDate(dynamic v) {
@@ -94,6 +94,7 @@ class CloudSyncService {
   final DatabaseHelper _dbHelper = DatabaseHelper();
   final ValueNotifier<DateTime?> lastSyncAt = ValueNotifier<DateTime?>(null);
   final ValueNotifier<String?> lastError = ValueNotifier<String?>(null);
+
   /// يزداد بعد كل استيراد ناجح من السحابة (Realtime أو سحب يدوي) لتحديث لوحة الرئيسية والمزودات.
   final ValueNotifier<int> remoteImportGeneration = ValueNotifier<int>(0);
   final ValueNotifier<List<AccountDevice>> devices =
@@ -145,10 +146,13 @@ class CloudSyncService {
           'updated_at': DateTime.now().toUtc().toIso8601String(),
         });
       } else {
-        await client.from('profiles').update({
-          'email': user.email,
-          'updated_at': DateTime.now().toUtc().toIso8601String(),
-        }).eq('id', user.id);
+        await client
+            .from('profiles')
+            .update({
+              'email': user.email,
+              'updated_at': DateTime.now().toUtc().toIso8601String(),
+            })
+            .eq('id', user.id);
       }
       final access = await registerCurrentDevice();
       if (access == DeviceAccessResult.revoked) {
@@ -205,8 +209,7 @@ class CloudSyncService {
     try {
       final currentDeviceId = await LicenseService.instance.getDeviceId();
       final existingDevices = await refreshDevices();
-      final activeDevices =
-          existingDevices.where((d) => !d.isRevoked).toList();
+      final activeDevices = existingDevices.where((d) => !d.isRevoked).toList();
       final alreadyRegistered = activeDevices.any(
         (d) => d.deviceId == currentDeviceId,
       );
@@ -390,15 +393,21 @@ class CloudSyncService {
 
   bool _isMissingSyncTables(PostgrestException e) {
     final m = e.message.toLowerCase();
-    final missingTable = m.contains(_snapshotsTable) ||
+    final missingTable =
+        m.contains(_snapshotsTable) ||
         m.contains(_snapshotChunksTable) ||
         m.contains('app_snapshots') ||
         m.contains('app_snapshot_chunks');
-    final tableNotReady = m.contains('could not find') || m.contains('relation');
+    final tableNotReady =
+        m.contains('could not find') || m.contains('relation');
     return missingTable && tableNotReady;
   }
 
-  Future<void> syncNow({bool forcePull = true}) async {
+  Future<void> syncNow({
+    bool forcePull = true,
+    bool forcePush = false,
+    bool forceImportOnPull = false,
+  }) async {
     if (_syncRunning) {
       _syncQueued = true;
       return;
@@ -410,8 +419,9 @@ class CloudSyncService {
 
       _syncRunning = true;
       try {
-        final remoteCfg =
-            await AppRemoteConfigService.instance.refresh(force: true);
+        final remoteCfg = await AppRemoteConfigService.instance.refresh(
+          force: true,
+        );
         if (remoteCfg.syncPausedGlobally) {
           lastError.value = remoteCfg.syncPausedMessageAr;
           return;
@@ -428,12 +438,18 @@ class CloudSyncService {
           return;
         }
         if (forcePull) {
-          final pull = await _pullLatestSnapshot(userId: user.id);
+          final pull = await _pullLatestSnapshot(
+            userId: user.id,
+            forceImport: forceImportOnPull,
+          );
           if (pull == _PullOutcome.blockPush) {
             return;
           }
         }
-        final pushOk = await _pushSnapshot(userId: user.id);
+        final pushOk = await _pushSnapshot(
+          userId: user.id,
+          forcePush: forcePush,
+        );
         await refreshDevices();
         if (!pushOk) {
           return;
@@ -453,7 +469,13 @@ class CloudSyncService {
         _syncRunning = false;
         if (_syncQueued) {
           _syncQueued = false;
-          unawaited(syncNow(forcePull: forcePull));
+          unawaited(
+            syncNow(
+              forcePull: forcePull,
+              forcePush: forcePush,
+              forceImportOnPull: forceImportOnPull,
+            ),
+          );
         }
       }
     });
@@ -470,9 +492,9 @@ class CloudSyncService {
 
   void _startAutoSyncTimer() {
     _syncTimer?.cancel();
-    // دورة خفيفة للتحقق العام/استرجاع احتياطي؛ التعديلات المحلية تُدفع فورًا عبر scheduleSyncSoon.
-    _syncTimer = Timer.periodic(const Duration(seconds: 45), (_) {
-      unawaited(syncNow(forcePull: true));
+    // دورة دورية خفيفة: دفع التغييرات المحلية فقط (بدون سحب تلقائي من الخادم).
+    _syncTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+      unawaited(syncNow(forcePull: false));
     });
   }
 
@@ -522,9 +544,7 @@ class CloudSyncService {
   void _debouncedRealtimePull(String userId) {
     _realtimePullDebounce?.cancel();
     _realtimePullDebounce = Timer(const Duration(milliseconds: 600), () {
-      unawaited(
-        _runSyncExclusive(() => _pullLatestSnapshot(userId: userId)),
-      );
+      unawaited(_runSyncExclusive(() => _pullLatestSnapshot(userId: userId)));
     });
   }
 
@@ -557,8 +577,7 @@ class CloudSyncService {
               if (map.isEmpty) return;
               if (map['user_id']?.toString() != user.id) return;
               if (map['device_id']?.toString() != deviceId) return;
-              if (map['access_status']?.toString().toLowerCase() !=
-                  'revoked') {
+              if (map['access_status']?.toString().toLowerCase() != 'revoked') {
                 return;
               }
               final kick = onRemoteDeviceRevoked;
@@ -574,7 +593,10 @@ class CloudSyncService {
     }
   }
 
-  Future<_PullOutcome> _pullLatestSnapshot({required String userId}) async {
+  Future<_PullOutcome> _pullLatestSnapshot({
+    required String userId,
+    bool forceImport = false,
+  }) async {
     final client = Supabase.instance.client;
     final rows = await client
         .from(_snapshotsTable)
@@ -588,11 +610,11 @@ class CloudSyncService {
     }
     final row = rows.first;
     final remoteUpdatedAt = (row['updated_at'] ?? '').toString();
-    if (remoteUpdatedAt.isNotEmpty) {
+    if (!forceImport && remoteUpdatedAt.isNotEmpty) {
       final prefs = await SharedPreferences.getInstance();
       final importedKey = _prefsKeyLastImportedRemoteAt(userId);
       final prevImported = prefs.getString(importedKey) ?? '';
-      // لا تعيد تنزيل/استيراد نفس النسخة مرة أخرى.
+      // لا تعيد تنزيل/استيراد نفس النسخة مرة أخرى (إلا عند الطلب اليدوي).
       if (prevImported == remoteUpdatedAt) {
         return _PullOutcome.allowPush;
       }
@@ -606,7 +628,8 @@ class CloudSyncService {
     }
     final payloadRaw = row['payload'];
     if (payloadRaw == null) {
-      lastError.value = 'لقطة السحابة لا تحتوي على بيانات (payload). تحقق من Supabase.';
+      lastError.value =
+          'لقطة السحابة لا تحتوي على بيانات (payload). تحقق من Supabase.';
       return _PullOutcome.blockPush;
     }
     Map<String, dynamic> payload;
@@ -646,7 +669,10 @@ class CloudSyncService {
   }
 
   /// يعيد `false` إذا أُوقف الرفع (مثلاً حماية اللقطة الفارغة) ويُضبط [lastError].
-  Future<bool> _pushSnapshot({required String userId}) async {
+  Future<bool> _pushSnapshot({
+    required String userId,
+    bool forcePush = false,
+  }) async {
     final client = Supabase.instance.client;
     final db = await _dbHelper.database;
     final tableNames = await _listSyncTables(db);
@@ -654,7 +680,7 @@ class CloudSyncService {
     final sigMapKey = _prefsKeyLastPushedTableSignatures(userId);
     final currentSigMap = await _buildTableSignatures(db, tableNames);
     final previousSigMap = _readSignatureMap(prefs.getString(sigMapKey));
-    if (_tableSignaturesUnchanged(currentSigMap, previousSigMap)) {
+    if (!forcePush && _tableSignaturesUnchanged(currentSigMap, previousSigMap)) {
       // لا تغيّر في أي جدول -> لا رفع.
       return true;
     }
@@ -679,23 +705,17 @@ class CloudSyncService {
       }
     }
 
-    final build = await _exportSnapshot(
-      db: db,
-      changedTables: changedTables,
-    );
+    final build = await _exportSnapshot(db: db, changedTables: changedTables);
     final nowIso = DateTime.now().toUtc().toIso8601String();
     final encoded = _encodePayload(build.payload);
     if (encoded.length <= _chunkThresholdChars) {
-      await client.from(_snapshotsTable).upsert(
-        {
-          'user_id': userId,
-          'device_label': defaultTargetPlatform.name,
-          'schema_version': _snapshotSchemaVersion,
-          'payload': build.payload,
-          'updated_at': nowIso,
-        },
-        onConflict: 'user_id',
-      );
+      await client.from(_snapshotsTable).upsert({
+        'user_id': userId,
+        'device_label': defaultTargetPlatform.name,
+        'schema_version': _snapshotSchemaVersion,
+        'payload': build.payload,
+        'updated_at': nowIso,
+      }, onConflict: 'user_id');
     } else {
       final syncId = '${DateTime.now().millisecondsSinceEpoch}-$userId';
       final chunks = _splitText(encoded, _chunkSizeChars);
@@ -709,21 +729,18 @@ class CloudSyncService {
           'updated_at': nowIso,
         }, onConflict: 'user_id,sync_id,chunk_index');
       }
-      await client.from(_snapshotsTable).upsert(
-        {
-          'user_id': userId,
-          'device_label': defaultTargetPlatform.name,
-          'schema_version': _snapshotSchemaVersion,
-          'payload': {
-            'chunked': true,
-            'sync_id': syncId,
-            'chunk_count': chunks.length,
-            'encoding': 'gzip+base64',
-          },
-          'updated_at': nowIso,
+      await client.from(_snapshotsTable).upsert({
+        'user_id': userId,
+        'device_label': defaultTargetPlatform.name,
+        'schema_version': _snapshotSchemaVersion,
+        'payload': {
+          'chunked': true,
+          'sync_id': syncId,
+          'chunk_count': chunks.length,
+          'encoding': 'gzip+base64',
         },
-        onConflict: 'user_id',
-      );
+        'updated_at': nowIso,
+      }, onConflict: 'user_id');
     }
     await prefs.setString(sigMapKey, jsonEncode(currentSigMap));
     return true;
@@ -844,6 +861,7 @@ class CloudSyncService {
           }
           await _mergeTableRows(txn, table, rows);
         }
+        await _applyUserProfilesIntoUsers(txn);
       });
     } finally {
       await db.execute('PRAGMA foreign_keys = ON');
@@ -858,9 +876,23 @@ class CloudSyncService {
     if (incomingRows.isEmpty) return;
     final pkCols = await _primaryKeyColumns(txn, table);
 
-    for (final incoming in incomingRows) {
+    // اقرأ الأعمدة الموجودة محلياً مرة واحدة لكل الجدول
+    final pragmaRows = await txn.rawQuery('PRAGMA table_info($table)');
+    final localCols = pragmaRows
+        .map((r) => (r['name'] ?? '').toString())
+        .where((s) => s.isNotEmpty)
+        .toSet();
+
+    for (final incomingRaw in incomingRows) {
+      // تجاهل أي عمود غير موجود في السكيما المحلية
+      final incoming = Map<String, dynamic>.fromEntries(
+        incomingRaw.entries.where((e) => localCols.contains(e.key)),
+      );
+      if (incoming.isEmpty) continue;
+
       final deletedAt =
-          _rowDate(incoming['deletedAt']) ?? _rowDate(incoming['deleted_at']);
+          _rowDate(incomingRaw['deletedAt']) ??
+          _rowDate(incomingRaw['deleted_at']);
 
       // إذا لا يوجد مفتاح أساسي عملي، fallback على replace.
       if (pkCols.isEmpty || pkCols.any((c) => !incoming.containsKey(c))) {
@@ -898,7 +930,15 @@ class CloudSyncService {
       }
 
       final current = existing.first;
-      if (_incomingWins(current, incoming)) {
+      if (_isCashLedgerIdCollision(table, current, incoming)) {
+        await _insertCashLedgerWithoutLosingLocal(
+          txn: txn,
+          incoming: incoming,
+          localCols: localCols,
+        );
+        continue;
+      }
+      if (_incomingWins(current, incomingRaw)) {
         await txn.insert(
           table,
           incoming,
@@ -954,6 +994,167 @@ class CloudSyncService {
     return DateTime.tryParse(s)?.toUtc();
   }
 
+  bool _isCashLedgerIdCollision(
+    String table,
+    Map<String, dynamic> current,
+    Map<String, dynamic> incoming,
+  ) {
+    if (table != 'cash_ledger') return false;
+    final currType = (current['transactionType'] ?? '').toString().trim();
+    final inType = (incoming['transactionType'] ?? '').toString().trim();
+    final currFils = _cashAmountFils(current);
+    final inFils = _cashAmountFils(incoming);
+    final currDesc = (current['description'] ?? '').toString().trim();
+    final inDesc = (incoming['description'] ?? '').toString().trim();
+    final currInv = (current['invoiceId'] as num?)?.toInt() ?? -1;
+    final inInv = (incoming['invoiceId'] as num?)?.toInt() ?? -1;
+    final currShift = (current['workShiftId'] as num?)?.toInt() ?? -1;
+    final inShift = (incoming['workShiftId'] as num?)?.toInt() ?? -1;
+    final currCreated = (current['createdAt'] ?? '').toString();
+    final inCreated = (incoming['createdAt'] ?? '').toString();
+
+    // إذا نفس المحتوى، ليس تضارباً.
+    final same =
+        currType == inType &&
+        currFils == inFils &&
+        currDesc == inDesc &&
+        currInv == inInv &&
+        currShift == inShift &&
+        currCreated == inCreated;
+    if (same) return false;
+
+    // نفس PK لكن بيانات مختلفة => غالباً تعارض ids بين جهازين.
+    return true;
+  }
+
+  int _cashAmountFils(Map<String, dynamic> row) {
+    final amountFils = (row['amountFils'] as num?)?.toInt() ?? 0;
+    if (amountFils != 0) return amountFils;
+    final amount = (row['amount'] as num?)?.toDouble() ?? 0.0;
+    return (amount * 1000).round();
+  }
+
+  Future<void> _insertCashLedgerWithoutLosingLocal({
+    required Transaction txn,
+    required Map<String, dynamic> incoming,
+    required Set<String> localCols,
+  }) async {
+    final inType = (incoming['transactionType'] ?? '').toString().trim();
+    final inDesc = (incoming['description'] ?? '').toString().trim();
+    final inCreated = (incoming['createdAt'] ?? '').toString();
+    final inInv = (incoming['invoiceId'] as num?)?.toInt() ?? -1;
+    final inShift = (incoming['workShiftId'] as num?)?.toInt() ?? -1;
+    final inFils = _cashAmountFils(incoming);
+
+    final candidateCols = <String>[
+      'id',
+      'transactionType',
+      if (localCols.contains('amount')) 'amount',
+      if (localCols.contains('amountFils')) 'amountFils',
+      'description',
+      'invoiceId',
+      'workShiftId',
+      'createdAt',
+    ];
+    final candidates = await txn.query(
+      'cash_ledger',
+      columns: candidateCols,
+      where:
+          "transactionType = ? AND IFNULL(createdAt, '') = ? "
+          "AND IFNULL(invoiceId, -1) = ? AND IFNULL(workShiftId, -1) = ? "
+          "AND IFNULL(description, '') = ?",
+      whereArgs: [inType, inCreated, inInv, inShift, inDesc],
+    );
+    final alreadyExists = candidates.any((r) => _cashAmountFils(r) == inFils);
+    if (alreadyExists) return;
+
+    final insertMap = Map<String, dynamic>.from(incoming)..remove('id');
+    if (localCols.contains('amountFils')) {
+      insertMap['amountFils'] = inFils;
+    }
+    if (localCols.contains('amount') && !insertMap.containsKey('amount')) {
+      insertMap['amount'] = inFils / 1000.0;
+    }
+    await txn.insert(
+      'cash_ledger',
+      insertMap,
+      conflictAlgorithm: ConflictAlgorithm.ignore,
+    );
+  }
+
+  Future<void> _applyUserProfilesIntoUsers(Transaction txn) async {
+    final profiles = await txn.query('user_profiles');
+    if (profiles.isEmpty) return;
+    final now = DateTime.now().toIso8601String();
+
+    for (final p in profiles) {
+      final username = (p['username'] ?? '').toString().trim().toLowerCase();
+      final email = (p['email'] ?? '').toString().trim().toLowerCase();
+      if (username.isEmpty && email.isEmpty) continue;
+
+      final role = (p['role'] ?? 'staff').toString().trim();
+      final displayName = (p['displayName'] ?? '').toString().trim();
+      final phone = (p['phone'] ?? '').toString().trim();
+      final phone2 = (p['phone2'] ?? '').toString().trim();
+      final jobTitle = (p['jobTitle'] ?? '').toString().trim();
+      final isActive = ((p['isActive'] as num?)?.toInt() ?? 1) == 1 ? 1 : 0;
+      final createdAt = ((p['createdAt'] ?? '').toString().trim().isEmpty)
+          ? now
+          : (p['createdAt'] ?? '').toString();
+      final updatedAt = ((p['updatedAt'] ?? '').toString().trim().isEmpty)
+          ? now
+          : (p['updatedAt'] ?? '').toString();
+
+      final whereParts = <String>[];
+      final whereArgs = <dynamic>[];
+      if (username.isNotEmpty) {
+        whereParts.add('LOWER(username) = ?');
+        whereArgs.add(username);
+      }
+      if (email.isNotEmpty) {
+        whereParts.add("LOWER(IFNULL(email, '')) = ?");
+        whereArgs.add(email);
+      }
+      if (whereParts.isEmpty) continue;
+
+      final existing = await txn.query(
+        'users',
+        where: whereParts.join(' OR '),
+        whereArgs: whereArgs,
+        limit: 1,
+      );
+
+      final rowToApply = <String, dynamic>{
+        'username': username.isNotEmpty ? username : email,
+        'role': role.isEmpty ? 'staff' : role,
+        'email': email,
+        'phone': phone,
+        'phone2': phone2,
+        'displayName': displayName,
+        'jobTitle': jobTitle,
+        'isActive': isActive,
+        'updatedAt': updatedAt,
+      };
+
+      if (existing.isNotEmpty) {
+        await txn.update(
+          'users',
+          rowToApply,
+          where: 'id = ?',
+          whereArgs: [existing.first['id']],
+        );
+      } else {
+        await txn.insert('users', {
+          ...rowToApply,
+          'passwordSalt': '',
+          'passwordHash': '',
+          'shiftAccessPin': DatabaseHelper.newRandomShiftAccessPin(),
+          'createdAt': createdAt,
+        }, conflictAlgorithm: ConflictAlgorithm.ignore);
+      }
+    }
+  }
+
   Future<List<String>> _listSyncTables(Database db) async {
     final rows = await db.rawQuery(
       "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name ASC",
@@ -969,7 +1170,11 @@ class CloudSyncService {
   bool _shouldSyncTable(String tableName) {
     if (tableName.isEmpty) return false;
     if (tableName.startsWith('sqlite_')) return false;
-    const excluded = {'android_metadata', 'sqlite_sequence'};
+    const excluded = {
+      'android_metadata',
+      'sqlite_sequence',
+      'users', // لا نرفع passwordHash/passwordSalt إلى السحابة
+    };
     return !excluded.contains(tableName);
   }
 

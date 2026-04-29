@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../../services/inventory_repository.dart';
+import '../../utils/screen_layout.dart';
 import 'stock_voucher_screen.dart';
 
 const _navy = Color(0xFF1E3A5F);
@@ -111,7 +112,12 @@ class _InventoryManagementScreenState extends State<InventoryManagementScreen> {
           // ── Summary bar ─────────────────────────────────────────────────
           Container(
             color: _navy,
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            padding: EdgeInsetsDirectional.only(
+              start: ScreenLayout.of(context).pageHorizontalGap,
+              end: ScreenLayout.of(context).pageHorizontalGap,
+              top: 0,
+              bottom: 16,
+            ),
             child: Row(
               children: [
                 _SummaryChip(
@@ -219,7 +225,7 @@ class _InventoryManagementScreenState extends State<InventoryManagementScreen> {
                     _ => _teal,
                   };
                   return Padding(
-                    padding: const EdgeInsets.only(left: 8),
+                    padding: const EdgeInsetsDirectional.only(start: 8),
                     child: FilterChip(
                       label: Text(f),
                       selected: selected,

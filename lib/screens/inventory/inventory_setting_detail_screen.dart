@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../providers/theme_provider.dart';
+import '../../utils/screen_layout.dart';
 
 /// شاشة فرعية لإعدادات فئة معيّنة من إعدادات المخزون والمنتجات.
 class InventorySettingDetailScreen extends StatefulWidget {
@@ -37,8 +38,9 @@ class _InventorySettingDetailScreenState
         final bg = isDark ? const Color(0xFF121212) : const Color(0xFFF0F4F8);
         final surface = isDark ? const Color(0xFF1E1E1E) : Colors.white;
         final textPrimary = isDark ? Colors.white : const Color(0xFF1E293B);
-        final textSecondary =
-            isDark ? Colors.grey.shade400 : Colors.grey.shade600;
+        final textSecondary = isDark
+            ? Colors.grey.shade400
+            : Colors.grey.shade600;
         final divider = isDark ? Colors.grey.shade800 : Colors.grey.shade300;
 
         return Scaffold(
@@ -47,8 +49,11 @@ class _InventorySettingDetailScreenState
             backgroundColor: const Color(0xFF1E3A5F),
             elevation: 0,
             leading: IconButton(
-              icon: const Icon(Icons.arrow_back_ios,
-                  color: Colors.white, size: 18),
+              icon: const Icon(
+                Icons.arrow_back_ios,
+                color: Colors.white,
+                size: 18,
+              ),
               onPressed: () => Navigator.pop(context),
             ),
             title: Text(
@@ -61,7 +66,12 @@ class _InventorySettingDetailScreenState
             ),
           ),
           body: ListView(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+            padding: EdgeInsetsDirectional.only(
+              start: ScreenLayout.of(context).pageHorizontalGap,
+              end: ScreenLayout.of(context).pageHorizontalGap,
+              top: 16,
+              bottom: 32,
+            ),
             children: [
               Container(
                 padding: const EdgeInsets.all(16),
@@ -239,7 +249,7 @@ class _InventorySettingDetailScreenState
     return Padding(
       padding: const EdgeInsets.only(bottom: 12, top: 4),
       child: Align(
-        alignment: Alignment.centerRight,
+        alignment: AlignmentDirectional.centerEnd,
         child: Text(
           text,
           style: TextStyle(
@@ -272,15 +282,10 @@ class _InventorySettingDetailScreenState
         title: Text(
           label,
           textAlign: TextAlign.right,
-          style: TextStyle(
-            fontSize: 14,
-            color: textPrimary,
-            height: 1.35,
-          ),
+          style: TextStyle(fontSize: 14, color: textPrimary, height: 1.35),
         ),
         value: _get(key),
-        activeTrackColor:
-            const Color(0xFF1E3A5F).withValues(alpha: 0.45),
+        activeTrackColor: const Color(0xFF1E3A5F).withValues(alpha: 0.45),
         activeThumbColor: const Color(0xFF1E3A5F),
         onChanged: (v) => _set(key, v),
       ),

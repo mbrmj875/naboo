@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
@@ -6,6 +7,8 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../providers/auth_provider.dart';
+import '../services/app_settings_repository.dart';
+import '../services/business_setup_settings.dart';
 import '../providers/notification_provider.dart';
 import '../providers/shift_provider.dart';
 import '../providers/product_provider.dart';
@@ -13,6 +16,7 @@ import '../providers/theme_provider.dart';
 import '../providers/sale_draft_provider.dart';
 import '../providers/parked_sales_provider.dart';
 import '../widgets/search_virtual_keyboard.dart';
+import '../widgets/virtual_keyboard_controller.dart';
 import '../widgets/dashboard_view.dart';
 import '../widgets/home_glance_orbit.dart';
 import '../widgets/invoice_detail_sheet.dart';
@@ -32,7 +36,6 @@ import 'inventory/inventory_products_screen.dart';
 import 'inventory/barcode_labels_screen.dart';
 import 'inventory/inventory_management_screen.dart';
 import 'inventory/warehouses_screen.dart';
-import 'inventory/price_lists_screen.dart';
 import 'inventory/stocktaking_screen.dart';
 import 'inventory/purchase_orders_screen.dart';
 import 'inventory/stock_analytics_screen.dart';
@@ -172,18 +175,65 @@ class _HomeScreenState extends State<HomeScreen>
     final shiftProv = context.read<ShiftProvider>();
     final activeShift = shiftProv.activeShift;
     final perm = PermissionService.instance;
+    final settingsRepo = AppSettingsRepository.instance;
+
+    bool enableDebts = true;
+    bool enableInstallments = true;
+    bool enableCustomers = true;
+    bool enableLoyalty = true;
+    try {
+      final tenantId = await settingsRepo.getActiveTenantId();
+      enableDebts =
+          (await settingsRepo.getForTenant(
+                BusinessSetupKeys.enableDebts,
+                tenantId: tenantId,
+              ) ??
+              '1') ==
+          '1';
+      enableInstallments =
+          (await settingsRepo.getForTenant(
+                BusinessSetupKeys.enableInstallments,
+                tenantId: tenantId,
+              ) ??
+              '1') ==
+          '1';
+      enableCustomers =
+          (await settingsRepo.getForTenant(
+                BusinessSetupKeys.enableCustomers,
+                tenantId: tenantId,
+              ) ??
+              '1') ==
+          '1';
+      enableLoyalty =
+          (await settingsRepo.getForTenant(
+                BusinessSetupKeys.enableLoyalty,
+                tenantId: tenantId,
+              ) ??
+              '1') ==
+          '1';
+    } catch (_) {
+      // في حال تعذر قراءة الإعدادات: لا نكسر التصفح.
+    }
 
     Future<bool> allow(String key) => perm.canForSession(
-          sessionUserId: auth.userId,
-          sessionRoleKey: auth.isAdmin ? 'admin' : 'staff',
-          activeShift: activeShift,
-          permissionKey: key,
-        );
+      sessionUserId: auth.userId,
+      sessionRoleKey: auth.isAdmin ? 'admin' : 'staff',
+      activeShift: activeShift,
+      permissionKey: key,
+    );
 
     final source = _orderedModules;
     final out = <ModuleItem>[];
 
     for (final m in source) {
+      if (!enableDebts && m.routeId == AppContentRoutes.debts) continue;
+      if (!enableInstallments && m.routeId == AppContentRoutes.installments) {
+        continue;
+      }
+      if (!enableCustomers && m.routeId == AppContentRoutes.customers) continue;
+      if (!enableLoyalty && m.routeId == AppContentRoutes.loyaltySettings) {
+        continue;
+      }
       if (m.routeId == AppContentRoutes.users) {
         final subs = m.subItems;
         if (subs == null) continue;
@@ -633,6 +683,7 @@ class _HomeScreenState extends State<HomeScreen>
     );
     unawaited(_loadHomeDiskPrefsOnce());
     _searchController.addListener(_onSearchControllerChanged);
+    _searchFocusNode.addListener(_onSearchFocusTick);
     CloudSyncService.instance.remoteImportGeneration.addListener(
       _onRemoteSnapshotImported,
     );
@@ -807,10 +858,23 @@ class _HomeScreenState extends State<HomeScreen>
     _searchDebounce?.cancel();
     _nameAnimController.dispose();
     _searchController.removeListener(_onSearchControllerChanged);
+    _searchFocusNode.removeListener(_onSearchFocusTick);
     _searchController.dispose();
     _searchFocusNode.dispose();
     _isDrawerOpen.dispose();
     super.dispose();
+  }
+
+  void _onSearchFocusTick() {
+    if (_searchFocusNode.hasFocus) {
+      VirtualKeyboardController.instance.registerField(
+        controller: _searchController,
+        focusNode: _searchFocusNode,
+        onSubmit: _scheduleGlobalSearch,
+      );
+      return;
+    }
+    VirtualKeyboardController.instance.unregisterField(_searchFocusNode);
   }
 
   Future<void> _saveQuickActions() async {
@@ -1115,10 +1179,8 @@ class _HomeScreenState extends State<HomeScreen>
     final route = contentMaterialRoute(
       routeId: AppContentRoutes.addProduct,
       breadcrumbTitle: 'إضافة منتج',
-      builder: (_) => AddProductScreen(
-        initialBarcode: raw,
-        autoFillFromScan: true,
-      ),
+      builder: (_) =>
+          AddProductScreen(initialBarcode: raw, autoFillFromScan: true),
     );
     final nav = _contentNavigator;
     if (nav != null) {
@@ -1245,8 +1307,8 @@ class _HomeScreenState extends State<HomeScreen>
       return;
     }
     final cached = MacStyleSettingsPrefs.cachedValue;
-    final useMacPanel = cached ??
-        await MacStyleSettingsPrefs.isMacStylePanelEnabled();
+    final useMacPanel =
+        cached ?? await MacStyleSettingsPrefs.isMacStylePanelEnabled();
     if (!mounted) return;
     if (useMacPanel && _macFloatingRouteIds.contains(routeId)) {
       final page = floatingPageBuilder ?? builder;
@@ -1430,8 +1492,7 @@ class _HomeScreenState extends State<HomeScreen>
                                 builder: (_, isOpen, _) {
                                   const double collapsedW = 56.0;
                                   const double expandedW = 220.0;
-                                  final sideW =
-                                      isOpen ? expandedW : collapsedW;
+                                  final sideW = isOpen ? expandedW : collapsedW;
                                   return AnimatedContainer(
                                     duration: const Duration(milliseconds: 240),
                                     curve: Curves.easeInOut,
@@ -1448,7 +1509,8 @@ class _HomeScreenState extends State<HomeScreen>
                                     SizedBox.expand(
                                       child: Navigator(
                                         key: _innerNavKey,
-                                        restorationScopeId: 'home_inner_nav_main',
+                                        restorationScopeId:
+                                            'home_inner_nav_main',
                                         observers: [_innerNavObserver],
                                         onGenerateInitialRoutes: (_, _) => [
                                           FastContentPageRoute(
@@ -1528,13 +1590,10 @@ class _HomeScreenState extends State<HomeScreen>
                                   FastContentPageRoute(
                                     settings: const RouteSettings(
                                       name: AppContentRoutes.home,
-                                      arguments: BreadcrumbMeta(
-                                        'الرئيسية',
-                                      ),
+                                      arguments: BreadcrumbMeta('الرئيسية'),
                                     ),
-                                    builder: (_) => _HomeContentPage(
-                                      parentState: this,
-                                    ),
+                                    builder: (_) =>
+                                        _HomeContentPage(parentState: this),
                                   ),
                                 ],
                               ),
@@ -1545,9 +1604,7 @@ class _HomeScreenState extends State<HomeScreen>
                                   behavior: HitTestBehavior.opaque,
                                   onTap: _clearGlobalSearch,
                                   child: Container(
-                                    color: Colors.black.withValues(
-                                      alpha: 0.4,
-                                    ),
+                                    color: Colors.black.withValues(alpha: 0.4),
                                   ),
                                 ),
                               ),
@@ -1817,7 +1874,7 @@ class _HomeScreenState extends State<HomeScreen>
       _appBarSettingsButton(),
       _appBarEditButton(),
       Padding(
-        padding: const EdgeInsets.only(right: 6, left: 2),
+        padding: const EdgeInsetsDirectional.only(end: 6, start: 2),
         child: _buildDarkModeToggle(themeProvider),
       ),
     ];
@@ -1875,7 +1932,9 @@ class _HomeScreenState extends State<HomeScreen>
                 fit: BoxFit.scaleDown,
                 alignment: Alignment.centerRight,
                 child: ConstrainedBox(
-                  constraints: BoxConstraints(maxWidth: maxW.clamp(48.0, 400.0)),
+                  constraints: BoxConstraints(
+                    maxWidth: maxW.clamp(48.0, 400.0),
+                  ),
                   child: AppBrandMark(
                     title: 'naboo',
                     logoSize: sl.isNarrowWidth ? 34 : 38,
@@ -1894,137 +1953,184 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   void _showUserInfoDialog(AuthProvider auth) {
-    showDialog(
+    showDialog<void>(
       context: context,
+      barrierDismissible: true,
       builder: (ctx) {
-        final isPhone = ScreenLayout.of(ctx).isHandsetForLayout;
-        return AlertDialog(
-        backgroundColor: _surfaceColor,
-        shape: RoundedRectangleBorder(borderRadius: ctx.appCorners.lg),
-        title: Row(
-          children: [
-            Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Color(0xFF6C63FF), Color(0xFF3B82F6)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
+        final mq = MediaQuery.sizeOf(ctx);
+        final dialogW = math.min(400.0, mq.width - 48);
+        const goldClose = Color(0xFFF5C518);
+
+        Widget row(
+          String label,
+          String value, {
+          bool ltrValue = false,
+          bool allowCopy = true,
+        }) {
+          final trimmed = label.endsWith(':')
+              ? label.substring(0, label.length - 1)
+              : label;
+          final show = '$trimmed:';
+
+          Widget valueWidget() {
+            if (ltrValue && value.isNotEmpty && value != '—') {
+              return SelectableText(
+                value,
+                textAlign: TextAlign.right,
+                textDirection: TextDirection.ltr,
+                style: TextStyle(
+                  color: _textPrimary,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
                 ),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(Icons.person, color: Colors.white, size: 24),
-            ),
-            const SizedBox(width: 12),
-            Text(
-              'بيانات المستخدم',
+              );
+            }
+            return SelectableText(
+              value.isEmpty ? '—' : value,
+              textAlign: TextAlign.right,
               style: TextStyle(
                 color: _textPrimary,
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
               ),
+            );
+          }
+
+          return Padding(
+            padding: const EdgeInsetsDirectional.only(
+              start: 2,
+              end: 2,
+              bottom: 8,
             ),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Divider(color: _dividerColor),
-            const SizedBox(height: 8),
-            _userInfoRow(
-              Icons.badge_outlined,
-              'الاسم المعروض',
-              auth.displayName.isNotEmpty ? auth.displayName : '—',
-            ),
-            const SizedBox(height: 10),
-            _userInfoRow(
-              Icons.account_circle_outlined,
-              'اسم الدخول',
-              auth.username.isNotEmpty ? auth.username : '—',
-            ),
-            const SizedBox(height: 10),
-            _userInfoRow(
-              Icons.badge_outlined,
-              'الصلاحية',
-              auth.role.isNotEmpty ? auth.role : '—',
-            ),
-            const SizedBox(height: 10),
-            _userInfoRow(
-              Icons.email_outlined,
-              'البريد الإلكتروني',
-              auth.email.isNotEmpty ? auth.email : '—',
-            ),
-            if (isPhone) ...[
-              const SizedBox(height: 16),
-              Divider(color: _dividerColor),
-              const SizedBox(height: 12),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton.tonal(
-                  style: FilledButton.styleFrom(
-                    foregroundColor: const Color(0xFFB91C1C),
-                    backgroundColor: const Color(0xFFB91C1C).withValues(alpha: 0.14),
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                  ),
-                  onPressed: () {
-                    Navigator.pop(ctx);
-                    WidgetsBinding.instance.addPostFrameCallback((_) {
-                      if (mounted) _confirmAndLogout(auth);
-                    });
-                  },
-                  child: const Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              textDirection: TextDirection.rtl,
+              children: [
+                Expanded(
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    textDirection: TextDirection.rtl,
                     children: [
-                      Icon(Icons.logout_rounded, size: 20),
-                      SizedBox(width: 8),
-                      Text('تسجيل الخروج'),
+                      Expanded(flex: 3, child: valueWidget()),
+                      const SizedBox(width: 10),
+                      SizedBox(
+                        width: 118,
+                        child: Text(
+                          show,
+                          textAlign: TextAlign.right,
+                          style: TextStyle(
+                            color: _textSecondary,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
                     ],
                   ),
                 ),
+                IconButton(
+                  tooltip: 'نسخ',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: allowCopy && value.isNotEmpty && value != '—'
+                      ? () async {
+                          await Clipboard.setData(ClipboardData(text: value));
+                          if (!ctx.mounted) return;
+                          ScaffoldMessenger.of(ctx).showSnackBar(
+                            const SnackBar(
+                              content: Text('تم النسخ'),
+                              behavior: SnackBarBehavior.floating,
+                            ),
+                          );
+                        }
+                      : null,
+                  icon: Icon(
+                    Icons.copy_rounded,
+                    size: 20,
+                    color: allowCopy && value.isNotEmpty && value != '—'
+                        ? AppColors.primary
+                        : Colors.grey,
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+
+        return Center(
+          child: SizedBox(
+            width: dialogW,
+            child: AlertDialog(
+              backgroundColor: _surfaceColor,
+              shape: RoundedRectangleBorder(borderRadius: ctx.appCorners.lg),
+              titlePadding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+              title: Row(
+                textDirection: TextDirection.rtl,
+                children: [
+                  CircleAvatar(
+                    radius: 28,
+                    backgroundColor: const Color(0xFF6366F1),
+                    child: const Icon(
+                      Icons.person_rounded,
+                      color: Colors.white,
+                      size: 30,
+                    ),
+                  ),
+                  Expanded(
+                    child: Text(
+                      'بيانات المستخدم',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: _textPrimary,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 56),
+                ],
               ),
-            ],
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text(
-              'إغلاق',
-              style: TextStyle(color: AppColors.primary),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Divider(color: _dividerColor),
+                    const SizedBox(height: 6),
+                    row(
+                      'الاسم المعروض:',
+                      auth.displayName.isNotEmpty ? auth.displayName : '—',
+                    ),
+                    row(
+                      'اسم الدخول:',
+                      auth.username.isNotEmpty ? auth.username : '—',
+                    ),
+                    row('الصلاحية:', auth.role.isNotEmpty ? auth.role : '—'),
+                    row(
+                      'البريد الإلكتروني:',
+                      auth.email.isNotEmpty ? auth.email : '—',
+                      ltrValue: true,
+                    ),
+                    Divider(color: _dividerColor),
+                  ],
+                ),
+              ),
+              actionsAlignment: MainAxisAlignment.center,
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text(
+                    'إغلاق',
+                    style: TextStyle(
+                      color: goldClose,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
-        ],
         );
       },
-    );
-  }
-
-  Widget _userInfoRow(IconData icon, String label, String value) {
-    return Row(
-      children: [
-        Icon(icon, size: 18, color: AppColors.primary),
-        const SizedBox(width: 8),
-        Text(
-          '$label: ',
-          style: TextStyle(
-            color: _textSecondary,
-            fontSize: 13,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-        Expanded(
-          child: Text(
-            value,
-            style: TextStyle(
-              color: _textPrimary,
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-            ),
-            overflow: TextOverflow.ellipsis,
-          ),
-        ),
-      ],
     );
   }
 
@@ -2113,18 +2219,13 @@ class _HomeScreenState extends State<HomeScreen>
   Widget _buildSearchBarSuffixRow(Color iconInField, bool hideVk) {
     final sl = ScreenLayout.of(context);
     final w = MediaQuery.sizeOf(context).width;
-    final collapse =
-        sl.isHandsetForLayout && w < 400 && !hideVk;
+    final collapse = sl.isHandsetForLayout && w < 400 && !hideVk;
 
     final barcodeBtn = IconButton(
       style: _searchBarSuffixIconStyle(iconInField),
       tooltip:
           'قراءة باركود (كاميرا على الجهاز المحمول، أو نافذة القارئ على الحاسوب)',
-      icon: Icon(
-        Icons.qr_code_scanner_rounded,
-        color: iconInField,
-        size: 21,
-      ),
+      icon: Icon(Icons.qr_code_scanner_rounded, color: iconInField, size: 21),
       onPressed: _scanFromDashboardSearch,
     );
 
@@ -2162,11 +2263,7 @@ class _HomeScreenState extends State<HomeScreen>
     if (!collapse) {
       return Row(
         mainAxisSize: MainAxisSize.min,
-        children: [
-          barcodeBtn,
-          if (!hideVk) keyboardBtn,
-          ?clearBtn,
-        ],
+        children: [barcodeBtn, if (!hideVk) keyboardBtn, ?clearBtn],
       );
     }
 
@@ -2226,7 +2323,10 @@ class _HomeScreenState extends State<HomeScreen>
       child: TextField(
         controller: _searchController,
         focusNode: _searchFocusNode,
-        readOnly: _showVirtualSearchKeyboard && !hideVk,
+        readOnly:
+            _showVirtualSearchKeyboard &&
+            !hideVk &&
+            VirtualKeyboardController.instance.isPinned,
         textInputAction: TextInputAction.search,
         onSubmitted: (_) => _scheduleGlobalSearch(),
         style: TextStyle(color: _textPrimary),
@@ -2406,6 +2506,7 @@ class _HomeScreenState extends State<HomeScreen>
 
     final cs = Theme.of(context).colorScheme;
     final ac = context.appCorners;
+    final sl = ScreenLayout.of(context);
     final sidebarBg = _isDarkMode
         ? Color.lerp(cs.primary, Colors.black, 0.45)!
         : cs.primary;
@@ -2419,101 +2520,105 @@ class _HomeScreenState extends State<HomeScreen>
       child: Container(
         color: sidebarBg,
         child: Column(
-        children: [
-          // ── زر التوسيع/الطي ──
-          SizedBox(
-            height: 56,
-            child: Tooltip(
-              message: isExpanded ? 'طي القائمة' : 'توسيع القائمة',
-              child: IconButton(
-                padding: const EdgeInsets.all(10),
-                style: IconButton.styleFrom(foregroundColor: cs.onPrimary),
-                onPressed: _toggleDrawer,
-                icon: const Icon(Icons.menu_rounded, size: 22),
-              ),
-            ),
-          ),
-
-          // ── اسم الشركة (عند التوسع) ──
-          if (isExpanded)
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    _sidebarUserTitle(auth),
-                    style: TextStyle(
-                      color: cs.onPrimary,
-                      fontSize: 15,
-                      fontWeight: FontWeight.bold,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                    maxLines: 2,
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    auth.role.isNotEmpty ? auth.role : 'NaBoo',
-                    style: TextStyle(
-                      color: cs.onPrimary.withValues(alpha: 0.72),
-                      fontSize: 11,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
+          children: [
+            // ── زر التوسيع/الطي ──
+            SizedBox(
+              height: 56,
+              child: Tooltip(
+                message: isExpanded ? 'طي القائمة' : 'توسيع القائمة',
+                child: IconButton(
+                  padding: const EdgeInsets.all(10),
+                  style: IconButton.styleFrom(foregroundColor: cs.onPrimary),
+                  onPressed: _toggleDrawer,
+                  icon: const Icon(Icons.menu_rounded, size: 22),
+                ),
               ),
             ),
 
-          Divider(
-            color: cs.onPrimary.withValues(alpha: 0.18),
-            height: 1,
-            thickness: 1,
-          ),
-
-          // ── قائمة الوحدات ──
-          Expanded(
-            child: ListView.builder(
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              itemCount: sidebarItems.length,
-              itemBuilder: (context, index) {
-                final isModule = index < _navForUi.length;
-                final isActive =
-                    isModule && _activeBottomIndex == index;
-                // فاصل قبل تسجيل الخروج
-                if (index == sidebarItems.length - 1) {
-                  return Column(
-                    children: [
-                      Divider(
-                        color: cs.onPrimary.withValues(alpha: 0.18),
-                        height: 16,
-                        thickness: 1,
+            // ── اسم الشركة (عند التوسع) ──
+            if (isExpanded)
+              Container(
+                width: double.infinity,
+                padding: EdgeInsetsDirectional.only(
+                  start: sl.pageHorizontalGap,
+                  end: sl.pageHorizontalGap,
+                  top: 8,
+                  bottom: 16,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      _sidebarUserTitle(auth),
+                      style: TextStyle(
+                        color: cs.onPrimary,
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
                       ),
-                      if (isExpanded)
-                        SidebarLogoutPill(
-                          colorScheme: cs,
-                          label: 'تسجيل الخروج',
-                          onTap: () => _confirmAndLogout(auth),
-                        )
-                      else
-                        _buildSidebarItem(
-                          sidebarItems[index],
-                          isExpanded,
-                          isActive: false,
-                        ),
-                    ],
-                  );
-                }
-                return _buildSidebarItem(
-                  sidebarItems[index],
-                  isExpanded,
-                  isActive: isActive,
-                );
-              },
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 2,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      auth.role.isNotEmpty ? auth.role : 'NaBoo',
+                      style: TextStyle(
+                        color: cs.onPrimary.withValues(alpha: 0.72),
+                        fontSize: 11,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+
+            Divider(
+              color: cs.onPrimary.withValues(alpha: 0.18),
+              height: 1,
+              thickness: 1,
             ),
-          ),
-        ],
-      ),
+
+            // ── قائمة الوحدات ──
+            Expanded(
+              child: ListView.builder(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                itemCount: sidebarItems.length,
+                itemBuilder: (context, index) {
+                  final isModule = index < _navForUi.length;
+                  final isActive = isModule && _activeBottomIndex == index;
+                  // فاصل قبل تسجيل الخروج
+                  if (index == sidebarItems.length - 1) {
+                    return Column(
+                      children: [
+                        Divider(
+                          color: cs.onPrimary.withValues(alpha: 0.18),
+                          height: 16,
+                          thickness: 1,
+                        ),
+                        if (isExpanded)
+                          SidebarLogoutPill(
+                            colorScheme: cs,
+                            label: 'تسجيل الخروج',
+                            onTap: () => _confirmAndLogout(auth),
+                          )
+                        else
+                          _buildSidebarItem(
+                            sidebarItems[index],
+                            isExpanded,
+                            isActive: false,
+                          ),
+                      ],
+                    );
+                  }
+                  return _buildSidebarItem(
+                    sidebarItems[index],
+                    isExpanded,
+                    isActive: isActive,
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -2699,9 +2804,7 @@ class _HomeScreenState extends State<HomeScreen>
                               child: Text(
                                 e.value.title,
                                 style: TextStyle(
-                                  color: cs.onPrimary.withValues(
-                                    alpha: 0.95,
-                                  ),
+                                  color: cs.onPrimary.withValues(alpha: 0.95),
                                   fontSize: 12.5,
                                   fontWeight: FontWeight.w500,
                                 ),
@@ -2759,148 +2862,140 @@ class _HomeScreenState extends State<HomeScreen>
     final qSize = _quickActionSize(availableWidth);
 
     final dashboard = DashboardView(
-            isDark: _isDarkMode,
-            onPinnedProductQuickSale: (preset) {
-              _pushInContentTagged(
-                AppContentRoutes.addInvoice,
-                'بيع جديد',
-                (_) => AddInvoiceScreen(presetProductLine: preset),
-              );
-            },
-            onGlanceAction: (action) {
-              switch (action) {
-                case HomeGlanceAction.cash:
-                  _pushInContentTagged(
-                    AppContentRoutes.cash,
-                    'الصندوق',
-                    (_) => const CashScreen(),
-                  );
-                  break;
-                case HomeGlanceAction.newSale:
-                  _pushInContentTagged(
-                    AppContentRoutes.addInvoice,
-                    'بيع جديد',
-                    (_) => const AddInvoiceScreen(),
-                  );
-                  break;
-                case HomeGlanceAction.inventoryProducts:
-                  _pushInContentTagged(
-                    AppContentRoutes.inventoryProducts,
-                    'الأصناف',
-                    (_) => const InventoryProductsScreen(),
-                  );
-                  break;
-                case HomeGlanceAction.parkedSales:
-                  _pushInContentTagged(
-                    AppContentRoutes.parkedSales,
-                    'معلّقة مؤقتاً',
-                    (_) => const ParkedSalesScreen(),
-                  );
-                  break;
-                case HomeGlanceAction.reportsExecutive:
-                  _pushInContentTagged(
-                    AppContentRoutes.reports(0),
-                    'التقارير',
-                    (_) => const ReportsScreen(initialSection: 0),
-                  );
-                  break;
-                case HomeGlanceAction.completedOrders:
-                  _pushInContentTagged(
-                    AppContentRoutes.invoices,
-                    'الفواتير',
-                    (_) => const InvoicesScreen(),
-                  );
-                  break;
-              }
-            },
-            onRecentActivity: (entry) async {
-              if (!mounted) return;
-              switch (entry.kind) {
-                case RecentActivityKind.invoice:
-                  final id = entry.invoiceId;
-                  if (id != null) {
-                    await showInvoiceDetailSheet(context, DatabaseHelper(), id);
-                  }
-                  break;
-                case RecentActivityKind.cashMovement:
-                  final link = entry.linkedInvoiceId;
-                  if (link != null) {
-                    await showInvoiceDetailSheet(
-                      context,
-                      DatabaseHelper(),
-                      link,
-                    );
-                  } else {
-                    _pushInContentTagged(
-                      AppContentRoutes.cash,
-                      'الصندوق',
-                      (_) => const CashScreen(),
-                    );
-                  }
-                  break;
-                case RecentActivityKind.parkedSale:
-                  _pushInContentTagged(
-                    AppContentRoutes.parkedSales,
-                    'معلّقة مؤقتاً',
-                    (_) => const ParkedSalesScreen(),
-                  );
-                  break;
-                case RecentActivityKind.loyalty:
-                  final inv = entry.linkedInvoiceId;
-                  if (inv != null) {
-                    await showInvoiceDetailSheet(
-                      context,
-                      DatabaseHelper(),
-                      inv,
-                    );
-                  } else {
-                    _pushInContentTagged(
-                      AppContentRoutes.loyaltyLedger,
-                      'سجل النقاط',
-                      (_) => const LoyaltyLedgerScreen(),
-                    );
-                  }
-                  break;
-                case RecentActivityKind.stockVoucher:
-                  _pushInContentTagged(
-                    AppContentRoutes.inventory,
-                    'المخزون',
-                    (_) => const InventoryHubScreen(),
-                  );
-                  break;
-                case RecentActivityKind.customerCreated:
-                  _pushInContentTagged(
-                    AppContentRoutes.customers,
-                    'العملاء',
-                    (_) => const CustomersScreen(),
-                  );
-                  break;
-                case RecentActivityKind.productCreated:
-                  _pushInContentTagged(
-                    AppContentRoutes.inventoryProducts,
-                    'الأصناف',
-                    (_) => const InventoryProductsScreen(),
-                  );
-                  break;
-                case RecentActivityKind.workShift:
-                  _pushInContentTagged(
-                    AppContentRoutes.staffShiftsWeek,
-                    'ورديات الموظفين',
-                    (_) => const StaffShiftsWeekScreen(),
-                  );
-                  break;
-              }
-            },
-            onOpenInvoicesFromActivity: () => _pushInContentTagged(
-              AppContentRoutes.invoices,
-              'الفواتير',
-              (_) => const InvoicesScreen(),
-            ),
-            onOpenCashFromActivity: () => _pushInContentTagged(
+      isDark: _isDarkMode,
+      onPinnedProductQuickSale: (preset) {
+        _pushInContentTagged(
+          AppContentRoutes.addInvoice,
+          'بيع جديد',
+          (_) => AddInvoiceScreen(presetProductLine: preset),
+        );
+      },
+      onGlanceAction: (action) {
+        switch (action) {
+          case HomeGlanceAction.cash:
+            _pushInContentTagged(
               AppContentRoutes.cash,
               'الصندوق',
               (_) => const CashScreen(),
-            ),
+            );
+            break;
+          case HomeGlanceAction.newSale:
+            _pushInContentTagged(
+              AppContentRoutes.addInvoice,
+              'بيع جديد',
+              (_) => const AddInvoiceScreen(),
+            );
+            break;
+          case HomeGlanceAction.inventoryProducts:
+            _pushInContentTagged(
+              AppContentRoutes.inventoryProducts,
+              'الأصناف',
+              (_) => const InventoryProductsScreen(),
+            );
+            break;
+          case HomeGlanceAction.parkedSales:
+            _pushInContentTagged(
+              AppContentRoutes.parkedSales,
+              'معلّقة مؤقتاً',
+              (_) => const ParkedSalesScreen(),
+            );
+            break;
+          case HomeGlanceAction.reportsExecutive:
+            _pushInContentTagged(
+              AppContentRoutes.reports(0),
+              'التقارير',
+              (_) => const ReportsScreen(initialSection: 0),
+            );
+            break;
+          case HomeGlanceAction.completedOrders:
+            _pushInContentTagged(
+              AppContentRoutes.invoices,
+              'الفواتير',
+              (_) => const InvoicesScreen(),
+            );
+            break;
+        }
+      },
+      onRecentActivity: (entry) async {
+        if (!mounted) return;
+        switch (entry.kind) {
+          case RecentActivityKind.invoice:
+            final id = entry.invoiceId;
+            if (id != null) {
+              await showInvoiceDetailSheet(context, DatabaseHelper(), id);
+            }
+            break;
+          case RecentActivityKind.cashMovement:
+            final link = entry.linkedInvoiceId;
+            if (link != null) {
+              await showInvoiceDetailSheet(context, DatabaseHelper(), link);
+            } else {
+              _pushInContentTagged(
+                AppContentRoutes.cash,
+                'الصندوق',
+                (_) => const CashScreen(),
+              );
+            }
+            break;
+          case RecentActivityKind.parkedSale:
+            _pushInContentTagged(
+              AppContentRoutes.parkedSales,
+              'معلّقة مؤقتاً',
+              (_) => const ParkedSalesScreen(),
+            );
+            break;
+          case RecentActivityKind.loyalty:
+            final inv = entry.linkedInvoiceId;
+            if (inv != null) {
+              await showInvoiceDetailSheet(context, DatabaseHelper(), inv);
+            } else {
+              _pushInContentTagged(
+                AppContentRoutes.loyaltyLedger,
+                'سجل النقاط',
+                (_) => const LoyaltyLedgerScreen(),
+              );
+            }
+            break;
+          case RecentActivityKind.stockVoucher:
+            _pushInContentTagged(
+              AppContentRoutes.inventory,
+              'المخزون',
+              (_) => const InventoryHubScreen(),
+            );
+            break;
+          case RecentActivityKind.customerCreated:
+            _pushInContentTagged(
+              AppContentRoutes.customers,
+              'العملاء',
+              (_) => const CustomersScreen(),
+            );
+            break;
+          case RecentActivityKind.productCreated:
+            _pushInContentTagged(
+              AppContentRoutes.inventoryProducts,
+              'الأصناف',
+              (_) => const InventoryProductsScreen(),
+            );
+            break;
+          case RecentActivityKind.workShift:
+            _pushInContentTagged(
+              AppContentRoutes.staffShiftsWeek,
+              'ورديات الموظفين',
+              (_) => const StaffShiftsWeekScreen(),
+            );
+            break;
+        }
+      },
+      onOpenInvoicesFromActivity: () => _pushInContentTagged(
+        AppContentRoutes.invoices,
+        'الفواتير',
+        (_) => const InvoicesScreen(),
+      ),
+      onOpenCashFromActivity: () => _pushInContentTagged(
+        AppContentRoutes.cash,
+        'الصندوق',
+        (_) => const CashScreen(),
+      ),
     );
 
     return Column(
@@ -2912,12 +3007,16 @@ class _HomeScreenState extends State<HomeScreen>
             if (raw == null) return const SizedBox.shrink();
             final name = (row!['shiftStaffName'] as String?)?.trim() ?? '';
             final label = name.isEmpty ? 'موظف الوردية' : name;
+            final gap = ScreenLayout.of(context).pageHorizontalGap;
             return Material(
-              color: Theme.of(context).colorScheme.primaryContainer.withValues(
-                    alpha: 0.55,
-                  ),
+              color: Theme.of(
+                context,
+              ).colorScheme.primaryContainer.withValues(alpha: 0.55),
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                padding: EdgeInsets.symmetric(
+                  horizontal: gap,
+                  vertical: 8,
+                ),
                 child: Row(
                   textDirection: TextDirection.rtl,
                   children: [
@@ -2970,6 +3069,7 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Widget _buildSearchOverlayScrollable() {
+    final sl = ScreenLayout.of(context);
     final hasAny =
         _hitModules.isNotEmpty ||
         _hitProducts.isNotEmpty ||
@@ -2977,7 +3077,10 @@ class _HomeScreenState extends State<HomeScreen>
         _hitUsers.isNotEmpty;
     if (!hasAny) {
       return Padding(
-        padding: const EdgeInsets.all(20),
+        padding: EdgeInsets.symmetric(
+          horizontal: sl.pageHorizontalGap,
+          vertical: 20,
+        ),
         child: Text(
           'لا توجد نتائج لـ «${_searchController.text.trim()}»',
           textAlign: TextAlign.center,
@@ -2987,7 +3090,12 @@ class _HomeScreenState extends State<HomeScreen>
     }
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(8, 12, 8, 16),
+      padding: EdgeInsetsDirectional.only(
+        start: sl.pageHorizontalGap,
+        end: sl.pageHorizontalGap,
+        top: 12,
+        bottom: 16,
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -3443,14 +3551,18 @@ class _HomeScreenState extends State<HomeScreen>
     await prefs.setStringList('modules_order', titles);
   }
 
-  void _reorderBottomModules(List<ModuleItem> currentVisible, int oldI, int newI) {
+  void _reorderBottomModules(
+    List<ModuleItem> currentVisible,
+    int oldI,
+    int newI,
+  ) {
     if (newI > oldI) newI -= 1;
     if (oldI < 0 || oldI >= currentVisible.length) return;
     if (newI < 0 || newI >= currentVisible.length) return;
 
-    final selectedRoute = currentVisible[_activeBottomIndex
-            .clamp(0, currentVisible.length - 1)]
-        .routeId;
+    final selectedRoute =
+        currentVisible[_activeBottomIndex.clamp(0, currentVisible.length - 1)]
+            .routeId;
 
     final nextVisible = List<ModuleItem>.from(currentVisible);
     final moved = nextVisible.removeAt(oldI);
@@ -3460,7 +3572,9 @@ class _HomeScreenState extends State<HomeScreen>
     final original = List<ModuleItem>.from(_orderedModules);
     final minIndex = original.indexWhere((m) => removed.contains(m.routeId));
     final base = original.where((m) => !removed.contains(m.routeId)).toList();
-    final insertAt = (minIndex < 0 || minIndex > base.length) ? base.length : minIndex;
+    final insertAt = (minIndex < 0 || minIndex > base.length)
+        ? base.length
+        : minIndex;
     base.insertAll(insertAt, nextVisible);
 
     final newActive = nextVisible.indexWhere((m) => m.routeId == selectedRoute);
@@ -3478,9 +3592,7 @@ class _HomeScreenState extends State<HomeScreen>
     final sl = ScreenLayout.of(context);
     final cs = Theme.of(context).colorScheme;
     final isDark = _isDarkMode;
-    final barBg = isDark
-        ? cs.surfaceContainerHigh
-        : const Color(0xFFF7F4EF);
+    final barBg = isDark ? cs.surfaceContainerHigh : const Color(0xFFF7F4EF);
     final indicator = isDark
         ? Colors.white.withValues(alpha: 0.14)
         : const Color(0xFFE8E0D6);
@@ -3755,10 +3867,7 @@ class _HomeInnerNavObserver extends NavigatorObserver {
 
 /// أيقونة شريط سفلي M3 — نقطة صغيرة عند وجود قائمة فرعية.
 class _BottomNavIcon extends StatelessWidget {
-  const _BottomNavIcon({
-    required this.module,
-    required this.barColor,
-  });
+  const _BottomNavIcon({required this.module, required this.barColor});
 
   final ModuleItem module;
   final Color barColor;
@@ -3829,15 +3938,15 @@ class _BottomNavTile extends StatelessWidget {
                 AnimatedContainer(
                   duration: const Duration(milliseconds: 160),
                   curve: Curves.easeOutCubic,
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 8,
+                  ),
                   decoration: BoxDecoration(
                     color: selected ? indicatorColor : Colors.transparent,
                     borderRadius: BorderRadius.circular(999),
                   ),
-                  child: _BottomNavIcon(
-                    module: module,
-                    barColor: barColor,
-                  ),
+                  child: _BottomNavIcon(module: module, barColor: barColor),
                 ),
                 const SizedBox(height: 5),
                 Text(

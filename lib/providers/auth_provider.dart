@@ -27,6 +27,7 @@ class AuthProvider extends ChangeNotifier {
   String _roleKey = 'staff';
   String _email = '';
   String _phone = '';
+  bool _googleSignInRunning = false;
 
   bool get isLoggedIn => _isLoggedIn;
   bool get isAdmin => _roleKey == 'admin';
@@ -68,12 +69,16 @@ class AuthProvider extends ChangeNotifier {
     final previous = prefs.getString(_prefActiveDataOwner);
     if (previous == newOwnerKey) return;
 
-    final switching = previous != null && previous != newOwnerKey;
+    // حماية: إذا كان المفتاح غير موجود (مثلاً بعد تحديث/ترحيل/إعادة تثبيت جزئية)،
+    // اعتبره "تبديل" حتى لا تُعرض بيانات حساب سابق بالخطأ.
+    final switching = previous == null || previous != newOwnerKey;
     if (switching) {
       await CloudSyncService.instance.stopForSignOut();
       if (newOwnerKey.startsWith('cloud:')) {
+        // حساب سحابي: من الآمن حذف الملف بالكامل لأن المصدر الحقيقي سيُسترد من السحابة.
         await _db.closeAndDeleteDatabaseFile();
       } else {
+        // حساب محلي: امسح بيانات العمل وابقِ المستخدمين المحليين فقط.
         await _db.wipeBusinessDataKeepUsers();
       }
       await CloudSyncService.instance.clearSyncPreferences();
@@ -188,11 +193,15 @@ class AuthProvider extends ChangeNotifier {
 
   Future<bool> login(String login, String password) async {
     final row = await _db.getUserByLogin(login);
-    if (row == null) return false;
+    if (row == null) {
+      return _loginViaSupabaseFallback(login, password);
+    }
     final salt = row['passwordSalt'] as String?;
     final hash = row['passwordHash'] as String?;
     if (salt == null || hash == null || salt.isEmpty || hash.isEmpty) {
-      return false;
+      // الحساب موجود محلياً لكن بدون كلمة مرور (أُنشئ عبر Google أو fallback سابق)
+      // نحاول Supabase وإذا نجح نحفظ الـ hash محلياً
+      return _loginViaSupabaseFallback(login, password);
     }
     if (!PasswordHashing.verify(password, salt, hash)) return false;
 
@@ -204,8 +213,113 @@ class AuthProvider extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_prefUserId, rowAfter['id'] as int);
     await LicenseService.instance.ensureLocalTrialStarted();
+    // حاول تفعيل جلسة Supabase تلقائياً للحسابات البريدية (إن كانت سحابية) دون كسر الدخول المحلي.
+    await _tryEnableCloudSessionAfterLocalLogin(
+      row: rowAfter,
+      login: login,
+      password: password,
+    );
     notifyListeners();
     return true;
+  }
+
+  Future<bool> _loginViaSupabaseFallback(String login, String password) async {
+    final mail = login.trim().toLowerCase();
+    if (mail.isEmpty || !mail.contains('@')) return false;
+    try {
+      final res = await Supabase.instance.client.auth.signInWithPassword(
+        email: mail,
+        password: password,
+      );
+      final user = res.user ?? Supabase.instance.client.auth.currentUser;
+      if (user == null) return false;
+      final email = (user.email ?? '').trim();
+      if (email.isEmpty) return false;
+      final displayName =
+          (user.userMetadata?['full_name'] as String?) ??
+          (user.userMetadata?['name'] as String?) ??
+          email.split('@').first;
+
+      await _bindAccountDataScope('cloud:${user.id}');
+      final localId = await _db.upsertGoogleUser(
+        supabaseUid: user.id,
+        email: email,
+        displayName: displayName,
+      );
+
+      // احفظ كلمة المرور محلياً حتى يعمل الدخول بدون إنترنت في المرات القادمة
+      final newSalt = PasswordHashing.generateSalt();
+      final newHash = PasswordHashing.hash(password, newSalt);
+      await _db.updateUserPasswordByLogin(
+        login: email,
+        passwordHash: newHash,
+        passwordSalt: newSalt,
+      );
+
+      final localRow = await _db.getUserById(localId);
+      if (localRow == null) return false;
+
+      _setFromRow(localRow);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(_prefUserId, localId);
+      await LicenseService.instance.ensureLocalTrialStarted();
+      await _completeCloudBootstrapAfterRestore(localId);
+      notifyListeners();
+      return true;
+    } on AuthException {
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> _ensureSupabaseSessionForLocalCloudAccount({
+    required Map<String, dynamic> row,
+    required String login,
+    required String password,
+  }) async {
+    final email =
+        ((row['email'] as String?)?.trim().toLowerCase().isNotEmpty ?? false)
+        ? (row['email'] as String).trim().toLowerCase()
+        : login.trim().toLowerCase();
+    if (email.isEmpty || !email.contains('@')) return false;
+    try {
+      await Supabase.instance.client.auth.signInWithPassword(
+        email: email,
+        password: password,
+      );
+      final localId = row['id'] as int?;
+      if (localId == null || localId <= 0) return false;
+      await _completeCloudBootstrapAfterRestore(localId);
+      return true;
+    } on AuthException {
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _tryEnableCloudSessionAfterLocalLogin({
+    required Map<String, dynamic> row,
+    required String login,
+    required String password,
+  }) async {
+    final supabaseUid = (row['supabaseUid'] as String?)?.trim() ?? '';
+    final email = ((row['email'] as String?) ?? '').trim().toLowerCase();
+    final loginKey = login.trim().toLowerCase();
+    final looksLikeEmail =
+        (email.contains('@') && email.isNotEmpty) ||
+        (loginKey.contains('@') && loginKey.isNotEmpty);
+    if (supabaseUid.isEmpty && !looksLikeEmail) return;
+
+    // لا نُفشل تسجيل الدخول المحلي إذا فشل الربط السحابي (انقطاع شبكة/حساب محلي فقط).
+    try {
+      await _ensureSupabaseSessionForLocalCloudAccount(
+        row: row,
+        login: login,
+        password: password,
+      );
+    } catch (_) {}
   }
 
   /// يعيد null عند النجاح، أو رسالة خطأ عربية.
@@ -253,9 +367,247 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
+  // ── OTP عبر البريد الإلكتروني ────────────────────────────────────────────
+
+  /// يُرسل رمز OTP إلى [email] عبر Supabase (طول الرمز حسب إعداد المشروع، غالباً 8 أرقام).
+  /// يُعيد null عند النجاح أو رسالة خطأ عربية.
+  Future<String?> sendEmailOtp(String email) async {
+    try {
+      await Supabase.instance.client.auth.signInWithOtp(
+        email: email.trim().toLowerCase(),
+      );
+      return null;
+    } on AuthException catch (e) {
+      final msg = e.message.toLowerCase();
+      if (msg.contains('rate limit') || msg.contains('too many')) {
+        return 'تم تجاوز حد الإرسال. انتظر بضع دقائق ثم حاول مجدداً.';
+      }
+      if (msg.contains('invalid email') || msg.contains('unable to validate')) {
+        return 'البريد الإلكتروني غير صالح.';
+      }
+      return 'تعذر إرسال رمز التحقق: ${e.message}';
+    } catch (e) {
+      return 'تعذر إرسال رمز التحقق. تحقق من الاتصال بالإنترنت.';
+    }
+  }
+
+  /// يتحقق من الرمز المُدخل ثم يُنشئ الحساب المحلي ويسجّل الدخول.
+  /// يُعيد null عند النجاح أو رسالة خطأ عربية.
+  Future<String?> verifyOtpAndRegister({
+    required String email,
+    required String otp,
+    required String displayName,
+    required String phone,
+    required String password,
+  }) async {
+    User? verifiedUser;
+    try {
+      final res = await Supabase.instance.client.auth.verifyOTP(
+        email: email.trim().toLowerCase(),
+        token: otp.trim(),
+        type: OtpType.email,
+      );
+      verifiedUser = res.user ?? Supabase.instance.client.auth.currentUser;
+      if (verifiedUser == null) {
+        return 'رمز التحقق غير صحيح أو منتهي الصلاحية';
+      }
+    } on AuthException catch (e) {
+      final lower = e.message.toLowerCase();
+      if (lower.contains('banned')) {
+        return 'تعذّر إكمال التحقق بهذا البريد. جرّب بريداً إلكترونياً آخر أو تواصل مع الدعم.';
+      }
+      return 'رمز التحقق خاطئ أو منتهي الصلاحية.';
+    } catch (e) {
+      return 'تعذر التحقق من الرمز. حاول مرة أخرى.';
+    }
+    final user = verifiedUser;
+
+    final mail = (user.email ?? email).trim().toLowerCase();
+    if (mail.isEmpty) return 'تعذر إنشاء الحساب. البريد الإلكتروني غير صالح.';
+
+    // ثبّت كلمة مرور السيرفر مباشرة بعد نجاح OTP لضمان تسجيل الدخول من أي جهاز.
+    try {
+      await Supabase.instance.client.auth.updateUser(
+        UserAttributes(
+          password: password,
+          data: {
+            'full_name': displayName.trim(),
+            'phone': phone.trim(),
+          },
+        ),
+      );
+    } on AuthException catch (e) {
+      final msg = e.message.toLowerCase();
+      if (msg.contains('weak') || msg.contains('password')) {
+        return 'رمز الدخول ضعيف. استخدم رمزاً أقوى.';
+      }
+      return 'تعذر تثبيت رمز الدخول على السيرفر. حاول مجدداً.';
+    } catch (_) {
+      return 'تعذر تثبيت رمز الدخول على السيرفر. تحقق من الاتصال بالإنترنت.';
+    }
+
+    try {
+      await _bindAccountDataScope('cloud:${user.id}');
+      final localId = await _db.upsertGoogleUser(
+        supabaseUid: user.id,
+        email: mail,
+        displayName: displayName.trim(),
+      );
+
+      final salt = PasswordHashing.generateSalt();
+      final hash = PasswordHashing.hash(password, salt);
+      await _db.updateUserPasswordByLogin(
+        login: mail,
+        passwordHash: hash,
+        passwordSalt: salt,
+      );
+
+      final localRow = await _db.getUserById(localId);
+      if (localRow == null) return 'تعذر إنشاء الحساب محلياً.';
+      final role = ((localRow['role'] ?? 'staff').toString().trim().isEmpty)
+          ? 'staff'
+          : (localRow['role'] ?? 'staff').toString().trim();
+      await _db.updateUserAdminBasic(
+        id: localId,
+        displayName: displayName.trim(),
+        email: mail,
+        phone: phone.trim(),
+        jobTitle: (localRow['jobTitle'] ?? '').toString().trim(),
+        role: role,
+        phone2: (localRow['phone2'] ?? '').toString().trim(),
+        passwordHash: hash,
+        passwordSalt: salt,
+      );
+
+      final rowAfter = await _db.getUserById(localId);
+      if (rowAfter == null) return 'تعذر قراءة الحساب بعد الإنشاء.';
+      _setFromRow(rowAfter);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(_prefUserId, localId);
+      await LicenseService.instance.ensureLocalTrialStarted();
+      await _completeCloudBootstrapAfterRestore(localId);
+      notifyListeners();
+      return null;
+    } catch (_) {
+      return 'تعذر إكمال تجهيز الحساب محلياً. حاول مرة أخرى.';
+    }
+  }
+
+  // ── نسيت رمز الدخول (استعادة كلمة السر محلياً عبر OTP البريد) ─────────────
+
+  /// يُرسل رمز تحقق إلى البريد لإعادة تعيين رمز الدخول المحلي.
+  Future<String?> sendPasswordResetOtp(String email) async {
+    final mail = email.trim().toLowerCase();
+    if (mail.isEmpty) return 'أدخل البريد الإلكتروني';
+    try {
+      await Supabase.instance.client.auth.signInWithOtp(
+        email: mail,
+        shouldCreateUser: false,
+      );
+      return null;
+    } on AuthException catch (e) {
+      final msg = e.message.toLowerCase();
+      if (msg.contains('rate limit') || msg.contains('too many')) {
+        return 'تم تجاوز حد الإرسال. انتظر بضع دقائق ثم حاول مجدداً.';
+      }
+      if (msg.contains('invalid email') || msg.contains('unable to validate')) {
+        return 'البريد الإلكتروني غير صالح.';
+      }
+      return 'تعذر إرسال رمز التحقق.';
+    } catch (_) {
+      return 'تعذر إرسال رمز التحقق. تحقق من الاتصال بالإنترنت.';
+    }
+  }
+
+  /// يتحقق من رمز الاستعادة المُدخل. لا يُغير أي بيانات محلية.
+  Future<String?> verifyPasswordResetOtp({
+    required String email,
+    required String otp,
+  }) async {
+    final mail = email.trim().toLowerCase();
+    if (mail.isEmpty) return 'أدخل البريد الإلكتروني';
+    if (otp.trim().isEmpty) return 'أدخل رمز التحقق';
+    try {
+      final res = await Supabase.instance.client.auth.verifyOTP(
+        email: mail,
+        token: otp.trim(),
+        type: OtpType.email,
+      );
+      if (res.user == null) {
+        return 'رمز التحقق غير صحيح أو منتهي الصلاحية';
+      }
+      return null;
+    } on AuthException catch (e) {
+      final lower = e.message.toLowerCase();
+      if (lower.contains('banned')) {
+        return 'تعذّر إكمال التحقق بهذا البريد. جرّب بريداً إلكترونياً آخر أو تواصل مع الدعم.';
+      }
+      return 'رمز التحقق غير صحيح أو منتهي الصلاحية';
+    } catch (_) {
+      return 'تعذر التحقق من الرمز. حاول مرة أخرى.';
+    }
+  }
+
+  /// يحدّث رمز الدخول المحلي + كلمة مرور Supabase (إن كانت الجلسة موجودة بعد verifyOTP).
+  Future<String?> resetLocalAndServerPassword({
+    required String email,
+    required String newPassword,
+  }) async {
+    final mail = email.trim().toLowerCase();
+    if (mail.isEmpty) return 'أدخل البريد الإلكتروني';
+    if (newPassword.trim().length < 8) return 'رمز الدخول قصير جداً';
+
+    // 1) تأكد من جلسة OTP ثم حدّث كلمة المرور على السيرفر.
+    try {
+      final session = Supabase.instance.client.auth.currentSession;
+      final user = Supabase.instance.client.auth.currentUser;
+      if (session == null || user == null) {
+        return 'انتهت جلسة التحقق. أعد طلب رمز التحقق ثم حاول مجدداً.';
+      }
+      await Supabase.instance.client.auth.updateUser(
+        UserAttributes(password: newPassword),
+      );
+
+      final userEmail = (user.email ?? mail).trim();
+      final displayName =
+          (user.userMetadata?['full_name'] as String?) ??
+          (user.userMetadata?['name'] as String?) ??
+          userEmail.split('@').first;
+      await _db.upsertGoogleUser(
+        supabaseUid: user.id,
+        email: userEmail,
+        displayName: displayName,
+      );
+    } on AuthException catch (_) {
+      return 'تعذر تحديث كلمة المرور على السيرفر. حاول مرة أخرى.';
+    } catch (_) {
+      return 'تعذر تحديث كلمة المرور على السيرفر. تحقق من الاتصال بالإنترنت.';
+    }
+
+    // 2) حدّث رمز الدخول المحلي.
+    final salt = PasswordHashing.generateSalt();
+    final hash = PasswordHashing.hash(newPassword, salt);
+    final ok = await _db.updateUserPasswordByLogin(
+      login: mail,
+      passwordHash: hash,
+      passwordSalt: salt,
+    );
+    if (!ok) return 'تعذر تحديث رمز الدخول محلياً على هذا الجهاز.';
+
+    // لا نحتفظ بجلسة Supabase الناتجة عن verifyOTP داخل تطبيق محلي.
+    try {
+      await Supabase.instance.client.auth.signOut();
+    } catch (_) {}
+    return null;
+  }
+
   // ── Google Sign-In + مزامنة سحابية ───────────────────────────────────────
 
   Future<String?> signInWithGoogle() async {
+    if (_googleSignInRunning) {
+      return 'جاري تسجيل الدخول عبر Google. يرجى الانتظار.';
+    }
+    _googleSignInRunning = true;
     try {
       final client = Supabase.instance.client;
 
@@ -333,6 +685,8 @@ class AuthProvider extends ChangeNotifier {
       return 'فشل تسجيل Google: ${e.message}';
     } catch (e) {
       return 'فشل تسجيل Google: $e';
+    } finally {
+      _googleSignInRunning = false;
     }
   }
 

@@ -54,14 +54,17 @@ extension DbStock on DatabaseHelper {
       'voucherDate': DateTime.now().toIso8601String(),
       'warehouseFromId': null,
       'warehouseToId': warehouseToId,
-      'referenceNo':
-          referenceNo?.trim().isEmpty == true ? null : referenceNo?.trim(),
+      'referenceNo': referenceNo?.trim().isEmpty == true
+          ? null
+          : referenceNo?.trim(),
       'notes': null,
-      'supplierName':
-          supplierName?.trim().isEmpty == true ? null : supplierName?.trim(),
+      'supplierName': supplierName?.trim().isEmpty == true
+          ? null
+          : supplierName?.trim(),
       'sourceType': sourceType.trim().isEmpty ? 'manual' : sourceType.trim(),
-      'sourceName':
-          sourceName?.trim().isEmpty == true ? null : sourceName?.trim(),
+      'sourceName': sourceName?.trim().isEmpty == true
+          ? null
+          : sourceName?.trim(),
       'sourceRefId': sourceRefId,
       'createdByUserId': null,
       'createdAt': DateTime.now().toIso8601String(),
@@ -97,7 +100,7 @@ extension DbStock on DatabaseHelper {
     final db = await database;
     return db.rawQuery(
       '''
-      SELECT id, name, barcode, sellPrice, purchasePrice
+      SELECT id, name, barcode, sellPrice, buyPrice AS purchasePrice
       FROM products
       WHERE isActive = 1
         AND tenantId = ?
@@ -149,16 +152,19 @@ extension DbStock on DatabaseHelper {
           'voucherDate': voucherDate.toIso8601String(),
           'warehouseFromId': null,
           'warehouseToId': warehouseToId,
-          'referenceNo':
-              referenceNo?.trim().isEmpty == true ? null : referenceNo?.trim(),
+          'referenceNo': referenceNo?.trim().isEmpty == true
+              ? null
+              : referenceNo?.trim(),
           'notes': notes?.trim().isEmpty == true ? null : notes?.trim(),
           'supplierName': supplierName?.trim().isEmpty == true
               ? null
               : supplierName?.trim(),
-          'sourceType':
-              sourceType.trim().isEmpty ? 'manual' : sourceType.trim(),
-          'sourceName':
-              sourceName?.trim().isEmpty == true ? null : sourceName?.trim(),
+          'sourceType': sourceType.trim().isEmpty
+              ? 'manual'
+              : sourceType.trim(),
+          'sourceName': sourceName?.trim().isEmpty == true
+              ? null
+              : sourceName?.trim(),
           'sourceRefId': sourceRefId,
           'createdByUserId': null,
           'createdAt': nowIso,
@@ -262,16 +268,19 @@ extension DbStock on DatabaseHelper {
           'voucherDate': voucherDate.toIso8601String(),
           'warehouseFromId': warehouseFromId,
           'warehouseToId': null,
-          'referenceNo':
-              referenceNo?.trim().isEmpty == true ? null : referenceNo?.trim(),
+          'referenceNo': referenceNo?.trim().isEmpty == true
+              ? null
+              : referenceNo?.trim(),
           'notes': notes?.trim().isEmpty == true ? null : notes?.trim(),
           'supplierName': supplierName?.trim().isEmpty == true
               ? null
               : supplierName?.trim(),
-          'sourceType':
-              sourceType.trim().isEmpty ? 'manual' : sourceType.trim(),
-          'sourceName':
-              sourceName?.trim().isEmpty == true ? null : sourceName?.trim(),
+          'sourceType': sourceType.trim().isEmpty
+              ? 'manual'
+              : sourceType.trim(),
+          'sourceName': sourceName?.trim().isEmpty == true
+              ? null
+              : sourceName?.trim(),
           'sourceRefId': sourceRefId,
           'createdByUserId': null,
           'createdAt': nowIso,
@@ -390,14 +399,17 @@ extension DbStock on DatabaseHelper {
           'voucherDate': voucherDate.toIso8601String(),
           'warehouseFromId': warehouseFromId,
           'warehouseToId': warehouseToId,
-          'referenceNo':
-              referenceNo?.trim().isEmpty == true ? null : referenceNo?.trim(),
+          'referenceNo': referenceNo?.trim().isEmpty == true
+              ? null
+              : referenceNo?.trim(),
           'notes': notes?.trim().isEmpty == true ? null : notes?.trim(),
           'supplierName': null,
-          'sourceType':
-              sourceType.trim().isEmpty ? 'transfer' : sourceType.trim(),
-          'sourceName':
-              sourceName?.trim().isEmpty == true ? null : sourceName?.trim(),
+          'sourceType': sourceType.trim().isEmpty
+              ? 'transfer'
+              : sourceType.trim(),
+          'sourceName': sourceName?.trim().isEmpty == true
+              ? null
+              : sourceName?.trim(),
           'sourceRefId': sourceRefId,
           'createdByUserId': null,
           'createdAt': nowIso,

@@ -74,6 +74,32 @@ class _OpenShiftScreenState extends State<OpenShiftScreen> {
 
     final row = await _db.getUserById(staffId);
     if (row == null) {
+      final auth = context.read<AuthProvider>();
+      final currentUserId = auth.userId;
+      final currentName = auth.displayName.trim();
+      final shiftId = (openShift['id'] as num?)?.toInt() ?? 0;
+      if (currentUserId != null && currentUserId > 0 && shiftId > 0) {
+        final db = await _db.database;
+        await db.update(
+          'work_shifts',
+          {
+            'shiftStaffUserId': currentUserId,
+            'shiftStaffName': currentName.isEmpty ? auth.username : currentName,
+          },
+          where: 'id = ?',
+          whereArgs: [shiftId],
+        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'تم إصلاح بيانات موظف الوردية تلقائياً على هذا الجهاز. يمكنك المتابعة.',
+              ),
+            ),
+          );
+        }
+        return true;
+      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(

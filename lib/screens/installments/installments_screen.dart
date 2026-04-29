@@ -3,6 +3,7 @@ import 'package:intl/intl.dart' hide TextDirection;
 
 import '../../models/installment.dart';
 import '../../models/invoice.dart';
+import '../../services/cloud_sync_service.dart';
 import '../../services/database_helper.dart';
 import '../../theme/design_tokens.dart';
 import '../../utils/screen_layout.dart';
@@ -69,6 +70,7 @@ class _InstallmentsScreenState extends State<InstallmentsScreen>
   final TextEditingController _search = TextEditingController();
 
   List<InstallmentPlan> _plans = [];
+
   /// ملخص منتجات الفاتورة لكل خطة (مفتاح: id الخطة).
   Map<int, String> _productLineByPlanId = {};
   bool _loading = true;
@@ -119,6 +121,16 @@ class _InstallmentsScreenState extends State<InstallmentsScreen>
     });
   }
 
+  Future<void> _refreshFromServer() async {
+    await CloudSyncService.instance.syncNow(
+      forcePull: true,
+      forcePush: true,
+      forceImportOnPull: true,
+    );
+    if (!mounted) return;
+    await _load();
+  }
+
   static bool _isOverdue(InstallmentPlan p) {
     final now = DateTime.now();
     final start = DateTime(now.year, now.month, now.day);
@@ -143,18 +155,16 @@ class _InstallmentsScreenState extends State<InstallmentsScreen>
     var list = List<InstallmentPlan>.from(_plans);
     final q = (searchOverride ?? _search.text).trim().toLowerCase();
     if (q.isNotEmpty) {
-      list = list
-          .where((p) {
-            final pid = p.id;
-            final prod = pid != null
-                ? (_productLineByPlanId[pid] ?? '').toLowerCase()
-                : '';
-            return p.customerName.toLowerCase().contains(q) ||
-                (p.id?.toString().contains(q) ?? false) ||
-                p.invoiceId.toString().contains(q) ||
-                prod.contains(q);
-          })
-          .toList();
+      list = list.where((p) {
+        final pid = p.id;
+        final prod = pid != null
+            ? (_productLineByPlanId[pid] ?? '').toLowerCase()
+            : '';
+        return p.customerName.toLowerCase().contains(q) ||
+            (p.id?.toString().contains(q) ?? false) ||
+            p.invoiceId.toString().contains(q) ||
+            prod.contains(q);
+      }).toList();
     }
     switch (filter) {
       case _PlanFilter.all:
@@ -211,8 +221,9 @@ class _InstallmentsScreenState extends State<InstallmentsScreen>
     final listScope = filtered.length != tabOnly.length;
 
     final totalDebt = _plans.fold<double>(0, (s, p) => s + _remaining(p));
-    final overdueCount =
-        _plans.where((p) => _isOverdue(p) && !_isSettled(p)).length;
+    final overdueCount = _plans
+        .where((p) => _isOverdue(p) && !_isSettled(p))
+        .length;
     final activeCount = _plans.where((p) => !_isSettled(p)).length;
 
     return Directionality(
@@ -230,7 +241,7 @@ class _InstallmentsScreenState extends State<InstallmentsScreen>
           actions: [
             IconButton(
               tooltip: 'تحديث',
-              onPressed: _load,
+              onPressed: _refreshFromServer,
               icon: const Icon(Icons.refresh_rounded),
             ),
           ],
@@ -248,15 +259,11 @@ class _InstallmentsScreenState extends State<InstallmentsScreen>
                     totalDebt: totalDebt,
                     activePlans: activeCount,
                     overduePlans: overdueCount,
-                    settledPlans:
-                        _plans.where(_isSettled).length,
+                    settledPlans: _plans.where(_isSettled).length,
                     colorScheme: cs,
                     tabController: _tabs,
                   ),
-                  _InstallmentSearchBar(
-                    controller: _search,
-                    colorScheme: cs,
-                  ),
+                  _InstallmentSearchBar(controller: _search, colorScheme: cs),
                   if (listScope)
                     Padding(
                       padding: EdgeInsets.fromLTRB(gap, 6, gap, 4),
@@ -597,8 +604,10 @@ class _InstallmentSearchBar extends StatelessWidget {
                 size: 20,
                 color: cs.onSurfaceVariant,
               ),
-              contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 14,
+                vertical: 10,
+              ),
               filled: true,
               fillColor: cs.surfaceContainerHighest.withValues(alpha: 0.65),
               border: OutlineInputBorder(
@@ -659,8 +668,7 @@ class _InstallmentPlansListTabBody extends StatelessWidget {
               child: _EmptyState(
                 hasPlans: emptyHasPlans,
                 colorScheme: cs,
-                filterActive:
-                    filterKind != _PlanFilter.all || hasSearchText,
+                filterActive: filterKind != _PlanFilter.all || hasSearchText,
               ),
             ),
           ],
@@ -680,8 +688,7 @@ class _InstallmentPlansListTabBody extends StatelessWidget {
             padding: const EdgeInsets.only(bottom: 10),
             child: _PlanListTile(
               plan: plan,
-              productSummary:
-                  plan.id != null ? productLines[plan.id!] : null,
+              productSummary: plan.id != null ? productLines[plan.id!] : null,
               colorScheme: cs,
               isDark: isDark,
               onTap: () => onOpenPlan(plan),
@@ -706,7 +713,12 @@ class _InfoBanner extends StatelessWidget {
         border: Border.all(color: colorScheme.outlineVariant),
       ),
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+        padding: EdgeInsetsDirectional.only(
+          start: ScreenLayout.of(context).pageHorizontalGap,
+          end: ScreenLayout.of(context).pageHorizontalGap,
+          top: 14,
+          bottom: 14,
+        ),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -716,9 +728,9 @@ class _InfoBanner extends StatelessWidget {
               child: Text(
                 'تُنشأ خطة لكل فاتورة نوعها «تقسيط» (حتى لو المقدّم = الإجمالي). التسديد من تفاصيل الخطة يظهر في الصندوق. المقدّم والجدولة: الأقساط ← إعدادات تقسيط.',
                 style: Theme.of(context).textTheme.bodySmall!.copyWith(
-                      color: colorScheme.onSurfaceVariant,
-                      height: 1.45,
-                    ),
+                  color: colorScheme.onSurfaceVariant,
+                  height: 1.45,
+                ),
               ),
             ),
           ],
@@ -762,15 +774,13 @@ class _PlanListTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final titleC =
-        isDark ? const Color(0xFFF8FAFC) : colorScheme.onSurface;
-    final mutedC =
-        isDark ? const Color(0xFF94A3B8) : colorScheme.onSurfaceVariant;
+    final titleC = isDark ? const Color(0xFFF8FAFC) : colorScheme.onSurface;
+    final mutedC = isDark
+        ? const Color(0xFF94A3B8)
+        : colorScheme.onSurfaceVariant;
     final badgeC = isDark ? const Color(0xFF38BDF8) : colorScheme.tertiary;
-    final chevronC =
-        isDark ? const Color(0xFF64748B) : colorScheme.outline;
-    final accentRem =
-        isDark ? const Color(0xFF38BDF8) : AppColors.accent;
+    final chevronC = isDark ? const Color(0xFF64748B) : colorScheme.outline;
+    final accentRem = isDark ? const Color(0xFF38BDF8) : AppColors.accent;
     final rem = _InstallmentsScreenState._remaining(plan);
     final settled = _InstallmentsScreenState._isSettled(plan);
     final overdue = _InstallmentsScreenState._isOverdue(plan) && !settled;
@@ -786,8 +796,7 @@ class _PlanListTile extends StatelessWidget {
     final statusColor = overdue
         ? const Color(0xFFDC2626)
         : (settled ? const Color(0xFF15803D) : const Color(0xFF3B82F6));
-    final statusLabel =
-        settled ? 'مكتملة' : (overdue ? 'متأخرة' : 'نشطة');
+    final statusLabel = settled ? 'مكتملة' : (overdue ? 'متأخرة' : 'نشطة');
 
     final fill = isDark ? AppColors.cardDark : colorScheme.surface;
     final r = BorderRadius.circular(12);
@@ -849,7 +858,11 @@ class _PlanListTile extends StatelessWidget {
                         ),
                       ),
                       const Spacer(),
-                      Icon(Icons.chevron_left_rounded, color: chevronC, size: 26),
+                      Icon(
+                        Icons.chevron_left_rounded,
+                        color: chevronC,
+                        size: 26,
+                      ),
                     ],
                   ),
                   const SizedBox(height: 10),
@@ -1094,7 +1107,8 @@ class _AmountChip extends StatelessWidget {
       children: [
         Text(
           label,
-          style: Theme.of(context).textTheme.labelSmall?.copyWith(
+          style:
+              Theme.of(context).textTheme.labelSmall?.copyWith(
                 fontSize: 10,
                 color: labelColor,
                 fontWeight: FontWeight.w500,
@@ -1105,7 +1119,8 @@ class _AmountChip extends StatelessWidget {
           amount,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: Theme.of(context).textTheme.labelMedium?.copyWith(
+          style:
+              Theme.of(context).textTheme.labelMedium?.copyWith(
                 fontWeight: FontWeight.w600,
                 fontSize: 12,
                 color: valueColor,
@@ -1149,8 +1164,8 @@ class _EmptyState extends StatelessWidget {
             Text(
               hasPlans
                   ? (filterActive
-                      ? 'لا توجد خطط ضمن البحث أو التصفية الحالية'
-                      : 'لا نتائج')
+                        ? 'لا توجد خطط ضمن البحث أو التصفية الحالية'
+                        : 'لا نتائج')
                   : 'لا توجد خطط تقسيط',
               textAlign: TextAlign.center,
               style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16),

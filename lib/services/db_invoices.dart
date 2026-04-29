@@ -3,6 +3,27 @@ part of 'database_helper.dart';
 // ── الفواتير ──────────────────────────────────────────────────────────────
 
 extension DbInvoices on DatabaseHelper {
+  int _toFils(double amount) {
+    if (!amount.isFinite || amount.isNaN) return 0;
+    return (amount * 1000).round();
+  }
+
+  double _fromFils(int fils) => fils / 1000.0;
+
+  /// قراءة مبلغ مالي مع أولوية أعمدة ...Fils وfallback للأعمدة القديمة.
+  double _readMoneyWithFilsFallback(
+    Map<String, dynamic> row, {
+    required String filsKey,
+    required String legacyKey,
+  }) {
+    final legacy = (row[legacyKey] as num?)?.toDouble() ?? 0.0;
+    final rawFils = row[filsKey];
+    final fils = rawFils is num ? rawFils.toInt() : int.tryParse('$rawFils');
+    if (fils == null) return legacy;
+    if (fils == 0 && legacy.abs() > 1e-9) return legacy;
+    return _fromFils(fils);
+  }
+
   /// استعلام صفحات للفواتير **بدون** بنودها (items) لتفادي تحميل ضخم للذاكرة.
   ///
   /// - [tabIndex] يطابق تبويبات شاشة الفواتير: 0 الكل، 1 مدفوعة، 2 غير مدفوعة،
@@ -96,11 +117,26 @@ extension DbInvoices on DatabaseHelper {
             DateTime.fromMillisecondsSinceEpoch(0),
         type: invoiceTypeFromDb(invoiceMap['type']),
         items: const <InvoiceItem>[],
-        discount: (invoiceMap['discount'] as num?)?.toDouble() ?? 0,
-        tax: (invoiceMap['tax'] as num?)?.toDouble() ?? 0,
-        advancePayment:
-            (invoiceMap['advancePayment'] as num?)?.toDouble() ?? 0,
-        total: (invoiceMap['total'] as num?)?.toDouble() ?? 0,
+        discount: _readMoneyWithFilsFallback(
+          invoiceMap,
+          filsKey: 'discountFils',
+          legacyKey: 'discount',
+        ),
+        tax: _readMoneyWithFilsFallback(
+          invoiceMap,
+          filsKey: 'taxFils',
+          legacyKey: 'tax',
+        ),
+        advancePayment: _readMoneyWithFilsFallback(
+          invoiceMap,
+          filsKey: 'advancePaymentFils',
+          legacyKey: 'advancePayment',
+        ),
+        total: _readMoneyWithFilsFallback(
+          invoiceMap,
+          filsKey: 'totalFils',
+          legacyKey: 'total',
+        ),
         isReturned: invoiceMap['isReturned'] == 1,
         originalInvoiceId: invoiceMap['originalInvoiceId'] as int?,
         deliveryAddress: invoiceMap['deliveryAddress'] as String?,
@@ -203,6 +239,9 @@ extension DbInvoices on DatabaseHelper {
     Invoice invoice,
     LoyaltySettingsData loyaltySettings,
   ) async {
+    _validateInvoiceForSave(invoice);
+    final actor = (invoice.createdByUserName ?? '').trim();
+    final actorLabel = actor.isEmpty ? 'غير معروف' : actor;
     final serviceReceipt =
         invoice.type == InvoiceType.debtCollection ||
         invoice.type == InvoiceType.installmentCollection ||
@@ -231,9 +270,13 @@ extension DbInvoices on DatabaseHelper {
       'date': invoice.date.toIso8601String(),
       'type': invoice.type.index,
       'discount': invoice.discount,
+      'discountFils': _toFils(invoice.discount),
       'tax': invoice.tax,
+      'taxFils': _toFils(invoice.tax),
       'advancePayment': invoice.advancePayment,
+      'advancePaymentFils': _toFils(invoice.advancePayment),
       'total': invoice.total,
+      'totalFils': _toFils(invoice.total),
       'isReturned': invoice.isReturned ? 1 : 0,
       'originalInvoiceId': invoice.originalInvoiceId,
       'deliveryAddress': invoice.deliveryAddress,
@@ -242,6 +285,7 @@ extension DbInvoices on DatabaseHelper {
       'workShiftId': shiftId,
       'customerId': invoice.customerId,
       'loyaltyDiscount': loyaltyDiscount,
+      'loyaltyDiscountFils': _toFils(loyaltyDiscount),
       'loyaltyPointsRedeemed': loyaltyRedeem,
       'loyaltyPointsEarned': 0,
       'installmentInterestPct': invoice.installmentInterestPct,
@@ -251,6 +295,16 @@ extension DbInvoices on DatabaseHelper {
       'installmentTotalWithInterest': invoice.installmentTotalWithInterest,
       'installmentSuggestedMonthly': invoice.installmentSuggestedMonthly,
     });
+    await _insertActivityLogInTxn(
+      txn,
+      type: invoice.isReturned ? 'invoice_returned' : 'invoice_created',
+      refTable: 'invoices',
+      refId: id,
+      title: invoice.isReturned ? 'تسجيل مرتجع فاتورة' : 'تسجيل فاتورة',
+      details:
+          'المنفّذ: $actorLabel — العميل: ${invoice.customerName.isEmpty ? 'عميل' : invoice.customerName} — النوع: ${invoice.type.name}',
+      amount: invoice.isReturned ? -invoice.total : invoice.total,
+    );
 
     for (final item in invoice.items) {
       // تثبيت تكلفة الشراء لحظة البيع (Cost Stamping) — السلسلة:
@@ -296,9 +350,12 @@ extension DbInvoices on DatabaseHelper {
         'productName': item.productName,
         'quantity': base,
         'price': item.price,
+        'priceFils': _toFils(item.price),
         'total': item.total,
+        'totalFils': _toFils(item.total),
         'productId': item.productId,
         'unitCost': stampedUnitCost,
+        'unitCostFils': _toFils(stampedUnitCost),
         'unitVariantId': item.unitVariantId,
         'unitLabel': item.unitLabel,
         'unitFactor': item.unitFactor <= 0 ? 1.0 : item.unitFactor,
@@ -327,11 +384,21 @@ extension DbInvoices on DatabaseHelper {
           await txn.insert('cash_ledger', {
             'transactionType': 'supplier_payment',
             'amount': -invoice.total,
+            'amountFils': _toFils(-invoice.total),
             'description': 'دفع مورد — $cust (سند #${id.toString()})',
             'invoiceId': id,
             'workShiftId': shiftId,
             'createdAt': DateTime.now().toIso8601String(),
           });
+          await _insertActivityLogInTxn(
+            txn,
+            type: 'cash_entry_created',
+            refTable: 'cash_ledger',
+            refId: id,
+            title: 'قيد صندوق: دفع مورد',
+            details: 'المنفّذ: $actorLabel — الفاتورة #$id — $cust',
+            amount: -invoice.total,
+          );
         }
       } else {
         final cashAmount = _cashAmountForInvoice(invoice);
@@ -359,11 +426,22 @@ extension DbInvoices on DatabaseHelper {
           await txn.insert('cash_ledger', {
             'transactionType': typeLabel,
             'amount': cashAmount,
+            'amountFils': _toFils(cashAmount),
             'description': desc,
             'invoiceId': id,
             'workShiftId': shiftId,
             'createdAt': DateTime.now().toIso8601String(),
           });
+          await _insertActivityLogInTxn(
+            txn,
+            type: 'cash_entry_created',
+            refTable: 'cash_ledger',
+            refId: id,
+            title: 'قيد صندوق مرتبط بفاتورة',
+            details:
+                'المنفّذ: $actorLabel — الفاتورة #$id — نوع القيد: $typeLabel',
+            amount: cashAmount,
+          );
         }
       }
     } else {
@@ -382,12 +460,22 @@ extension DbInvoices on DatabaseHelper {
         await txn.insert('cash_ledger', {
           'transactionType': 'sale_return',
           'amount': -refund,
+          'amountFils': _toFils(-refund),
           'description':
               'مرتجع فاتورة #${id.toString()}${invoice.originalInvoiceId != null ? ' (أصل #${invoice.originalInvoiceId})' : ''} — ${invoice.customerName.isEmpty ? 'عميل' : invoice.customerName}',
           'invoiceId': id,
           'workShiftId': shiftId,
           'createdAt': DateTime.now().toIso8601String(),
         });
+        await _insertActivityLogInTxn(
+          txn,
+          type: 'cash_entry_created',
+          refTable: 'cash_ledger',
+          refId: id,
+          title: 'قيد صندوق: مرتجع بيع',
+          details: 'المنفّذ: $actorLabel — الفاتورة #$id',
+          amount: -refund,
+        );
       }
     }
 
@@ -406,6 +494,7 @@ extension DbInvoices on DatabaseHelper {
   }
 
   Future<int> insertInvoice(Invoice invoice) async {
+    _validateInvoiceForSave(invoice);
     final db = await database;
     final loyaltySettings = await _readLoyaltySettings(db);
     final id = await db.transaction<int>(
@@ -413,6 +502,92 @@ extension DbInvoices on DatabaseHelper {
     );
     CloudSyncService.instance.scheduleSyncSoon();
     return id;
+  }
+
+  void _validateInvoiceForSave(Invoice invoice) {
+    const moneyTol = 0.05;
+
+    bool isFiniteNum(double v) => v.isFinite && !v.isNaN;
+
+    void ensureFinite(String label, double v) {
+      if (!isFiniteNum(v)) {
+        throw const FormatException('بيانات الفاتورة غير صالحة (قيمة رقمية غير منتهية).');
+      }
+      if (v < -moneyTol) {
+        throw FormatException('لا يمكن أن يكون $label أقل من الصفر.');
+      }
+    }
+
+    if (invoice.items.isEmpty) {
+      throw const FormatException('لا يمكن حفظ فاتورة بدون بنود.');
+    }
+
+    ensureFinite('الخصم', invoice.discount);
+    ensureFinite('الضريبة', invoice.tax);
+    ensureFinite('الدفعة المقدمة', invoice.advancePayment);
+    ensureFinite('إجمالي الفاتورة', invoice.total);
+
+    if (!isFiniteNum(invoice.discountPercent) ||
+        invoice.discountPercent < -moneyTol ||
+        invoice.discountPercent > 100 + moneyTol) {
+      throw const FormatException('نسبة الخصم يجب أن تكون بين 0% و100%.');
+    }
+
+    final serviceReceipt =
+        invoice.type == InvoiceType.debtCollection ||
+        invoice.type == InvoiceType.installmentCollection ||
+        invoice.type == InvoiceType.supplierPayment;
+    if (serviceReceipt && invoice.items.length != 1) {
+      throw const FormatException(
+        'سندات التحصيل/الدفع يجب أن تحتوي على بند واحد فقط.',
+      );
+    }
+
+    var subtotal = 0.0;
+    for (var i = 0; i < invoice.items.length; i++) {
+      final item = invoice.items[i];
+      final lineNo = i + 1;
+      final enteredQty = item.enteredQtyResolved;
+      final baseQty = item.baseQtyResolved;
+
+      if (item.productName.trim().isEmpty) {
+        throw FormatException('اسم المنتج في البند رقم $lineNo مطلوب.');
+      }
+      ensureFinite('سعر البند رقم $lineNo', item.price);
+      ensureFinite('إجمالي البند رقم $lineNo', item.total);
+      if (!isFiniteNum(enteredQty) || enteredQty <= 0) {
+        throw FormatException('كمية البيع في البند رقم $lineNo يجب أن تكون أكبر من صفر.');
+      }
+      if (!isFiniteNum(baseQty) || baseQty <= 0) {
+        throw FormatException('كمية المخزون الأساسية في البند رقم $lineNo غير صالحة.');
+      }
+      if (item.productId != null && item.productId! <= 0) {
+        throw FormatException('معرّف المنتج في البند رقم $lineNo غير صالح.');
+      }
+
+      final expectedLine = item.price * enteredQty;
+      if ((expectedLine - item.total).abs() > moneyTol) {
+        throw FormatException(
+          'إجمالي البند رقم $lineNo غير متطابق مع السعر × الكمية.',
+        );
+      }
+
+      subtotal += item.total;
+    }
+
+    if (invoice.discount - subtotal > moneyTol) {
+      throw const FormatException('قيمة الخصم لا يمكن أن تتجاوز مجموع البنود.');
+    }
+
+    final expectedTotal = subtotal - invoice.discount + invoice.tax;
+    if ((expectedTotal - invoice.total).abs() > moneyTol) {
+      throw const FormatException(
+        'إجمالي الفاتورة غير متطابق مع مجموع البنود بعد الخصم والضريبة.',
+      );
+    }
+    if (invoice.advancePayment - invoice.total > moneyTol) {
+      throw const FormatException('الدفعة المقدمة لا يمكن أن تتجاوز إجمالي الفاتورة.');
+    }
   }
 
   /// مبلغ نقدي يُحسب للفاتورة.
@@ -455,10 +630,26 @@ extension DbInvoices on DatabaseHelper {
       date: DateTime.parse(invoiceMap['date'] as String),
       type: invoiceTypeFromDb(invoiceMap['type']),
       items: items.map((i) => InvoiceItem.fromMap(i)).toList(),
-      discount: (invoiceMap['discount'] as num).toDouble(),
-      tax: (invoiceMap['tax'] as num).toDouble(),
-      advancePayment: (invoiceMap['advancePayment'] as num).toDouble(),
-      total: (invoiceMap['total'] as num).toDouble(),
+      discount: _readMoneyWithFilsFallback(
+        invoiceMap,
+        filsKey: 'discountFils',
+        legacyKey: 'discount',
+      ),
+      tax: _readMoneyWithFilsFallback(
+        invoiceMap,
+        filsKey: 'taxFils',
+        legacyKey: 'tax',
+      ),
+      advancePayment: _readMoneyWithFilsFallback(
+        invoiceMap,
+        filsKey: 'advancePaymentFils',
+        legacyKey: 'advancePayment',
+      ),
+      total: _readMoneyWithFilsFallback(
+        invoiceMap,
+        filsKey: 'totalFils',
+        legacyKey: 'total',
+      ),
       isReturned: invoiceMap['isReturned'] == 1,
       originalInvoiceId: invoiceMap['originalInvoiceId'] as int?,
       deliveryAddress: invoiceMap['deliveryAddress'] as String?,
@@ -525,10 +716,26 @@ extension DbInvoices on DatabaseHelper {
         date: DateTime.parse(invoiceMap['date'] as String),
         type: invoiceTypeFromDb(invoiceMap['type']),
         items: items.map((i) => InvoiceItem.fromMap(i)).toList(),
-        discount: (invoiceMap['discount'] as num).toDouble(),
-        tax: (invoiceMap['tax'] as num).toDouble(),
-        advancePayment: (invoiceMap['advancePayment'] as num).toDouble(),
-        total: (invoiceMap['total'] as num).toDouble(),
+        discount: _readMoneyWithFilsFallback(
+          invoiceMap,
+          filsKey: 'discountFils',
+          legacyKey: 'discount',
+        ),
+        tax: _readMoneyWithFilsFallback(
+          invoiceMap,
+          filsKey: 'taxFils',
+          legacyKey: 'tax',
+        ),
+        advancePayment: _readMoneyWithFilsFallback(
+          invoiceMap,
+          filsKey: 'advancePaymentFils',
+          legacyKey: 'advancePayment',
+        ),
+        total: _readMoneyWithFilsFallback(
+          invoiceMap,
+          filsKey: 'totalFils',
+          legacyKey: 'total',
+        ),
         isReturned: invoiceMap['isReturned'] == 1,
         originalInvoiceId: invoiceMap['originalInvoiceId'] as int?,
         deliveryAddress: invoiceMap['deliveryAddress'] as String?,

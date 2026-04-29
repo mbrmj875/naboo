@@ -55,7 +55,12 @@ class WideHomeProductRail extends StatefulWidget {
   /// نص البحث العلوي (صغير) لمزامنة تصفية القائمة.
   final String searchQuery;
   final bool isDark;
-  final void Function(Map<String, dynamic> product) onProductPick;
+
+  /// إضافة أو دمج سطر: [addQuantity] كمية لإضافتها (&gt; 0) — عادة 1 من النقر؛ من حوار الضغط المطوّل أوامر أخرى.
+  final void Function(
+    Map<String, dynamic> product, {
+    required double addQuantity,
+  }) onProductPick;
 
   @override
   State<WideHomeProductRail> createState() => _WideHomeProductRailState();
@@ -73,6 +78,7 @@ class _WideHomeProductRailState extends State<WideHomeProductRail> {
   List<_PinnedQuickGroup> _quickGroups = const [];
   String? _activeQuickKey;
   VoidCallback? _pinnedListener;
+  int? _flashProductId;
 
   @override
   void initState() {
@@ -286,7 +292,64 @@ class _WideHomeProductRailState extends State<WideHomeProductRail> {
 
   void _scheduleLoad() {
     _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 280), _load);
+    _debounce = Timer(const Duration(milliseconds: 150), _load);
+  }
+
+  void _triggerProductFlash(int productId) {
+    setState(() => _flashProductId = productId);
+    Future<void>.delayed(const Duration(milliseconds: 420), () {
+      if (!mounted) return;
+      setState(() {
+        if (_flashProductId == productId) _flashProductId = null;
+      });
+    });
+  }
+
+  Future<void> _promptAddQuantity(
+    Map<String, dynamic> p,
+    void Function(double q) onChosen,
+  ) async {
+    final isWeight = ((p['stockBaseKind'] as num?)?.toInt() ?? 0) == 1;
+    final ctrl = TextEditingController(text: '1');
+    bool? ok;
+    try {
+      ok = await showDialog<bool>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('الكمية'),
+              content: TextField(
+                controller: ctrl,
+                keyboardType: TextInputType.numberWithOptions(
+                  decimal: isWeight,
+                  signed: false,
+                ),
+                autofocus: true,
+                decoration: InputDecoration(
+                  labelText: isWeight ? 'كمية (كغ)' : 'كمية',
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('إلغاء'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text('إضافة'),
+                ),
+              ],
+            ),
+          ) ??
+          false;
+    } finally {
+      ctrl.dispose();
+    }
+    if (ok != true || !mounted) return;
+    final raw = ctrl.text.trim().replaceAll(',', '');
+    final v =
+        isWeight ? (double.tryParse(raw) ?? 0) : (int.tryParse(raw) ?? 0).toDouble();
+    if (v <= 0) return;
+    onChosen(v);
   }
 
   Future<void> _load() async {
@@ -427,6 +490,10 @@ class _WideHomeProductRailState extends State<WideHomeProductRail> {
       final sellRaw = p['sell'] as num?;
       final sell = sellRaw != null ? sellRaw.toDouble() : 0.0;
       final stock = _stockLine(p);
+      final pid = (p['id'] as num?)?.toInt();
+      final flashing = pid != null && _flashProductId == pid;
+      final track = (p['trackInventory'] as int?) != 0;
+      final outOfStock = track && ((p['qty'] as num?)?.toDouble() ?? 0) <= 0;
       final border2 = widget.isDark
           ? Colors.white.withValues(alpha: 0.12)
           : Colors.black.withValues(alpha: 0.10);
@@ -439,94 +506,144 @@ class _WideHomeProductRailState extends State<WideHomeProductRail> {
                   ? const Color(0xFFF59E0B)
                   : textMuted);
 
-      return Material(
+      void pickOne() {
+        if (pid != null) _triggerProductFlash(pid);
+        widget.onProductPick(p, addQuantity: 1);
+      }
+
+      Widget card = Material(
         color: Colors.transparent,
         child: InkWell(
-          onTap: () => widget.onProductPick(p),
+          onTap: pickOne,
+          onLongPress: () async {
+            await _promptAddQuantity(p, (q) {
+              if (pid != null) _triggerProductFlash(pid);
+              widget.onProductPick(p, addQuantity: q);
+            });
+          },
           borderRadius: BorderRadius.circular(12),
           child: Ink(
             decoration: BoxDecoration(
-              color: widget.isDark
-                  ? Colors.white.withValues(alpha: 0.04)
-                  : Colors.white,
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: border2),
+              border: Border.all(
+                width: flashing ? 2 : 1,
+                color: flashing
+                    ? const Color(0xFF22C55E)
+                    : border2,
+              ),
+              color: widget.isDark
+                  ? Colors.white.withValues(alpha: outOfStock ? 0.02 : 0.04)
+                  : (outOfStock
+                      ? Colors.white.withValues(alpha: 0.55)
+                      : Colors.white),
             ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
+            child: Stack(
+              clipBehavior: Clip.none,
               children: [
-                Expanded(
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: widget.isDark
-                          ? Colors.white.withValues(alpha: 0.06)
-                          : const Color(0xFFF1F5F9),
-                      borderRadius:
-                          const BorderRadius.vertical(top: Radius.circular(12)),
-                      border: Border.all(color: border2),
-                    ),
-                    child: const Center(
-                      child: Icon(Icons.inventory_2_outlined, size: 34),
-                    ),
-                  ),
-                ),
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Text(
-                          name,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w800,
-                            color: text1,
-                            height: 1.05,
-                          ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Expanded(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: widget.isDark
+                              ? Colors.white.withValues(alpha: 0.06)
+                              : const Color(0xFFF1F5F9),
+                          borderRadius:
+                              const BorderRadius.vertical(top: Radius.circular(12)),
+                          border: Border.all(color: border2),
                         ),
-                        const SizedBox(height: 3),
-                        Text(
-                          IraqiCurrencyFormat.formatIqd(sell),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 10.5,
-                            fontWeight: FontWeight.w800,
-                            color: widget.isDark
-                                ? Colors.white70
-                                : const Color(0xFF0D9488),
-                          ),
+                        child: const Center(
+                          child: Icon(Icons.inventory_2_outlined, size: 34),
                         ),
-                        Expanded(
-                          child: Align(
-                            alignment: Alignment.bottomCenter,
-                            child: Text(
-                              stock,
+                      ),
+                    ),
+                    Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Text(
+                              name,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w800,
+                                color: text1,
+                                height: 1.05,
+                              ),
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              IraqiCurrencyFormat.formatIqd(sell),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               textAlign: TextAlign.center,
                               style: TextStyle(
-                                fontSize: 10,
-                                fontWeight: FontWeight.w700,
-                                color: stockColor,
+                                fontSize: 10.5,
+                                fontWeight: FontWeight.w800,
+                                color: widget.isDark
+                                    ? Colors.white70
+                                    : const Color(0xFF0D9488),
                               ),
                             ),
-                          ),
+                            Expanded(
+                              child: Align(
+                                alignment: Alignment.bottomCenter,
+                                child: Text(
+                                  'الكمية المتاحة: $stock',
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    fontSize: 9.5,
+                                    fontWeight: FontWeight.w700,
+                                    color: stockColor,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
-                      ],
+                      ),
+                    ),
+                  ],
+                ),
+                if (outOfStock)
+                  PositionedDirectional(
+                    top: 6,
+                    end: 6,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.72),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: const Text(
+                        'نفذ',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 9.5,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
                     ),
                   ),
-                ),
               ],
             ),
           ),
         ),
       );
+      if (outOfStock) {
+        card = Opacity(opacity: 0.62, child: card);
+      }
+      return card;
     }
 
     return Material(
@@ -607,23 +724,25 @@ class _WideHomeProductRailState extends State<WideHomeProductRail> {
               ),
             ),
             const SizedBox(height: 8),
-            SizedBox(
-              height: _pinnedGridHeight,
-              child: LayoutBuilder(
-                builder: (context, c) {
-                  final crossAxisCount = c.maxWidth >= 260 ? 2 : 1;
-                  return GridView.builder(
-                    padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
-                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: crossAxisCount,
-                      mainAxisSpacing: 10,
-                      crossAxisSpacing: 10,
-                      childAspectRatio: 1,
-                    ),
-                    itemCount: pinnedFiltered.length,
-                    itemBuilder: (_, i) => pinnedCard(pinnedFiltered[i]),
-                  );
-                },
+            Flexible(
+              child: SizedBox(
+                height: _pinnedGridHeight,
+                child: LayoutBuilder(
+                  builder: (context, c) {
+                    final crossAxisCount = c.maxWidth >= 260 ? 2 : 1;
+                    return GridView.builder(
+                      padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: crossAxisCount,
+                        mainAxisSpacing: 10,
+                        crossAxisSpacing: 10,
+                        childAspectRatio: 1,
+                      ),
+                      itemCount: pinnedFiltered.length,
+                      itemBuilder: (_, i) => pinnedCard(pinnedFiltered[i]),
+                    );
+                  },
+                ),
               ),
             ),
             Tooltip(
@@ -712,131 +831,182 @@ class _WideHomeProductRailState extends State<WideHomeProductRail> {
                           itemCount: _rows.length,
                           itemBuilder: (context, i) {
                             final p = _rows[i];
-                            final pinned = _pinnedIds.contains(p['id'] as int);
+                            final pid = p['id'] as int;
+                            final pinned = _pinnedIds.contains(pid);
                             final sellRaw = p['sell'] as num?;
-                            final sell = sellRaw != null
-                                ? IraqiCurrencyFormat.formatInt(sellRaw)
+                            final sellDisp = sellRaw != null
+                                ? IraqiCurrencyFormat.formatIqd(sellRaw)
                                 : '—';
+                            final flashing = _flashProductId == pid;
+                            final track = (p['trackInventory'] as int?) != 0;
+                            final outOfStock =
+                                track && ((p['qty'] as num?)?.toDouble() ?? 0) <= 0;
+                            final stock = _stockLine(p);
                             final cardBg = widget.isDark
                                 ? const Color(0xFF334155)
                                     .withValues(alpha: 0.35)
                                 : Colors.white;
-                            final cardBorder = widget.isDark
-                                ? Colors.white.withValues(alpha: 0.1)
-                                : Colors.black.withValues(alpha: 0.08);
-                            return Padding(
-                              padding: const EdgeInsets.only(bottom: 8),
-                              child: Material(
-                                color: cardBg,
-                                elevation: 0,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                  side: BorderSide(color: cardBorder, width: 1),
+                            final cardBorder = flashing
+                                ? const Color(0xFF22C55E)
+                                : (widget.isDark
+                                    ? Colors.white.withValues(alpha: 0.1)
+                                    : Colors.black.withValues(alpha: 0.08));
+
+                            void pickOne() {
+                              _triggerProductFlash(pid);
+                              widget.onProductPick(p, addQuantity: 1);
+                            }
+
+                            Widget row = Material(
+                              color: outOfStock
+                                  ? cardBg.withValues(alpha: 0.72)
+                                  : cardBg,
+                              elevation: 0,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                side: BorderSide(
+                                  color: cardBorder,
+                                  width: flashing ? 2 : 1,
                                 ),
-                                clipBehavior: Clip.antiAlias,
-                                child: InkWell(
-                                  onTap: () => widget.onProductPick(p),
-                                  child: Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 6,
-                                      vertical: 8,
-                                    ),
-                                    child: Directionality(
-                                      textDirection: TextDirection.ltr,
-                                      child: Row(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.center,
-                                        children: [
-                                          Expanded(
-                                            flex: 5,
-                                            child: Align(
-                                              alignment: Alignment.centerLeft,
-                                              child: Text(
-                                                '${p['name'] ?? ''}',
-                                                maxLines: 2,
-                                                overflow: TextOverflow.ellipsis,
-                                                textAlign: TextAlign.left,
-                                                textDirection:
-                                                    TextDirection.rtl,
-                                                style: TextStyle(
-                                                  fontSize: 12.5,
-                                                  fontWeight: FontWeight.w700,
-                                                  color: text1,
-                                                  height: 1.2,
-                                                ),
+                              ),
+                              clipBehavior: Clip.antiAlias,
+                              child: InkWell(
+                                onTap: pickOne,
+                                onLongPress: () async {
+                                  await _promptAddQuantity(p, (q) {
+                                    _triggerProductFlash(pid);
+                                    widget.onProductPick(p, addQuantity: q);
+                                  });
+                                },
+                                child: Padding(
+                                  padding: const EdgeInsetsDirectional.only(
+                                    start: 8,
+                                    end: 4,
+                                    top: 8,
+                                    bottom: 8,
+                                  ),
+                                  child: Row(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.center,
+                                    children: [
+                                      Expanded(
+                                        flex: 5,
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              '${p['name'] ?? ''}',
+                                              maxLines: 2,
+                                              overflow: TextOverflow.ellipsis,
+                                              textAlign: TextAlign.start,
+                                              style: TextStyle(
+                                                fontSize: 13,
+                                                fontWeight: FontWeight.w800,
+                                                color: text1,
+                                                height: 1.15,
                                               ),
                                             ),
-                                          ),
-                                          Expanded(
-                                            flex: 4,
-                                            child: Column(
-                                              mainAxisSize: MainAxisSize.min,
-                                              mainAxisAlignment:
-                                                  MainAxisAlignment.center,
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.center,
-                                              children: [
-                                                Text(
-                                                  '$sell د.ع',
-                                                  maxLines: 1,
-                                                  overflow:
-                                                      TextOverflow.ellipsis,
-                                                  textAlign: TextAlign.center,
-                                                  style: TextStyle(
-                                                    fontSize: 11,
-                                                    fontWeight: FontWeight.w600,
-                                                    color: text1,
-                                                  ),
-                                                ),
-                                                const SizedBox(height: 2),
-                                                Text(
-                                                  _stockLine(p),
-                                                  maxLines: 1,
-                                                  overflow:
-                                                      TextOverflow.ellipsis,
-                                                  textAlign: TextAlign.center,
-                                                  style: TextStyle(
-                                                    fontSize: 10,
-                                                    color: text2,
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                          SizedBox(
-                                            width: 36,
-                                            child: IconButton(
-                                              visualDensity:
-                                                  VisualDensity.compact,
-                                              padding: EdgeInsets.zero,
-                                              constraints: const BoxConstraints(
-                                                minWidth: 36,
-                                                minHeight: 36,
-                                              ),
-                                              tooltip: pinned
-                                                  ? 'إلغاء التثبيت من أعلى «كل المنتجات» فقط'
-                                                  : 'تثبيت أعلى «كل المنتجات» فقط (لا يغيّر تثبيت الشاشة الرئيسية)',
-                                              onPressed: () => _togglePinnedLocal(
-                                                p['id'] as int,
-                                              ),
-                                              icon: Icon(
-                                                pinned
-                                                    ? Icons.push_pin_rounded
-                                                    : Icons
-                                                        .push_pin_outlined,
-                                                size: 22,
-                                                color: pinned
-                                                    ? const Color(0xFF0D9488)
-                                                    : text2,
-                                              ),
-                                            ),
-                                          ),
-                                        ],
+                                          ],
+                                        ),
                                       ),
-                                    ),
+                                      Expanded(
+                                        flex: 4,
+                                        child: Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.center,
+                                          children: [
+                                            Text(
+                                              sellDisp,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              textAlign: TextAlign.center,
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.w700,
+                                                color: text1,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 2),
+                                            Text(
+                                              'الكمية المتاحة: $stock',
+                                              maxLines: 2,
+                                              overflow: TextOverflow.ellipsis,
+                                              textAlign: TextAlign.center,
+                                              style: TextStyle(
+                                                fontSize: 10,
+                                                color: text2,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      SizedBox(
+                                        width: 36,
+                                        child: IconButton(
+                                          visualDensity:
+                                              VisualDensity.compact,
+                                          padding: EdgeInsets.zero,
+                                          constraints: const BoxConstraints(
+                                            minWidth: 36,
+                                            minHeight: 36,
+                                          ),
+                                          tooltip: pinned
+                                              ? 'إلغاء التثبيت من أعلى «كل المنتجات» فقط'
+                                              : 'تثبيت أعلى «كل المنتجات» فقط (لا يغيّر تثبيت الشاشة الرئيسية)',
+                                          onPressed: () => _togglePinnedLocal(
+                                            pid,
+                                          ),
+                                          icon: Icon(
+                                            pinned
+                                                ? Icons.push_pin_rounded
+                                                : Icons.push_pin_outlined,
+                                            size: 22,
+                                            color: pinned
+                                                ? const Color(0xFF0D9488)
+                                                : text2,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ),
                               ),
+                            );
+                            row = Stack(
+                              clipBehavior: Clip.none,
+                              children: [
+                                row,
+                                if (outOfStock)
+                                  PositionedDirectional(
+                                    top: 4,
+                                    end: 40,
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 5,
+                                        vertical: 1,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: Colors.black
+                                            .withValues(alpha: 0.65),
+                                        borderRadius: BorderRadius.circular(5),
+                                      ),
+                                      child: const Text(
+                                        'نفذ',
+                                        style: TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 9,
+                                          fontWeight: FontWeight.w800,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            );
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 8),
+                              child: row,
                             );
                           },
                         ),

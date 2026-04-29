@@ -422,6 +422,35 @@ tr:last-child td {
   max-width: 720px;
 }
 
+/* شريط بطاقات التراخيص */
+.license-summary-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.license-summary-cards .mini-card {
+  flex: 1 1 220px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: 8px;
+  padding: 1rem;
+}
+
+.license-summary-cards .mini-card ul {
+  margin: 0.5rem 0 0;
+  padding-inline-start: 1.25rem;
+}
+
+.license-issue-panel {
+  margin-bottom: 1rem;
+  border: 1px solid var(--border);
+  background: rgba(30, 58, 95, 0.25);
+  border-radius: 8px;
+  padding: 1rem;
+}
+
 .rc-form label {
   display: flex;
   flex-direction: column;
@@ -431,6 +460,8 @@ tr:last-child td {
 }
 
 .rc-form input[type="text"],
+.rc-form input[type="number"],
+.rc-form select,
 .rc-form textarea {
   font-family: inherit;
   padding: 0.45rem 0.55rem;

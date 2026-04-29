@@ -76,6 +76,7 @@ flutter:
     - assets/images/splash_bg.png
     - assets/images/splash_logo_mark.png
     - assets/sounds/stamp_sound.mp3
+    - assets/data/market_pos_seed.db.gz
   fonts:
     - family: Tajawal
       fonts:

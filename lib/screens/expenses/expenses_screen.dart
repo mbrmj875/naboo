@@ -1,20 +1,39 @@
-import 'dart:async' show unawaited;
+import 'dart:async' show Timer, unawaited;
 import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 
 import '../../models/expense.dart';
+import '../../services/cloud_sync_service.dart';
 import '../../services/database_helper.dart';
 import '../../services/expense_attachment_store.dart';
 import '../../theme/app_corner_style.dart';
 import '../../utils/iraqi_currency_format.dart';
+import '../../utils/numeric_format.dart';
+import '../../widgets/inputs/app_input.dart';
+import '../../widgets/inputs/app_price_input.dart';
 import 'expense_receipt_printer.dart';
 import 'expense_report_printer.dart';
 
-final _dateFmt = DateFormat('yyyy/MM/dd', 'en');
+final _dateDispFmt = DateFormat('dd/MM/yyyy', 'en');
+
+enum _ExpenseDatePreset { today, thisWeek, thisMonth, thisYear }
+
+class _ExpenseShortcutAdd extends Intent {
+  const _ExpenseShortcutAdd();
+}
+
+class _ExpenseShortcutSearch extends Intent {
+  const _ExpenseShortcutSearch();
+}
+
+class _ExpenseShortcutRefresh extends Intent {
+  const _ExpenseShortcutRefresh();
+}
 
 class ExpensesScreen extends StatefulWidget {
   const ExpensesScreen({super.key});
@@ -35,18 +54,30 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   bool _loading = true;
 
   int? _categoryId;
-  String _status = 'all'; // all|paid|pending
+  String _status = 'all'; // all|paid|pending|recurring
   final TextEditingController _searchCtrl = TextEditingController();
+  Timer? _searchDebounce;
+  final FocusNode _searchFocus = FocusNode();
+  int? _highlightExpenseId;
 
   double _total = 0.0;
 
   @override
   void initState() {
     super.initState();
-    _searchCtrl.addListener(() {
+    _searchCtrl.addListener(_onSearchChanged);
+    unawaited(_bootstrap());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _searchFocus.requestFocus();
+    });
+  }
+
+  void _onSearchChanged() {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 300), () {
+      if (!mounted) return;
       unawaited(_reload());
     });
-    unawaited(_bootstrap());
   }
 
   Future<void> _bootstrap() async {
@@ -59,14 +90,18 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
     _searchCtrl.dispose();
+    _searchFocus.dispose();
     super.dispose();
   }
 
   Future<void> _reload() async {
     setState(() => _loading = true);
     final db = DatabaseHelper();
-    final cats = (await db.getExpenseCategories()).map(ExpenseCategory.fromMap).toList();
+    final cats = (await db.getExpenseCategories())
+        .map(ExpenseCategory.fromMap)
+        .toList();
     final rows = await db.getExpenses(
       from: _from,
       to: _to,
@@ -75,13 +110,33 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
       query: _searchCtrl.text,
     );
     final items = rows.map(ExpenseEntry.fromJoinedRow).toList();
-    final total = await db.sumExpenses(from: _from, to: _to);
-    final byCategory = await db.sumExpensesByCategory(from: _from, to: _to, status: _status);
-    final daily = await db.sumExpensesDaily(from: _from, to: _to, status: _status);
+    final total = await db.sumExpensesFiltered(
+      from: _from,
+      to: _to,
+      categoryId: _categoryId,
+      status: _status,
+      query: _searchCtrl.text,
+    );
+    final byCategory = await db.sumExpensesByCategory(
+      from: _from,
+      to: _to,
+      status: _status,
+      categoryId: _categoryId,
+      query: _searchCtrl.text,
+    );
+    final daily = await db.sumExpensesDaily(
+      from: _from,
+      to: _to,
+      status: _status,
+      categoryId: _categoryId,
+      query: _searchCtrl.text,
+    );
     final dailyByCategory = await db.sumExpensesDailyByCategory(
       from: _from,
       to: _to,
       status: _status,
+      categoryId: _categoryId,
+      query: _searchCtrl.text,
     );
     if (!mounted) return;
     setState(() {
@@ -95,6 +150,16 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     });
   }
 
+  Future<void> _refreshFromServer() async {
+    await CloudSyncService.instance.syncNow(
+      forcePull: true,
+      forcePush: true,
+      forceImportOnPull: true,
+    );
+    if (!mounted) return;
+    await _reload();
+  }
+
   Future<void> _pickRange() async {
     final today = DateTime.now();
     final range = await showDateRangePicker(
@@ -102,10 +167,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
       firstDate: DateTime(2018),
       lastDate: DateTime(today.year, today.month, today.day),
       initialDateRange: DateTimeRange(start: _from, end: _to),
-      builder: (ctx, child) => Directionality(
-        textDirection: TextDirection.rtl,
-        child: child!,
-      ),
+      builder: (ctx, child) =>
+          Directionality(textDirection: TextDirection.rtl, child: child!),
     );
     if (range == null) return;
     setState(() {
@@ -115,16 +178,109 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     await _reload();
   }
 
-  Future<void> _openEditor({ExpenseEntry? existing}) async {
-    final saved = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => _ExpenseEditorDialog(
-        categories: _categories,
-        existing: existing,
+  void _applyDatePreset(_ExpenseDatePreset p) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    switch (p) {
+      case _ExpenseDatePreset.today:
+        _from = today;
+        _to = today;
+        break;
+      case _ExpenseDatePreset.thisWeek:
+        _from = today.subtract(const Duration(days: 6));
+        _to = today;
+        break;
+      case _ExpenseDatePreset.thisMonth:
+        _from = DateTime(now.year, now.month, 1);
+        _to = today;
+        break;
+      case _ExpenseDatePreset.thisYear:
+        _from = DateTime(now.year, 1, 1);
+        _to = today;
+        break;
+    }
+  }
+
+  Future<void> _pickPresetAndReload(_ExpenseDatePreset p) async {
+    setState(() => _applyDatePreset(p));
+    await _reload();
+  }
+
+  String _breakdownLine() {
+    if (_total <= 1e-9 || _byCategory.isEmpty) return '';
+    final nonzero =
+        _byCategory
+            .where((r) => (((r['total'] as num?)?.toDouble()) ?? 0) > 1e-9)
+            .toList()
+          ..sort(
+            (a, b) => (((b['total'] as num?)?.toDouble()) ?? 0).compareTo(
+              ((a['total'] as num?)?.toDouble()) ?? 0,
+            ),
+          );
+    if (nonzero.isEmpty) return '';
+    String row(Map<String, dynamic> r) {
+      final n = r['categoryName']?.toString() ?? '';
+      final v = (r['total'] as num?)?.toDouble() ?? 0;
+      return '$n: ${IraqiCurrencyFormat.formatIqd(v)}';
+    }
+
+    if (nonzero.length <= 3) return nonzero.map(row).join(' | ');
+    final top2 = nonzero.take(2).map(row).join(' | ');
+    var rest = 0.0;
+    for (final r in nonzero.skip(2)) {
+      rest += (r['total'] as num?)?.toDouble() ?? 0;
+    }
+    return '$top2 | أخرى: ${IraqiCurrencyFormat.formatIqd(rest)}';
+  }
+
+  Future<void> _exportExpensesToClipboard() async {
+    final bom = '\uFEFF';
+    final sb = StringBuffer(bom);
+    sb.writeln('الفئة,الوصف,المبلغ,التاريخ,الحالة,متكرر,الموظف');
+    for (final e in _items) {
+      final status = e.status == ExpenseStatus.paid ? 'مدفوع' : 'غير مدفوع';
+      final rec = e.isRecurring ? 'نعم' : 'لا';
+      final desc = e.description.replaceAll(',', '،');
+      final emp = e.employeeName.replaceAll(',', '،');
+      sb.writeln(
+        '${e.categoryName},$desc,${e.amount.toStringAsFixed(0)},${_dateDispFmt.format(e.occurredAt)},$status,$rec,$emp',
+      );
+    }
+    await Clipboard.setData(ClipboardData(text: sb.toString()));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('تم نسخ الجدول إلى الحافظة (لصق في Excel).'),
       ),
     );
-    if (saved == true) {
-      await _reload();
+  }
+
+  Future<void> _openEditor({ExpenseEntry? existing}) async {
+    final q = MediaQuery.of(context);
+    final result = await showModalBottomSheet<({bool ok, int? newId})?>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      barrierColor: Colors.black54,
+      builder: (ctx) {
+        return Padding(
+          padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(ctx).bottom),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: q.size.height * 0.88),
+            child: _ExpenseEditorSheet(
+              categories: _categories,
+              existing: existing,
+            ),
+          ),
+        );
+      },
+    );
+    if (!mounted || result == null || !result.ok) return;
+    setState(() => _highlightExpenseId = result.newId);
+    await _reload();
+    if (mounted && _highlightExpenseId != null) {
+      await Future<void>.delayed(const Duration(seconds: 3));
+      if (mounted) setState(() => _highlightExpenseId = null);
     }
   }
 
@@ -150,11 +306,12 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
           textDirection: TextDirection.rtl,
           child: AlertDialog(
             title: const Text('حذف المصروف؟'),
-            content: Text(
-              'سيتم حذف «${e.categoryName}» بمبلغ ${IraqiCurrencyFormat.formatIqd(e.amount)}',
-            ),
+            content: const Text('هل تريد حذف هذا المصروف؟ لا يمكن التراجع.'),
             actions: [
-              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('إلغاء'),
+              ),
               FilledButton(
                 onPressed: () => Navigator.pop(ctx, true),
                 child: const Text('حذف'),
@@ -173,87 +330,159 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final rangeLabel = '${_dateFmt.format(_from)}  ←  ${_dateFmt.format(_to)}';
+    final rangeLabel =
+        'من: ${_dateDispFmt.format(_from)}   إلى: ${_dateDispFmt.format(_to)}';
+    final breakdown = _breakdownLine();
 
-    return Directionality(
-      textDirection: TextDirection.rtl,
-      child: DefaultTabController(
-        length: 2,
-        child: Scaffold(
-          backgroundColor: cs.surfaceContainerLowest,
-          appBar: AppBar(
-            title: const Text('المصروفات'),
-            actions: [
-              IconButton(
-                tooltip: 'تحديث',
-                onPressed: _loading ? null : _reload,
-                icon: const Icon(Icons.refresh_rounded),
+    return Shortcuts(
+      shortcuts: <ShortcutActivator, Intent>{
+        const SingleActivator(LogicalKeyboardKey.keyN, control: true):
+            const _ExpenseShortcutAdd(),
+        const SingleActivator(LogicalKeyboardKey.keyN, meta: true):
+            const _ExpenseShortcutAdd(),
+        const SingleActivator(LogicalKeyboardKey.keyF, control: true):
+            const _ExpenseShortcutSearch(),
+        const SingleActivator(LogicalKeyboardKey.keyF, meta: true):
+            const _ExpenseShortcutSearch(),
+        const SingleActivator(LogicalKeyboardKey.f5):
+            const _ExpenseShortcutRefresh(),
+      },
+      child: Actions(
+        actions: <Type, Action<Intent>>{
+          _ExpenseShortcutAdd: CallbackAction<_ExpenseShortcutAdd>(
+            onInvoke: (_) {
+              unawaited(_openEditor());
+              return null;
+            },
+          ),
+          _ExpenseShortcutSearch: CallbackAction<_ExpenseShortcutSearch>(
+            onInvoke: (_) {
+              _searchFocus.requestFocus();
+              return null;
+            },
+          ),
+          _ExpenseShortcutRefresh: CallbackAction<_ExpenseShortcutRefresh>(
+            onInvoke: (_) {
+              if (!_loading) unawaited(_reload());
+              return null;
+            },
+          ),
+        },
+        child: Directionality(
+          textDirection: TextDirection.rtl,
+          child: DefaultTabController(
+            length: 2,
+            child: Scaffold(
+              backgroundColor: cs.surfaceContainerLowest,
+              appBar: AppBar(
+                title: const Text('المصروفات'),
+                actions: [
+                  IconButton(
+                    tooltip: 'تحديث',
+                    onPressed: _loading ? null : _refreshFromServer,
+                    icon: const Icon(Icons.refresh_rounded),
+                  ),
+                ],
+                bottom: const TabBar(
+                  tabs: [
+                    Tab(text: 'السجل'),
+                    Tab(text: 'تحليلات'),
+                  ],
+                ),
               ),
-            ],
-            bottom: const TabBar(
-              tabs: [
-                Tab(text: 'السجل'),
-                Tab(text: 'تحليلات'),
-              ],
+              floatingActionButton: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  FloatingActionButton.small(
+                    heroTag: 'exp_export_btn',
+                    tooltip: 'تصدير (نسخ لـ Excel)',
+                    onPressed: _loading ? null : _exportExpensesToClipboard,
+                    backgroundColor: cs.secondaryContainer,
+                    foregroundColor: cs.onSecondaryContainer,
+                    child: const Icon(Icons.table_chart_outlined),
+                  ),
+                  const SizedBox(width: 10),
+                  FloatingActionButton.small(
+                    heroTag: 'exp_print_btn',
+                    tooltip: 'طباعة تقرير فترة',
+                    onPressed: _openReportDialog,
+                    backgroundColor: cs.secondaryContainer,
+                    foregroundColor: cs.onSecondaryContainer,
+                    child: const Icon(Icons.print_outlined),
+                  ),
+                  const SizedBox(width: 10),
+                  FloatingActionButton.extended(
+                    heroTag: 'exp_add_btn',
+                    onPressed: () => unawaited(_openEditor()),
+                    icon: const Icon(Icons.add_rounded),
+                    label: const Text('إضافة مصروف'),
+                  ),
+                ],
+              ),
+              body: TabBarView(
+                children: [
+                  _ExpensesLedgerTab(
+                    loading: _loading,
+                    categories: _categories,
+                    items: _items,
+                    total: _total,
+                    rangeLabel: rangeLabel,
+                    breakdownLine: breakdown,
+                    onPickRange: _pickRange,
+                    onPickPreset: _pickPresetAndReload,
+                    searchCtrl: _searchCtrl,
+                    searchFocus: _searchFocus,
+                    highlightExpenseId: _highlightExpenseId,
+                    categoryId: _categoryId,
+                    status: _status,
+                    onCategoryChanged: (v) async {
+                      setState(() => _categoryId = v);
+                      await _reload();
+                    },
+                    onStatusChanged: (v) async {
+                      setState(() => _status = v);
+                      await _reload();
+                    },
+                    onEdit: (e) => unawaited(_openEditor(existing: e)),
+                    onDelete: _delete,
+                    onAddExpense: () => unawaited(_openEditor()),
+                  ),
+                  _ExpensesAnalyticsTab(
+                    loading: _loading,
+                    total: _total,
+                    byCategory: _byCategory,
+                    daily: _daily,
+                    dailyByCategory: _dailyByCategory,
+                    from: _from,
+                    to: _to,
+                  ),
+                ],
+              ),
             ),
-          ),
-          floatingActionButton: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              FloatingActionButton.small(
-                heroTag: 'exp_print_btn',
-                tooltip: 'طباعة تقرير فترة',
-                onPressed: _openReportDialog,
-                backgroundColor: cs.secondaryContainer,
-                foregroundColor: cs.onSecondaryContainer,
-                child: const Icon(Icons.print_outlined),
-              ),
-              const SizedBox(width: 10),
-              FloatingActionButton.extended(
-                heroTag: 'exp_add_btn',
-                onPressed: () => _openEditor(),
-                icon: const Icon(Icons.add_rounded),
-                label: const Text('إضافة مصروف'),
-              ),
-            ],
-          ),
-          body: TabBarView(
-            children: [
-              _ExpensesLedgerTab(
-                loading: _loading,
-                categories: _categories,
-                items: _items,
-                total: _total,
-                rangeLabel: rangeLabel,
-                onPickRange: _pickRange,
-                searchCtrl: _searchCtrl,
-                categoryId: _categoryId,
-                status: _status,
-                onCategoryChanged: (v) async {
-                  setState(() => _categoryId = v);
-                  await _reload();
-                },
-                onStatusChanged: (v) async {
-                  setState(() => _status = v);
-                  await _reload();
-                },
-                onEdit: (e) => _openEditor(existing: e),
-                onDelete: _delete,
-              ),
-              _ExpensesAnalyticsTab(
-                loading: _loading,
-                total: _total,
-                byCategory: _byCategory,
-                daily: _daily,
-                dailyByCategory: _dailyByCategory,
-                from: _from,
-                to: _to,
-              ),
-            ],
           ),
         ),
       ),
     );
+  }
+}
+
+/// أيقونة اختيار سريعة تظهر مع الفئات في فلتر القائمة.
+String _ledgerFilterEmojiForCategoryName(String name) {
+  switch (name) {
+    case 'رواتب':
+      return '👥';
+    case 'ماء':
+      return '💧';
+    case 'كهرباء':
+      return '⚡';
+    case 'إيجار':
+      return '🏠';
+    case 'ضرائب':
+      return '📋';
+    case 'مصاريف متنوعة':
+      return '📦';
+    default:
+      return '📎';
   }
 }
 
@@ -264,14 +493,19 @@ class _ExpensesLedgerTab extends StatelessWidget {
     required this.items,
     required this.total,
     required this.rangeLabel,
+    required this.breakdownLine,
     required this.onPickRange,
+    required this.onPickPreset,
     required this.searchCtrl,
+    required this.searchFocus,
+    required this.highlightExpenseId,
     required this.categoryId,
     required this.status,
     required this.onCategoryChanged,
     required this.onStatusChanged,
     required this.onEdit,
     required this.onDelete,
+    required this.onAddExpense,
   });
 
   final bool loading;
@@ -279,14 +513,19 @@ class _ExpensesLedgerTab extends StatelessWidget {
   final List<ExpenseEntry> items;
   final double total;
   final String rangeLabel;
+  final String breakdownLine;
   final VoidCallback onPickRange;
+  final Future<void> Function(_ExpenseDatePreset preset) onPickPreset;
   final TextEditingController searchCtrl;
+  final FocusNode searchFocus;
+  final int? highlightExpenseId;
   final int? categoryId;
   final String status;
   final ValueChanged<int?> onCategoryChanged;
   final ValueChanged<String> onStatusChanged;
   final ValueChanged<ExpenseEntry> onEdit;
   final ValueChanged<ExpenseEntry> onDelete;
+  final VoidCallback onAddExpense;
 
   @override
   Widget build(BuildContext context) {
@@ -328,7 +567,10 @@ class _ExpensesLedgerTab extends StatelessWidget {
                                 alignment: Alignment.centerRight,
                                 child: TextButton.icon(
                                   onPressed: onPickRange,
-                                  icon: const Icon(Icons.date_range_rounded, size: 18),
+                                  icon: const Icon(
+                                    Icons.date_range_rounded,
+                                    size: 18,
+                                  ),
                                   label: Text(
                                     rangeLabel,
                                     textDirection: TextDirection.ltr,
@@ -354,7 +596,10 @@ class _ExpensesLedgerTab extends StatelessWidget {
                             Flexible(
                               child: TextButton.icon(
                                 onPressed: onPickRange,
-                                icon: const Icon(Icons.date_range_rounded, size: 18),
+                                icon: const Icon(
+                                  Icons.date_range_rounded,
+                                  size: 18,
+                                ),
                                 label: Text(
                                   rangeLabel,
                                   textDirection: TextDirection.ltr,
@@ -372,9 +617,14 @@ class _ExpensesLedgerTab extends StatelessWidget {
                       children: [
                         Expanded(
                           child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 10,
+                            ),
                             decoration: BoxDecoration(
-                              color: cs.primaryContainer.withValues(alpha: 0.35),
+                              color: cs.primaryContainer.withValues(
+                                alpha: 0.35,
+                              ),
                               borderRadius: ac.sm,
                               border: Border.all(
                                 color: cs.outlineVariant.withValues(alpha: 0.6),
@@ -382,7 +632,10 @@ class _ExpensesLedgerTab extends StatelessWidget {
                             ),
                             child: Row(
                               children: [
-                                Icon(Icons.payments_outlined, color: cs.primary),
+                                Icon(
+                                  Icons.payments_outlined,
+                                  color: cs.primary,
+                                ),
                                 const SizedBox(width: 10),
                                 Expanded(
                                   child: Text(
@@ -403,34 +656,87 @@ class _ExpensesLedgerTab extends StatelessWidget {
                         ),
                       ],
                     ),
+                    if (breakdownLine.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        breakdownLine,
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          height: 1.25,
+                          color: cs.onSurfaceVariant,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 8),
+                    Align(
+                      alignment: Alignment.center,
+                      child: Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        alignment: WrapAlignment.center,
+                        children: [
+                          OutlinedButton(
+                            onPressed: () => unawaited(
+                              onPickPreset(_ExpenseDatePreset.today),
+                            ),
+                            child: const Text('اليوم'),
+                          ),
+                          OutlinedButton(
+                            onPressed: () => unawaited(
+                              onPickPreset(_ExpenseDatePreset.thisWeek),
+                            ),
+                            child: const Text('هذا الأسبوع'),
+                          ),
+                          OutlinedButton(
+                            onPressed: () => unawaited(
+                              onPickPreset(_ExpenseDatePreset.thisMonth),
+                            ),
+                            child: const Text('هذا الشهر'),
+                          ),
+                          OutlinedButton(
+                            onPressed: () => unawaited(
+                              onPickPreset(_ExpenseDatePreset.thisYear),
+                            ),
+                            child: const Text('هذا العام'),
+                          ),
+                        ],
+                      ),
+                    ),
                     const SizedBox(height: 10),
                     LayoutBuilder(
                       builder: (context, c) {
                         final row = c.maxWidth >= 520;
-                        final search = TextField(
-                          controller: searchCtrl,
-                          decoration: InputDecoration(
-                            prefixIcon: const Icon(Icons.search_rounded),
-                            hintText: 'بحث (وصف أو فئة)',
-                            filled: true,
-                            fillColor: cs.surfaceContainerHighest.withValues(alpha: 0.55),
-                            border: OutlineInputBorder(
-                              borderRadius: ac.md,
-                              borderSide: BorderSide(
-                                color: cs.outlineVariant.withValues(alpha: 0.7),
-                              ),
-                            ),
-                            enabledBorder: OutlineInputBorder(
-                              borderRadius: ac.md,
-                              borderSide: BorderSide(
-                                color: cs.outlineVariant.withValues(alpha: 0.7),
-                              ),
-                            ),
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 10,
-                            ),
-                          ),
+                        final search = ValueListenableBuilder<TextEditingValue>(
+                          valueListenable: searchCtrl,
+                          builder: (context, tv, _) {
+                            return Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Expanded(
+                                  child: AppInput(
+                                    label: 'بحث',
+                                    showLabel: false,
+                                    hint: 'بحث (وصف أو فئة)',
+                                    controller: searchCtrl,
+                                    focusNode: searchFocus,
+                                    prefixIcon: const Icon(
+                                      Icons.search_rounded,
+                                    ),
+                                  ),
+                                ),
+                                if (tv.text.trim().isNotEmpty)
+                                  IconButton(
+                                    tooltip: 'مسح البحث',
+                                    onPressed: () {
+                                      searchCtrl.clear();
+                                      searchFocus.requestFocus();
+                                    },
+                                    icon: const Icon(Icons.clear_rounded),
+                                  ),
+                              ],
+                            );
+                          },
                         );
 
                         final category = DropdownButtonHideUnderline(
@@ -440,17 +746,31 @@ class _ExpensesLedgerTab extends StatelessWidget {
                             borderRadius: ac.md,
                             hint: const Text('الفئة'),
                             items: [
-                              const DropdownMenuItem<int?>(
+                              DropdownMenuItem<int?>(
                                 value: null,
-                                child: Text('كل الفئات'),
+                                child: Row(
+                                  children: [
+                                    const Text('🔵 '),
+                                    const Expanded(child: Text('كل الفئات')),
+                                  ],
+                                ),
                               ),
-                              for (final c in categories)
+                              for (final cat in categories)
                                 DropdownMenuItem<int?>(
-                                  value: c.id,
-                                  child: Text(
-                                    c.name,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
+                                  value: cat.id,
+                                  child: Row(
+                                    children: [
+                                      Text(
+                                        '${_ledgerFilterEmojiForCategoryName(cat.name)} ',
+                                      ),
+                                      Expanded(
+                                        child: Text(
+                                          cat.name,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ),
                             ],
@@ -464,9 +784,22 @@ class _ExpensesLedgerTab extends StatelessWidget {
                             isExpanded: true,
                             borderRadius: ac.md,
                             items: const [
-                              DropdownMenuItem(value: 'all', child: Text('الكل')),
-                              DropdownMenuItem(value: 'paid', child: Text('مدفوع')),
-                              DropdownMenuItem(value: 'pending', child: Text('معلق')),
+                              DropdownMenuItem(
+                                value: 'all',
+                                child: Text('الكل'),
+                              ),
+                              DropdownMenuItem(
+                                value: 'paid',
+                                child: Text('مدفوع'),
+                              ),
+                              DropdownMenuItem(
+                                value: 'pending',
+                                child: Text('غير مدفوع'),
+                              ),
+                              DropdownMenuItem(
+                                value: 'recurring',
+                                child: Text('متكرر'),
+                              ),
                             ],
                             onChanged: (v) {
                               if (v == null) return;
@@ -477,10 +810,11 @@ class _ExpensesLedgerTab extends StatelessWidget {
 
                         if (row) {
                           return Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Expanded(child: search),
                               const SizedBox(width: 10),
-                              SizedBox(width: 160, child: category),
+                              SizedBox(width: 180, child: category),
                               const SizedBox(width: 10),
                               SizedBox(width: 120, child: statusPick),
                             ],
@@ -488,6 +822,7 @@ class _ExpensesLedgerTab extends StatelessWidget {
                         }
 
                         return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
                             search,
                             const SizedBox(height: 10),
@@ -514,12 +849,34 @@ class _ExpensesLedgerTab extends StatelessWidget {
         }
         if (items.isEmpty) {
           return Padding(
-            padding: const EdgeInsets.only(top: 18),
-            child: Center(
-              child: Text(
-                'لا توجد مصروفات ضمن هذه الفترة.',
-                style: TextStyle(color: cs.onSurfaceVariant),
-              ),
+            padding: const EdgeInsets.fromLTRB(24, 36, 24, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'لا توجد مصروفات ضمن هذه الفترة',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    color: cs.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'جرّب تغيير نطاق التاريخ أو الفلتر',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    color: cs.onSurfaceVariant.withValues(alpha: 0.9),
+                  ),
+                ),
+                const SizedBox(height: 18),
+                FilledButton.icon(
+                  onPressed: onAddExpense,
+                  icon: const Icon(Icons.add_rounded),
+                  label: const Text('إضافة مصروف'),
+                ),
+              ],
             ),
           );
         }
@@ -529,6 +886,8 @@ class _ExpensesLedgerTab extends StatelessWidget {
         final color = expenseCategoryColor(e.categoryName, cs);
         final icon = expenseCategoryIcon(e.categoryName);
         final pending = e.status == ExpenseStatus.pending;
+        final highlighted = highlightExpenseId == e.id;
+        final isRecurringRow = e.isRecurring || e.recurringOriginId != null;
 
         return Padding(
           padding: EdgeInsets.fromLTRB(
@@ -539,7 +898,15 @@ class _ExpensesLedgerTab extends StatelessWidget {
           ),
           child: Material(
             color: cs.surface,
-            borderRadius: ac.md,
+            shape: RoundedRectangleBorder(
+              borderRadius: ac.md,
+              side: BorderSide(
+                color: highlighted
+                    ? cs.primary
+                    : cs.outlineVariant.withValues(alpha: 0.42),
+                width: highlighted ? 2 : 1,
+              ),
+            ),
             child: InkWell(
               borderRadius: ac.md,
               onTap: () => onEdit(e),
@@ -577,6 +944,30 @@ class _ExpensesLedgerTab extends StatelessWidget {
                                   overflow: TextOverflow.ellipsis,
                                 ),
                               ),
+                              if (isRecurringRow) ...[
+                                const SizedBox(width: 6),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 4,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: const Color(
+                                      0xFFFBBF24,
+                                    ).withValues(alpha: 0.22),
+                                    borderRadius: BorderRadius.circular(999),
+                                  ),
+                                  child: const Text(
+                                    'متكرر',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w800,
+                                      fontSize: 10.5,
+                                      color: Color(0xFFB45309),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                              const SizedBox(width: 6),
                               Container(
                                 padding: const EdgeInsets.symmetric(
                                   horizontal: 8,
@@ -584,20 +975,22 @@ class _ExpensesLedgerTab extends StatelessWidget {
                                 ),
                                 decoration: BoxDecoration(
                                   color: pending
-                                      ? const Color(0xFFF59E0B)
-                                          .withValues(alpha: 0.15)
-                                      : const Color(0xFF16A34A)
-                                          .withValues(alpha: 0.12),
+                                      ? const Color(
+                                          0xFFF59E0B,
+                                        ).withValues(alpha: 0.18)
+                                      : const Color(
+                                          0xFF16A34A,
+                                        ).withValues(alpha: 0.14),
                                   borderRadius: BorderRadius.circular(999),
                                 ),
                                 child: Text(
-                                  pending ? 'معلق' : 'مدفوع',
+                                  pending ? 'غير مدفوع' : 'مدفوع',
                                   style: TextStyle(
-                                    fontWeight: FontWeight.w700,
-                                    fontSize: 11,
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 10.5,
                                     color: pending
                                         ? const Color(0xFFB45309)
-                                        : const Color(0xFF16A34A),
+                                        : const Color(0xFF15803D),
                                   ),
                                 ),
                               ),
@@ -615,7 +1008,7 @@ class _ExpensesLedgerTab extends StatelessWidget {
                                 const SizedBox(width: 4),
                                 Expanded(
                                   child: Text(
-                                    e.employeeName,
+                                    '${e.employeeName} — المستفيد',
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                     style: TextStyle(
@@ -640,10 +1033,11 @@ class _ExpensesLedgerTab extends StatelessWidget {
                           Row(
                             children: [
                               Text(
-                                _dateFmt.format(e.occurredAt),
+                                _dateDispFmt.format(e.occurredAt),
                                 style: TextStyle(
                                   fontSize: 11.5,
                                   color: cs.onSurfaceVariant,
+                                  fontWeight: FontWeight.w600,
                                 ),
                                 textDirection: TextDirection.ltr,
                               ),
@@ -664,22 +1058,6 @@ class _ExpensesLedgerTab extends StatelessWidget {
                                   ),
                                 ),
                               ],
-                              if (e.isRecurring || e.recurringOriginId != null) ...[
-                                const SizedBox(width: 8),
-                                Icon(
-                                  Icons.replay_rounded,
-                                  size: 14,
-                                  color: cs.onSurfaceVariant,
-                                ),
-                                const SizedBox(width: 2),
-                                Text(
-                                  'متكرر',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    color: cs.onSurfaceVariant,
-                                  ),
-                                ),
-                              ],
                             ],
                           ),
                         ],
@@ -693,7 +1071,7 @@ class _ExpensesLedgerTab extends StatelessWidget {
                           IraqiCurrencyFormat.formatIqd(e.amount),
                           style: TextStyle(
                             fontWeight: FontWeight.w900,
-                            color: cs.onSurface,
+                            color: cs.error,
                           ),
                           textDirection: TextDirection.ltr,
                         ),
@@ -702,12 +1080,35 @@ class _ExpensesLedgerTab extends StatelessWidget {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             IconButton(
+                              tooltip: 'تعديل',
+                              visualDensity: VisualDensity.compact,
+                              constraints: const BoxConstraints(
+                                minWidth: 40,
+                                minHeight: 40,
+                              ),
+                              onPressed: () => onEdit(e),
+                              icon: Icon(
+                                Icons.edit_outlined,
+                                color: cs.primary,
+                              ),
+                            ),
+                            IconButton(
                               tooltip: 'طباعة إيصال',
+                              visualDensity: VisualDensity.compact,
+                              constraints: const BoxConstraints(
+                                minWidth: 40,
+                                minHeight: 40,
+                              ),
                               onPressed: () => ExpenseReceiptPrinter.show(e),
                               icon: const Icon(Icons.print_rounded),
                             ),
                             IconButton(
                               tooltip: 'حذف',
+                              visualDensity: VisualDensity.compact,
+                              constraints: const BoxConstraints(
+                                minWidth: 40,
+                                minHeight: 40,
+                              ),
                               onPressed: () => onDelete(e),
                               icon: Icon(
                                 Icons.delete_outline_rounded,
@@ -764,7 +1165,10 @@ class _ExpensesAnalyticsTab extends StatelessWidget {
           (r) => _PieSlice(
             label: r['categoryName']?.toString() ?? '',
             value: (r['total'] as num?)?.toDouble() ?? 0.0,
-            color: expenseCategoryColor(r['categoryName']?.toString() ?? '', cs),
+            color: expenseCategoryColor(
+              r['categoryName']?.toString() ?? '',
+              cs,
+            ),
           ),
         )
         .toList();
@@ -786,13 +1190,19 @@ class _ExpensesAnalyticsTab extends StatelessWidget {
                   Expanded(
                     child: Text(
                       'تحليلات المصروفات ضمن الفترة',
-                      style: TextStyle(fontWeight: FontWeight.w800, color: cs.onSurface),
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        color: cs.onSurface,
+                      ),
                     ),
                   ),
                   Text(
                     IraqiCurrencyFormat.formatIqd(total),
                     textDirection: TextDirection.ltr,
-                    style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface),
+                    style: TextStyle(
+                      fontWeight: FontWeight.w900,
+                      color: cs.onSurface,
+                    ),
                   ),
                 ],
               ),
@@ -809,20 +1219,23 @@ class _ExpensesAnalyticsTab extends StatelessWidget {
                 children: [
                   Text(
                     'توزيع حسب الفئة',
-                    style: TextStyle(fontWeight: FontWeight.w800, color: cs.onSurface),
+                    style: TextStyle(
+                      fontWeight: FontWeight.w800,
+                      color: cs.onSurface,
+                    ),
                   ),
                   const SizedBox(height: 10),
                   if (slices.isNotEmpty)
                     SizedBox(
                       height: 290,
-                      child: _InteractivePie(
-                        slices: slices,
-                        total: total,
-                      ),
+                      child: _InteractivePie(slices: slices, total: total),
                     ),
                   if (slices.isNotEmpty) const SizedBox(height: 12),
                   if (byCategory.isEmpty)
-                    Text('لا توجد بيانات.', style: TextStyle(color: cs.onSurfaceVariant))
+                    Text(
+                      'لا توجد بيانات.',
+                      style: TextStyle(color: cs.onSurfaceVariant),
+                    )
                   else
                     for (final r in byCategory)
                       _CategoryBarRow(
@@ -845,7 +1258,10 @@ class _ExpensesAnalyticsTab extends StatelessWidget {
                 children: [
                   Text(
                     'اتجاه يومي',
-                    style: TextStyle(fontWeight: FontWeight.w800, color: cs.onSurface),
+                    style: TextStyle(
+                      fontWeight: FontWeight.w800,
+                      color: cs.onSurface,
+                    ),
                   ),
                   const SizedBox(height: 10),
                   SizedBox(
@@ -855,7 +1271,7 @@ class _ExpensesAnalyticsTab extends StatelessWidget {
                           .map(
                             (r) => (
                               (r['d']?.toString() ?? ''),
-                              (r['total'] as num?)?.toDouble() ?? 0.0
+                              (r['total'] as num?)?.toDouble() ?? 0.0,
                             ),
                           )
                           .toList(),
@@ -891,7 +1307,10 @@ class _ExpensesAnalyticsTab extends StatelessWidget {
                   const SizedBox(height: 4),
                   Text(
                     'كل قوس يمثل نسبة فئة من إجمالي المصروفات في الفترة.',
-                    style: TextStyle(fontSize: 11.5, color: cs.onSurfaceVariant),
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      color: cs.onSurfaceVariant,
+                    ),
                   ),
                   const SizedBox(height: 14),
                   SizedBox(
@@ -930,7 +1349,10 @@ class _ExpensesAnalyticsTab extends StatelessWidget {
                   const SizedBox(height: 4),
                   Text(
                     'يعرض مجموع كل فئة يوميًا بشكل تراكمي، مع محور قيم واضح ومسافات مريحة.',
-                    style: TextStyle(fontSize: 11.5, color: cs.onSurfaceVariant),
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      color: cs.onSurfaceVariant,
+                    ),
                   ),
                   const SizedBox(height: 12),
                   SizedBox(
@@ -980,19 +1402,28 @@ class _CategoryBarRow extends StatelessWidget {
               Expanded(
                 child: Text(
                   name,
-                  style: TextStyle(fontWeight: FontWeight.w700, color: cs.onSurface),
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: cs.onSurface,
+                  ),
                 ),
               ),
               Text(
                 IraqiCurrencyFormat.formatIqd(value),
                 textDirection: TextDirection.ltr,
-                style: TextStyle(fontWeight: FontWeight.w800, color: cs.onSurface),
+                style: TextStyle(
+                  fontWeight: FontWeight.w800,
+                  color: cs.onSurface,
+                ),
               ),
               const SizedBox(width: 10),
               Text(
                 '${(pct * 100).toStringAsFixed(pct * 100 < 10 ? 1 : 0)}%',
                 textDirection: TextDirection.ltr,
-                style: TextStyle(fontWeight: FontWeight.w700, color: cs.onSurfaceVariant),
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  color: cs.onSurfaceVariant,
+                ),
               ),
             ],
           ),
@@ -1002,7 +1433,9 @@ class _CategoryBarRow extends StatelessWidget {
             child: LinearProgressIndicator(
               value: pct.clamp(0, 1),
               minHeight: 8,
-              backgroundColor: cs.surfaceContainerHighest.withValues(alpha: 0.6),
+              backgroundColor: cs.surfaceContainerHighest.withValues(
+                alpha: 0.6,
+              ),
               valueColor: AlwaysStoppedAnimation<Color>(color),
             ),
           ),
@@ -1022,7 +1455,10 @@ class _MiniBars extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     if (points.isEmpty) {
       return Center(
-        child: Text('لا توجد بيانات.', style: TextStyle(color: cs.onSurfaceVariant)),
+        child: Text(
+          'لا توجد بيانات.',
+          style: TextStyle(color: cs.onSurfaceVariant),
+        ),
       );
     }
     final max = maxY <= 0 ? 1.0 : maxY;
@@ -1065,10 +1501,7 @@ String _formatPct(double pct) {
 }
 
 class _CategoryGauges extends StatelessWidget {
-  const _CategoryGauges({
-    required this.byCategory,
-    required this.total,
-  });
+  const _CategoryGauges({required this.byCategory, required this.total});
 
   final List<Map<String, dynamic>> byCategory;
   final double total;
@@ -1112,8 +1545,7 @@ class _CategoryGauges extends StatelessWidget {
                       )
                       .toList(),
                   total: total,
-                  trackColor:
-                      cs.surfaceContainerHighest.withValues(alpha: 0.7),
+                  trackColor: cs.surfaceContainerHighest.withValues(alpha: 0.7),
                   labelColor: cs.onSurface,
                   subLabelColor: cs.onSurfaceVariant,
                 ),
@@ -1156,10 +1588,7 @@ class _LegendDot extends StatelessWidget {
           decoration: BoxDecoration(color: color, shape: BoxShape.circle),
         ),
         const SizedBox(width: 6),
-        Text(
-          label,
-          style: TextStyle(fontSize: 12, color: cs.onSurface),
-        ),
+        Text(label, style: TextStyle(fontSize: 12, color: cs.onSurface)),
       ],
     );
   }
@@ -1331,8 +1760,7 @@ class _StackedAreaChart extends StatelessWidget {
           spacing: 14,
           runSpacing: 8,
           children: [
-            for (final s in series)
-              _LegendDot(color: s.color, label: s.name),
+            for (final s in series) _LegendDot(color: s.color, label: s.name),
           ],
         ),
       ],
@@ -1341,11 +1769,7 @@ class _StackedAreaChart extends StatelessWidget {
 }
 
 class _SeriesData {
-  _SeriesData({
-    required this.name,
-    required this.color,
-    required this.values,
-  });
+  _SeriesData({required this.name, required this.color, required this.values});
   final String name;
   final Color color;
   final List<double> values;
@@ -1385,7 +1809,8 @@ class _StackedAreaPainter extends CustomPainter {
     final xStep = n > 1 ? chartWidth / (n - 1) : 0.0;
 
     double xFor(int i) => leftPad + (n > 1 ? xStep * i : chartWidth / 2);
-    double yFor(double v) => topPad + chartHeight - (v / maxStack) * chartHeight;
+    double yFor(double v) =>
+        topPad + chartHeight - (v / maxStack) * chartHeight;
 
     // Grid lines (4 steps).
     final grid = Paint()
@@ -1416,10 +1841,12 @@ class _StackedAreaPainter extends CustomPainter {
       ..color = axisColor
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.0;
-    canvas.drawLine(Offset(leftPad, origin.dy),
-        Offset(size.width - rightPad, origin.dy), axis);
-    canvas.drawLine(Offset(leftPad, topPad),
-        Offset(leftPad, origin.dy), axis);
+    canvas.drawLine(
+      Offset(leftPad, origin.dy),
+      Offset(size.width - rightPad, origin.dy),
+      axis,
+    );
+    canvas.drawLine(Offset(leftPad, topPad), Offset(leftPad, origin.dy), axis);
 
     // Build stacked values
     final cumulative = List<double>.filled(n, 0.0);
@@ -1536,7 +1963,8 @@ class _InteractivePieState extends State<_InteractivePie> {
     var sweepStart = 0.0;
     for (var i = 0; i < widget.slices.length; i++) {
       final sweep = (widget.slices[i].value / widget.total) * 2 * math.pi;
-      if (normalized >= sweepStart && normalized <= sweepStart + sweep) return i;
+      if (normalized >= sweepStart && normalized <= sweepStart + sweep)
+        return i;
       sweepStart += sweep;
     }
     return null;
@@ -1548,9 +1976,11 @@ class _InteractivePieState extends State<_InteractivePie> {
       builder: (context, c) {
         final size = Size(c.maxWidth, c.maxHeight);
         final active =
-            (_activeIndex != null && _activeIndex! >= 0 && _activeIndex! < widget.slices.length)
-                ? widget.slices[_activeIndex!]
-                : null;
+            (_activeIndex != null &&
+                _activeIndex! >= 0 &&
+                _activeIndex! < widget.slices.length)
+            ? widget.slices[_activeIndex!]
+            : null;
         return MouseRegion(
           onHover: (e) {
             _lastPointer = e.localPosition;
@@ -1581,7 +2011,9 @@ class _InteractivePieState extends State<_InteractivePie> {
                     total: widget.total,
                     activeIndex: _activeIndex,
                     textColor: Theme.of(context).colorScheme.onSurface,
-                    subTextColor: Theme.of(context).colorScheme.onSurfaceVariant,
+                    subTextColor: Theme.of(
+                      context,
+                    ).colorScheme.onSurfaceVariant,
                   ),
                 ),
                 if (active != null && _lastPointer != null)
@@ -1626,10 +2058,12 @@ class _PieTooltip extends StatelessWidget {
     const w = 215.0;
     const h = 74.0;
     final desired = Offset(anchor.dx + 12, anchor.dy - h - 10);
-    final x =
-        desired.dx.clamp(8.0, math.max(8.0, bounds.width - w - 8)).toDouble();
-    final y =
-        desired.dy.clamp(8.0, math.max(8.0, bounds.height - h - 8)).toDouble();
+    final x = desired.dx
+        .clamp(8.0, math.max(8.0, bounds.width - w - 8))
+        .toDouble();
+    final y = desired.dy
+        .clamp(8.0, math.max(8.0, bounds.height - h - 8))
+        .toDouble();
 
     return Positioned(
       left: x,
@@ -1648,7 +2082,9 @@ class _PieTooltip extends StatelessWidget {
             child: Container(
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.7)),
+                border: Border.all(
+                  color: cs.outlineVariant.withValues(alpha: 0.7),
+                ),
               ),
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
               child: Column(
@@ -1659,7 +2095,10 @@ class _PieTooltip extends StatelessWidget {
                       Container(
                         width: 10,
                         height: 10,
-                        decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+                        decoration: BoxDecoration(
+                          color: color,
+                          shape: BoxShape.circle,
+                        ),
                       ),
                       const SizedBox(width: 8),
                       Expanded(
@@ -1749,7 +2188,9 @@ class _PiePainter extends CustomPainter {
       final sweep = (s.value / total) * 2 * math.pi;
       final mid = start + (sweep / 2);
       final isActive = activeIndex == i;
-      final offset = isActive ? Offset(math.cos(mid) * 7, math.sin(mid) * 7) : Offset.zero;
+      final offset = isActive
+          ? Offset(math.cos(mid) * 7, math.sin(mid) * 7)
+          : Offset.zero;
       final rect = Rect.fromCircle(
         center: center + offset,
         radius: isActive ? radius + 4 : radius,
@@ -1811,7 +2252,9 @@ class _PiePainter extends CustomPainter {
         textAlign: isRight ? TextAlign.right : TextAlign.left,
       )..layout(maxWidth: size.width * 0.30);
 
-      final textX = isRight ? end.dx - math.max(labelTp.width, pctTp.width) : end.dx;
+      final textX = isRight
+          ? end.dx - math.max(labelTp.width, pctTp.width)
+          : end.dx;
       final textY = end.dy - (labelTp.height + pctTp.height + 2) / 2;
       labelTp.paint(canvas, Offset(textX, textY));
       pctTp.paint(canvas, Offset(textX, textY + labelTp.height + 2));
@@ -1821,8 +2264,8 @@ class _PiePainter extends CustomPainter {
   }
 
   int _sig() => Object.hashAll(
-        slices.map((s) => Object.hash(s.label, s.value, s.color.value)),
-      );
+    slices.map((s) => Object.hash(s.label, s.value, s.color.value)),
+  );
 
   @override
   bool shouldRepaint(covariant _PiePainter oldDelegate) {
@@ -1834,22 +2277,29 @@ class _PiePainter extends CustomPainter {
   }
 }
 
-class _ExpenseEditorDialog extends StatefulWidget {
-  const _ExpenseEditorDialog({required this.categories, this.existing});
+class _ExpenseEditorSheet extends StatefulWidget {
+  const _ExpenseEditorSheet({required this.categories, this.existing});
   final List<ExpenseCategory> categories;
   final ExpenseEntry? existing;
 
   @override
-  State<_ExpenseEditorDialog> createState() => _ExpenseEditorDialogState();
+  State<_ExpenseEditorSheet> createState() => _ExpenseEditorSheetState();
 }
 
-class _ExpenseEditorDialogState extends State<_ExpenseEditorDialog> {
+class _ExpenseEditorSheetState extends State<_ExpenseEditorSheet> {
   late int _categoryId;
   late ExpenseStatus _status;
   late DateTime _date;
   final TextEditingController _amountCtrl = TextEditingController();
   final TextEditingController _descCtrl = TextEditingController();
+  final TextEditingController _invoiceRefCtrl = TextEditingController();
+  final TextEditingController _landlordCtrl = TextEditingController();
+  final TextEditingController _taxKindCtrl = TextEditingController();
+  final FocusNode _amountFocus = FocusNode();
   bool _saving = false;
+
+  int _wizardStep = 1;
+  int _parsedAmountUnits = 0;
 
   int? _employeeId;
   String _employeeLabel = '';
@@ -1861,22 +2311,43 @@ class _ExpenseEditorDialogState extends State<_ExpenseEditorDialog> {
   void initState() {
     super.initState();
     final e = widget.existing;
-    _categoryId =
-        e?.categoryId ?? (widget.categories.isNotEmpty ? widget.categories.first.id : 0);
+    _wizardStep = e == null ? 1 : 2;
+    _categoryId = e?.categoryId ?? 0;
     _status = e?.status ?? ExpenseStatus.paid;
     _date = e?.occurredAt ?? DateTime.now();
     if (e != null) {
-      _amountCtrl.text = e.amount.toStringAsFixed(0);
+      _parsedAmountUnits = e.amount.round();
+      _amountCtrl.text = NumericFormat.formatNumber(_parsedAmountUnits);
       _descCtrl.text = e.description;
       _employeeId = e.employeeUserId;
       _employeeLabel = e.employeeName;
       _isRecurring = e.isRecurring;
       _recurringDay = e.recurringDay;
       _attachmentPath = e.attachmentPath;
+      _invoiceRefCtrl.text = e.invoiceRef ?? '';
+      _landlordCtrl.text = e.landlordOrProperty ?? '';
+      _taxKindCtrl.text = e.taxKind ?? '';
     } else {
-      final catName = _currentCategoryName();
-      _isRecurring = expenseCategorySuggestsRecurring(catName);
-      _recurringDay = _isRecurring ? DateTime.now().day : null;
+      _parsedAmountUnits = 0;
+    }
+  }
+
+  void _selectCategoryGrid(int categoryId) {
+    for (final c in widget.categories) {
+      if (c.id != categoryId) continue;
+      final catName = c.name;
+      setState(() {
+        _categoryId = categoryId;
+        _wizardStep = 2;
+        _isRecurring = expenseCategorySuggestsRecurring(catName);
+        _recurringDay = _isRecurring
+            ? (_recurringDay ?? DateTime.now().day).clamp(1, 28)
+            : null;
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _amountFocus.requestFocus();
+      });
+      return;
     }
   }
 
@@ -1889,15 +2360,16 @@ class _ExpenseEditorDialogState extends State<_ExpenseEditorDialog> {
         maxWidth: 1600,
       );
       if (xfile == null) return;
-      final saved =
-          await ExpenseAttachmentStore.instance.save(File(xfile.path));
+      final saved = await ExpenseAttachmentStore.instance.save(
+        File(xfile.path),
+      );
       if (!mounted) return;
       setState(() => _attachmentPath = saved);
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('تعذر اختيار الصورة.')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('تعذر اختيار الصورة.')));
     }
   }
 
@@ -1924,7 +2396,9 @@ class _ExpenseEditorDialogState extends State<_ExpenseEditorDialog> {
         _employeeLabel = '';
       }
       _isRecurring = expenseCategorySuggestsRecurring(catName);
-      _recurringDay = _isRecurring ? (_recurringDay ?? _date.day) : null;
+      _recurringDay = _isRecurring
+          ? (_recurringDay ?? _date.day).clamp(1, 28)
+          : null;
     });
   }
 
@@ -1936,8 +2410,9 @@ class _ExpenseEditorDialogState extends State<_ExpenseEditorDialog> {
     if (picked != null) {
       setState(() {
         _employeeId = picked.id;
-        _employeeLabel =
-            picked.name.isNotEmpty ? picked.name : 'موظف #${picked.id}';
+        _employeeLabel = picked.name.isNotEmpty
+            ? picked.name
+            : 'موظف #${picked.id}';
       });
     }
   }
@@ -1946,7 +2421,35 @@ class _ExpenseEditorDialogState extends State<_ExpenseEditorDialog> {
   void dispose() {
     _amountCtrl.dispose();
     _descCtrl.dispose();
+    _invoiceRefCtrl.dispose();
+    _landlordCtrl.dispose();
+    _taxKindCtrl.dispose();
+    _amountFocus.dispose();
     super.dispose();
+  }
+
+  double? _parseAmountDoubleOrNull() {
+    if (_parsedAmountUnits <= 0) return null;
+    return _parsedAmountUnits.toDouble();
+  }
+
+  String? _extraInvoiceRefDb() {
+    final n = _currentCategoryName();
+    if (n != 'ماء' && n != 'كهرباء') return null;
+    final s = _invoiceRefCtrl.text.trim();
+    return s.isEmpty ? null : s;
+  }
+
+  String? _extraLandlordDb() {
+    if (_currentCategoryName() != 'إيجار') return null;
+    final s = _landlordCtrl.text.trim();
+    return s.isEmpty ? null : s;
+  }
+
+  String? _extraTaxDb() {
+    if (_currentCategoryName() != 'ضرائب') return null;
+    final s = _taxKindCtrl.text.trim();
+    return s.isEmpty ? null : s;
   }
 
   Future<void> _pickDate() async {
@@ -1956,73 +2459,124 @@ class _ExpenseEditorDialogState extends State<_ExpenseEditorDialog> {
       firstDate: DateTime(2018),
       lastDate: DateTime(today.year, today.month, today.day),
       initialDate: _date,
-      builder: (ctx, child) => Directionality(
-        textDirection: TextDirection.rtl,
-        child: child!,
-      ),
+      builder: (ctx, child) =>
+          Directionality(textDirection: TextDirection.rtl, child: child!),
     );
     if (picked == null) return;
     setState(() => _date = picked);
   }
 
-  double? _parseAmount() {
-    final raw = _amountCtrl.text.trim().replaceAll(',', '');
-    final v = double.tryParse(raw);
-    if (v == null || v <= 0) return null;
-    return v;
+  Future<void> _maybeDismissSheet() async {
+    if (_saving) return;
+    if (!mounted) return;
+    if (!_hasDraft()) {
+      Navigator.of(context).pop((ok: false, newId: null));
+      return;
+    }
+    final leave = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => Directionality(
+        textDirection: TextDirection.rtl,
+        child: AlertDialog(
+          title: const Text('إغلاق النموذج؟'),
+          content: const Text('هل تريد إغلاق النموذج؟ البيانات لن تُحفظ'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('البقاء'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('إغلاق'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (leave == true && mounted)
+      Navigator.of(context).pop((ok: false, newId: null));
+  }
+
+  bool _hasDraft() {
+    if (_wizardStep == 1) return false;
+    if (_parsedAmountUnits > 0) return true;
+    if (_descCtrl.text.trim().isNotEmpty) return true;
+    if (_invoiceRefCtrl.text.trim().isNotEmpty) return true;
+    if (_landlordCtrl.text.trim().isNotEmpty) return true;
+    if (_taxKindCtrl.text.trim().isNotEmpty) return true;
+    if (_employeeId != null) return true;
+    if (_attachmentPath != null && _attachmentPath!.isNotEmpty) return true;
+    return widget.existing != null;
   }
 
   Future<void> _save() async {
-    final amount = _parseAmount();
-    if (_categoryId <= 0 || amount == null) {
+    final amount = _parseAmountDoubleOrNull();
+    if (_wizardStep != 2 || _categoryId <= 0 || amount == null) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('يرجى اختيار فئة وإدخال مبلغ صحيح.')),
       );
       return;
     }
-    final catName = _currentCategoryName();
-    if (expenseCategoryRequiresEmployee(catName) && _employeeId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('يرجى اختيار الموظف المستفيد من الراتب.')),
-      );
-      return;
-    }
     setState(() => _saving = true);
+    final messenger = ScaffoldMessenger.of(context);
     final db = DatabaseHelper();
-    final desc = _descCtrl.text.trim();
+    var desc = _descCtrl.text.trim();
+    if (desc.length > 200) desc = desc.substring(0, 200);
     final statusDb = expenseStatusToDb(_status);
     final existing = widget.existing;
     final effectiveDay = _isRecurring
         ? (_recurringDay ?? _date.day).clamp(1, 28)
         : null;
-    if (existing == null) {
-      await db.insertExpense(
-        categoryId: _categoryId,
-        amount: amount,
-        occurredAt: _date,
-        status: statusDb,
-        description: desc.isEmpty ? null : desc,
-        employeeUserId: _employeeId,
-        isRecurring: _isRecurring,
-        recurringDay: effectiveDay,
-        attachmentPath: _attachmentPath,
-      );
-    } else {
-      await db.updateExpense(
-        id: existing.id,
-        categoryId: _categoryId,
-        amount: amount,
-        occurredAt: _date,
-        status: statusDb,
-        description: desc.isEmpty ? null : desc,
-        employeeUserId: _employeeId,
-        isRecurring: _isRecurring,
-        recurringDay: effectiveDay,
-        attachmentPath: _attachmentPath,
-      );
+    try {
+      if (existing == null) {
+        final newId = await db.insertExpense(
+          categoryId: _categoryId,
+          amount: amount,
+          occurredAt: _date,
+          status: statusDb,
+          description: desc.isEmpty ? null : desc,
+          employeeUserId: _employeeId,
+          isRecurring: _isRecurring,
+          recurringDay: effectiveDay,
+          attachmentPath: _attachmentPath,
+          invoiceRef: _extraInvoiceRefDb(),
+          landlordOrProperty: _extraLandlordDb(),
+          taxKind: _extraTaxDb(),
+        );
+        if (!mounted) return;
+        messenger.showSnackBar(
+          const SnackBar(content: Text('تم تسجيل المصروف بنجاح')),
+        );
+        Navigator.of(context).pop((ok: true, newId: newId));
+      } else {
+        await db.updateExpense(
+          id: existing.id,
+          categoryId: _categoryId,
+          amount: amount,
+          occurredAt: _date,
+          status: statusDb,
+          description: desc.isEmpty ? null : desc,
+          employeeUserId: _employeeId,
+          isRecurring: _isRecurring,
+          recurringDay: effectiveDay,
+          attachmentPath: _attachmentPath,
+          invoiceRef: _extraInvoiceRefDb(),
+          landlordOrProperty: _extraLandlordDb(),
+          taxKind: _extraTaxDb(),
+        );
+        if (!mounted) return;
+        messenger.showSnackBar(
+          const SnackBar(content: Text('تم تحديث المصروف بنجاح')),
+        );
+        Navigator.of(context).pop((ok: true, newId: existing.id));
+      }
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(SnackBar(content: Text('تعذر الحفظ: $e')));
+    } finally {
+      if (mounted) setState(() => _saving = false);
     }
-    if (!mounted) return;
-    Navigator.of(context).pop(true);
   }
 
   @override
@@ -2030,156 +2584,461 @@ class _ExpenseEditorDialogState extends State<_ExpenseEditorDialog> {
     final cs = Theme.of(context).colorScheme;
     final ac = context.appCorners;
     final title = widget.existing == null ? 'إضافة مصروف' : 'تعديل مصروف';
-    return Directionality(
-      textDirection: TextDirection.rtl,
-      child: AlertDialog(
-        title: Text(title),
-        content: SizedBox(
-          width: 520,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              DropdownButtonFormField<int>(
-                value: _categoryId == 0 ? null : _categoryId,
-                decoration: const InputDecoration(labelText: 'الفئة'),
-                items: [
-                  for (final c in widget.categories)
-                    DropdownMenuItem<int>(value: c.id, child: Text(c.name)),
-                ],
-                onChanged: _onCategoryChanged,
-              ),
-              if (expenseCategoryRequiresEmployee(_currentCategoryName())) ...[
-                const SizedBox(height: 10),
-                InkWell(
-                  borderRadius: ac.md,
-                  onTap: _pickEmployee,
-                  child: InputDecorator(
-                    decoration: const InputDecoration(
-                      labelText: 'الموظف (المستفيد)',
-                      suffixIcon: Icon(Icons.search_rounded),
-                    ),
-                    child: Text(
-                      _employeeLabel.isEmpty
-                          ? 'اختر موظفًا'
-                          : _employeeLabel,
-                      style: TextStyle(
-                        fontWeight: FontWeight.w700,
-                        color: _employeeLabel.isEmpty
-                            ? cs.onSurfaceVariant
-                            : cs.onSurface,
+    final catName = _currentCategoryName();
+    final td = DateTime(
+      DateTime.now().year,
+      DateTime.now().month,
+      DateTime.now().day,
+    );
+    final payDay = DateTime(_date.year, _date.month, _date.day);
+    final warnFuturePaid = payDay.isAfter(td);
+    final canSave =
+        !_saving &&
+        _wizardStep == 2 &&
+        _categoryId > 0 &&
+        _parsedAmountUnits > 0;
+
+    Widget stepBody;
+    if (_wizardStep == 1) {
+      stepBody = ListView.builder(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+        itemCount: widget.categories.length,
+        itemBuilder: (context, i) {
+          final c = widget.categories[i];
+          final col = expenseCategoryColor(c.name, cs);
+          final ic = expenseCategoryIcon(c.name);
+          final em = _ledgerFilterEmojiForCategoryName(c.name);
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Material(
+              borderRadius: ac.md,
+              color: cs.surfaceContainerHighest.withValues(alpha: 0.38),
+              child: InkWell(
+                borderRadius: ac.md,
+                onTap: () => _selectCategoryGrid(c.id),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 14,
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 42,
+                        height: 42,
+                        decoration: BoxDecoration(
+                          color: col.withValues(alpha: 0.14),
+                          borderRadius: ac.sm,
+                          border: Border.all(
+                            color: col.withValues(alpha: 0.35),
+                          ),
+                        ),
+                        child: Icon(ic, color: col),
                       ),
+                      const SizedBox(width: 10),
+                      Text(em, style: const TextStyle(fontSize: 18)),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          c.name,
+                          style: TextStyle(
+                            fontWeight: FontWeight.w800,
+                            fontSize: 15,
+                            color: cs.onSurface,
+                          ),
+                        ),
+                      ),
+                      Icon(Icons.chevron_left_rounded, color: cs.primary),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      );
+    } else {
+      stepBody = SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+        physics: const BouncingScrollPhysics(),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (widget.existing == null)
+              Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: TextButton.icon(
+                  onPressed: () => setState(() {
+                    _wizardStep = 1;
+                    _categoryId = 0;
+                  }),
+                  icon: Icon(
+                    Icons.arrow_back_ios_new_rounded,
+                    size: 16,
+                    color: cs.primary,
+                  ),
+                  label: Text(
+                    'اختيار فئة أخرى',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      color: cs.primary,
                     ),
                   ),
                 ),
-              ],
-              const SizedBox(height: 10),
-              TextField(
-                controller: _amountCtrl,
-                keyboardType: TextInputType.number,
-                textDirection: TextDirection.ltr,
-                decoration: const InputDecoration(labelText: 'المبلغ (د.ع)'),
               ),
+            DropdownButtonFormField<int>(
+              value: _categoryId <= 0 ? null : _categoryId,
+              decoration: const InputDecoration(labelText: 'الفئة *'),
+              items: [
+                for (final c in widget.categories)
+                  DropdownMenuItem<int>(
+                    value: c.id,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text('${_ledgerFilterEmojiForCategoryName(c.name)} '),
+                        Flexible(
+                          child: Text(
+                            c.name,
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 1,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+              onChanged: _onCategoryChanged,
+            ),
+            if (catName == 'رواتب') ...[
               const SizedBox(height: 10),
               Row(
                 children: [
-                  Expanded(
-                    child: InkWell(
-                      borderRadius: ac.md,
-                      onTap: _pickDate,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                        decoration: BoxDecoration(
-                          color: cs.surfaceContainerHighest.withValues(alpha: 0.55),
-                          borderRadius: ac.md,
-                          border: Border.all(
-                            color: cs.outlineVariant.withValues(alpha: 0.7),
-                          ),
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(Icons.event_rounded, color: cs.primary),
-                            const SizedBox(width: 8),
-                            Text(
-                              _dateFmt.format(_date),
-                              textDirection: TextDirection.ltr,
-                              style: TextStyle(fontWeight: FontWeight.w700, color: cs.onSurface),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
+                  Text(
+                    'الموظف (المستفيد)',
+                    style: Theme.of(context).textTheme.titleSmall,
                   ),
-                  const SizedBox(width: 10),
-                  DropdownButtonHideUnderline(
-                    child: DropdownButton<ExpenseStatus>(
-                      value: _status,
-                      borderRadius: ac.md,
-                      items: const [
-                        DropdownMenuItem(
-                          value: ExpenseStatus.paid,
-                          child: Text('مدفوع'),
-                        ),
-                        DropdownMenuItem(
-                          value: ExpenseStatus.pending,
-                          child: Text('معلق'),
-                        ),
-                      ],
-                      onChanged: (v) => setState(() => _status = v ?? ExpenseStatus.paid),
+                  const SizedBox(width: 8),
+                  Text(
+                    '(اختياري)',
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      color: cs.onSurfaceVariant,
                     ),
                   ),
                 ],
               ),
-              const SizedBox(height: 10),
-              _RecurringPicker(
-                enabled: _isRecurring,
-                day: _recurringDay,
-                onToggle: (v) => setState(() {
-                  _isRecurring = v;
-                  if (v && _recurringDay == null) _recurringDay = _date.day;
-                }),
-                onDayChanged: (d) => setState(() => _recurringDay = d),
+              const SizedBox(height: 6),
+              InkWell(
+                borderRadius: ac.md,
+                onTap: _pickEmployee,
+                child: InputDecorator(
+                  decoration: InputDecoration(
+                    filled: true,
+                    fillColor: cs.surfaceContainerHighest.withValues(
+                      alpha: 0.5,
+                    ),
+                    border: OutlineInputBorder(borderRadius: ac.md),
+                    suffixIcon: const Icon(Icons.search_rounded),
+                  ),
+                  child: Text(
+                    _employeeLabel.isEmpty ? 'اختر موظفاً' : _employeeLabel,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      color: _employeeLabel.isEmpty
+                          ? cs.onSurfaceVariant
+                          : cs.onSurface,
+                    ),
+                  ),
+                ),
               ),
-              if (expenseCategoryAllowsAttachment(_currentCategoryName())) ...[
-                const SizedBox(height: 10),
-                _AttachmentPicker(
-                  path: _attachmentPath,
-                  onPick: _pickAttachment,
-                  onClear: _clearAttachment,
+            ],
+            if (catName == 'ماء' || catName == 'كهرباء') ...[
+              const SizedBox(height: 12),
+              AppInput(
+                label: 'رقم الفاتورة',
+                isOptional: true,
+                hint: 'رقم فاتورة الخدمة',
+                controller: _invoiceRefCtrl,
+              ),
+            ],
+            if (catName == 'إيجار') ...[
+              const SizedBox(height: 12),
+              AppInput(
+                label: 'اسم العقار / الجهة',
+                isOptional: true,
+                hint: 'اسم المالك أو العقار',
+                controller: _landlordCtrl,
+              ),
+            ],
+            if (catName == 'ضرائب') ...[
+              const SizedBox(height: 12),
+              AppInput(
+                label: 'نوع الضريبة',
+                isOptional: true,
+                hint: 'مثال: ضريبة الدخل، ضريبة القيمة المضافة',
+                controller: _taxKindCtrl,
+              ),
+            ],
+            const SizedBox(height: 12),
+            AppPriceInput(
+              label: 'المبلغ (د.ع)',
+              isRequired: true,
+              controller: _amountCtrl,
+              focusNode: _amountFocus,
+              onParsedChanged: (v) => setState(() => _parsedAmountUnits = v),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        children: [
+                          Text(
+                            'تاريخ الدفع',
+                            style: Theme.of(context).textTheme.titleSmall,
+                          ),
+                          Text(
+                            ' *',
+                            style: TextStyle(
+                              color: cs.error,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      InkWell(
+                        borderRadius: ac.md,
+                        onTap: _pickDate,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 12,
+                          ),
+                          decoration: BoxDecoration(
+                            color: cs.surfaceContainerHighest.withValues(
+                              alpha: 0.55,
+                            ),
+                            borderRadius: ac.md,
+                            border: Border.all(
+                              color: cs.outlineVariant.withValues(alpha: 0.7),
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(Icons.event_rounded, color: cs.primary),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  '${_status == ExpenseStatus.paid ? 'مدفوع ' : 'غير مدفوع — '}'
+                                  '${_dateDispFmt.format(_date)}',
+                                  textDirection: TextDirection.ltr,
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                    color: cs.onSurface,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      if (warnFuturePaid)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 6),
+                          child: Text(
+                            'هل المصروف مدفوع مسبقاً؟',
+                            style: TextStyle(
+                              fontSize: 11.5,
+                              color: const Color(0xFFF59E0B),
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 10),
+                SizedBox(
+                  width: 130,
+                  child: DropdownButtonFormField<ExpenseStatus>(
+                    decoration: const InputDecoration(labelText: 'الحالة'),
+                    value: _status,
+                    items: const [
+                      DropdownMenuItem(
+                        value: ExpenseStatus.paid,
+                        child: Text('مدفوع'),
+                      ),
+                      DropdownMenuItem(
+                        value: ExpenseStatus.pending,
+                        child: Text('غير مدفوع'),
+                      ),
+                    ],
+                    onChanged: (v) =>
+                        setState(() => _status = v ?? ExpenseStatus.paid),
+                  ),
                 ),
               ],
+            ),
+            const SizedBox(height: 10),
+            _RecurringPicker(
+              enabled: _isRecurring,
+              day: _recurringDay,
+              onToggle: (v) => setState(() {
+                _isRecurring = v;
+                if (v && _recurringDay == null)
+                  _recurringDay = _date.day.clamp(1, 28);
+              }),
+              onDayChanged: (d) => setState(() => _recurringDay = d),
+            ),
+            if (expenseCategoryAllowsAttachment(catName)) ...[
               const SizedBox(height: 10),
-              TextField(
-                controller: _descCtrl,
-                maxLines: _currentCategoryName() == 'مصاريف متنوعة' ? 2 : 1,
-                decoration: InputDecoration(
-                  labelText: _currentCategoryName() == 'مصاريف متنوعة'
-                      ? 'سبب الصرف (يُطبع مع الفاتورة)'
-                      : 'الوصف (اختياري)',
-                  helperText: _currentCategoryName() == 'مصاريف متنوعة'
-                      ? 'اكتب هنا تعليقًا يوضح لماذا تم صرف هذا المبلغ.'
-                      : null,
+              _AttachmentPicker(
+                path: _attachmentPath,
+                onPick: _pickAttachment,
+                onClear: _clearAttachment,
+              ),
+            ],
+            const SizedBox(height: 12),
+            AppInput(
+              label: catName == 'مصاريف متنوعة'
+                  ? 'سبب الصرف (يُطبع مع الإيصال)'
+                  : 'الوصف',
+              isOptional: true,
+              hint: 'الوصف (اختياري)',
+              controller: _descCtrl,
+              minLines: 1,
+              maxLines: 3,
+              onChanged: (s) {
+                if (s.length <= 200) return;
+                _descCtrl.value = TextEditingValue(
+                  text: s.substring(0, 200),
+                  selection: TextSelection.collapsed(offset: 200),
+                );
+              },
+            ),
+          ],
+        ),
+      );
+    }
+
+    return CallbackShortcuts(
+      bindings: <ShortcutActivator, VoidCallback>{
+        const SingleActivator(LogicalKeyboardKey.escape): () {
+          unawaited(_maybeDismissSheet());
+        },
+        const SingleActivator(LogicalKeyboardKey.keyS, control: true): () {
+          if (canSave) unawaited(_save());
+        },
+        const SingleActivator(LogicalKeyboardKey.keyS, meta: true): () {
+          if (canSave) unawaited(_save());
+        },
+      },
+      child: Directionality(
+        textDirection: TextDirection.rtl,
+        child: Material(
+          color: cs.surface,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
+          clipBehavior: Clip.antiAlias,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 10),
+              Center(
+                child: Container(
+                  width: 42,
+                  height: 5,
+                  decoration: BoxDecoration(
+                    color: cs.outlineVariant.withValues(alpha: 0.75),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsetsDirectional.only(start: 4, end: 8),
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    Align(
+                      alignment: AlignmentDirectional.centerStart,
+                      child: IconButton(
+                        tooltip: 'إغلاق',
+                        icon: Icon(Icons.close_rounded, color: cs.onSurface),
+                        onPressed: _saving
+                            ? null
+                            : () => unawaited(_maybeDismissSheet()),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 52),
+                      child: Text(
+                        title,
+                        textAlign: TextAlign.center,
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.w800,
+                        ),
+                        maxLines: 2,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (_wizardStep == 1)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+                  child: Align(
+                    alignment: AlignmentDirectional.centerStart,
+                    child: Text(
+                      'اختر فئة المصروف',
+                      style: TextStyle(
+                        color: cs.onSurfaceVariant,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ),
+              Expanded(child: stepBody),
+              SafeArea(
+                top: false,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: !_saving && canSave
+                          ? () => unawaited(_save())
+                          : null,
+                      icon: _saving
+                          ? SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Theme.of(context).colorScheme.onPrimary,
+                              ),
+                            )
+                          : Icon(
+                              widget.existing == null
+                                  ? Icons.check_rounded
+                                  : Icons.save_rounded,
+                            ),
+                      label: Text(
+                        _saving
+                            ? 'جارٍ الحفظ...'
+                            : (widget.existing == null ? 'حفظ' : 'تحديث'),
+                      ),
+                    ),
+                  ),
                 ),
               ),
             ],
           ),
         ),
-        actions: [
-          TextButton(
-            onPressed: _saving ? null : () => Navigator.of(context).pop(false),
-            child: const Text('إلغاء'),
-          ),
-          FilledButton.icon(
-            onPressed: _saving ? null : _save,
-            icon: _saving
-                ? const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.check_rounded),
-            label: Text(widget.existing == null ? 'حفظ' : 'تحديث'),
-          ),
-        ],
       ),
     );
   }
@@ -2216,7 +3075,9 @@ class _AttachmentPicker extends StatelessWidget {
             decoration: BoxDecoration(
               color: cs.surface,
               borderRadius: ac.sm,
-              border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.7)),
+              border: Border.all(
+                color: cs.outlineVariant.withValues(alpha: 0.7),
+              ),
             ),
             clipBehavior: Clip.antiAlias,
             child: has
@@ -2236,7 +3097,9 @@ class _AttachmentPicker extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  has ? 'تم إرفاق صورة الفاتورة' : 'إرفاق صورة الفاتورة (اختياري)',
+                  has
+                      ? 'تم إرفاق صورة الفاتورة'
+                      : 'إرفاق صورة الفاتورة (اختياري)',
                   style: TextStyle(
                     fontWeight: FontWeight.w700,
                     color: cs.onSurface,
@@ -2333,10 +3196,7 @@ class _RecurringPicker extends StatelessWidget {
                   ),
                 ),
                 const Spacer(),
-                Text(
-                  'من كل شهر',
-                  style: TextStyle(color: cs.onSurfaceVariant),
-                ),
+                Text('من كل شهر', style: TextStyle(color: cs.onSurfaceVariant)),
               ],
             ),
           ],
@@ -2372,8 +3232,9 @@ class _EmployeePickerDialogState extends State<_EmployeePickerDialog> {
   }
 
   Future<void> _reload() async {
-    final rows =
-        await DatabaseHelper().searchEmployeesForExpense(query: _searchCtrl.text);
+    final rows = await DatabaseHelper().searchEmployeesForExpense(
+      query: _searchCtrl.text,
+    );
     if (!mounted) return;
     setState(() {
       _items = rows.map(ExpenseEmployeeOption.fromMap).toList();
@@ -2420,12 +3281,16 @@ class _EmployeePickerDialogState extends State<_EmployeePickerDialog> {
                             leading: CircleAvatar(
                               child: Text(
                                 (e.name.isNotEmpty ? e.name[0] : '?'),
-                                style: const TextStyle(fontWeight: FontWeight.w800),
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w800,
+                                ),
                               ),
                             ),
                             title: Text(
                               e.name,
-                              style: const TextStyle(fontWeight: FontWeight.w700),
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                              ),
                             ),
                             subtitle: Text(
                               [
@@ -2452,4 +3317,3 @@ class _EmployeePickerDialogState extends State<_EmployeePickerDialog> {
     );
   }
 }
-

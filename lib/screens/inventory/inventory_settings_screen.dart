@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../providers/theme_provider.dart';
+import '../../utils/screen_layout.dart';
 import 'product_settings_screen.dart';
 import 'barcode_settings_screen.dart';
 import 'categories_settings_screen.dart';
@@ -56,7 +57,12 @@ class _InventorySettingsScreenState extends State<InventorySettingsScreen> {
               ),
             ),
             body: ListView(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+              padding: EdgeInsetsDirectional.only(
+                start: ScreenLayout.of(context).pageHorizontalGap,
+                end: ScreenLayout.of(context).pageHorizontalGap,
+                top: 16,
+                bottom: 32,
+              ),
               children: [
                 _SectionHeader(
                   icon: Icons.tune_outlined,

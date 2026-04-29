@@ -57,6 +57,7 @@ abstract class AppContentRoutes {
   static const settingsNotifications = 'app_settings_notifications';
   static const settingsPrintingInline = 'app_settings_printing_inline';
   static const settingsDashboardLayout = 'app_settings_dashboard_layout';
+  static const settingsRestore = 'app_settings_restore';
   static const settingsSubscriptionAccount = 'app_settings_subscription_account';
   static const subscriptionPlans = 'app_subscription_plans';
   static const reportsPrefix = 'app_reports_';

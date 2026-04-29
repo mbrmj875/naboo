@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 
 import '../../models/customer_record.dart';
+import '../../utils/screen_layout.dart';
 import '../../services/database_helper.dart';
 import '../../theme/design_tokens.dart';
 import '../../utils/customer_validation.dart';
@@ -154,9 +155,9 @@ class _CustomerFormScreenState extends State<CustomerFormScreen> {
         final msg = e is DuplicateCustomerPhoneException
             ? e.message
             : 'تعذر الحفظ: $e';
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(msg)),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(msg)));
       }
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -189,7 +190,12 @@ class _CustomerFormScreenState extends State<CustomerFormScreen> {
           children: [
             Expanded(
               child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+                padding: EdgeInsetsDirectional.only(
+                  start: ScreenLayout.of(context).pageHorizontalGap,
+                  end: ScreenLayout.of(context).pageHorizontalGap,
+                  top: 16,
+                  bottom: 24,
+                ),
                 child: Form(
                   key: _formKey,
                   child: Column(
@@ -324,7 +330,12 @@ class _CustomerFormScreenState extends State<CustomerFormScreen> {
               child: SafeArea(
                 top: false,
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+                  padding: EdgeInsetsDirectional.only(
+                    start: ScreenLayout.of(context).pageHorizontalGap,
+                    end: ScreenLayout.of(context).pageHorizontalGap,
+                    top: 10,
+                    bottom: 12,
+                  ),
                   child: Align(
                     alignment: AlignmentDirectional.centerStart,
                     child: Row(

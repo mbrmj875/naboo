@@ -107,10 +107,10 @@ class _CustomerContactsScreenState extends State<CustomerContactsScreen> {
       _appliedText = _searchCtrl.text;
       _appliedId = _idCtrl.text;
     });
-    final q = _appliedId.trim().isNotEmpty ? _appliedId.trim() : _appliedText;
     unawaited(
       context.read<CustomersProvider>().setFilters(
-            query: q,
+            query: _appliedText,
+            idQuery: _appliedId,
             statusArabic: 'الكل',
             sortKey: _sort == _ContactSort.balanceDesc ? 'balance_desc' : 'name_asc',
           ),
@@ -129,6 +129,7 @@ class _CustomerContactsScreenState extends State<CustomerContactsScreen> {
     unawaited(
       context.read<CustomersProvider>().setFilters(
             query: '',
+            idQuery: '',
             statusArabic: 'الكل',
             sortKey: 'name_asc',
           ),

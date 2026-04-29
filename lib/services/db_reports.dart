@@ -24,7 +24,12 @@ extension DbReports on DatabaseHelper {
 
     final salesRows = await db.rawQuery(
       '''
-      SELECT substr(date, 1, 10) AS d, IFNULL(SUM(total), 0) AS v
+      SELECT
+        substr(date, 1, 10) AS d,
+        IFNULL(
+          SUM(CASE WHEN totalFils != 0 THEN totalFils ELSE ROUND(total * 1000) END) / 1000.0,
+          0
+        ) AS v
       FROM invoices
       WHERE IFNULL(isReturned, 0) = 0
         AND datetime(date) >= datetime(?)
@@ -36,9 +41,14 @@ extension DbReports on DatabaseHelper {
     );
     final expenseRows = await db.rawQuery(
       '''
-      SELECT substr(createdAt, 1, 10) AS d, IFNULL(SUM(ABS(amount)), 0) AS v
+      SELECT
+        substr(createdAt, 1, 10) AS d,
+        IFNULL(
+          SUM(ABS(CASE WHEN amountFils != 0 THEN amountFils ELSE ROUND(amount * 1000) END)) / 1000.0,
+          0
+        ) AS v
       FROM cash_ledger
-      WHERE amount < 0
+      WHERE (CASE WHEN amountFils != 0 THEN amountFils ELSE ROUND(amount * 1000) END) < 0
         AND datetime(createdAt) >= datetime(?)
         AND datetime(createdAt) <= datetime(?)
       GROUP BY substr(createdAt, 1, 10)
@@ -126,7 +136,10 @@ extension DbReports on DatabaseHelper {
     Future<double> sumShiftSalesTotal(int sid) async {
       final rows = await db.rawQuery(
         '''
-        SELECT IFNULL(SUM(total), 0) AS s
+        SELECT IFNULL(
+          SUM(CASE WHEN totalFils != 0 THEN totalFils ELSE ROUND(total * 1000) END) / 1000.0,
+          0
+        ) AS s
         FROM invoices
         WHERE IFNULL(isReturned, 0) = 0
           AND type IN (0, 1, 2, 3)

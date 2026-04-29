@@ -9,6 +9,7 @@ import '../../providers/notification_provider.dart';
 import '../../services/cloud_sync_service.dart';
 import '../../services/database_helper.dart';
 import '../../theme/design_tokens.dart';
+import '../../utils/screen_layout.dart';
 
 final _numFmt = NumberFormat('#,##0', 'en');
 
@@ -33,8 +34,7 @@ class _DebtSettingsScreenState extends State<DebtSettingsScreen> {
   Color get _surface => Theme.of(context).colorScheme.surface;
   Color get _primary => Theme.of(context).colorScheme.primary;
   Color get _onPrimary => Theme.of(context).colorScheme.onPrimary;
-  Color get _filterBg =>
-      Theme.of(context).colorScheme.surfaceContainerHighest;
+  Color get _filterBg => Theme.of(context).colorScheme.surfaceContainerHighest;
   Color get _textPrimary => Theme.of(context).colorScheme.onSurface;
   Color get _textSecondary => Theme.of(context).colorScheme.onSurfaceVariant;
   Color get _outline => Theme.of(context).colorScheme.outline;
@@ -94,8 +94,7 @@ class _DebtSettingsScreenState extends State<DebtSettingsScreen> {
       _maxPerInvoice.text = s.maxOpenRemainingPerInvoice <= 0
           ? ''
           : _numFmt.format(s.maxOpenRemainingPerInvoice);
-      _warnDays.text =
-          s.warnDebtAgeDays <= 0 ? '' : '${s.warnDebtAgeDays}';
+      _warnDays.text = s.warnDebtAgeDays <= 0 ? '' : '${s.warnDebtAgeDays}';
       _loading = false;
     });
   }
@@ -128,9 +127,9 @@ class _DebtSettingsScreenState extends State<DebtSettingsScreen> {
       unawaited(context.read<NotificationProvider>().refresh());
     } catch (_) {}
     setState(() => _data = next);
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('تم حفظ إعدادات الدين')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('تم حفظ إعدادات الدين')));
   }
 
   PreferredSizeWidget _buildAppBar() {
@@ -205,7 +204,12 @@ class _DebtSettingsScreenState extends State<DebtSettingsScreen> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+            padding: EdgeInsetsDirectional.only(
+              start: ScreenLayout.of(context).pageHorizontalGap,
+              end: ScreenLayout.of(context).pageHorizontalGap,
+              top: 14,
+              bottom: 10,
+            ),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -271,11 +275,7 @@ class _DebtSettingsScreenState extends State<DebtSettingsScreen> {
         padding: const EdgeInsets.only(top: 6),
         child: Text(
           subtitle,
-          style: TextStyle(
-            fontSize: 12.5,
-            height: 1.4,
-            color: _textSecondary,
-          ),
+          style: TextStyle(fontSize: 12.5, height: 1.4, color: _textSecondary),
         ),
       ),
       value: value,
@@ -332,8 +332,7 @@ class _DebtSettingsScreenState extends State<DebtSettingsScreen> {
                               controller: _maxPerCustomer,
                               keyboardType: TextInputType.number,
                               decoration: _fieldDecoration(
-                                label:
-                                    'أقصى مجموع متبقٍ لكل عميل (د.ع)',
+                                label: 'أقصى مجموع متبقٍ لكل عميل (د.ع)',
                                 helper:
                                     'مجموع المتبقي عبر كل فواتير الدين المفتوحة لنفس العميل. يمنع للعميل تجاوز السقف عند التفعيل أدناه.',
                                 helperMaxLines: 3,
@@ -349,8 +348,7 @@ class _DebtSettingsScreenState extends State<DebtSettingsScreen> {
                               controller: _maxPerInvoice,
                               keyboardType: TextInputType.number,
                               decoration: _fieldDecoration(
-                                label:
-                                    'أقصى متبقٍ لفاتورة دين واحدة (د.ع)',
+                                label: 'أقصى متبقٍ لفاتورة دين واحدة (د.ع)',
                                 helper: 'إجمالي الفاتورة − المقدّم (النقدي).',
                                 prefixIcon: Icon(
                                   Icons.receipt_long_outlined,
@@ -364,9 +362,9 @@ class _DebtSettingsScreenState extends State<DebtSettingsScreen> {
                               controller: _warnDays,
                               keyboardType: TextInputType.number,
                               decoration: _fieldDecoration(
-                                label:
-                                    'أيام «تحذير العمر» في لوحة الديون',
-                                helper: '0 = لا تنبيه بالعمر. بعد هذا العدد من أيام تاريخ الفاتورة تُعرَّف الفاتورة كقديمة.',
+                                label: 'أيام «تحذير العمر» في لوحة الديون',
+                                helper:
+                                    '0 = لا تنبيه بالعمر. بعد هذا العدد من أيام تاريخ الفاتورة تُعرَّف الفاتورة كقديمة.',
                                 helperMaxLines: 3,
                                 prefixIcon: Icon(
                                   Icons.schedule_outlined,

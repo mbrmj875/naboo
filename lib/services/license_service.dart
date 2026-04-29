@@ -266,14 +266,123 @@ class LicenseService extends ChangeNotifier {
 
   // ── التحقق من الترخيص ─────────────────────────────────────────────────────
 
+  /// يختار ترخيصاً واحداً مفعّلاً ليُربط بهذا الحساب (أفضلية: active ثم trial؛ يتجاهل الموقوف).
+  static Map<String, dynamic>? pickBestAssignedLicense(
+    List<Map<String, dynamic>> rows,
+  ) {
+    if (rows.isEmpty) return null;
+    int statusRank(String raw) {
+      switch (raw.toLowerCase()) {
+        case 'active':
+          return 0;
+        case 'trial':
+          return 1;
+        case 'expired':
+          return 2;
+        default:
+          return 9;
+      }
+    }
+
+    final usable = rows.where((r) {
+      final st = (r['status'] as String? ?? '').toLowerCase();
+      return st != 'suspended';
+    }).toList();
+
+    if (usable.isEmpty) return null;
+
+    final activeOrTrial =
+        usable
+            .where((r) {
+              final st = (r['status'] as String? ?? '').toLowerCase();
+              return st == 'active' || st == 'trial';
+            })
+            .toList();
+
+    final pool = activeOrTrial.isNotEmpty ? activeOrTrial : usable;
+
+    pool.sort((a, b) {
+      final ra = statusRank(a['status'] as String? ?? '');
+      final rb = statusRank(b['status'] as String? ?? '');
+      if (ra != rb) return ra.compareTo(rb);
+      int idVal(Map<String, dynamic> m) {
+        final v = m['id'];
+        if (v is int) return v;
+        if (v is num) return v.toInt();
+        return 0;
+      }
+
+      DateTime? expiresVal(Map<String, dynamic> m) {
+        final s = m['expires_at']?.toString();
+        if (s == null || s.isEmpty) return null;
+        return DateTime.tryParse(s);
+      }
+
+      final ea = expiresVal(a);
+      final eb = expiresVal(b);
+      if (ea != null && eb != null && !ea.isAtSameMomentAs(eb)) {
+        return eb.compareTo(ea);
+      }
+      if (ea != null && eb == null) return -1;
+      if (ea == null && eb != null) return 1;
+      return idVal(b).compareTo(idVal(a));
+    });
+    return pool.first;
+  }
+
+  /// عند تسجيل الدخول: يجعل الترخيص المربوط بـ assigned_user_id مصدر الحقيقة
+  /// ويكتبه في التفضيلات حتى لا يظل جهاز بحفظ مفتاح قديم (مثلاً تجربة basic)
+  /// بعد تعيين pro من لوحة الإدارة بدون إدخال مفتاح.
+  Future<void> _syncAssignedLicenseFromSupabaseIntoPrefs(
+    SharedPreferences prefs,
+  ) async {
+    final user = Supabase.instance.client.auth.currentUser;
+    if (user == null) return;
+    try {
+      final response = await Supabase.instance.client
+          .from('licenses')
+          .select()
+          .eq('assigned_user_id', user.id);
+      final maps = List<Map<String, dynamic>>.from(
+        (response as List<dynamic>).map(
+          (e) => Map<String, dynamic>.from(e as Map),
+        ),
+      );
+      final picked = pickBestAssignedLicense(maps);
+      if (picked == null) return;
+      final keyRaw = picked['license_key']?.toString().trim() ?? '';
+      if (keyRaw.isEmpty) return;
+      final key = keyRaw.toUpperCase();
+      final prevUpper = (prefs.getString(_Prefs.licenseKey) ?? '').trim().toUpperCase();
+      if (prevUpper != key) {
+        await prefs.remove(_Prefs.status);
+        await prefs.remove(_Prefs.businessName);
+        await prefs.remove(_Prefs.expiresAt);
+        await prefs.remove(_Prefs.planKey);
+        await prefs.remove(_Prefs.maxDevices);
+        await prefs.remove(_Prefs.deviceCount);
+        await prefs.remove(_Prefs.lastCheckAt);
+      }
+      await prefs.setString(_Prefs.licenseKey, key);
+      await prefs.setBool(_Prefs.useCloudTrial, false);
+      await prefs.remove(_Prefs.trialEndsAt);
+      await prefs.remove(_Prefs.localTrialStartAt);
+    } catch (_) {
+      // تجاهل؛ يُكمِل checkLicense بدون تعيين
+    }
+  }
+
   Future<void> checkLicense({bool forceRemote = false}) async {
     _setState(LicenseState.checking);
     final prefs = await SharedPreferences.getInstance();
-    final savedKey = prefs.getString(_Prefs.licenseKey);
-    if (savedKey == null || savedKey.isEmpty) {
+    await _syncAssignedLicenseFromSupabaseIntoPrefs(prefs);
+    var effectiveKey = (prefs.getString(_Prefs.licenseKey) ?? '').trim();
+    if (effectiveKey.isEmpty) {
       _setState(_resolveLocalTrialState(prefs));
       return;
     }
+
+    final keyUpper = effectiveKey.toUpperCase();
 
     final lastMs = prefs.getInt(_Prefs.lastCheckAt) ?? 0;
     final since = DateTime.now().millisecondsSinceEpoch - lastMs;
@@ -288,7 +397,7 @@ class LicenseService extends ChangeNotifier {
     }
 
     try {
-      final data = await _fetchLicense(savedKey.trim().toUpperCase());
+      final data = await _fetchLicense(keyUpper);
       if (data == null) {
         _setState(
           const LicenseState(
@@ -323,12 +432,12 @@ class LicenseService extends ChangeNotifier {
 
       final result = await _resolveState(
         data,
-        savedKey,
+        keyUpper,
         prefs,
         deviceId,
         regDevices,
       );
-      await _saveToCache(prefs, result, savedKey);
+      await _saveToCache(prefs, result, keyUpper);
       _setState(result);
     } catch (_) {
       final cached = await _loadFromCache(prefs);
@@ -405,6 +514,13 @@ class LicenseService extends ChangeNotifier {
       await ensureLocalTrialStarted();
       return;
     }
+    final prefsEarly = await SharedPreferences.getInstance();
+    await _syncAssignedLicenseFromSupabaseIntoPrefs(prefsEarly);
+    if ((prefsEarly.getString(_Prefs.licenseKey) ?? '').trim().isNotEmpty) {
+      await checkLicense(forceRemote: true);
+      return;
+    }
+    final accountCreatedAtIso = _supabaseUserCreatedAtIsoUtc(user);
     try {
       final client = Supabase.instance.client;
       var row = await client
@@ -414,11 +530,10 @@ class LicenseService extends ChangeNotifier {
           .maybeSingle();
 
       if (row == null) {
-        final nowIso = DateTime.now().toUtc().toIso8601String();
         await client.from('profiles').insert({
           'id': user.id,
           'email': user.email,
-          'trial_started_at': nowIso,
+          'trial_started_at': accountCreatedAtIso,
           'updated_at': DateTime.now().toUtc().toIso8601String(),
         });
       } else {
@@ -435,11 +550,10 @@ class LicenseService extends ChangeNotifier {
           .maybeSingle();
       dynamic ts = row?['trial_started_at'];
       if (ts == null || ts.toString().isEmpty) {
-        final nowIso = DateTime.now().toUtc().toIso8601String();
         await client.from('profiles').update({
-          'trial_started_at': nowIso,
+          'trial_started_at': accountCreatedAtIso,
         }).eq('id', user.id);
-        ts = nowIso;
+        ts = accountCreatedAtIso;
       }
       final start = DateTime.parse(ts.toString()).toUtc();
       final endUtc = start.add(const Duration(days: 15));
@@ -451,6 +565,16 @@ class LicenseService extends ChangeNotifier {
     } catch (_) {
       await ensureLocalTrialStarted();
     }
+  }
+
+  String _supabaseUserCreatedAtIsoUtc(User user) {
+    try {
+      final raw = user.toJson()['created_at'];
+      if (raw is String && raw.trim().isNotEmpty) {
+        return DateTime.parse(raw).toUtc().toIso8601String();
+      }
+    } catch (_) {}
+    return DateTime.now().toUtc().toIso8601String();
   }
 
   Future<void> ensureLocalTrialStarted() async {

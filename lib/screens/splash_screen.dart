@@ -4,9 +4,12 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:audioplayers/audioplayers.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../providers/auth_provider.dart';
+import '../services/app_settings_repository.dart';
+import '../services/business_setup_settings.dart';
 import '../services/app_remote_config_service.dart';
 
 class SplashScreen extends StatefulWidget {
@@ -244,15 +247,92 @@ class _SplashScreenState extends State<SplashScreen>
         onTimeout: () {},
       );
     } catch (_) {}
+    if (!mounted) return;
+
+    await _showTargetedRoyalMessageIfAny();
 
     await Future<void>.delayed(const Duration(milliseconds: 1200));
     if (!mounted) return;
 
-    final target = auth.isLoggedIn ? '/open-shift' : '/login';
+    var target = auth.isLoggedIn ? '/open-shift' : '/login';
+    if (auth.isLoggedIn) {
+      try {
+        final completed = await BusinessSetupSettingsData.isCompleted(
+          AppSettingsRepository.instance,
+        );
+        if (!completed) target = '/onboarding';
+      } catch (_) {}
+    }
     try {
       Navigator.of(context).pushReplacementNamed(target);
     } catch (_) {
       Navigator.of(context).pushReplacementNamed('/login');
+    }
+  }
+
+  Future<void> _showTargetedRoyalMessageIfAny() async {
+    final user = Supabase.instance.client.auth.currentUser;
+    if (user == null) return;
+    try {
+      final row = await Supabase.instance.client
+          .from('profiles')
+          .select(
+            'custom_message_title_ar,custom_message_body_ar,custom_message_active',
+          )
+          .eq('id', user.id)
+          .maybeSingle();
+      if (!mounted || row == null) return;
+
+      final active = row['custom_message_active'] == true;
+      final body = (row['custom_message_body_ar'] ?? '').toString().trim();
+      if (!active || body.isEmpty) return;
+      final title = (row['custom_message_title_ar'] ?? '')
+          .toString()
+          .trim();
+
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: true,
+        builder: (ctx) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF071A36),
+            surfaceTintColor: Colors.transparent,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+              side: const BorderSide(color: Color(0xFFB8960C), width: 1.2),
+            ),
+            title: Text(
+              title.isEmpty ? 'رسالة خاصة من الإدارة' : title,
+              style: const TextStyle(
+                color: Color(0xFFFFE08A),
+                fontWeight: FontWeight.bold,
+              ),
+              textAlign: TextAlign.start,
+            ),
+            content: SingleChildScrollView(
+              child: Text(
+                body,
+                style: const TextStyle(
+                  color: Color(0xFFFFF2B2),
+                  height: 1.5,
+                ),
+                textAlign: TextAlign.start,
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                style: TextButton.styleFrom(
+                  foregroundColor: const Color(0xFFFFE08A),
+                ),
+                child: const Text('تم'),
+              ),
+            ],
+          );
+        },
+      );
+    } catch (_) {
+      // نتجاهل أي خطأ شبكة/صلاحيات حتى لا يتعطل الدخول.
     }
   }
 

@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 
 import '../../services/database_helper.dart';
 import '../../services/inventory_repository.dart';
+import '../../utils/screen_layout.dart';
 import '../../services/permission_service.dart';
 import '../../services/tenant_context_service.dart';
 import '../../widgets/permission_guard.dart';
@@ -678,7 +679,9 @@ class _CountingScreenState extends State<_CountingScreen> {
         actions: [
           Center(
             child: Padding(
-              padding: const EdgeInsets.only(left: 16),
+              padding: EdgeInsetsDirectional.only(
+                start: ScreenLayout.of(context).pageHorizontalGap,
+              ),
               child: Text(
                 '$_countedItems/${_items.length}',
                 style: const TextStyle(

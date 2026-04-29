@@ -3,6 +3,55 @@ part of 'database_helper.dart';
 // ── المستخدمون والموظفون ──────────────────────────────────────────────────
 
 extension DbUsers on DatabaseHelper {
+  Future<void> _upsertUserProfileByUserId(Database db, int id) async {
+    final rows = await db.query(
+      'users',
+      columns: const [
+        'id',
+        'username',
+        'role',
+        'email',
+        'phone',
+        'phone2',
+        'displayName',
+        'jobTitle',
+        'isActive',
+        'createdAt',
+        'updatedAt',
+      ],
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    if (rows.isEmpty) return;
+    final row = rows.first;
+    final now = DateTime.now().toIso8601String();
+    final rawUsername = (row['username'] ?? '').toString().trim().toLowerCase();
+    final rawEmail = (row['email'] ?? '').toString().trim().toLowerCase();
+    final role = (row['role'] ?? 'staff').toString().trim();
+    await db.insert(
+      'user_profiles',
+      {
+        'id': id,
+        'username': rawUsername.isNotEmpty ? rawUsername : rawEmail,
+        'role': role.isEmpty ? 'staff' : role,
+        'email': (row['email'] ?? '').toString().trim(),
+        'phone': (row['phone'] ?? '').toString().trim(),
+        'phone2': (row['phone2'] ?? '').toString().trim(),
+        'displayName': (row['displayName'] ?? '').toString().trim(),
+        'jobTitle': (row['jobTitle'] ?? '').toString().trim(),
+        'isActive': ((row['isActive'] as num?)?.toInt() ?? 1) == 1 ? 1 : 0,
+        'createdAt': ((row['createdAt'] ?? '').toString().trim().isEmpty)
+            ? now
+            : (row['createdAt'] ?? '').toString(),
+        'updatedAt': ((row['updatedAt'] ?? '').toString().trim().isEmpty)
+            ? now
+            : (row['updatedAt'] ?? '').toString(),
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
   /// بحث موظفين/مستخدمين (اسم الدخول / البريد / الهاتف).
   Future<List<Map<String, dynamic>>> searchUsers(
     String query, {
@@ -69,6 +118,43 @@ extension DbUsers on DatabaseHelper {
     return rows.isEmpty ? null : rows.first;
   }
 
+  /// تحديث رمز الدخول (كلمة السر) لمستخدم موجود.
+  /// يُستخدم في تدفق "نسيت رمز الدخول" بعد التحقق عبر OTP.
+  Future<bool> updateUserPasswordByLogin({
+    required String login,
+    required String passwordHash,
+    required String passwordSalt,
+  }) async {
+    final key = login.trim().toLowerCase();
+    if (key.isEmpty) return false;
+    if (passwordHash.trim().isEmpty || passwordSalt.trim().isEmpty) {
+      return false;
+    }
+    final db = await database;
+    final rows = await db.query(
+      'users',
+      columns: const ['id'],
+      where:
+          "isActive = 1 AND (LOWER(username) = ? OR LOWER(IFNULL(email, '')) = ?)",
+      whereArgs: [key, key],
+      limit: 1,
+    );
+    if (rows.isEmpty) return false;
+    final id = rows.first['id'] as int;
+    final now = DateTime.now().toIso8601String();
+    final updated = await db.update(
+      'users',
+      {
+        'passwordHash': passwordHash,
+        'passwordSalt': passwordSalt,
+        'updatedAt': now,
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+    return updated > 0;
+  }
+
   Future<bool> signupEmailTaken(String email) async {
     final e = email.trim().toLowerCase();
     if (e.isEmpty) return false;
@@ -96,7 +182,7 @@ extension DbUsers on DatabaseHelper {
   }) async {
     final db = await database;
     final now = DateTime.now().toIso8601String();
-    return db.insert('users', {
+    final id = await db.insert('users', {
       'username': username.trim().toLowerCase(),
       'passwordHash': passwordHash,
       'passwordSalt': passwordSalt,
@@ -113,6 +199,8 @@ extension DbUsers on DatabaseHelper {
       'createdAt': now,
       'updatedAt': now,
     });
+    await _upsertUserProfileByUserId(db, id);
+    return id;
   }
 
   /// إنشاء مستخدم من لوحة الإدارة (مدير فقط).
@@ -179,6 +267,7 @@ extension DbUsers on DatabaseHelper {
       map['passwordSalt'] = passwordSalt;
     }
     await db.update('users', map, where: 'id = ?', whereArgs: [id]);
+    await _upsertUserProfileByUserId(db, id);
   }
 
   Future<void> deactivateUser(int id) async {
@@ -189,6 +278,7 @@ extension DbUsers on DatabaseHelper {
       where: 'id = ?',
       whereArgs: [id],
     );
+    await _upsertUserProfileByUserId(db, id);
   }
 
   Future<void> regenerateUserShiftAccessPin(int id) async {
@@ -228,7 +318,11 @@ extension DbUsers on DatabaseHelper {
     final now = DateTime.now().toIso8601String();
 
     final byUid = await getUserBySupabaseUid(supabaseUid);
-    if (byUid != null) return byUid['id'] as int;
+    if (byUid != null) {
+      final id = byUid['id'] as int;
+      await _upsertUserProfileByUserId(db, id);
+      return id;
+    }
 
     final mail = email.trim().toLowerCase();
     final byEmail = await db.query(
@@ -245,13 +339,14 @@ extension DbUsers on DatabaseHelper {
         where: 'id = ?',
         whereArgs: [existingId],
       );
+      await _upsertUserProfileByUserId(db, existingId);
       return existingId;
     }
 
     final n = await countActiveUsers();
     final role = n == 0 ? 'admin' : 'staff';
 
-    return db.insert('users', {
+    final id = await db.insert('users', {
       'username': mail,
       'role': role,
       'email': email.trim(),
@@ -267,5 +362,7 @@ extension DbUsers on DatabaseHelper {
       'createdAt': now,
       'updatedAt': now,
     });
+    await _upsertUserProfileByUserId(db, id);
+    return id;
   }
 }

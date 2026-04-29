@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 
 import '../../services/database_helper.dart';
+import '../../utils/screen_layout.dart';
 import '../../theme/design_tokens.dart';
 
 /// يحوّل الأرقام العربية/الفارسية إلى أرقام لاتينية (0–9) مع الإبقاء على باقي النص.
@@ -118,8 +119,10 @@ class _StaffShiftsWeekScreenState extends State<StaffShiftsWeekScreen> {
   Future<void> _load() async {
     setState(() => _loading = true);
     final end = _weekEndExclusive(_weekStartSaturday);
-    final rows =
-        await _db.listWorkShiftsOverlappingRange(_weekStartSaturday, end);
+    final rows = await _db.listWorkShiftsOverlappingRange(
+      _weekStartSaturday,
+      end,
+    );
     if (!mounted) return;
     setState(() {
       _rawShifts = rows;
@@ -176,8 +179,9 @@ class _StaffShiftsWeekScreenState extends State<StaffShiftsWeekScreen> {
             .subtract(const Duration(microseconds: 1));
 
         final segStart = open.isAfter(dayStart) ? open : dayStart;
-        final segEnd =
-            effectiveClose.isBefore(dayEnd) ? effectiveClose : dayEnd;
+        final segEnd = effectiveClose.isBefore(dayEnd)
+            ? effectiveClose
+            : dayEnd;
         if (segStart.isBefore(segEnd)) {
           days[dayIndex].add(
             _DaySegment(
@@ -290,9 +294,9 @@ class _StaffShiftsWeekScreenState extends State<StaffShiftsWeekScreen> {
                     rangeTitle,
                     textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: 0.2,
-                        ),
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.2,
+                    ),
                   ),
                   const SizedBox(height: 2),
                   TextButton.icon(
@@ -343,9 +347,9 @@ class _StaffShiftsWeekScreenState extends State<StaffShiftsWeekScreen> {
             child: Text(
               text,
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    height: 1.35,
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
+                height: 1.35,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
             ),
           ),
         ],
@@ -374,10 +378,7 @@ class _StaffShiftsWeekScreenState extends State<StaffShiftsWeekScreen> {
         final segs = byDay[dayIndex];
         final dayShort = DateFormat('EEE', 'ar').format(dayDate);
         final dayNum = _latinDigits('${dayDate.day}');
-        final today = _isSameCalendarDay(
-          dayDate,
-          DateTime.now(),
-        );
+        final today = _isSameCalendarDay(dayDate, DateTime.now());
         final surface = isDark ? AppColors.cardDark : AppColors.cardLight;
         final border = isDark ? AppColors.borderDark : AppColors.borderLight;
 
@@ -391,7 +392,8 @@ class _StaffShiftsWeekScreenState extends State<StaffShiftsWeekScreen> {
                   children: [
                     Text(
                       dayNum,
-                      style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                      style: Theme.of(context).textTheme.headlineSmall
+                          ?.copyWith(
                             fontWeight: FontWeight.w800,
                             height: 1.05,
                             color: today ? cs.primary : null,
@@ -401,11 +403,9 @@ class _StaffShiftsWeekScreenState extends State<StaffShiftsWeekScreen> {
                     Text(
                       dayShort,
                       style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                            fontWeight: FontWeight.w600,
-                            color: today
-                                ? cs.primary
-                                : cs.onSurfaceVariant,
-                          ),
+                        fontWeight: FontWeight.w600,
+                        color: today ? cs.primary : cs.onSurfaceVariant,
+                      ),
                     ),
                   ],
                 ),
@@ -427,13 +427,16 @@ class _StaffShiftsWeekScreenState extends State<StaffShiftsWeekScreen> {
               children: [
                 dayHeader,
                 Padding(
-                  padding:
-                      const EdgeInsets.only(left: 12, right: 12, bottom: 12),
+                  padding: EdgeInsetsDirectional.only(
+                    start: ScreenLayout.of(context).pageHorizontalGap,
+                    end: ScreenLayout.of(context).pageHorizontalGap,
+                    bottom: 12,
+                  ),
                   child: Text(
                     'لا توجد ورديات',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: cs.onSurfaceVariant,
-                        ),
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant),
                   ),
                 ),
               ],
@@ -452,19 +455,26 @@ class _StaffShiftsWeekScreenState extends State<StaffShiftsWeekScreen> {
             data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
             child: ExpansionTile(
               tilePadding: EdgeInsets.zero,
-              childrenPadding:
-                  const EdgeInsets.only(left: 12, right: 12, bottom: 10),
+              childrenPadding: EdgeInsetsDirectional.only(
+                start: ScreenLayout.of(context).pageHorizontalGap,
+                end: ScreenLayout.of(context).pageHorizontalGap,
+                bottom: 10,
+              ),
               title: dayHeader,
               subtitle: Padding(
-                padding: const EdgeInsets.only(right: 12, left: 12, bottom: 4),
+                padding: EdgeInsetsDirectional.only(
+                  start: ScreenLayout.of(context).pageHorizontalGap,
+                  end: ScreenLayout.of(context).pageHorizontalGap,
+                  bottom: 4,
+                ),
                 child: Align(
-                  alignment: Alignment.centerRight,
+                  alignment: AlignmentDirectional.centerEnd,
                   child: Text(
                     '${segs.length} ${segs.length == 1 ? 'وردية' : 'ورديات'}',
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: cs.primary,
-                          fontWeight: FontWeight.w600,
-                        ),
+                      color: cs.primary,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
               ),
@@ -488,11 +498,7 @@ class _StaffShiftsWeekScreenState extends State<StaffShiftsWeekScreen> {
                           child: Row(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Container(
-                                width: 4,
-                                height: 40,
-                                color: col,
-                              ),
+                              Container(width: 4, height: 40, color: col),
                               const SizedBox(width: 10),
                               Expanded(
                                 child: Column(
@@ -558,7 +564,11 @@ class _StaffShiftsWeekScreenState extends State<StaffShiftsWeekScreen> {
     );
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.only(left: 8, right: 8, bottom: 12),
+      padding: EdgeInsetsDirectional.only(
+        start: ScreenLayout.of(context).pageHorizontalGap * 0.66,
+        end: ScreenLayout.of(context).pageHorizontalGap * 0.66,
+        bottom: 12,
+      ),
       child: SingleChildScrollView(
         scrollDirection: Axis.horizontal,
         child: SizedBox(
@@ -572,10 +582,9 @@ class _StaffShiftsWeekScreenState extends State<StaffShiftsWeekScreen> {
                 width: 1,
                 height: timelineH + _DayTimelineColumn.headerHeight,
                 child: ColoredBox(
-                  color: Theme.of(context)
-                      .colorScheme
-                      .outline
-                      .withValues(alpha: 0.72),
+                  color: Theme.of(
+                    context,
+                  ).colorScheme.outline.withValues(alpha: 0.72),
                 ),
               ),
               SizedBox(
@@ -722,8 +731,8 @@ class _TimeRuler extends StatelessWidget {
                       top: h == _lastH
                           ? height - 12
                           : h == _firstH
-                              ? 0.0
-                              : (h - _firstH) / span * height - 5,
+                          ? 0.0
+                          : (h - _firstH) / span * height - 5,
                       left: 0,
                       right: 0,
                       child: Text(
@@ -774,7 +783,8 @@ class _DayTimelineColumn extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     final border = cs.outlineVariant;
     final now = DateTime.now();
-    final isToday = dayDate.year == now.year &&
+    final isToday =
+        dayDate.year == now.year &&
         dayDate.month == now.month &&
         dayDate.day == now.day;
     final dayNum = _latinDigits('${dayDate.day}');
@@ -792,11 +802,20 @@ class _DayTimelineColumn extends StatelessWidget {
           decoration: BoxDecoration(
             color: headerBg,
             border: Border(
-              left: BorderSide(color: border.withValues(alpha: 0.55), width: 0.5),
+              left: BorderSide(
+                color: border.withValues(alpha: 0.55),
+                width: 0.5,
+              ),
               right: omitBorderTowardRuler
                   ? BorderSide.none
-                  : BorderSide(color: border.withValues(alpha: 0.55), width: 0.5),
-              top: BorderSide(color: border.withValues(alpha: 0.55), width: 0.5),
+                  : BorderSide(
+                      color: border.withValues(alpha: 0.55),
+                      width: 0.5,
+                    ),
+              top: BorderSide(
+                color: border.withValues(alpha: 0.55),
+                width: 0.5,
+              ),
             ),
           ),
           child: Column(
@@ -835,10 +854,16 @@ class _DayTimelineColumn extends StatelessWidget {
             decoration: BoxDecoration(
               color: isDark ? const Color(0xFF161622) : const Color(0xFFFAFAFA),
               border: Border(
-                left: BorderSide(color: border.withValues(alpha: 0.55), width: 0.5),
+                left: BorderSide(
+                  color: border.withValues(alpha: 0.55),
+                  width: 0.5,
+                ),
                 right: omitBorderTowardRuler
                     ? BorderSide.none
-                    : BorderSide(color: border.withValues(alpha: 0.55), width: 0.5),
+                    : BorderSide(
+                        color: border.withValues(alpha: 0.55),
+                        width: 0.5,
+                      ),
                 bottom: BorderSide(color: border.withValues(alpha: 0.6)),
               ),
             ),
@@ -875,8 +900,8 @@ class _DayTimelineColumn extends StatelessWidget {
                           return const SizedBox.shrink();
                         }
 
-                        final top = ((visStart - _windowStartMin) /
-                                _windowSpanMin) *
+                        final top =
+                            ((visStart - _windowStartMin) / _windowSpanMin) *
                             timelineHeight;
                         final barH = math.max(
                           26.0,
@@ -893,7 +918,9 @@ class _DayTimelineColumn extends StatelessWidget {
                           height: barH,
                           child: Padding(
                             padding: const EdgeInsets.symmetric(
-                                horizontal: 1, vertical: 0.5),
+                              horizontal: 1,
+                              vertical: 0.5,
+                            ),
                             child: Material(
                               color: col.withValues(alpha: 0.88),
                               elevation: 1,
@@ -904,7 +931,9 @@ class _DayTimelineColumn extends StatelessWidget {
                                 onTap: () {},
                                 child: Padding(
                                   padding: const EdgeInsets.symmetric(
-                                      horizontal: 3, vertical: 2),
+                                    horizontal: 3,
+                                    vertical: 2,
+                                  ),
                                   child: FittedBox(
                                     fit: BoxFit.scaleDown,
                                     alignment: Alignment.center,
@@ -929,8 +958,9 @@ class _DayTimelineColumn extends StatelessWidget {
                                             '${_DayTimelineColumn._hm24(s.start)} – ${_DayTimelineColumn._hm24(s.end)}',
                                             textAlign: TextAlign.center,
                                             style: TextStyle(
-                                              color: Colors.white
-                                                  .withValues(alpha: 0.95),
+                                              color: Colors.white.withValues(
+                                                alpha: 0.95,
+                                              ),
                                               fontSize: 9,
                                               fontWeight: FontWeight.w600,
                                               fontFeatures: const [
@@ -1009,8 +1039,8 @@ class _TotalsBar extends StatelessWidget {
                     Text(
                       'إجمالي الوقت خلال الأسبوع',
                       style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                            fontWeight: FontWeight.w800,
-                          ),
+                        fontWeight: FontWeight.w800,
+                      ),
                     ),
                   ],
                 ),

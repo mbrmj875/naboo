@@ -15,10 +15,12 @@ const Color _kGreen  = Color(0xFF15803D);
 const int _kMaxAutoPoLines = 150;
 
 class AddPurchaseOrderScreen extends StatefulWidget {
-  const AddPurchaseOrderScreen({super.key, this.poId});
+  const AddPurchaseOrderScreen({super.key, this.poId, this.copyFromPoId});
 
   /// إذا كان [poId] غير null فهذا تعديل لأمر موجود.
   final int? poId;
+  /// إنشاء أمر جديد عبر نسخ بيانات أمر موجود.
+  final int? copyFromPoId;
 
   @override
   State<AddPurchaseOrderScreen> createState() => _AddPurchaseOrderScreenState();
@@ -46,6 +48,7 @@ class _AddPurchaseOrderScreenState extends State<AddPurchaseOrderScreen> {
   final List<_PoLine> _lines = [];
 
   bool get _isEdit => widget.poId != null;
+  bool get _isCopy => !_isEdit && widget.copyFromPoId != null;
 
   @override
   void initState() {
@@ -78,8 +81,8 @@ class _AddPurchaseOrderScreenState extends State<AddPurchaseOrderScreen> {
       orderBy: 'name COLLATE NOCASE',
       limit: 500,
     );
-    if (_isEdit) {
-      await _loadExistingPo(db);
+    if (_isEdit || _isCopy) {
+      await _loadExistingPo(db, poId: _isEdit ? widget.poId : widget.copyFromPoId);
     }
     if (!mounted) return;
     setState(() {
@@ -89,11 +92,11 @@ class _AddPurchaseOrderScreenState extends State<AddPurchaseOrderScreen> {
     });
   }
 
-  Future<void> _loadExistingPo(dynamic db) async {
+  Future<void> _loadExistingPo(dynamic db, {required int? poId}) async {
     final rows = await db.query(
       'purchase_orders',
       where: 'id = ?',
-      whereArgs: [widget.poId],
+      whereArgs: [poId],
       limit: 1,
     );
     if (rows.isEmpty) return;
@@ -113,7 +116,7 @@ class _AddPurchaseOrderScreenState extends State<AddPurchaseOrderScreen> {
     final items = await db.query(
       'purchase_order_items',
       where: 'poId = ?',
-      whereArgs: [widget.poId],
+      whereArgs: [poId],
     ) as List<Map<String, dynamic>>;
     for (final item in items) {
       _lines.add(_PoLine(
@@ -130,6 +133,16 @@ class _AddPurchaseOrderScreenState extends State<AddPurchaseOrderScreen> {
           text: _fmt2((item['unitPrice'] as num?)?.toDouble() ?? 0),
         ),
       ));
+    }
+
+    if (_isCopy) {
+      // عند النسخ: نبدأ أمر جديد بمسودة وتاريخ اليوم، ونصفّر الاستلام.
+      _status = 'draft';
+      _orderDate = DateTime.now();
+      _expectedDate = null;
+      for (final l in _lines) {
+        l.receivedQty = 0;
+      }
     }
   }
 

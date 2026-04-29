@@ -480,32 +480,40 @@ class _StatsBar extends StatelessWidget {
           }
           return Row(
             children: [
-              _StatChip(
-                label: 'الإجمالي',
-                value: _numFmt.format(total),
-                color: cs.primary,
-                icon: Icons.receipt_long_rounded,
+              Expanded(
+                child: _StatChip(
+                  label: 'الإجمالي',
+                  value: _numFmt.format(total),
+                  color: cs.primary,
+                  icon: Icons.receipt_long_rounded,
+                ),
               ),
               const SizedBox(width: 8),
-              _StatChip(
-                label: 'مدفوعة',
-                value: _numFmt.format(paid),
-                color: const Color(0xFF16A34A),
-                icon: Icons.check_circle_rounded,
+              Expanded(
+                child: _StatChip(
+                  label: 'مدفوعة',
+                  value: _numFmt.format(paid),
+                  color: const Color(0xFF16A34A),
+                  icon: Icons.check_circle_rounded,
+                ),
               ),
               const SizedBox(width: 8),
-              _StatChip(
-                label: 'دين',
-                value: _numFmt.format(unpaid),
-                color: const Color(0xFFF59E0B),
-                icon: Icons.access_time_rounded,
+              Expanded(
+                child: _StatChip(
+                  label: 'دين',
+                  value: _numFmt.format(unpaid),
+                  color: const Color(0xFFF59E0B),
+                  icon: Icons.access_time_rounded,
+                ),
               ),
               const SizedBox(width: 8),
-              _StatChip(
-                label: 'مرتجع',
-                value: _numFmt.format(returns),
-                color: cs.error,
-                icon: Icons.reply_rounded,
+              Expanded(
+                child: _StatChip(
+                  label: 'مرتجع',
+                  value: _numFmt.format(returns),
+                  color: cs.error,
+                  icon: Icons.reply_rounded,
+                ),
               ),
             ],
           );
@@ -523,30 +531,28 @@ class _StatChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.09),
-          borderRadius: BorderRadius.zero,
-          border: Border.all(color: color.withValues(alpha: 0.22)),
-        ),
-        child: Column(
-          children: [
-            Icon(icon, size: 18, color: color),
-            const SizedBox(height: 3),
-            Text(value,
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: color),
-                overflow: TextOverflow.ellipsis),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 10,
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.09),
+        borderRadius: BorderRadius.zero,
+        border: Border.all(color: color.withValues(alpha: 0.22)),
+      ),
+      child: Column(
+        children: [
+          Icon(icon, size: 18, color: color),
+          const SizedBox(height: 3),
+          Text(value,
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: color),
+              overflow: TextOverflow.ellipsis),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 10,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -568,13 +574,14 @@ class _SearchSortBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = colorScheme;
+    final gap = ScreenLayout.of(context).pageHorizontalGap;
     return Container(
       color: cs.surface,
-      padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
-      child: Row(
-        children: [
-          // فلتر الترتيب
-          PopupMenuButton<String>(
+      padding: EdgeInsetsDirectional.fromSTEB(gap, 0, gap, 10),
+      child: LayoutBuilder(
+        builder: (context, c) {
+          final narrow = c.maxWidth < 520;
+          final sortBtn = PopupMenuButton<String>(
             initialValue: sort,
             onSelected: onSort,
             tooltip: 'ترتيب',
@@ -592,11 +599,8 @@ class _SearchSortBar extends StatelessWidget {
               const PopupMenuItem(value: 'amount_desc', child: Text('الأعلى مبلغاً')),
               const PopupMenuItem(value: 'amount_asc',  child: Text('الأقل مبلغاً')),
             ],
-          ),
-          const SizedBox(width: 8),
-          // حقل البحث
-          Expanded(
-            child: TextField(
+          );
+          final searchField = TextField(
               controller: controller,
               textDirection: TextDirection.rtl,
               decoration: InputDecoration(
@@ -617,9 +621,28 @@ class _SearchSortBar extends StatelessWidget {
                       )
                     : null,
               ),
-            ),
-          ),
-        ],
+            );
+          if (narrow) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                searchField,
+                const SizedBox(height: 8),
+                Align(
+                  alignment: AlignmentDirectional.centerEnd,
+                  child: sortBtn,
+                ),
+              ],
+            );
+          }
+          return Row(
+            children: [
+              sortBtn,
+              const SizedBox(width: 8),
+              Expanded(child: searchField),
+            ],
+          );
+        },
       ),
     );
   }
@@ -670,17 +693,18 @@ class _InvoiceList extends StatelessWidget {
         }
         return false;
       },
-      child: _buildList(),
+      child: _buildList(context),
     );
   }
 
-  Widget _buildList() {
+  Widget _buildList(BuildContext context) {
+    final gap = ScreenLayout.of(context).pageHorizontalGap;
     final baseCount = invoices.length;
     final tail = (isLoadingMore ? 1 : 0);
 
     if (!groupByShift) {
       return ListView.builder(
-        padding: const EdgeInsets.fromLTRB(14, 12, 14, 100),
+        padding: EdgeInsetsDirectional.fromSTEB(gap, 12, gap, 100),
         itemCount: baseCount + tail,
         itemBuilder: (_, i) {
           if (i >= baseCount) {
@@ -715,7 +739,7 @@ class _InvoiceList extends StatelessWidget {
     final itemCount = entries.length + tail;
 
     return ListView.builder(
-      padding: const EdgeInsets.fromLTRB(14, 12, 14, 100),
+      padding: EdgeInsetsDirectional.fromSTEB(gap, 12, gap, 100),
       itemCount: itemCount,
       itemBuilder: (_, i) {
         if (i >= itemCount - tail && isLoadingMore) {
@@ -1098,10 +1122,11 @@ class _EmptyState extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final gap = ScreenLayout.of(context).pageHorizontalGap;
     return LayoutBuilder(
       builder: (context, c) {
         return SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          padding: EdgeInsets.symmetric(horizontal: gap, vertical: 8),
           child: ConstrainedBox(
             constraints: BoxConstraints(minHeight: c.maxHeight),
             child: Column(

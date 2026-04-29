@@ -4,9 +4,11 @@ import 'package:provider/provider.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/shift_provider.dart';
 import '../../services/app_settings_repository.dart';
+import '../../services/cloud_sync_service.dart';
 import '../../services/inventory_policy_settings.dart';
 import '../../services/permission_service.dart';
 import '../../services/tenant_context_service.dart';
+import '../../utils/screen_layout.dart';
 
 import 'add_product_screen.dart';
 import 'quick_product_update_screen.dart';
@@ -150,6 +152,16 @@ class _InventoryHubScreenState extends State<InventoryHubScreen> {
     });
   }
 
+  Future<void> _refreshFromServer() async {
+    await CloudSyncService.instance.syncNow(
+      forcePull: true,
+      forcePush: true,
+      forceImportOnPull: true,
+    );
+    if (!mounted) return;
+    await _load();
+  }
+
   Future<Set<String>> _loadDeniedModules() async {
     final auth    = context.read<AuthProvider>();
     final userId  = auth.userId;
@@ -189,7 +201,9 @@ class _InventoryHubScreenState extends State<InventoryHubScreen> {
       builder: (ctx) => AlertDialog(
         title: const Text('اختيار الحساب/المستأجر'),
         content: SizedBox(
-          width: 420,
+          width: MediaQuery.sizeOf(ctx).width < 560
+              ? MediaQuery.sizeOf(ctx).width - 56
+              : 420,
           child: ListView(
             shrinkWrap: true,
             children: [
@@ -238,7 +252,9 @@ class _InventoryHubScreenState extends State<InventoryHubScreen> {
           builder: (_, setLocal) => AlertDialog(
             title: const Text('تخصيص وحدات المخزون'),
             content: SizedBox(
-              width: 420,
+              width: MediaQuery.sizeOf(ctx).width < 560
+                  ? MediaQuery.sizeOf(ctx).width - 56
+                  : 420,
               child: ListView(
                 shrinkWrap: true,
                 children: [
@@ -305,6 +321,7 @@ class _InventoryHubScreenState extends State<InventoryHubScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final layout = context.screenLayout;
     final visible = _modules.where((m) {
       if (_hiddenIds.contains(m.id)) return false;
       if (_deniedIds.contains(m.id)) return false;
@@ -318,7 +335,7 @@ class _InventoryHubScreenState extends State<InventoryHubScreen> {
           title: const Text('مركز المخزون'),
           actions: [
             IconButton(
-              onPressed: _load,
+              onPressed: _refreshFromServer,
               tooltip: 'تحديث',
               icon: const Icon(Icons.refresh_outlined),
             ),
@@ -365,8 +382,9 @@ class _InventoryHubScreenState extends State<InventoryHubScreen> {
                           : c.maxWidth >= 700
                               ? 2
                               : 1;
+                      final gap = layout.pageHorizontalGap;
                       return ListView(
-                        padding: const EdgeInsets.all(16),
+                        padding: EdgeInsets.all(gap),
                         children: [
                           GridView.builder(
                             shrinkWrap: true,

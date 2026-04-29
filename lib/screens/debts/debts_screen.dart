@@ -4,6 +4,7 @@ import 'package:intl/intl.dart' hide TextDirection;
 import '../../models/credit_debt_invoice.dart';
 import '../../models/customer_debt_models.dart';
 import '../../models/debt_settings_data.dart';
+import '../../services/cloud_sync_service.dart';
 import '../../services/database_helper.dart';
 import '../../theme/design_tokens.dart';
 import '../../utils/screen_layout.dart';
@@ -62,6 +63,16 @@ class _DebtsScreenState extends State<DebtsScreen> {
     });
   }
 
+  Future<void> _refreshFromServer() async {
+    await CloudSyncService.instance.syncNow(
+      forcePull: true,
+      forcePush: true,
+      forceImportOnPull: true,
+    );
+    if (!mounted) return;
+    await _load();
+  }
+
   bool _isAged(CreditDebtInvoice r, DateTime now) {
     if (_settings.warnDebtAgeDays <= 0) return false;
     if (r.isSettled) return false;
@@ -72,13 +83,11 @@ class _DebtsScreenState extends State<DebtsScreen> {
     var list = List<CreditDebtInvoice>.from(_rows);
     final q = _search.text.trim().toLowerCase();
     if (q.isNotEmpty) {
-      list = list
-          .where((r) {
-            return r.customerName.toLowerCase().contains(q) ||
-                r.invoiceId.toString().contains(q) ||
-                (r.customerId?.toString().contains(q) ?? false);
-          })
-          .toList();
+      list = list.where((r) {
+        return r.customerName.toLowerCase().contains(q) ||
+            r.invoiceId.toString().contains(q) ||
+            (r.customerId?.toString().contains(q) ?? false);
+      }).toList();
     }
     switch (_filter) {
       case _DebtFilter.all:
@@ -116,14 +125,16 @@ class _DebtsScreenState extends State<DebtsScreen> {
     final bg = isDark ? AppColors.surfaceDark : AppColors.surfaceLight;
     final now = DateTime.now();
     final filtered = _filteredList(now);
-    final totalOpen =
-        _rows.where((r) => !r.isSettled).fold<double>(0, (s, r) => s + r.remaining);
+    final totalOpen = _rows
+        .where((r) => !r.isSettled)
+        .fold<double>(0, (s, r) => s + r.remaining);
     final openCount = _rows.where((r) => !r.isSettled).length;
     final agedCount = _rows.where((r) => _isAged(r, now)).length;
     final listScope = filtered.length != _rows.length;
     final sumFiltered = _filteredSummaries();
     final sumScope = sumFiltered.length != _summaries.length;
     final sl = ScreenLayout.of(context);
+    final gap = sl.pageHorizontalGap;
 
     return DefaultTabController(
       length: 3,
@@ -164,7 +175,7 @@ class _DebtsScreenState extends State<DebtsScreen> {
               ),
               IconButton(
                 tooltip: 'تحديث',
-                onPressed: _loading ? null : _load,
+                onPressed: _loading ? null : _refreshFromServer,
                 icon: const Icon(Icons.refresh_rounded),
               ),
             ],
@@ -175,32 +186,43 @@ class _DebtsScreenState extends State<DebtsScreen> {
                   children: [
                     RefreshIndicator(
                       color: cs.primary,
-                      onRefresh: _load,
+                      onRefresh: _refreshFromServer,
                       child: ListView(
                         physics: const AlwaysScrollableScrollPhysics(),
                         padding: const EdgeInsets.only(bottom: 100),
                         children: [
                           Padding(
-                            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                            padding: EdgeInsetsDirectional.only(
+                              start: gap,
+                              end: gap,
+                              top: 12,
+                              bottom: 8,
+                            ),
                             child: _InfoBanner(
                               colorScheme: cs,
                               warnDays: _settings.warnDebtAgeDays,
                             ),
                           ),
                           Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            padding: EdgeInsets.symmetric(horizontal: gap),
                             child: _SummaryStrip(
                               totalOpen: totalOpen,
                               openInvoices: openCount,
                               agedInvoices: agedCount,
                               colorScheme: cs,
                               isDark: isDark,
-                              onSelectFilter: (f) => setState(() => _filter = f),
+                              onSelectFilter: (f) =>
+                                  setState(() => _filter = f),
                             ),
                           ),
                           if (listScope)
                             Padding(
-                              padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+                              padding: EdgeInsetsDirectional.only(
+                                start: gap,
+                                end: gap,
+                                top: 10,
+                                bottom: 0,
+                              ),
                               child: Text(
                                 'القائمة: ${filtered.length} من ${_rows.length} فاتورة (بحث أو تصفية)',
                                 style: theme.textTheme.labelMedium?.copyWith(
@@ -209,16 +231,21 @@ class _DebtsScreenState extends State<DebtsScreen> {
                               ),
                             ),
                           Padding(
-                            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                            padding: EdgeInsetsDirectional.only(
+                              start: gap,
+                              end: gap,
+                              top: 12,
+                              bottom: 8,
+                            ),
                             child: TextField(
                               controller: _search,
                               style: TextStyle(color: cs.onSurface),
                               cursorColor: cs.primary,
                               decoration: InputDecoration(
-                                hintText:
-                                    'بحث: عميل، رقم فاتورة، معرّف عميل…',
-                                hintStyle:
-                                    TextStyle(color: cs.onSurfaceVariant),
+                                hintText: 'بحث: عميل، رقم فاتورة، معرّف عميل…',
+                                hintStyle: TextStyle(
+                                  color: cs.onSurfaceVariant,
+                                ),
                                 prefixIcon: Icon(
                                   Icons.search_rounded,
                                   color: cs.onSurfaceVariant,
@@ -242,24 +269,28 @@ class _DebtsScreenState extends State<DebtsScreen> {
                                     : cs.surface,
                                 border: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(8),
-                                  borderSide:
-                                      BorderSide(color: cs.outlineVariant),
+                                  borderSide: BorderSide(
+                                    color: cs.outlineVariant,
+                                  ),
                                 ),
                                 enabledBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(8),
-                                  borderSide:
-                                      BorderSide(color: cs.outlineVariant),
+                                  borderSide: BorderSide(
+                                    color: cs.outlineVariant,
+                                  ),
                                 ),
                                 focusedBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(8),
                                   borderSide: BorderSide(
-                                      color: cs.primary, width: 1.5),
+                                    color: cs.primary,
+                                    width: 1.5,
+                                  ),
                                 ),
                               ),
                             ),
                           ),
                           Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                            padding: EdgeInsets.symmetric(horizontal: gap),
                             child: SingleChildScrollView(
                               scrollDirection: Axis.horizontal,
                               child: SegmentedButton<_DebtFilter>(
@@ -298,15 +329,19 @@ class _DebtsScreenState extends State<DebtsScreen> {
                               child: _EmptyState(
                                 hasRows: _rows.isNotEmpty,
                                 colorScheme: cs,
-                                filterActive: listScope ||
-                                    _filter != _DebtFilter.all,
+                                filterActive:
+                                    listScope || _filter != _DebtFilter.all,
                               ),
                             )
                           else
                             for (final r in filtered)
                               Padding(
-                                padding:
-                                    const EdgeInsets.fromLTRB(16, 0, 16, 10),
+                                padding: EdgeInsetsDirectional.only(
+                                  start: gap,
+                                  end: gap,
+                                  top: 0,
+                                  bottom: 10,
+                                ),
                                 child: _DebtCard(
                                   row: r,
                                   warnDays: _settings.warnDebtAgeDays,
@@ -330,14 +365,24 @@ class _DebtsScreenState extends State<DebtsScreen> {
                         padding: const EdgeInsets.only(bottom: 100),
                         children: [
                           Padding(
-                            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                            padding: EdgeInsetsDirectional.only(
+                              start: gap,
+                              end: gap,
+                              top: 12,
+                              bottom: 8,
+                            ),
                             child: _InfoBanner(
                               colorScheme: cs,
                               warnDays: _settings.warnDebtAgeDays,
                             ),
                           ),
                           Padding(
-                            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                            padding: EdgeInsetsDirectional.only(
+                              start: gap,
+                              end: gap,
+                              top: 0,
+                              bottom: 8,
+                            ),
                             child: Text(
                               'تجميع حسب العميل: المنتجات والبائعون وتسديد جزئي من شاشة التفاصيل. QR على الإيصال للعملاء المسجّلين فقط.',
                               style: theme.textTheme.bodySmall?.copyWith(
@@ -347,15 +392,21 @@ class _DebtsScreenState extends State<DebtsScreen> {
                             ),
                           ),
                           Padding(
-                            padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                            padding: EdgeInsetsDirectional.only(
+                              start: gap,
+                              end: gap,
+                              top: 4,
+                              bottom: 8,
+                            ),
                             child: TextField(
                               controller: _search,
                               style: TextStyle(color: cs.onSurface),
                               cursorColor: cs.primary,
                               decoration: InputDecoration(
                                 hintText: 'بحث باسم العميل أو المعرف…',
-                                hintStyle:
-                                    TextStyle(color: cs.onSurfaceVariant),
+                                hintStyle: TextStyle(
+                                  color: cs.onSurfaceVariant,
+                                ),
                                 prefixIcon: Icon(
                                   Icons.search_rounded,
                                   color: cs.onSurfaceVariant,
@@ -379,25 +430,34 @@ class _DebtsScreenState extends State<DebtsScreen> {
                                     : cs.surface,
                                 border: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(8),
-                                  borderSide:
-                                      BorderSide(color: cs.outlineVariant),
+                                  borderSide: BorderSide(
+                                    color: cs.outlineVariant,
+                                  ),
                                 ),
                                 enabledBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(8),
-                                  borderSide:
-                                      BorderSide(color: cs.outlineVariant),
+                                  borderSide: BorderSide(
+                                    color: cs.outlineVariant,
+                                  ),
                                 ),
                                 focusedBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(8),
                                   borderSide: BorderSide(
-                                      color: cs.primary, width: 1.5),
+                                    color: cs.primary,
+                                    width: 1.5,
+                                  ),
                                 ),
                               ),
                             ),
                           ),
                           if (sumScope)
                             Padding(
-                              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                              padding: EdgeInsetsDirectional.only(
+                                start: gap,
+                                end: gap,
+                                top: 0,
+                                bottom: 8,
+                              ),
                               child: Text(
                                 '${sumFiltered.length} من ${_summaries.length} عميل',
                                 style: theme.textTheme.labelMedium?.copyWith(
@@ -420,8 +480,12 @@ class _DebtsScreenState extends State<DebtsScreen> {
                           else
                             for (final s in sumFiltered)
                               Padding(
-                                padding:
-                                    const EdgeInsets.fromLTRB(16, 0, 16, 10),
+                                padding: EdgeInsetsDirectional.only(
+                                  start: gap,
+                                  end: gap,
+                                  top: 0,
+                                  bottom: 10,
+                                ),
                                 child: _CustomerDebtSummaryCard(
                                   summary: s,
                                   colorScheme: cs,
@@ -453,11 +517,12 @@ class _CustomerDebtSummaryCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final gap = ScreenLayout.of(context).pageHorizontalGap;
     final fill = isDark ? AppColors.cardDark : colorScheme.surface;
-    final titleC =
-        isDark ? const Color(0xFFF8FAFC) : colorScheme.onSurface;
-    final mutedC =
-        isDark ? const Color(0xFF94A3B8) : colorScheme.onSurfaceVariant;
+    final titleC = isDark ? const Color(0xFFF8FAFC) : colorScheme.onSurface;
+    final mutedC = isDark
+        ? const Color(0xFF94A3B8)
+        : colorScheme.onSurfaceVariant;
     final r = BorderRadius.circular(12);
     return Material(
       elevation: isDark ? 3 : 1,
@@ -472,14 +537,18 @@ class _CustomerDebtSummaryCard extends StatelessWidget {
         onTap: () {
           Navigator.of(context).push<void>(
             MaterialPageRoute<void>(
-              builder: (_) => CustomerDebtDetailScreen.fromParty(
-                party: summary.toParty(),
-              ),
+              builder: (_) =>
+                  CustomerDebtDetailScreen.fromParty(party: summary.toParty()),
             ),
           );
         },
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(14, 14, 16, 16),
+          padding: EdgeInsetsDirectional.only(
+            start: gap,
+            end: gap,
+            top: 14,
+            bottom: 16,
+          ),
           child: Row(
             children: [
               Expanded(
@@ -557,10 +626,7 @@ class _InfoBanner extends StatelessWidget {
   final ColorScheme colorScheme;
   final int warnDays;
 
-  const _InfoBanner({
-    required this.colorScheme,
-    required this.warnDays,
-  });
+  const _InfoBanner({required this.colorScheme, required this.warnDays});
 
   @override
   Widget build(BuildContext context) {
@@ -584,9 +650,9 @@ class _InfoBanner extends StatelessWidget {
               child: Text(
                 'تُحسب الديون من فواتير النوع «دين / آجل». المتبقي = إجمالي الفاتورة − المقدّم. حدود البيع تُضبط من إعدادات الديون.$ageHint',
                 style: Theme.of(context).textTheme.bodySmall!.copyWith(
-                      color: colorScheme.onSurfaceVariant,
-                      height: 1.45,
-                    ),
+                  color: colorScheme.onSurfaceVariant,
+                  height: 1.45,
+                ),
               ),
             ),
           ],
@@ -709,10 +775,7 @@ class _MetricBox extends StatelessWidget {
               children: [
                 Icon(icon, size: 20, color: c),
                 const SizedBox(height: 6),
-                Text(
-                  title,
-                  style: TextStyle(fontSize: 10, color: onVar),
-                ),
+                Text(title, style: TextStyle(fontSize: 10, color: onVar)),
                 Text(
                   value,
                   maxLines: 1,
@@ -749,17 +812,19 @@ class _DebtCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final gap = ScreenLayout.of(context).pageHorizontalGap;
     final now = DateTime.now();
     final settled = row.isSettled;
-    final aged = warnDays > 0 && !settled && row.daysSinceInvoice(now) >= warnDays;
+    final aged =
+        warnDays > 0 && !settled && row.daysSinceInvoice(now) >= warnDays;
     final statusColor = settled
         ? const Color(0xFF15803D)
         : (aged ? const Color(0xFFF59E0B) : const Color(0xFF3B82F6));
     final statusLabel = settled ? 'مغلقة' : (aged ? 'تنبيه عمر' : 'مفتوحة');
-    final titleC =
-        isDark ? const Color(0xFFF8FAFC) : colorScheme.onSurface;
-    final mutedC =
-        isDark ? const Color(0xFF94A3B8) : colorScheme.onSurfaceVariant;
+    final titleC = isDark ? const Color(0xFFF8FAFC) : colorScheme.onSurface;
+    final mutedC = isDark
+        ? const Color(0xFF94A3B8)
+        : colorScheme.onSurfaceVariant;
     final fill = isDark ? AppColors.cardDark : colorScheme.surface;
     final r = BorderRadius.circular(12);
     final rem = row.remaining;
@@ -787,7 +852,12 @@ class _DebtCard extends StatelessWidget {
             highlightColor: Colors.transparent,
             hoverColor: colorScheme.primary.withValues(alpha: 0.08),
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(14, 12, 16, 14),
+              padding: EdgeInsetsDirectional.only(
+                start: gap,
+                end: gap,
+                top: 12,
+                bottom: 14,
+              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 mainAxisSize: MainAxisSize.min,
@@ -817,8 +887,7 @@ class _DebtCard extends StatelessWidget {
                         ),
                       ),
                       const Spacer(),
-                      Icon(Icons.chevron_left_rounded,
-                          color: mutedC, size: 26),
+                      Icon(Icons.chevron_left_rounded, color: mutedC, size: 26),
                     ],
                   ),
                   const SizedBox(height: 10),
@@ -898,8 +967,8 @@ class _DebtCard extends StatelessWidget {
                       color: aged
                           ? const Color(0xFFFBBF24)
                           : (settled
-                              ? const Color(0xFF86EFAC)
-                              : const Color(0xFF38BDF8)),
+                                ? const Color(0xFF86EFAC)
+                                : const Color(0xFF38BDF8)),
                       height: 1.1,
                     ),
                   ),
@@ -916,8 +985,8 @@ class _DebtCard extends StatelessWidget {
               ),
             ),
           ),
-          Positioned(
-            right: 0,
+          PositionedDirectional(
+            end: 0,
             top: 0,
             bottom: 0,
             child: IgnorePointer(
@@ -946,9 +1015,10 @@ class _EmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final gap = ScreenLayout.of(context).pageHorizontalGap;
     return Center(
       child: Padding(
-        padding: const EdgeInsets.all(24),
+        padding: EdgeInsets.symmetric(horizontal: gap, vertical: 24),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
@@ -961,8 +1031,8 @@ class _EmptyState extends StatelessWidget {
             Text(
               hasRows
                   ? (filterActive
-                      ? 'لا توجد فواتير ضمن البحث أو التصفية الحالية'
-                      : 'لا نتائج')
+                        ? 'لا توجد فواتير ضمن البحث أو التصفية الحالية'
+                        : 'لا نتائج')
                   : 'لا توجد فواتير دين مسجّلة',
               textAlign: TextAlign.center,
               style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16),

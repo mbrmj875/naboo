@@ -114,6 +114,7 @@ class SalePosSettingsScreen extends StatelessWidget {
     final prov = context.watch<SalePosSettingsProvider>();
     final d = prov.data;
     final scheme = Theme.of(context).colorScheme;
+    final gap = ScreenLayout.of(context).pageHorizontalGap;
     final showWideSaleLayoutControls =
         !ScreenLayout.of(context).isHandsetForLayout;
 
@@ -127,7 +128,7 @@ class SalePosSettingsScreen extends StatelessWidget {
           backgroundColor: scheme.primary,
         ),
         body: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+          padding: EdgeInsetsDirectional.fromSTEB(gap, 16, gap, 32),
           children: [
             if (appearanceOnly) ...[
               _GlobalBrandIntroCard(scheme: scheme),

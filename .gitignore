@@ -44,6 +44,10 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
+# Release signing (never commit)
+/android/key.properties
+/android/upload-keystore.jks
+
 # --- NABOO project specific ignores ---
 
 # Local backup snapshots (do not push to GitHub)

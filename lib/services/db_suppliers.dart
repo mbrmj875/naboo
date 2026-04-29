@@ -326,7 +326,7 @@ extension DbSuppliers on DatabaseHelper {
       final loyaltySettings = await _readLoyaltySettings(txn);
       final sup = await txn.query(
         'suppliers',
-        columns: ['name'],
+        columns: ['name', 'tenantId'],
         where: 'id = ?',
         whereArgs: [supplierId],
         limit: 1,
@@ -334,6 +334,7 @@ extension DbSuppliers on DatabaseHelper {
       final name =
           (sup.isNotEmpty ? sup.first['name'] as String? : null)?.trim() ??
           'مورد';
+      final tenantId = (sup.isNotEmpty ? (sup.first['tenantId'] as num?)?.toInt() : null) ?? 1;
 
       var meta = 'مورد #$supplierId';
       final n = note?.trim();
@@ -367,6 +368,17 @@ extension DbSuppliers on DatabaseHelper {
         receiptInv,
         loyaltySettings,
       );
+      final actor = user.isEmpty ? 'غير معروف' : user;
+      await _insertActivityLogInTxn(
+        txn,
+        type: 'supplier_receipt_created',
+        refTable: 'invoices',
+        refId: invoiceId,
+        title: 'إنشاء سند دفع مورد',
+        details: 'المورد: $name (#$supplierId) • المنفذ: $actor',
+        amount: amount,
+        tenantId: tenantId,
+      );
 
       final pid = await txn.insert('supplier_payouts', {
         'supplierId': supplierId,
@@ -377,6 +389,16 @@ extension DbSuppliers on DatabaseHelper {
         'affectsCash': affectsCash ? 1 : 0,
         'receiptInvoiceId': invoiceId,
       });
+      await _insertActivityLogInTxn(
+        txn,
+        type: 'supplier_payout_created',
+        refTable: 'supplier_payouts',
+        refId: pid,
+        title: 'تسجيل دفعة مورد',
+        details: 'المورد: $name (#$supplierId) • الفاتورة المرجعية: #$invoiceId • المنفذ: $actor',
+        amount: amount,
+        tenantId: tenantId,
+      );
 
       int? ledgerId;
       if (affectsCash) {
@@ -419,6 +441,10 @@ extension DbSuppliers on DatabaseHelper {
       final affectsCash = ((r['affectsCash'] as int?) ?? 1) == 1;
       final amount = (r['amount'] as num).toDouble();
       final receiptInvoiceId = (r['receiptInvoiceId'] as num?)?.toInt();
+      final tenantId = (r['tenantId'] as num?)?.toInt() ?? 1;
+      final actor = ((r['createdByUserName'] as String?) ?? '').trim().isEmpty
+          ? 'غير معروف'
+          : ((r['createdByUserName'] as String?) ?? '').trim();
 
       if (receiptInvoiceId != null && receiptInvoiceId > 0) {
         await txn.delete(
@@ -435,6 +461,16 @@ extension DbSuppliers on DatabaseHelper {
           'invoices',
           where: 'id = ?',
           whereArgs: [receiptInvoiceId],
+        );
+        await _insertActivityLogInTxn(
+          txn,
+          type: 'supplier_receipt_deleted',
+          refTable: 'invoices',
+          refId: receiptInvoiceId,
+          title: 'حذف سند دفع مورد',
+          details: 'المورد #$supplierId • الحذف ضمن عكس دفعة #$payoutId • المنفذ: $actor',
+          amount: amount,
+          tenantId: tenantId,
         );
       }
 
@@ -468,12 +504,34 @@ extension DbSuppliers on DatabaseHelper {
           'workShiftId': openShiftId,
           'createdAt': DateTime.now().toIso8601String(),
         });
+        await _insertActivityLogInTxn(
+          txn,
+          type: 'supplier_payout_reversed',
+          refTable: 'supplier_payouts',
+          refId: payoutId,
+          title: 'عكس دفعة مورد',
+          details: 'المورد: $name (#$supplierId) • المنفذ: $actor',
+          amount: amount,
+          tenantId: tenantId,
+        );
       }
       final n = await txn.delete(
         'supplier_payouts',
         where: 'id = ?',
         whereArgs: [payoutId],
       );
+      if (n > 0) {
+        await _insertActivityLogInTxn(
+          txn,
+          type: 'supplier_payout_deleted',
+          refTable: 'supplier_payouts',
+          refId: payoutId,
+          title: 'حذف دفعة مورد',
+          details: 'المورد #$supplierId • المنفذ: $actor',
+          amount: amount,
+          tenantId: tenantId,
+        );
+      }
       return n > 0;
     });
     if (deleted) {

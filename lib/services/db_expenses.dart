@@ -50,6 +50,10 @@ Future<void> ensureExpensesSchema(Database db) async {
   await addExpenseColumn('cashLedgerId', 'INTEGER');
   await addExpenseColumn('affectsCash', 'INTEGER NOT NULL DEFAULT 1');
 
+  await addExpenseColumn('invoiceRef', 'TEXT');
+  await addExpenseColumn('landlordOrProperty', 'TEXT');
+  await addExpenseColumn('taxKind', 'TEXT');
+
   await db.execute(
     'CREATE INDEX IF NOT EXISTS idx_expenses_tenant_date ON expenses(tenantId, occurredAt)',
   );
@@ -97,6 +101,24 @@ Future<void> ensureExpensesSchema(Database db) async {
   }
 }
 
+/// `prefix` فارغًا لجدول [expenses] بدون اسم مستعار، أو `e.` ضمن JOIN.
+void _appendExpenseLedgerStatusFilter(
+  List<String> where,
+  List<Object?> args,
+  String? status, {
+  String prefix = '',
+}) {
+  final raw = (status ?? '').trim().toLowerCase();
+  if (raw.isEmpty || raw == 'all') return;
+  if (raw == 'recurring') {
+    where.add('${prefix}isRecurring = ?');
+    args.add(1);
+    return;
+  }
+  where.add('${prefix}status = ?');
+  args.add(raw);
+}
+
 extension DbExpenses on DatabaseHelper {
   Future<List<Map<String, dynamic>>> getExpenseCategories({int tenantId = 1}) async {
     final db = await database;
@@ -132,14 +154,17 @@ extension DbExpenses on DatabaseHelper {
       where.add('e.categoryId = ?');
       args.add(categoryId);
     }
-    if (status != null && status.isNotEmpty && status != 'all') {
-      where.add('e.status = ?');
-      args.add(status);
-    }
+    _appendExpenseLedgerStatusFilter(where, args, status, prefix: 'e.');
     final q = (query ?? '').trim();
     if (q.isNotEmpty) {
-      where.add('(e.description LIKE ? OR c.name LIKE ?)');
-      args.addAll(['%$q%', '%$q%']);
+      where.add(
+        '(e.description LIKE ? OR c.name LIKE ? '
+        'OR IFNULL(e.invoiceRef, "") LIKE ? '
+        'OR IFNULL(e.landlordOrProperty, "") LIKE ? '
+        'OR IFNULL(e.taxKind, "") LIKE ?)',
+      );
+      final like = '%$q%';
+      args.addAll([like, like, like, like, like]);
     }
 
     return db.rawQuery('''
@@ -157,6 +182,52 @@ extension DbExpenses on DatabaseHelper {
     ''', [...args, limit]);
   }
 
+  Future<double> sumExpensesFiltered({
+    required DateTime from,
+    required DateTime to,
+    int? categoryId,
+    String? status,
+    String? query,
+    int tenantId = 1,
+  }) async {
+    final db = await database;
+    await ensureExpensesSchema(db);
+    final where = <String>['e.tenantId = ?'];
+    final args = <Object?>[tenantId];
+    final fromIso =
+        DateTime(from.year, from.month, from.day).toIso8601String();
+    final toIso =
+        DateTime(to.year, to.month, to.day, 23, 59, 59).toIso8601String();
+    where.add('e.occurredAt BETWEEN ? AND ?');
+    args.addAll([fromIso, toIso]);
+    if (categoryId != null) {
+      where.add('e.categoryId = ?');
+      args.add(categoryId);
+    }
+    _appendExpenseLedgerStatusFilter(where, args, status, prefix: 'e.');
+    final q = (query ?? '').trim();
+    if (q.isNotEmpty) {
+      where.add(
+        '(e.description LIKE ? OR c.name LIKE ? '
+        'OR IFNULL(e.invoiceRef, "") LIKE ? '
+        'OR IFNULL(e.landlordOrProperty, "") LIKE ? '
+        'OR IFNULL(e.taxKind, "") LIKE ?)',
+      );
+      final like = '%$q%';
+      args.addAll([like, like, like, like, like]);
+    }
+    final rows = await db.rawQuery(
+      '''
+      SELECT COALESCE(SUM(e.amount), 0) AS s
+      FROM expenses e
+      JOIN expense_categories c ON c.id = e.categoryId
+      WHERE ${where.join(' AND ')}
+      ''',
+      args,
+    );
+    return (rows.first['s'] as num?)?.toDouble() ?? 0.0;
+  }
+
   Future<int> insertExpense({
     required int categoryId,
     required double amount,
@@ -170,6 +241,9 @@ extension DbExpenses on DatabaseHelper {
     String? attachmentPath,
     bool affectsCash = true,
     int tenantId = 1,
+    String? invoiceRef,
+    String? landlordOrProperty,
+    String? taxKind,
   }) async {
     final db = await database;
     await ensureExpensesSchema(db);
@@ -189,9 +263,24 @@ extension DbExpenses on DatabaseHelper {
         'recurringOriginId': recurringOriginId,
         'attachmentPath': attachmentPath,
         'affectsCash': affectsCash ? 1 : 0,
+        'invoiceRef': invoiceRef,
+        'landlordOrProperty': landlordOrProperty,
+        'taxKind': taxKind,
         'createdAt': nowIso,
         'updatedAt': nowIso,
       });
+      final actor = employeeUserId != null ? 'الموظف #$employeeUserId' : 'غير معروف';
+      final statusLabel = status == 'paid' ? 'مدفوع' : 'معلق';
+      await _insertActivityLogInTxn(
+        txn,
+        type: 'expense_created',
+        refTable: 'expenses',
+        refId: expenseId,
+        title: 'تسجيل مصروف',
+        details: 'الفئة #$categoryId • الحالة: $statusLabel • المنفذ: $actor',
+        amount: amount,
+        tenantId: tenantId,
+      );
       if (affectsCash && status == 'paid') {
         final ledgerId = await _linkExpenseToCashLedger(
           txn,
@@ -200,6 +289,8 @@ extension DbExpenses on DatabaseHelper {
           amount: amount,
           description: description,
           occurredAt: occurredAt,
+          tenantId: tenantId,
+          actorName: actor,
         );
         await txn.update(
           'expenses',
@@ -220,6 +311,8 @@ extension DbExpenses on DatabaseHelper {
     required double amount,
     String? description,
     required DateTime occurredAt,
+    int tenantId = 1,
+    String? actorName,
   }) async {
     int? openShiftId;
     final ws = await txn.query(
@@ -250,6 +343,17 @@ extension DbExpenses on DatabaseHelper {
       'workShiftId': openShiftId,
       'createdAt': occurredAt.toIso8601String(),
     });
+    final actor = (actorName ?? '').trim().isEmpty ? 'غير معروف' : actorName!.trim();
+    await _insertActivityLogInTxn(
+      txn,
+      type: 'cash_entry_created',
+      refTable: 'cash_ledger',
+      refId: id,
+      title: 'قيد صندوق: مصروف',
+      details: 'مصروف #$expenseId • فئة #$categoryId • المنفذ: $actor',
+      amount: -amount.abs(),
+      tenantId: tenantId,
+    );
     return id;
   }
 
@@ -266,6 +370,9 @@ extension DbExpenses on DatabaseHelper {
     String? attachmentPath,
     bool affectsCash = true,
     int tenantId = 1,
+    String? invoiceRef,
+    String? landlordOrProperty,
+    String? taxKind,
   }) async {
     final db = await database;
     await ensureExpensesSchema(db);
@@ -281,8 +388,19 @@ extension DbExpenses on DatabaseHelper {
       final priorLedger = prior.isNotEmpty
           ? (prior.first['cashLedgerId'] as num?)?.toInt()
           : null;
+      final actor = employeeUserId != null ? 'الموظف #$employeeUserId' : 'غير معروف';
       if (priorLedger != null) {
         await txn.delete('cash_ledger', where: 'id = ?', whereArgs: [priorLedger]);
+        await _insertActivityLogInTxn(
+          txn,
+          type: 'cash_entry_deleted',
+          refTable: 'cash_ledger',
+          refId: priorLedger,
+          title: 'حذف قيد صندوق: مصروف',
+          details: 'تم حذف القيد المرتبط بمصروف #$id أثناء التعديل • المنفذ: $actor',
+          amount: null,
+          tenantId: tenantId,
+        );
       }
 
       int? newLedgerId;
@@ -294,6 +412,8 @@ extension DbExpenses on DatabaseHelper {
           amount: amount,
           description: description,
           occurredAt: occurredAt,
+          tenantId: tenantId,
+          actorName: actor,
         );
       }
 
@@ -309,12 +429,26 @@ extension DbExpenses on DatabaseHelper {
           'isRecurring': isRecurring ? 1 : 0,
           'recurringDay': recurringDay,
           'attachmentPath': attachmentPath,
+          'invoiceRef': invoiceRef,
+          'landlordOrProperty': landlordOrProperty,
+          'taxKind': taxKind,
           'affectsCash': affectsCash ? 1 : 0,
           'cashLedgerId': newLedgerId,
           'updatedAt': DateTime.now().toIso8601String(),
         },
         where: 'id = ? AND tenantId = ?',
         whereArgs: [id, tenantId],
+      );
+      final statusLabel = status == 'paid' ? 'مدفوع' : 'معلق';
+      await _insertActivityLogInTxn(
+        txn,
+        type: 'expense_updated',
+        refTable: 'expenses',
+        refId: id,
+        title: 'تعديل مصروف',
+        details: 'الفئة #$categoryId • الحالة: $statusLabel • المنفذ: $actor',
+        amount: amount,
+        tenantId: tenantId,
       );
     });
     CloudSyncService.instance.scheduleSyncSoon();
@@ -326,21 +460,50 @@ extension DbExpenses on DatabaseHelper {
     await db.transaction((txn) async {
       final prior = await txn.query(
         'expenses',
-        columns: ['cashLedgerId'],
+        columns: ['cashLedgerId', 'categoryId', 'amount', 'employeeUserId'],
         where: 'id = ? AND tenantId = ?',
         whereArgs: [id, tenantId],
         limit: 1,
       );
+      final actor = prior.isNotEmpty && prior.first['employeeUserId'] != null
+          ? 'الموظف #${(prior.first['employeeUserId'] as num).toInt()}'
+          : 'غير معروف';
       final priorLedger = prior.isNotEmpty
           ? (prior.first['cashLedgerId'] as num?)?.toInt()
           : null;
       if (priorLedger != null) {
         await txn.delete('cash_ledger', where: 'id = ?', whereArgs: [priorLedger]);
+        await _insertActivityLogInTxn(
+          txn,
+          type: 'cash_entry_deleted',
+          refTable: 'cash_ledger',
+          refId: priorLedger,
+          title: 'حذف قيد صندوق: مصروف',
+          details: 'حذف المصروف #$id أدى لحذف القيد المرتبط • المنفذ: $actor',
+          amount: null,
+          tenantId: tenantId,
+        );
       }
       await txn.delete(
         'expenses',
         where: 'id = ? AND tenantId = ?',
         whereArgs: [id, tenantId],
+      );
+      final categoryId = prior.isNotEmpty
+          ? (prior.first['categoryId'] as num?)?.toInt()
+          : null;
+      final amount = prior.isNotEmpty
+          ? (prior.first['amount'] as num?)?.toDouble()
+          : null;
+      await _insertActivityLogInTxn(
+        txn,
+        type: 'expense_deleted',
+        refTable: 'expenses',
+        refId: id,
+        title: 'حذف مصروف',
+        details: 'الفئة #${categoryId ?? '-'} • المنفذ: $actor',
+        amount: amount,
+        tenantId: tenantId,
       );
     });
     CloudSyncService.instance.scheduleSyncSoon();
@@ -401,6 +564,9 @@ extension DbExpenses on DatabaseHelper {
         recurringOriginId: originId,
         attachmentPath: null,
         affectsCash: ((t['affectsCash'] as num?)?.toInt() ?? 1) == 1,
+        invoiceRef: (t['invoiceRef'] as String?)?.trim(),
+        landlordOrProperty: (t['landlordOrProperty'] as String?)?.trim(),
+        taxKind: (t['taxKind'] as String?)?.trim(),
       );
       created++;
     }
@@ -429,6 +595,8 @@ extension DbExpenses on DatabaseHelper {
     required DateTime from,
     required DateTime to,
     String? status,
+    int? categoryId,
+    String? query,
     int tenantId = 1,
   }) async {
     final db = await database;
@@ -440,10 +608,21 @@ extension DbExpenses on DatabaseHelper {
       'e.occurredAt BETWEEN ? AND ?',
     ];
     final args = <Object?>[tenantId, fromIso, toIso];
-    final st = (status ?? '').trim().toLowerCase();
-    if (st.isNotEmpty && st != 'all') {
-      where.add('e.status = ?');
-      args.add(st);
+    _appendExpenseLedgerStatusFilter(where, args, status, prefix: 'e.');
+    if (categoryId != null) {
+      where.add('e.categoryId = ?');
+      args.add(categoryId);
+    }
+    final q = (query ?? '').trim();
+    if (q.isNotEmpty) {
+      where.add(
+        '(e.description LIKE ? OR c.name LIKE ? '
+        'OR IFNULL(e.invoiceRef, "") LIKE ? '
+        'OR IFNULL(e.landlordOrProperty, "") LIKE ? '
+        'OR IFNULL(e.taxKind, "") LIKE ?)',
+      );
+      final like = '%$q%';
+      args.addAll([like, like, like, like, like]);
     }
     return db.rawQuery('''
       SELECT 
@@ -462,6 +641,8 @@ extension DbExpenses on DatabaseHelper {
     required DateTime from,
     required DateTime to,
     String? status,
+    int? categoryId,
+    String? query,
     int tenantId = 1,
   }) async {
     final db = await database;
@@ -473,10 +654,21 @@ extension DbExpenses on DatabaseHelper {
       'e.occurredAt BETWEEN ? AND ?',
     ];
     final args = <Object?>[tenantId, fromIso, toIso];
-    final st = (status ?? '').trim().toLowerCase();
-    if (st.isNotEmpty && st != 'all') {
-      where.add('e.status = ?');
-      args.add(st);
+    _appendExpenseLedgerStatusFilter(where, args, status, prefix: 'e.');
+    if (categoryId != null) {
+      where.add('e.categoryId = ?');
+      args.add(categoryId);
+    }
+    final q = (query ?? '').trim();
+    if (q.isNotEmpty) {
+      where.add(
+        '(e.description LIKE ? OR c.name LIKE ? '
+        'OR IFNULL(e.invoiceRef, "") LIKE ? '
+        'OR IFNULL(e.landlordOrProperty, "") LIKE ? '
+        'OR IFNULL(e.taxKind, "") LIKE ?)',
+      );
+      final like = '%$q%';
+      args.addAll([like, like, like, like, like]);
     }
     return db.rawQuery('''
       SELECT 
@@ -495,6 +687,8 @@ extension DbExpenses on DatabaseHelper {
     required DateTime from,
     required DateTime to,
     String? status,
+    int? categoryId,
+    String? query,
     int tenantId = 1,
   }) async {
     final db = await database;
@@ -502,21 +696,33 @@ extension DbExpenses on DatabaseHelper {
     final fromIso = DateTime(from.year, from.month, from.day).toIso8601String();
     final toIso = DateTime(to.year, to.month, to.day, 23, 59, 59).toIso8601String();
     final where = <String>[
-      'tenantId = ?',
-      'occurredAt BETWEEN ? AND ?',
+      'e.tenantId = ?',
+      'e.occurredAt BETWEEN ? AND ?',
     ];
     final args = <Object?>[tenantId, fromIso, toIso];
-    final st = (status ?? '').trim().toLowerCase();
-    if (st.isNotEmpty && st != 'all') {
-      where.add('status = ?');
-      args.add(st);
+    _appendExpenseLedgerStatusFilter(where, args, status, prefix: 'e.');
+    if (categoryId != null) {
+      where.add('e.categoryId = ?');
+      args.add(categoryId);
+    }
+    final q = (query ?? '').trim();
+    if (q.isNotEmpty) {
+      where.add(
+        '(e.description LIKE ? OR c.name LIKE ? '
+        'OR IFNULL(e.invoiceRef, "") LIKE ? '
+        'OR IFNULL(e.landlordOrProperty, "") LIKE ? '
+        'OR IFNULL(e.taxKind, "") LIKE ?)',
+      );
+      final like = '%$q%';
+      args.addAll([like, like, like, like, like]);
     }
     return db.rawQuery('''
-      SELECT substr(occurredAt, 1, 10) AS d,
-             COALESCE(SUM(amount), 0) AS total
-      FROM expenses
+      SELECT substr(e.occurredAt, 1, 10) AS d,
+             COALESCE(SUM(e.amount), 0) AS total
+      FROM expenses e
+      JOIN expense_categories c ON c.id = e.categoryId
       WHERE ${where.join(' AND ')}
-      GROUP BY substr(occurredAt, 1, 10)
+      GROUP BY substr(e.occurredAt, 1, 10)
       ORDER BY d ASC
     ''', args);
   }

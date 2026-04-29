@@ -13,6 +13,7 @@ import '../../providers/auth_provider.dart';
 import '../../providers/invoice_provider.dart';
 import '../../services/database_helper.dart';
 import '../../services/tenant_context_service.dart';
+import '../../utils/screen_layout.dart';
 import '../../utils/sale_receipt_pdf.dart';
 import '../../theme/design_tokens.dart';
 
@@ -936,7 +937,12 @@ class _SupplierDetailScreenState extends State<SupplierDetailScreen> {
             : _supplier == null
             ? const Center(child: Text('المورد غير موجود'))
             : ListView(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
+                padding: EdgeInsetsDirectional.only(
+                  start: ScreenLayout.of(context).pageHorizontalGap,
+                  end: ScreenLayout.of(context).pageHorizontalGap,
+                  top: 12,
+                  bottom: 100,
+                ),
                 children: [
                   Container(
                     width: double.infinity,

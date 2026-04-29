@@ -43,8 +43,20 @@ import '../inventory/add_product_screen.dart';
 import '../customers/customer_form_screen.dart';
 import 'process_return_screen.dart';
 
+class _CartUndoOp {
+  const _CartUndoOp({
+    required this.lineId,
+    required this.previousQty,
+    required this.wasNewLine,
+  });
+  final int lineId;
+  final double previousQty;
+  final bool wasNewLine;
+}
+
 class AddInvoiceScreen extends StatefulWidget {
   final String? initialBarcode;
+
   /// من البحث السريع: يضيف سطرًا جاهزًا (اسم، سعر بيع، أدنى سعر).
   final Map<String, dynamic>? presetProductLine;
 
@@ -121,15 +133,26 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
   final _instMonths = TextEditingController(text: '6');
 
   /// نسخة محلية من إعدادات التقسيط (إظهار البطاقة، الفائدة الافتراضية، عدد الأشهر الافتراضي…).
-  InstallmentSettingsData _instSaleSettings = InstallmentSettingsData.defaults();
+  InstallmentSettingsData _instSaleSettings =
+      InstallmentSettingsData.defaults();
 
   /// تصفية عمود «المنتجات السريعة» على الشاشات العريضة فقط.
   final _saleQuickRailSearchController = TextEditingController();
+  final FocusNode _saleQuickRailSearchFocus = FocusNode();
+  bool _saleQuickRailSearchAutofocusDone = false;
 
   static const double _kSaleQuickRailMinW = 260;
   static const double _kSaleQuickRailMaxW = 380;
-  static const String _kSaleQuickRailWidthPref = 'sale_wide_quick_rail_width_v1';
+  static const String _kSaleQuickRailWidthPref =
+      'sale_wide_quick_rail_width_v1';
   double _saleQuickRailWidth = 300;
+
+  /// تنقّل لوحة المفاتيح في سلة البيع (السطور).
+  final FocusNode _saleCartListFocus = FocusNode();
+  int _saleCartKeyboardIndex = 0;
+
+  /// تراجع بسيط آخر إضافة للسلة (Ctrl+Z).
+  _CartUndoOp? _lastCartAddUndo;
 
   int _takeLineId() {
     _lineIdSeq += 1;
@@ -156,12 +179,14 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
   }
 
   Future<
-      ({
-        int stockBaseKind,
-        int? unitVariantId,
-        String unitLabel,
-        double unitFactor,
-      })> _unitSelectionForCatalogProduct(Map<String, dynamic> p) async {
+    ({
+      int stockBaseKind,
+      int? unitVariantId,
+      String unitLabel,
+      double unitFactor,
+    })
+  >
+  _unitSelectionForCatalogProduct(Map<String, dynamic> p) async {
     final pid = (p['id'] as num?)?.toInt() ?? (p['productId'] as num?)?.toInt();
     final stockBaseKind = (p['stockBaseKind'] as num?)?.toInt() ?? 0;
 
@@ -170,8 +195,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     final dvLabel = (p['defaultUnitLabel'] as String?)?.trim();
 
     if (dvId != null && dvId > 0 && dvFactor != null && dvFactor > 0) {
-      final label =
-          (dvLabel == null || dvLabel.isEmpty) ? 'وحدة' : dvLabel;
+      final label = (dvLabel == null || dvLabel.isEmpty) ? 'وحدة' : dvLabel;
       return (
         stockBaseKind: stockBaseKind,
         unitVariantId: dvId,
@@ -189,8 +213,9 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       );
     }
 
-    final rows =
-        await context.read<ProductProvider>().listActiveUnitVariantsForProduct(pid);
+    final rows = await context
+        .read<ProductProvider>()
+        .listActiveUnitVariantsForProduct(pid);
     if (!mounted || rows.isEmpty) {
       return (
         stockBaseKind: stockBaseKind,
@@ -262,7 +287,9 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     double? baseSell;
     double? baseMin;
     if (line.productId != null) {
-      final p = await context.read<ProductProvider>().getProductById(line.productId!);
+      final p = await context.read<ProductProvider>().getProductById(
+        line.productId!,
+      );
       if (!mounted) return;
       if (p != null) {
         baseSell = (p['sellPrice'] as num?)?.toDouble() ?? 0;
@@ -385,7 +412,8 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     final mq = MediaQuery.of(context);
     final safe = mq.padding.bottom + mq.viewInsets.bottom;
     final sl = ScreenLayout.of(context);
-    final actionStrip = (sl.showSaleBarcodeShortcut ? 52.0 : 50.0) +
+    final actionStrip =
+        (sl.showSaleBarcodeShortcut ? 52.0 : 50.0) +
         10 +
         (sl.showSaleBarcodeShortcut ? 54.0 : 50.0) +
         28;
@@ -410,9 +438,8 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     }
   }
 
-  Color _toastOnSurface(Color bg) => bg.computeLuminance() > 0.55
-      ? const Color(0xFF0F172A)
-      : Colors.white;
+  Color _toastOnSurface(Color bg) =>
+      bg.computeLuminance() > 0.55 ? const Color(0xFF0F172A) : Colors.white;
 
   String? _plainTextFromSnackWidget(Widget? w) {
     if (w == null) return null;
@@ -457,13 +484,13 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
 
   void _showSaleSnackBar(SnackBar snackBar) {
     if (!mounted) return;
-    final compact =
-        context.read<UiFeedbackSettingsProvider>().useCompactSnackNotifications;
+    final compact = context
+        .read<UiFeedbackSettingsProvider>()
+        .useCompactSnackNotifications;
     final plain = _plainTextFromSnackWidget(snackBar.content);
     if (compact && plain != null && plain.isNotEmpty) {
       final pal = SalePalette.fromSettings(_salePos, Theme.of(context));
-      final bg = snackBar.backgroundColor ??
-          pal.navy.withValues(alpha: 0.96);
+      final bg = snackBar.backgroundColor ?? pal.navy.withValues(alpha: 0.96);
       _saleInlineToastTimer?.cancel();
       setState(() {
         _saleInlineToast = plain;
@@ -501,7 +528,8 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     double bottomMargin = 88,
     bool? useCompactSnackOverride,
   }) {
-    final compact = useCompactSnackOverride ??
+    final compact =
+        useCompactSnackOverride ??
         context.read<UiFeedbackSettingsProvider>().useCompactSnackNotifications;
     if (!compact) {
       messenger.showSnackBar(
@@ -560,18 +588,27 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     });
     _dismissSaleInlineToast();
     _formKey.currentState?.reset();
+    _saleQuickRailSearchAutofocusDone = false;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _saleQuickRailSearchFocus.requestFocus();
+      _syncCashAdvanceToTotalIfCash(
+        Provider.of<LoyaltySettingsProvider>(context, listen: false).data,
+      );
+    });
   }
 
   InvoiceType type = InvoiceType.cash;
 
   double get subtotal => _lines.fold(
-        0,
-        (sum, line) => sum + (_lineEnteredForMath(line) * line.unitPrice),
-      );
+    0,
+    (sum, line) => sum + (_lineEnteredForMath(line) * line.unitPrice),
+  );
   double get _tax {
     if (!_salePos.enableTaxOnSale) return 0;
     return double.tryParse(_taxController.text.trim()) ?? 0;
   }
+
   double get _advancePayment =>
       double.tryParse(_advanceController.text.trim()) ?? 0;
   double get _discountPercent {
@@ -647,9 +684,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
   /// إضافة عميل جديد من شاشة البيع: تفتح صفحة النموذج ثم تربط العميل بالفاتورة عند الرجوع.
   Future<void> _openQuickAddCustomerDialog() async {
     final saved = await Navigator.of(context).push<CustomerRecord?>(
-      MaterialPageRoute(
-        builder: (_) => const CustomerFormScreen(),
-      ),
+      MaterialPageRoute(builder: (_) => const CustomerFormScreen()),
     );
     if (saved == null || !mounted) return;
     setState(() {
@@ -663,16 +698,19 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
 
   void _onCustomerInputChanged() {
     _customerSearchDebounce?.cancel();
-    _customerSearchDebounce = Timer(const Duration(milliseconds: 120), () async {
-      final q = _customerController.text.trim();
-      if (q.isEmpty) {
-        if (mounted) setState(() => _customerHits = []);
-        return;
-      }
-      final rows = await _parkDb.searchCustomers(q, limit: 15);
-      if (!mounted) return;
-      setState(() => _customerHits = rows);
-    });
+    _customerSearchDebounce = Timer(
+      const Duration(milliseconds: 120),
+      () async {
+        final q = _customerController.text.trim();
+        if (q.isEmpty) {
+          if (mounted) setState(() => _customerHits = []);
+          return;
+        }
+        final rows = await _parkDb.searchCustomers(q, limit: 15);
+        if (!mounted) return;
+        setState(() => _customerHits = rows);
+      },
+    );
   }
 
   /// مجموع البنود بعد خصم الفاتورة وقبل الضريبة.
@@ -702,26 +740,34 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
   double _totalQtyForProduct(int? productId, {int? excludeLineId}) {
     if (productId == null) return 0.0;
     return _lines
-        .where((x) =>
-            x.productId == productId &&
-            (excludeLineId == null || x.lineId != excludeLineId))
+        .where(
+          (x) =>
+              x.productId == productId &&
+              (excludeLineId == null || x.lineId != excludeLineId),
+        )
         .fold<double>(0.0, (s, x) => s + _lineBaseForMath(x));
   }
 
   Future<double?> _maxBaseQtyAllowedForLine(_InvoiceLineState line) async {
     if (_lineIgnoresStock(line)) return null;
-    final m =
-        await context.read<ProductProvider>().getProductById(line.productId!);
+    final m = await context.read<ProductProvider>().getProductById(
+      line.productId!,
+    );
     if (!mounted || m == null) return null;
     final stock = (m['qty'] as num?)?.toDouble() ?? 0;
-    final other =
-        _totalQtyForProduct(line.productId, excludeLineId: line.lineId);
+    final other = _totalQtyForProduct(
+      line.productId,
+      excludeLineId: line.lineId,
+    );
     final raw = stock - other;
     if (raw < 0) return 0;
     return raw;
   }
 
-  Future<bool> _trySetLineQuantity(_InvoiceLineState line, double newQty) async {
+  Future<bool> _trySetLineQuantity(
+    _InvoiceLineState line,
+    double newQty,
+  ) async {
     if (!newQty.isFinite || newQty <= 0) return false;
     if (_lineIgnoresStock(line)) {
       setState(() => line.quantity = newQty);
@@ -757,7 +803,10 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
   }) async {
     if (productId == null) return true;
     if (!trackInventory || allowNegativeStock) return true;
-    if (!context.read<SalePosSettingsProvider>().data.enforceAvailableQtyAtSale) {
+    if (!context
+        .read<SalePosSettingsProvider>()
+        .data
+        .enforceAvailableQtyAtSale) {
       return true;
     }
     double stock;
@@ -824,9 +873,13 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     int? unitVariantId,
     String? unitLabel,
     double unitFactor = 1.0,
+    double addQuantity = 1.0,
+    bool suppressLineSnacks = false,
   }) async {
     if (!mounted) return;
     final f = unitFactor <= 0 ? 1.0 : unitFactor;
+    final dq = addQuantity.isFinite && addQuantity > 0 ? addQuantity : 1.0;
+
     if (productId != null) {
       final existing = _findMergeTargetForProduct(
         productId,
@@ -836,32 +889,41 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
         unitFactor: f,
       );
       if (existing != null) {
-        final ok = await _trySetLineQuantity(
-          existing,
-          existing.quantity + 1.0,
-        );
+        final prevQty = existing.quantity;
+        final ok = await _trySetLineQuantity(existing, existing.quantity + dq);
         if (!ok || !mounted) return;
-        _showSaleSnackBar(
-          SnackBar(content: Text('تمت زيادة الكمية: $productName')),
+        if (!suppressLineSnacks) {
+          _showSaleSnackBar(
+            SnackBar(content: Text('تمت زيادة الكمية: $productName')),
+          );
+        }
+        _lastCartAddUndo = _CartUndoOp(
+          lineId: existing.lineId,
+          previousQty: prevQty,
+          wasNewLine: false,
         );
         return;
       }
     }
+
     final ok = await _canAppendProductLine(
       productId: productId,
       trackInventory: trackInventory,
       allowNegativeStock: allowNegativeStock,
-      baseQtyToAdd: f,
+      baseQtyToAdd: f * dq,
       knownOnHandQty: knownOnHandQty,
     );
     if (!ok || !mounted) return;
+
+    int newLineId = -1;
     setState(() {
       final lid = _takeLineId();
+      newLineId = lid;
       _lines.add(
         _InvoiceLineState(
           lineId: lid,
           productName: productName,
-          quantity: 1.0,
+          quantity: dq,
           unitPrice: sellPrice,
           sellPrice: sellPrice,
           minSellPrice: minSellPrice,
@@ -874,18 +936,26 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
           unitFactor: f,
         ),
       );
+      _saleCartKeyboardIndex = _lines.length - 1;
       if (productId != null) {
         unawaited(_ensureVariantsLoadedForProduct(productId));
       }
     });
     if (!mounted) return;
-    _showSaleSnackBar(
-      SnackBar(
-        content: Text(
-          newItemSnackText ?? 'تمت إضافة سطر جديد: $productName',
-        ),
-      ),
+
+    _lastCartAddUndo = _CartUndoOp(
+      lineId: newLineId,
+      previousQty: 0,
+      wasNewLine: true,
     );
+
+    if (!suppressLineSnacks) {
+      _showSaleSnackBar(
+        SnackBar(
+          content: Text(newItemSnackText ?? 'تمت إضافة سطر جديد: $productName'),
+        ),
+      );
+    }
   }
 
   bool _parseTrackInvMap(Map<String, dynamic> m) {
@@ -1009,6 +1079,10 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     }
     unawaited(_refreshInstSaleSettingsFromDb());
     unawaited(_restoreSaleQuickRailWidth());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(context.read<ParkedSalesProvider>().refresh());
+    });
   }
 
   Future<void> _restoreSaleQuickRailWidth() async {
@@ -1051,6 +1125,8 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     _instInterestPct.dispose();
     _instMonths.dispose();
     _saleQuickRailSearchController.dispose();
+    _saleQuickRailSearchFocus.dispose();
+    _saleCartListFocus.dispose();
     _saleScannerController?.dispose();
     super.dispose();
   }
@@ -1130,8 +1206,15 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     return (pay - adv).clamp(0.0, double.infinity);
   }
 
-  ({double financed, double interestPct, double interestAmt, double totalWithInterest, int months, double monthly})
-      _installmentCalcFromInputs(
+  ({
+    double financed,
+    double interestPct,
+    double interestAmt,
+    double totalWithInterest,
+    int months,
+    double monthly,
+  })
+  _installmentCalcFromInputs(
     LoyaltySettingsData loyalty, {
     required double interestPct,
     required int months,
@@ -1154,15 +1237,19 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     );
   }
 
-  ({double financed, double interestPct, double interestAmt, double totalWithInterest, int months, double monthly})
-      _installmentCalc(LoyaltySettingsData loyalty) {
-    final interestPct = (double.tryParse(
-              _instInterestPct.text.replaceAll(',', '').trim(),
-            ) ??
-            0)
-        .clamp(0.0, 100.0);
-    final months =
-        (int.tryParse(_instMonths.text.trim()) ?? 1).clamp(1, 120);
+  ({
+    double financed,
+    double interestPct,
+    double interestAmt,
+    double totalWithInterest,
+    int months,
+    double monthly,
+  })
+  _installmentCalc(LoyaltySettingsData loyalty) {
+    final interestPct =
+        (double.tryParse(_instInterestPct.text.replaceAll(',', '').trim()) ?? 0)
+            .clamp(0.0, 100.0);
+    final months = (int.tryParse(_instMonths.text.trim()) ?? 1).clamp(1, 120);
     return _installmentCalcFromInputs(
       loyalty,
       interestPct: interestPct,
@@ -1194,7 +1281,11 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
             children: [
               Row(
                 children: [
-                  Icon(Icons.calculate_outlined, color: scheme.primary, size: 22),
+                  Icon(
+                    Icons.calculate_outlined,
+                    color: scheme.primary,
+                    size: 22,
+                  ),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
@@ -1264,8 +1355,11 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
                 ],
               ),
               const SizedBox(height: 12),
-              _instSumRow('المبلغ بعد المقدّم (أساس التقسيط)',
-                  IraqiCurrencyFormat.formatIqd(c.financed), scheme),
+              _instSumRow(
+                'المبلغ بعد المقدّم (أساس التقسيط)',
+                IraqiCurrencyFormat.formatIqd(c.financed),
+                scheme,
+              ),
               _instSumRow(
                 'قيمة الفائدة (${c.interestPct.toStringAsFixed(1)}٪)',
                 IraqiCurrencyFormat.formatIqd(c.interestAmt),
@@ -1355,11 +1449,12 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     }
     final palette = SalePalette.fromSettings(salePos, Theme.of(context));
     final printProv = context.watch<PrintSettingsProvider>();
-    final buyerAddressQrEnabled = printProv.isReady &&
-        printProv.data.receiptShowBuyerAddressQr;
+    final buyerAddressQrEnabled =
+        printProv.isReady && printProv.data.receiptShowBuyerAddressQr;
     final loyaltyCfg = context.watch<LoyaltySettingsProvider>().data;
-    final compactSnack =
-        context.watch<UiFeedbackSettingsProvider>().useCompactSnackNotifications;
+    final compactSnack = context
+        .watch<UiFeedbackSettingsProvider>()
+        .useCompactSnackNotifications;
     if (!compactSnack && _saleInlineToast != null) {
       Future.microtask(() {
         if (mounted) _dismissSaleInlineToast();
@@ -1388,41 +1483,76 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
             ),
           ],
         ),
-        body: Form(
-          key: _formKey,
-          child: sl.isHandsetForLayout
-              ? _buildSaleMainBodyWithOptionalQuickRail(
-                  context,
-                  sl: sl,
-                  salePos: salePos,
-                  palette: palette,
-                  loyaltyCfg: loyaltyCfg,
-                  payableTotal: payableTotal,
-                  buyerAddressQrEnabled: buyerAddressQrEnabled,
-                  compactSnack: compactSnack,
-                )
-              : Column(
-                  children: [
-                    Expanded(
-                      child: _buildSaleMainBodyWithOptionalQuickRail(
+        body: CallbackShortcuts(
+          bindings: <ShortcutActivator, VoidCallback>{
+            const SingleActivator(LogicalKeyboardKey.f1):
+                _focusSaleQuickRailSearch,
+            const SingleActivator(LogicalKeyboardKey.f4): () =>
+                unawaited(_parkInvoice()),
+            const SingleActivator(LogicalKeyboardKey.f12): () =>
+                unawaited(_saveInvoiceIfEligible()),
+            const SingleActivator(LogicalKeyboardKey.escape):
+                _handleSaleEscapeKey,
+            const SingleActivator(LogicalKeyboardKey.f2): _cartKbEditQtyKey,
+            const SingleActivator(LogicalKeyboardKey.keyZ, control: true):
+                _undoLastCartMutation,
+            const SingleActivator(LogicalKeyboardKey.keyZ, meta: true):
+                _undoLastCartMutation,
+            const SingleActivator(LogicalKeyboardKey.arrowUp): () =>
+                _cartKbMoveHighlight(-1),
+            const SingleActivator(LogicalKeyboardKey.arrowDown): () =>
+                _cartKbMoveHighlight(1),
+            const SingleActivator(LogicalKeyboardKey.equal): () =>
+                _cartKbBumpQty(1),
+            const SingleActivator(LogicalKeyboardKey.add): () =>
+                _cartKbBumpQty(1),
+            const SingleActivator(LogicalKeyboardKey.numpadAdd): () =>
+                _cartKbBumpQty(1),
+            const SingleActivator(LogicalKeyboardKey.minus): () =>
+                _cartKbBumpQty(-1),
+            const SingleActivator(LogicalKeyboardKey.numpadSubtract): () =>
+                _cartKbBumpQty(-1),
+            const SingleActivator(LogicalKeyboardKey.delete): () =>
+                _cartKbRemoveHighlighted(),
+          },
+          child: Form(
+            key: _formKey,
+            child: sl.isHandsetForLayout
+                ? _buildSaleMainBodyWithOptionalQuickRail(
+                    context,
+                    sl: sl,
+                    salePos: salePos,
+                    palette: palette,
+                    loyaltyCfg: loyaltyCfg,
+                    payableTotal: payableTotal,
+                    buyerAddressQrEnabled: buyerAddressQrEnabled,
+                    compactSnack: compactSnack,
+                  )
+                : Column(
+                    children: [
+                      Expanded(
+                        child: _buildSaleMainBodyWithOptionalQuickRail(
+                          context,
+                          sl: sl,
+                          salePos: salePos,
+                          palette: palette,
+                          loyaltyCfg: loyaltyCfg,
+                          payableTotal: payableTotal,
+                          buyerAddressQrEnabled: buyerAddressQrEnabled,
+                          compactSnack: compactSnack,
+                        ),
+                      ),
+                      _buildSaleCheckoutActionsFixedBar(
                         context,
                         sl: sl,
-                        salePos: salePos,
                         palette: palette,
                         loyaltyCfg: loyaltyCfg,
                         payableTotal: payableTotal,
-                        buyerAddressQrEnabled: buyerAddressQrEnabled,
                         compactSnack: compactSnack,
                       ),
-                    ),
-                    _buildSaleCheckoutActionsFixedBar(
-                      context,
-                      sl: sl,
-                      palette: palette,
-                      compactSnack: compactSnack,
-                    ),
-                  ],
-                ),
+                    ],
+                  ),
+          ),
         ),
       ),
     );
@@ -1441,35 +1571,46 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     if (t == InvoiceType.installment && prev != InvoiceType.installment) {
       unawaited(_prefillInstallmentAssistFields());
     }
+    if (t == InvoiceType.cash) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _syncCashAdvanceToTotalIfCash(
+          context.read<LoyaltySettingsProvider>().data,
+        );
+      });
+    }
   }
 
   Color _salePanelPrimaryText(BuildContext context, SalePalette palette) =>
       Theme.of(context).brightness == Brightness.dark
-          ? const Color(0xFFE8E4DC)
-          : palette.navy;
+      ? const Color(0xFFE8E4DC)
+      : palette.navy;
 
   Color _salePanelMutedText(BuildContext context, SalePalette palette) =>
       Theme.of(context).brightness == Brightness.dark
-          ? const Color(0xFF94A3B8)
-          : palette.navy.withValues(alpha: 0.58);
+      ? const Color(0xFF94A3B8)
+      : palette.navy.withValues(alpha: 0.58);
 
   /// مسافة بعد كل كتلة رئيسية في تدفق البيع — أوسع قليلاً على الشاشات الكبيرة.
   double _saleFlowBlockGap(BuildContext context) =>
       ScreenLayout.of(context).showSaleBarcodeShortcut ? 18 : 26;
 
   EdgeInsets _saleOuterScrollPadding(ScreenLayout sl) => EdgeInsets.fromLTRB(
-        sl.pageHorizontalGap,
-        16,
-        sl.pageHorizontalGap,
-        sl.showSaleBarcodeShortcut ? 10 : 14,
-      );
+    sl.pageHorizontalGap,
+    16,
+    sl.pageHorizontalGap,
+    sl.showSaleBarcodeShortcut ? 10 : 14,
+  );
 
   static const double _kWideQuickProductRailMinWidth = 800;
 
   bool _showWideQuickProductRail(ScreenLayout sl) =>
       !sl.isHandsetForLayout && sl.size.width >= _kWideQuickProductRailMinWidth;
 
-  Future<void> _onWideSaleRailProductPick(Map<String, dynamic> p) async {
+  Future<void> _onWideSaleRailProductPick(
+    Map<String, dynamic> p, {
+    double addQuantity = 1.0,
+  }) async {
     final name = (p['name'] ?? '').toString().trim();
     final baseSell = (p['sell'] as num?)?.toDouble() ?? 0;
     final baseMin = (p['minSell'] as num?)?.toDouble() ?? baseSell;
@@ -1498,6 +1639,12 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       unitVariantId: u.unitVariantId,
       unitLabel: u.unitLabel,
       unitFactor: u.unitFactor,
+      addQuantity: addQuantity,
+      suppressLineSnacks: true,
+    );
+    if (!mounted || type != InvoiceType.cash) return;
+    _syncCashAdvanceToTotalIfCash(
+      Provider.of<LoyaltySettingsProvider>(context, listen: false).data,
     );
   }
 
@@ -1506,8 +1653,11 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     BuildContext context, {
     required ScreenLayout sl,
     required SalePalette palette,
+    required LoyaltySettingsData loyaltyCfg,
+    required double payableTotal,
     required bool compactSnack,
   }) {
+    final parkedCount = context.watch<ParkedSalesProvider>().count;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
@@ -1524,7 +1674,8 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
                   ),
                 ),
                 child: Material(
-                  color: _saleInlineToastBg ??
+                  color:
+                      _saleInlineToastBg ??
                       palette.navy.withValues(alpha: 0.96),
                   elevation: 3,
                   shadowColor: palette.navy.withValues(alpha: 0.35),
@@ -1583,7 +1734,9 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
               ),
             ),
             label: Text(
-              'تعليق الفاتورة — خدمة عميل آخر',
+              parkedCount > 0
+                  ? 'تعليق الفاتورة — تعليق ($parkedCount)'
+                  : 'تعليق الفاتورة — خدمة عميل آخر',
               style: TextStyle(
                 fontWeight: FontWeight.w600,
                 fontSize: sl.showSaleBarcodeShortcut ? 13.5 : 14,
@@ -1596,16 +1749,13 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
             style: OutlinedButton.styleFrom(
               foregroundColor:
                   SaleAccessibleButtonColors.outlinedOnAppSurfaceText(
-                palette.navy,
-                Theme.of(context).brightness,
-              ),
+                    palette.navy,
+                    Theme.of(context).brightness,
+                  ),
               iconColor: SaleAccessibleButtonColors.outlinedAccentIcon(
                 palette.gold,
               ),
-              side: BorderSide(
-                color: palette.gold,
-                width: 1.4,
-              ),
+              side: BorderSide(color: palette.gold, width: 1.4),
             ),
           ),
         ),
@@ -1613,11 +1763,12 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
         SizedBox(
           height: sl.showSaleBarcodeShortcut ? 52 : 48,
           child: FilledButton.icon(
-            onPressed: _saveInvoice,
+            onPressed: !_canCompleteSalePayment(loyaltyCfg)
+                ? null
+                : () => unawaited(_saveInvoice()),
             style: FilledButton.styleFrom(
               backgroundColor: palette.navy,
-              foregroundColor:
-                  SaleAccessibleButtonColors.filledOnNavyLabel(),
+              foregroundColor: SaleAccessibleButtonColors.filledOnNavyLabel(),
               iconColor: SaleAccessibleButtonColors.filledOnNavyIcon(
                 palette.gold,
               ),
@@ -1625,7 +1776,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
             ),
             icon: const Icon(Icons.payments_rounded),
             label: Text(
-              'الدفع',
+              'الدفع — ${IraqiCurrencyFormat.formatIqd(payableTotal)}',
               style: TextStyle(
                 fontWeight: FontWeight.bold,
                 fontSize: sl.showSaleBarcodeShortcut ? 16 : 15,
@@ -1642,6 +1793,8 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     BuildContext context, {
     required ScreenLayout sl,
     required SalePalette palette,
+    required LoyaltySettingsData loyaltyCfg,
+    required double payableTotal,
     required bool compactSnack,
   }) {
     return SafeArea(
@@ -1671,6 +1824,8 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
               context,
               sl: sl,
               palette: palette,
+              loyaltyCfg: loyaltyCfg,
+              payableTotal: payableTotal,
               compactSnack: compactSnack,
             ),
           ),
@@ -1684,6 +1839,8 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     BuildContext context, {
     required ScreenLayout sl,
     required SalePalette palette,
+    required LoyaltySettingsData loyaltyCfg,
+    required double payableTotal,
     required bool compactSnack,
   }) {
     final bottomInset = MediaQuery.paddingOf(context).bottom;
@@ -1702,6 +1859,8 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
             context,
             sl: sl,
             palette: palette,
+            loyaltyCfg: loyaltyCfg,
+            payableTotal: payableTotal,
             compactSnack: compactSnack,
           ),
         ],
@@ -1732,6 +1891,12 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     );
     if (!_showWideQuickProductRail(sl)) return main;
 
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _saleQuickRailSearchAutofocusDone) return;
+      _saleQuickRailSearchAutofocusDone = true;
+      _saleQuickRailSearchFocus.requestFocus();
+    });
+
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final railBg = isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9);
     final text1 = isDark ? Colors.white : const Color(0xFF0F172A);
@@ -1748,12 +1913,13 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
             behavior: HitTestBehavior.opaque,
             onHorizontalDragUpdate: (d) {
               setState(() {
-                _saleQuickRailWidth = (_saleQuickRailWidth + d.delta.dx)
-                    .clamp(_kSaleQuickRailMinW, _kSaleQuickRailMaxW);
+                _saleQuickRailWidth = (_saleQuickRailWidth + d.delta.dx).clamp(
+                  _kSaleQuickRailMinW,
+                  _kSaleQuickRailMaxW,
+                );
               });
             },
-            onHorizontalDragEnd: (_) =>
-                unawaited(_persistSaleQuickRailWidth()),
+            onHorizontalDragEnd: (_) => unawaited(_persistSaleQuickRailWidth()),
             child: Tooltip(
               message: 'اسحب لتغيير عرض القائمة الجانبية',
               child: Container(
@@ -1784,7 +1950,9 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
                   padding: const EdgeInsets.fromLTRB(10, 10, 10, 6),
                   child: TextField(
                     controller: _saleQuickRailSearchController,
+                    focusNode: _saleQuickRailSearchFocus,
                     onChanged: (_) => setState(() {}),
+                    textInputAction: TextInputAction.search,
                     textDirection: TextDirection.rtl,
                     style: TextStyle(fontSize: 13, color: text1),
                     decoration: InputDecoration(
@@ -1799,6 +1967,19 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
                         horizontal: 10,
                         vertical: 8,
                       ),
+                      suffixIcon: _saleQuickRailSearchController.text.isEmpty
+                          ? null
+                          : IconButton(
+                              tooltip: 'مسح',
+                              onPressed: () {
+                                setState(_saleQuickRailSearchController.clear);
+                              },
+                              icon: Icon(
+                                Icons.close_rounded,
+                                size: 20,
+                                color: text2,
+                              ),
+                            ),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(8),
                         borderSide: BorderSide(
@@ -1815,7 +1996,9 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
                 child: WideHomeProductRail(
                   searchQuery: _saleQuickRailSearchController.text,
                   isDark: isDark,
-                  onProductPick: (m) => unawaited(_onWideSaleRailProductPick(m)),
+                  onProductPick: (m, {required addQuantity}) => unawaited(
+                    _onWideSaleRailProductPick(m, addQuantity: addQuantity),
+                  ),
                 ),
               ),
             ],
@@ -1866,6 +2049,8 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
                 context,
                 sl: sl,
                 palette: palette,
+                loyaltyCfg: loyaltyCfg,
+                payableTotal: payableTotal,
                 compactSnack: compactSnack,
               ),
           ],
@@ -1954,8 +2139,9 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
             setState(() {
               final cur = _wideFlexLive ?? salePos.wideSaleProductsFlex;
               final delta = (dx / rowWidth * 100).round();
-              _wideFlexLive =
-                  SaleWideLayoutFlexBounds.clampProducts(cur + delta);
+              _wideFlexLive = SaleWideLayoutFlexBounds.clampProducts(
+                cur + delta,
+              );
             });
           },
           onHorizontalDragEnd: (_) => unawaited(_persistWideSaleFlex()),
@@ -2083,10 +2269,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
           top: BorderSide(color: edge),
           bottom: BorderSide(color: edge),
           left: BorderSide(color: edge),
-          right: BorderSide(
-            color: palette.gold,
-            width: wide ? 3 : 2.5,
-          ),
+          right: BorderSide(color: palette.gold, width: wide ? 3 : 2.5),
         ),
       ),
       child: child,
@@ -2118,17 +2301,14 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       showCheckmark: false,
       onSelected: (_) => _setInvoicePaymentType(value),
       shape: RoundedRectangleBorder(borderRadius: chipRadius),
-      backgroundColor:
-          dark ? const Color(0xFF243047) : Colors.white,
+      backgroundColor: dark ? const Color(0xFF243047) : Colors.white,
       selectedColor: palette.navy,
       labelPadding: EdgeInsets.symmetric(
         horizontal: phone ? 12 : 14,
         vertical: phone ? 9 : 8,
       ),
       side: BorderSide(
-        color: selected
-            ? palette.gold
-            : palette.navy.withValues(alpha: 0.28),
+        color: selected ? palette.gold : palette.navy.withValues(alpha: 0.28),
         width: selected ? 1.8 : 1,
       ),
       labelStyle: TextStyle(
@@ -2153,8 +2333,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     SalePosSettingsData pos,
   ) {
     final showScan = ScreenLayout.of(context).showSaleBarcodeShortcut;
-    final productsCaption = (!pos.enableInvoiceDiscount &&
-            !pos.enableTaxOnSale)
+    final productsCaption = (!pos.enableInvoiceDiscount && !pos.enableTaxOnSale)
         ? 'أسطر الفاتورة والكميات والأسعار — ثم راجع تفاصيل السعر وطريقة الدفع.'
         : 'أسطر الفاتورة والكميات والأسعار — ثم انتقل لخصم الفاتورة والضريبة.';
     return Padding(
@@ -2246,7 +2425,10 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
               palette,
               pos,
               child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 8),
+                padding: const EdgeInsets.symmetric(
+                  vertical: 18,
+                  horizontal: 8,
+                ),
                 child: Column(
                   children: [
                     Icon(
@@ -2257,8 +2439,8 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
                     const SizedBox(height: 12),
                     Text(
                       showScan
-                          ? 'لا توجد أصناف بعد.\nامسح الباركود أعلاه أو أضف من البحث في الشاشة الرئيسية.'
-                          : 'لا توجد أصناف بعد.\nأضف منتجات من البحث في الشاشة الرئيسية.',
+                          ? 'لا توجد أصناف بعد.\nامسح الباركود أعلاه أو أضف من البحث في الشاشة الرئيسية.\nابحث عن منتج أو امسح الباركود للإضافة.'
+                          : 'لا توجد أصناف بعد.\nأضف منتجات من البحث في الشاشة الرئيسية.\nابحث عن منتج أو امسح الباركود للإضافة.',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontSize: 13,
@@ -2427,17 +2609,13 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
                 ],
                 if (pos.enableTaxOnSale) ...[
                   const SizedBox(height: 6),
-                  _sumRow(
-                    'الضريبة',
-                    IraqiCurrencyFormat.formatIqd(_tax),
-                  ),
+                  _sumRow('الضريبة', IraqiCurrencyFormat.formatIqd(_tax)),
                 ],
                 if (type != InvoiceType.cash &&
                     type != InvoiceType.credit &&
                     type != InvoiceType.delivery &&
                     !(type == InvoiceType.installment &&
-                        _instSaleSettings
-                            .showInstallmentCalculatorOnSale)) ...[
+                        _instSaleSettings.showInstallmentCalculatorOnSale)) ...[
                   const SizedBox(height: 10),
                   TextFormField(
                     controller: _advanceController,
@@ -2513,269 +2691,269 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-              Text(
-                'طريقة الدفع',
-                style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 13,
-                  color: _salePanelPrimaryText(context, palette),
-                ),
-              ),
-              const SizedBox(height: 10),
-              Wrap(
-                spacing: 10,
-                runSpacing: 10,
-                alignment: WrapAlignment.start,
-                children: [
-                  _paymentTypeChip(
-                    context,
-                    palette,
-                    salePos,
-                    InvoiceType.cash,
-                    'نقدي',
+                Text(
+                  'طريقة الدفع',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                    color: _salePanelPrimaryText(context, palette),
                   ),
-                  if (salePos.allowCredit)
+                ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  alignment: WrapAlignment.start,
+                  children: [
                     _paymentTypeChip(
                       context,
                       palette,
                       salePos,
-                      InvoiceType.credit,
-                      'دين',
+                      InvoiceType.cash,
+                      'نقدي',
                     ),
-                  if (salePos.allowInstallment)
-                    _paymentTypeChip(
-                      context,
-                      palette,
-                      salePos,
-                      InvoiceType.installment,
-                      'تقسيط',
-                    ),
-                  if (salePos.allowDelivery)
-                    _paymentTypeChip(
-                      context,
-                      palette,
-                      salePos,
-                      InvoiceType.delivery,
-                      'توصيل',
-                    ),
-                ],
-              ),
-              const SizedBox(height: 14),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    child: TextFormField(
-                      controller: _customerController,
-                      decoration: const InputDecoration(
-                        labelText: 'اسم العميل',
-                        isDense: true,
-                        hintText: 'ابحث من أول حرف…',
+                    if (salePos.allowCredit)
+                      _paymentTypeChip(
+                        context,
+                        palette,
+                        salePos,
+                        InvoiceType.credit,
+                        'دين',
                       ),
-                      onChanged: (_) {
-                        setState(() => _linkedCustomerId = null);
-                        _onCustomerInputChanged();
-                      },
+                    if (salePos.allowInstallment)
+                      _paymentTypeChip(
+                        context,
+                        palette,
+                        salePos,
+                        InvoiceType.installment,
+                        'تقسيط',
+                      ),
+                    if (salePos.allowDelivery)
+                      _paymentTypeChip(
+                        context,
+                        palette,
+                        salePos,
+                        InvoiceType.delivery,
+                        'توصيل',
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: _customerController,
+                        decoration: const InputDecoration(
+                          labelText: 'اسم العميل',
+                          isDense: true,
+                          hintText: 'ابحث من أول حرف…',
+                        ),
+                        onChanged: (_) {
+                          setState(() => _linkedCustomerId = null);
+                          _onCustomerInputChanged();
+                        },
+                        validator: (v) {
+                          if (_needsCustomerNameFor &&
+                              (v == null || v.trim().isEmpty)) {
+                            return type == InvoiceType.delivery
+                                ? 'اسم العميل مطلوب للتوصيل'
+                                : 'مطلوب للدين/التقسيط';
+                          }
+                          return null;
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: Tooltip(
+                        message: 'إضافة عميل جديد دون مغادرة البيع',
+                        child: Material(
+                          color: scheme.surfaceContainerHighest.withValues(
+                            alpha: 0.95,
+                          ),
+                          shape: const RoundedRectangleBorder(
+                            borderRadius: AppShape.none,
+                          ),
+                          child: InkWell(
+                            onTap: _openQuickAddCustomerDialog,
+                            child: Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: Icon(
+                                Icons.person_add_alt_1_outlined,
+                                size: 22,
+                                color: scheme.primary,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                if (type == InvoiceType.credit) ...[
+                  const SizedBox(height: 8),
+                  TextFormField(
+                    controller: _advanceController,
+                    decoration: const InputDecoration(
+                      isDense: true,
+                      labelText: 'المبلغ الواصل (د.ع)',
+                    ),
+                    keyboardType: TextInputType.number,
+                    onChanged: (_) => setState(() {}),
+                  ),
+                ],
+                if (_customerHits.isNotEmpty &&
+                    _customerController.text.trim().isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Material(
+                      elevation: 3,
+                      color: Theme.of(context).cardColor,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxHeight: 200),
+                        child: ListView.builder(
+                          shrinkWrap: true,
+                          padding: EdgeInsets.zero,
+                          itemCount: _customerHits.length,
+                          itemBuilder: (ctx, i) {
+                            final c = _customerHits[i];
+                            final phone = c['phone']?.toString() ?? '';
+                            return ListTile(
+                              dense: true,
+                              title: Text(c['name']?.toString() ?? ''),
+                              subtitle: phone.isNotEmpty ? Text(phone) : null,
+                              onTap: () {
+                                _customerController.text =
+                                    c['name']?.toString() ?? '';
+                                setState(() {
+                                  _linkedCustomerId = c['id'] as int?;
+                                  _customerHits = [];
+                                });
+                                FocusScope.of(context).unfocus();
+                                unawaited(_refreshLoyaltyBalance());
+                              },
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                  ),
+                if (type == InvoiceType.installment &&
+                    _instSaleSettings.showInstallmentCalculatorOnSale)
+                  _buildInstallmentAssistCard(loyaltyCfg, salePos),
+                if (type == InvoiceType.delivery ||
+                    (buyerAddressQrEnabled &&
+                        (type != InvoiceType.cash ||
+                            salePos.showBuyerAddressOnCash)))
+                  Padding(
+                    padding: const EdgeInsets.only(top: 10),
+                    child: TextFormField(
+                      controller: _deliveryAddressController,
+                      decoration: InputDecoration(
+                        labelText:
+                            type == InvoiceType.delivery &&
+                                buyerAddressQrEnabled
+                            ? 'عنوان التوصيل والموقع (QR خرائط)'
+                            : type == InvoiceType.delivery
+                            ? 'عنوان التوصيل'
+                            : 'عنوان المشتري (QR للخرائط على الإيصال)',
+                        helperText:
+                            buyerAddressQrEnabled &&
+                                type != InvoiceType.delivery
+                            ? 'اختياري — وصف أو عنوان يظهر في Google Maps عند مسح الرمز'
+                            : (buyerAddressQrEnabled
+                                  ? (type == InvoiceType.delivery
+                                        ? 'مطلوب — يُطبَع QR للخرائط عند وجود نص؛ اكتب عنوان التوصيل بوضوح'
+                                        : 'يُطبَع QR يفتح الخرائط عند المسح')
+                                  : null),
+                        isDense: true,
+                      ),
+                      maxLines: buyerAddressQrEnabled ? 3 : 2,
                       validator: (v) {
-                        if (_needsCustomerNameFor &&
+                        if (type == InvoiceType.delivery &&
                             (v == null || v.trim().isEmpty)) {
-                          return type == InvoiceType.delivery
-                              ? 'اسم العميل مطلوب للتوصيل'
-                              : 'مطلوب للدين/التقسيط';
+                          return 'عنوان التوصيل مطلوب';
                         }
                         return null;
                       },
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  Padding(
-                    padding: const EdgeInsets.only(top: 6),
-                    child: Tooltip(
-                      message: 'إضافة عميل جديد دون مغادرة البيع',
-                      child: Material(
-                        color: scheme.surfaceContainerHighest
-                            .withValues(alpha: 0.95),
-                        shape: const RoundedRectangleBorder(
-                          borderRadius: AppShape.none,
-                        ),
-                        child: InkWell(
-                          onTap: _openQuickAddCustomerDialog,
-                          child: Padding(
-                            padding: const EdgeInsets.all(12),
-                            child: Icon(
-                              Icons.person_add_alt_1_outlined,
-                              size: 22,
-                              color: scheme.primary,
-                            ),
-                          ),
-                        ),
+                if (loyaltyCfg.enabled && type != InvoiceType.installment) ...[
+                  const SizedBox(height: 10),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: Text(
+                      _linkedCustomerId == null
+                          ? 'لاستخدام النقاط: اختر عميلاً مسجّلاً من القائمة المقترحة.'
+                          : 'رصيد نقاط العميل: $_customerLoyaltyBalance',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: scheme.onSurfaceVariant,
                       ),
                     ),
                   ),
-                ],
-              ),
-              if (type == InvoiceType.credit) ...[
-                const SizedBox(height: 8),
-                TextFormField(
-                  controller: _advanceController,
-                  decoration: const InputDecoration(
-                    isDense: true,
-                    labelText: 'المبلغ الواصل (د.ع)',
-                  ),
-                  keyboardType: TextInputType.number,
-                  onChanged: (_) => setState(() {}),
-                ),
-              ],
-              if (_customerHits.isNotEmpty &&
-                  _customerController.text.trim().isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Material(
-                    elevation: 3,
-                    color: Theme.of(context).cardColor,
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxHeight: 200),
-                      child: ListView.builder(
-                        shrinkWrap: true,
-                        padding: EdgeInsets.zero,
-                        itemCount: _customerHits.length,
-                        itemBuilder: (ctx, i) {
-                          final c = _customerHits[i];
-                          final phone = c['phone']?.toString() ?? '';
-                          return ListTile(
-                            dense: true,
-                            title: Text(c['name']?.toString() ?? ''),
-                            subtitle: phone.isNotEmpty ? Text(phone) : null,
-                            onTap: () {
-                              _customerController.text =
-                                  c['name']?.toString() ?? '';
+                  if (_linkedCustomerId != null) ...[
+                    const SizedBox(height: 8),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: TextFormField(
+                            controller: _loyaltyRedeemController,
+                            decoration: InputDecoration(
+                              isDense: true,
+                              labelText:
+                                  'نقاط للاستبدال (حد أقصى ${LoyaltyMath.maxRedeemablePoints(balance: _customerLoyaltyBalance, netBeforeLoyalty: _netBeforeLoyaltySale, s: loyaltyCfg)})',
+                            ),
+                            keyboardType: TextInputType.number,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: OutlinedButton(
+                            onPressed: () {
+                              final m = LoyaltyMath.maxRedeemablePoints(
+                                balance: _customerLoyaltyBalance,
+                                netBeforeLoyalty: _netBeforeLoyaltySale,
+                                s: loyaltyCfg,
+                              );
                               setState(() {
-                                _linkedCustomerId = c['id'] as int?;
-                                _customerHits = [];
+                                _loyaltyRedeemController.text = m.toString();
                               });
-                              FocusScope.of(context).unfocus();
-                              unawaited(_refreshLoyaltyBalance());
                             },
-                          );
-                        },
-                      ),
-                    ),
-                  ),
-                ),
-              if (type == InvoiceType.installment &&
-                  _instSaleSettings.showInstallmentCalculatorOnSale)
-                _buildInstallmentAssistCard(loyaltyCfg, salePos),
-              if (type == InvoiceType.delivery ||
-                  (buyerAddressQrEnabled &&
-                      (type != InvoiceType.cash || salePos.showBuyerAddressOnCash)))
-                Padding(
-                  padding: const EdgeInsets.only(top: 10),
-                  child: TextFormField(
-                    controller: _deliveryAddressController,
-                    decoration: InputDecoration(
-                      labelText: type == InvoiceType.delivery &&
-                              buyerAddressQrEnabled
-                          ? 'عنوان التوصيل والموقع (QR خرائط)'
-                          : type == InvoiceType.delivery
-                              ? 'عنوان التوصيل'
-                              : 'عنوان المشتري (QR للخرائط على الإيصال)',
-                      helperText: buyerAddressQrEnabled &&
-                              type != InvoiceType.delivery
-                          ? 'اختياري — وصف أو عنوان يظهر في Google Maps عند مسح الرمز'
-                          : (buyerAddressQrEnabled
-                              ? (type == InvoiceType.delivery
-                                  ? 'مطلوب — يُطبَع QR للخرائط عند وجود نص؛ اكتب عنوان التوصيل بوضوح'
-                                  : 'يُطبَع QR يفتح الخرائط عند المسح')
-                              : null),
-                      isDense: true,
-                    ),
-                    maxLines: buyerAddressQrEnabled ? 3 : 2,
-                    validator: (v) {
-                      if (type == InvoiceType.delivery &&
-                          (v == null || v.trim().isEmpty)) {
-                        return 'عنوان التوصيل مطلوب';
-                      }
-                      return null;
-                    },
-                  ),
-                ),
-              if (loyaltyCfg.enabled &&
-                  type != InvoiceType.installment) ...[
-                const SizedBox(height: 10),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: Text(
-                    _linkedCustomerId == null
-                        ? 'لاستخدام النقاط: اختر عميلاً مسجّلاً من القائمة المقترحة.'
-                        : 'رصيد نقاط العميل: $_customerLoyaltyBalance',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: scheme.onSurfaceVariant,
-                    ),
-                  ),
-                ),
-                if (_linkedCustomerId != null) ...[
-                  const SizedBox(height: 8),
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        child: TextFormField(
-                          controller: _loyaltyRedeemController,
-                          decoration: InputDecoration(
-                            isDense: true,
-                            labelText:
-                                'نقاط للاستبدال (حد أقصى ${LoyaltyMath.maxRedeemablePoints(balance: _customerLoyaltyBalance, netBeforeLoyalty: _netBeforeLoyaltySale, s: loyaltyCfg)})',
-                          ),
-                          keyboardType: TextInputType.number,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: OutlinedButton(
-                          onPressed: () {
-                            final m = LoyaltyMath.maxRedeemablePoints(
-                              balance: _customerLoyaltyBalance,
-                              netBeforeLoyalty: _netBeforeLoyaltySale,
-                              s: loyaltyCfg,
-                            );
-                            setState(() {
-                              _loyaltyRedeemController.text = m.toString();
-                            });
-                          },
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor:
-                                SaleAccessibleButtonColors.outlinedOnSalePanelText(
-                              palette.navy,
-                              Theme.of(context).brightness,
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor:
+                                  SaleAccessibleButtonColors.outlinedOnSalePanelText(
+                                    palette.navy,
+                                    Theme.of(context).brightness,
+                                  ),
+                              side: BorderSide(color: palette.gold, width: 1.1),
                             ),
-                            side: BorderSide(color: palette.gold, width: 1.1),
+                            child: const Text('الأقصى'),
                           ),
-                          child: const Text('الأقصى'),
                         ),
-                      ),
-                    ],
-                  ),
+                      ],
+                    ),
+                  ],
                 ],
-              ],
-              if (_needsCustomerNameFor)
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Text(
-                    type == InvoiceType.delivery
-                        ? 'للتوصيل: أدخل اسم العميل وعنوان التوصيل (كلاهما مطلوب). يظهر اقتراح للاسم من قاعدة العملاء أثناء الكتابة.'
-                        : 'مهم: للدين والتقسيط اضغط على اسم العميل من القائمة المقترحة لربط البيع ببطاقته (لا يكفي كتابة الاسم يدوياً إن لم يُطابق سجلاً واحداً بالضبط).',
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: scheme.error,
+                if (_needsCustomerNameFor)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      type == InvoiceType.delivery
+                          ? 'للتوصيل: أدخل اسم العميل وعنوان التوصيل (كلاهما مطلوب). يظهر اقتراح للاسم من قاعدة العملاء أثناء الكتابة.'
+                          : 'مهم: للدين والتقسيط اضغط على اسم العميل من القائمة المقترحة لربط البيع ببطاقته (لا يكفي كتابة الاسم يدوياً إن لم يُطابق سجلاً واحداً بالضبط).',
+                      style: TextStyle(fontSize: 11, color: scheme.error),
                     ),
                   ),
-                ),
-            ],
+              ],
+            ),
           ),
-        ),
-      ],
+        ],
       ),
     );
   }
@@ -2839,9 +3017,9 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     final cardRadius = pos.saleFlowBorderRadius;
     final variants = item.productId == null
         ? const <Map<String, dynamic>>[]
-        : (_variantsByProductId[item.productId!] ?? const <Map<String, dynamic>>[]);
-    final showVariantChips =
-        item.productId != null && variants.length > 1;
+        : (_variantsByProductId[item.productId!] ??
+              const <Map<String, dynamic>>[]);
+    final showVariantChips = item.productId != null && variants.length > 1;
     final qtyStep = _saleQtyStep(item);
 
     return Padding(
@@ -2849,9 +3027,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       child: Material(
         color: scheme.surface,
         elevation: 0,
-        shape: RoundedRectangleBorder(
-          borderRadius: cardRadius,
-        ),
+        shape: RoundedRectangleBorder(borderRadius: cardRadius),
         child: Container(
           decoration: BoxDecoration(
             border: Border.all(color: lineBorder),
@@ -2861,23 +3037,29 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 8,
+                ),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     IconButton(
                       visualDensity: VisualDensity.compact,
                       padding: EdgeInsets.zero,
-                      constraints:
-                          const BoxConstraints(minWidth: 32, minHeight: 32),
+                      constraints: const BoxConstraints(
+                        minWidth: 32,
+                        minHeight: 32,
+                      ),
                       icon: Icon(
                         expanded
                             ? Icons.expand_less_rounded
                             : Icons.expand_more_rounded,
                         size: 22,
                       ),
-                      tooltip:
-                          expanded ? 'إخفاء التفاصيل' : 'تفاصيل السعر والخصم',
+                      tooltip: expanded
+                          ? 'إخفاء التفاصيل'
+                          : 'تفاصيل السعر والخصم',
                       onPressed: () {
                         setState(() {
                           if (expanded) {
@@ -2916,12 +3098,16 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
                                       if (item.unitVariantId != null) {
                                         return item.unitVariantId == vid;
                                       }
-                                      return ((v['isDefault'] as num?)?.toInt() ??
+                                      return ((v['isDefault'] as num?)
+                                                  ?.toInt() ??
                                               0) ==
                                           1;
                                     }(),
                                     onSelected: (_) => unawaited(
-                                      _applyLineVariantSelection(line: item, v: v),
+                                      _applyLineVariantSelection(
+                                        line: item,
+                                        v: v,
+                                      ),
                                     ),
                                   ),
                               ],
@@ -2936,19 +3122,28 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
                                 ActionChip(
                                   label: const Text('+¼ كغ'),
                                   onPressed: () => unawaited(
-                                    _trySetLineQuantity(item, item.quantity + 0.25),
+                                    _trySetLineQuantity(
+                                      item,
+                                      item.quantity + 0.25,
+                                    ),
                                   ),
                                 ),
                                 ActionChip(
                                   label: const Text('+½ كغ'),
                                   onPressed: () => unawaited(
-                                    _trySetLineQuantity(item, item.quantity + 0.5),
+                                    _trySetLineQuantity(
+                                      item,
+                                      item.quantity + 0.5,
+                                    ),
                                   ),
                                 ),
                                 ActionChip(
                                   label: const Text('+1 كغ'),
                                   onPressed: () => unawaited(
-                                    _trySetLineQuantity(item, item.quantity + 1),
+                                    _trySetLineQuantity(
+                                      item,
+                                      item.quantity + 1,
+                                    ),
                                   ),
                                 ),
                               ],
@@ -2984,8 +3179,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
                           onPressed: () {
                             setState(() {
                               final next = item.quantity - qtyStep;
-                              final minQ =
-                                  item.stockBaseKind == 1 ? 1e-6 : 1.0;
+                              final minQ = item.stockBaseKind == 1 ? 1e-6 : 1.0;
                               if (next + 1e-12 >= minQ) {
                                 item.quantity = next;
                               }
@@ -2993,15 +3187,18 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
                           },
                         ),
                         Material(
-                          color: scheme.surfaceContainerHighest
-                              .withValues(alpha: 0.6),
+                          color: scheme.surfaceContainerHighest.withValues(
+                            alpha: 0.6,
+                          ),
                           borderRadius: BorderRadius.circular(4),
                           child: InkWell(
                             onTap: () => _promptEditQuantity(item),
                             borderRadius: BorderRadius.circular(4),
                             child: Padding(
                               padding: const EdgeInsets.symmetric(
-                                  horizontal: 10, vertical: 6),
+                                horizontal: 10,
+                                vertical: 6,
+                              ),
                               child: Text(
                                 _formatSaleQty(item),
                                 style: const TextStyle(
@@ -3017,13 +3214,17 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
                           icon: const Icon(Icons.add_circle_outline),
                           onPressed: () async {
                             await _trySetLineQuantity(
-                                item, item.quantity + qtyStep);
+                              item,
+                              item.quantity + qtyStep,
+                            );
                           },
                         ),
                         IconButton(
                           visualDensity: VisualDensity.compact,
-                          icon: const Icon(Icons.delete_outline,
-                              color: Colors.red),
+                          icon: const Icon(
+                            Icons.delete_outline,
+                            color: Colors.red,
+                          ),
                           onPressed: () => setState(() {
                             _expandedLineIds.remove(item.lineId);
                             _lines.removeAt(idx);
@@ -3038,8 +3239,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
                 Container(
                   width: double.infinity,
                   padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
-                  color:
-                      scheme.surfaceContainerHighest.withValues(alpha: 0.45),
+                  color: scheme.surfaceContainerHighest.withValues(alpha: 0.45),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
@@ -3123,8 +3323,10 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
           title: const Text('الكمية'),
           content: TextField(
             controller: ctrl,
-            keyboardType:
-                const TextInputType.numberWithOptions(decimal: true, signed: false),
+            keyboardType: const TextInputType.numberWithOptions(
+              decimal: true,
+              signed: false,
+            ),
             inputFormatters: [
               FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
             ],
@@ -3218,8 +3420,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
   void _applyParkedPayloadMap(Map<String, dynamic> m) {
     _customerController.text = m['customer']?.toString() ?? '';
     _linkedCustomerId = (m['linkedCustomerId'] as num?)?.toInt();
-    _loyaltyRedeemController.text =
-        m['loyaltyRedeem']?.toString() ?? '0';
+    _loyaltyRedeemController.text = m['loyaltyRedeem']?.toString() ?? '0';
     _deliveryAddressController.text = m['deliveryAddress']?.toString() ?? '';
     _discountPercentController.text = m['discountPercent']?.toString() ?? '0';
     _taxController.text = m['tax']?.toString() ?? '0';
@@ -3245,10 +3446,12 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
           productName: e['productName']?.toString() ?? 'صنف',
           quantity: (e['quantity'] as num?)?.toDouble() ?? 1.0,
           unitPrice: (e['unitPrice'] as num?)?.toDouble() ?? 0,
-          sellPrice: (e['sellPrice'] as num?)?.toDouble() ??
+          sellPrice:
+              (e['sellPrice'] as num?)?.toDouble() ??
               (e['unitPrice'] as num?)?.toDouble() ??
               0,
-          minSellPrice: (e['minSellPrice'] as num?)?.toDouble() ??
+          minSellPrice:
+              (e['minSellPrice'] as num?)?.toDouble() ??
               (e['unitPrice'] as num?)?.toDouble() ??
               0,
           productId: (e['productId'] as num?)?.toInt(),
@@ -3300,7 +3503,9 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       if (!mounted) return;
       setState(() => _blockSaleDraftUntilResumeApplied = false);
       _showSaleSnackBar(
-        const SnackBar(content: Text('ملف الفاتورة المعلّقة تالف أو غير متوافق')),
+        const SnackBar(
+          content: Text('ملف الفاتورة المعلّقة تالف أو غير متوافق'),
+        ),
       );
     }
   }
@@ -3308,7 +3513,9 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
   Future<void> _parkInvoice() async {
     if (_lines.isEmpty) {
       _showSaleSnackBar(
-        const SnackBar(content: Text('أضف صنفاً واحداً على الأقل لتعليق الفاتورة')),
+        const SnackBar(
+          content: Text('أضف صنفاً واحداً على الأقل لتعليق الفاتورة'),
+        ),
       );
       return;
     }
@@ -3355,8 +3562,9 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       CloudSyncService.instance.scheduleSyncSoon();
       if (!mounted) return;
       final parkedMessenger = ScaffoldMessenger.of(context);
-      final snackCompact =
-          context.read<UiFeedbackSettingsProvider>().useCompactSnackNotifications;
+      final snackCompact = context
+          .read<UiFeedbackSettingsProvider>()
+          .useCompactSnackNotifications;
       await context.read<ParkedSalesProvider>().refresh();
       if (!mounted) return;
       _leaveSaleScreen();
@@ -3405,7 +3613,9 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     }
   }
 
-  List<Map<String, dynamic>> _saleLineMapsForNotification(List<InvoiceItem> items) {
+  List<Map<String, dynamic>> _saleLineMapsForNotification(
+    List<InvoiceItem> items,
+  ) {
     final out = <Map<String, dynamic>>[];
     var i = 0;
     for (final it in items) {
@@ -3438,32 +3648,35 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       double totalWithInterest,
       int months,
       double monthly,
-    })? installmentCalc,
+    })?
+    installmentCalc,
   }) async {
     if (!mounted || !context.mounted) return;
     final c = installmentCalc;
     await context.read<NotificationProvider>().recordFinancedSale(
-          invoiceId: invoiceId,
-          isInstallment: isInstallment,
-          customerName: customerName,
-          staffName: staffName,
-          total: total,
-          advance: advance,
-          at: at,
-          lines: _saleLineMapsForNotification(items),
-          planId: planId,
-          plannedMonths: c?.months,
-          suggestedMonthly: c?.monthly,
-          financedAtSale: c?.financed,
-          totalWithInterest: c?.totalWithInterest,
-          planCreationFailed: planCreationFailed,
-        );
+      invoiceId: invoiceId,
+      isInstallment: isInstallment,
+      customerName: customerName,
+      staffName: staffName,
+      total: total,
+      advance: advance,
+      at: at,
+      lines: _saleLineMapsForNotification(items),
+      planId: planId,
+      plannedMonths: c?.months,
+      suggestedMonthly: c?.monthly,
+      financedAtSale: c?.financed,
+      totalWithInterest: c?.totalWithInterest,
+      planCreationFailed: planCreationFailed,
+    );
   }
 
   Future<void> _saveInvoice() async {
     if (_lines.isEmpty) {
       _showSaleSnackBar(
-        const SnackBar(content: Text('أضف صنفاً واحداً على الأقل لإتمام البيع')),
+        const SnackBar(
+          content: Text('أضف صنفاً واحداً على الأقل لإتمام البيع'),
+        ),
       );
       return;
     }
@@ -3505,14 +3718,21 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     }
 
     final customerName = _customerController.text.trim();
-    final loyaltyCfg =
-        Provider.of<LoyaltySettingsProvider>(context, listen: false).data;
-    final invoiceProvider =
-        Provider.of<InvoiceProvider>(context, listen: false);
-    final staffName =
-        Provider.of<AuthProvider>(context, listen: false).username.trim();
+    final loyaltyCfg = Provider.of<LoyaltySettingsProvider>(
+      context,
+      listen: false,
+    ).data;
+    final invoiceProvider = Provider.of<InvoiceProvider>(
+      context,
+      listen: false,
+    );
+    final staffName = Provider.of<AuthProvider>(
+      context,
+      listen: false,
+    ).username.trim();
 
-    final customerId = _linkedCustomerId ??
+    final customerId =
+        _linkedCustomerId ??
         await _parkDb.tryResolveCustomerIdByExactName(customerName);
     if (!mounted) return;
 
@@ -3533,8 +3753,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     }
 
     final redeemPts = _clampedRedeemPoints(loyaltyCfg);
-    final rawRedeem =
-        int.tryParse(_loyaltyRedeemController.text.trim()) ?? 0;
+    final rawRedeem = int.tryParse(_loyaltyRedeemController.text.trim()) ?? 0;
     if (loyaltyCfg.enabled && rawRedeem > 0 && customerId == null) {
       if (mounted) {
         _showSaleSnackBar(
@@ -3547,30 +3766,25 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       }
       return;
     }
-    final items = _lines
-        .map(
-          (l) {
-            final entered = _lineEnteredForMath(l);
-            final base = _lineBaseForMath(l);
-            return InvoiceItem(
-              productName: l.productName,
-              quantity: base,
-              price: l.unitPrice,
-              total: entered * l.unitPrice,
-              productId: l.productId,
-              unitVariantId: l.unitVariantId,
-              unitLabel: l.unitLabel,
-              unitFactor: l.unitFactor <= 0 ? 1.0 : l.unitFactor,
-              enteredQty: entered,
-              baseQty: base,
-            );
-          },
-        )
-        .toList();
+    final items = _lines.map((l) {
+      final entered = _lineEnteredForMath(l);
+      final base = _lineBaseForMath(l);
+      return InvoiceItem(
+        productName: l.productName,
+        quantity: base,
+        price: l.unitPrice,
+        total: entered * l.unitPrice,
+        productId: l.productId,
+        unitVariantId: l.unitVariantId,
+        unitLabel: l.unitLabel,
+        unitFactor: l.unitFactor <= 0 ? 1.0 : l.unitFactor,
+        enteredQty: entered,
+        baseQty: base,
+      );
+    }).toList();
     final discount = discountValue;
     final tax = _tax;
-    final advancePayment =
-        type == InvoiceType.delivery ? 0.0 : _advancePayment;
+    final advancePayment = type == InvoiceType.delivery ? 0.0 : _advancePayment;
     final deliveryAddress = _deliveryAddressController.text.trim().isEmpty
         ? null
         : _deliveryAddressController.text.trim();
@@ -3635,8 +3849,9 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
         if (customerId != null) {
           existing = await _parkDb.sumOpenCreditDebtForCustomer(customerId);
         } else if (customerName.trim().isNotEmpty) {
-          existing = await _parkDb
-              .sumOpenCreditDebtForUnlinkedCustomerName(customerName);
+          existing = await _parkDb.sumOpenCreditDebtForUnlinkedCustomerName(
+            customerName,
+          );
         }
         if (existing + rem > debtSet.maxTotalOpenDebtPerCustomer + 1e-6) {
           if (mounted) {
@@ -3657,14 +3872,15 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       }
     }
 
-    final instCalc = type == InvoiceType.installment && instSettingsForSave != null
+    final instCalc =
+        type == InvoiceType.installment && instSettingsForSave != null
         ? (instSettingsForSave.showInstallmentCalculatorOnSale
-            ? _installmentCalc(loyaltyCfg)
-            : _installmentCalcFromInputs(
-                loyaltyCfg,
-                interestPct: instSettingsForSave.saleDefaultInterestPercent,
-                months: instSettingsForSave.defaultInstallmentCount,
-              ))
+              ? _installmentCalc(loyaltyCfg)
+              : _installmentCalcFromInputs(
+                  loyaltyCfg,
+                  interestPct: instSettingsForSave.saleDefaultInterestPercent,
+                  months: instSettingsForSave.defaultInstallmentCount,
+                ))
         : null;
 
     final invoice = Invoice(
@@ -3698,9 +3914,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       invoiceId = await invoiceProvider.addInvoice(invoice);
     } catch (e) {
       if (mounted) {
-        _showSaleSnackBar(
-          SnackBar(content: Text('تعذر حفظ الفاتورة: $e')),
-        );
+        _showSaleSnackBar(SnackBar(content: Text('تعذر حفظ الفاتورة: $e')));
       }
       return;
     }
@@ -3748,12 +3962,12 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     }
     if (negLines.isNotEmpty && mounted) {
       await context.read<NotificationProvider>().recordNegativeStockSale(
-            invoiceId: invoiceId,
-            staffName: staffName,
-            customerName: customerName,
-            at: now,
-            lines: negLines,
-          );
+        invoiceId: invoiceId,
+        staffName: staffName,
+        customerName: customerName,
+        at: now,
+        lines: negLines,
+      );
     }
     if (!mounted || !context.mounted) return;
 
@@ -3819,16 +4033,17 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     }
 
     final hasFinanceBalance = advancePayment < payTotal - 1e-6;
+
     /// خطة أقساط تُنشأ لبيع «تقسيط» فقط — التوصيل دون مقدّم ولا يُفتَح محرر خطة هنا.
     final needsInstallmentPlanRow = type == InvoiceType.installment;
-    final openPlanEditor =
-        hasFinanceBalance && type == InvoiceType.installment;
+    final openPlanEditor = hasFinanceBalance && type == InvoiceType.installment;
 
     if (needsInstallmentPlanRow) {
       int planId;
       try {
         final existing = await _parkDb.getInstallmentPlanByInvoiceId(invoiceId);
-        planId = existing?.id ??
+        planId =
+            existing?.id ??
             await _parkDb.insertDefaultInstallmentPlanForInvoice(
               invoiceId: invoiceId,
               customerName: customerName,
@@ -3845,7 +4060,8 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
             );
       } catch (e) {
         if (mounted) {
-          _showSnackBarViaMessenger(messenger,
+          _showSnackBarViaMessenger(
+            messenger,
             SnackBar(
               content: Text('تم حفظ الفاتورة لكن تعذّر إنشاء خطة التقسيط: $e'),
             ),
@@ -3869,7 +4085,8 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
         return;
       }
       if (openPlanEditor) {
-        _showSnackBarViaMessenger(messenger,
+        _showSnackBarViaMessenger(
+          messenger,
           const SnackBar(
             content: Text(
               'تم حفظ الفاتورة وإنشاء خطة التقسيط — يمكنك ضبط الجدول أو الرجوع',
@@ -3906,7 +4123,8 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       }
 
       _resetSaleForNextInvoice();
-      _showSnackBarViaMessenger(messenger,
+      _showSnackBarViaMessenger(
+        messenger,
         const SnackBar(
           content: Text(
             'تم حفظ فاتورة التقسيط وربطها بخطة (لا أقساط متبقية لأن المبلغ محصّل بالكامل).',
@@ -3931,7 +4149,8 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     }
 
     _resetSaleForNextInvoice();
-    _showSnackBarViaMessenger(messenger,
+    _showSnackBarViaMessenger(
+      messenger,
       const SnackBar(
         content: Text('تم تسجيل الفاتورة وتحديث المخزون والصندوق'),
       ),
@@ -4018,7 +4237,8 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
         );
         return;
       }
-      final open = await showDialog<bool>(
+      final open =
+          await showDialog<bool>(
             context: context,
             builder: (ctx) => AlertDialog(
               title: Text('فاتورة #${inv.id}'),
@@ -4048,8 +4268,9 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       );
       return;
     }
-    final resolved =
-        await context.read<ProductProvider>().resolveProductByAnyBarcode(barcode);
+    final resolved = await context
+        .read<ProductProvider>()
+        .resolveProductByAnyBarcode(barcode);
     if (!mounted) return;
     final product = resolved?['product'] as Map<String, dynamic>?;
     final variant = resolved?['variant'] as Map<String, dynamic>?;
@@ -4106,13 +4327,13 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
         unitVariantId: unitVariantId,
         unitLabel: unitLabel,
         unitFactor: unitFactor,
-        newItemSnackText:
-            'تمت إضافة المنتج: ${name.isEmpty ? barcode : name}',
+        newItemSnackText: 'تمت إضافة المنتج: ${name.isEmpty ? barcode : name}',
       );
       return;
     }
 
-    final goToAdd = await showDialog<bool>(
+    final goToAdd =
+        await showDialog<bool>(
           context: context,
           builder: (_) => AlertDialog(
             title: const Text('المنتج غير موجود'),
@@ -4137,15 +4358,14 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => AddProductScreen(
-              initialBarcode: barcode,
-              autoFillFromScan: true,
-            ),
+        builder: (_) =>
+            AddProductScreen(initialBarcode: barcode, autoFillFromScan: true),
       ),
     );
     if (!mounted) return;
-    final afterAdd =
-        await context.read<ProductProvider>().findProductByBarcode(barcode);
+    final afterAdd = await context.read<ProductProvider>().findProductByBarcode(
+      barcode,
+    );
     if (afterAdd != null && mounted) {
       final name = (afterAdd['name']?.toString() ?? '').trim();
       final baseSell = (afterAdd['sellPrice'] as num?)?.toDouble() ?? 0;
@@ -4176,10 +4396,148 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
         unitVariantId: u.unitVariantId,
         unitLabel: u.unitLabel,
         unitFactor: u.unitFactor,
-        newItemSnackText:
-            'تمت إضافة المنتج: ${name.isEmpty ? barcode : name}',
+        newItemSnackText: 'تمت إضافة المنتج: ${name.isEmpty ? barcode : name}',
       );
     }
+  }
+
+  void _undoLastCartMutation() {
+    final u = _lastCartAddUndo;
+    if (u == null || _lines.isEmpty) return;
+    setState(() {
+      if (u.wasNewLine) {
+        _lines.removeWhere((l) => l.lineId == u.lineId);
+        _expandedLineIds.remove(u.lineId);
+      } else {
+        for (final l in _lines) {
+          if (l.lineId == u.lineId) {
+            l.quantity = u.previousQty;
+            break;
+          }
+        }
+      }
+      _lastCartAddUndo = null;
+    });
+  }
+
+  bool _canCompleteSalePayment(LoyaltySettingsData loyalty) {
+    if (_lines.isEmpty) return false;
+    final pay = saleTotal(loyalty);
+    if (type == InvoiceType.cash) {
+      if (_advancePayment + 0.5 < pay) return false;
+    }
+    if (type == InvoiceType.credit || type == InvoiceType.installment) {
+      if (_linkedCustomerId == null) return false;
+    }
+    if (type == InvoiceType.delivery) {
+      if (_customerController.text.trim().isEmpty) return false;
+      if (_deliveryAddressController.text.trim().isEmpty) return false;
+    }
+    return true;
+  }
+
+  void _focusSaleQuickRailSearch() {
+    _saleQuickRailSearchFocus.requestFocus();
+  }
+
+  void _handleSaleEscapeKey() {
+    if (_saleQuickRailSearchController.text.isNotEmpty) {
+      setState(() => _saleQuickRailSearchController.clear());
+      return;
+    }
+    if (_lines.isEmpty) return;
+    unawaited(
+      showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('إفراغ السلة؟'),
+          content: const Text('سيتم إزالة جميع الأصناف من الفاتورة الحالية.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('إلغاء'),
+            ),
+            FilledButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                setState(() {
+                  _lines.clear();
+                  _expandedLineIds.clear();
+                  _lastCartAddUndo = null;
+                });
+              },
+              child: const Text('إفراغ'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _saveInvoiceIfEligible() async {
+    final loyaltyCfg = Provider.of<LoyaltySettingsProvider>(
+      context,
+      listen: false,
+    ).data;
+    if (!_canCompleteSalePayment(loyaltyCfg)) {
+      return;
+    }
+    await _saveInvoice();
+  }
+
+  void _cartKbMoveHighlight(int delta) {
+    if (_lines.isEmpty) return;
+    setState(() {
+      final hi = _saleCartKeyboardIndex.clamp(0, _lines.length - 1).toInt();
+      final next = hi + delta;
+      _saleCartKeyboardIndex = next.clamp(0, _lines.length - 1);
+    });
+    _saleCartListFocus.requestFocus();
+  }
+
+  void _cartKbBumpQty(int delta) {
+    if (_lines.isEmpty) return;
+    final hi = _saleCartKeyboardIndex.clamp(0, _lines.length - 1).toInt();
+    final item = _lines[hi];
+    final step = _saleQtyStep(item);
+    final next = item.quantity + delta * step;
+    final minQ = item.stockBaseKind == 1 ? 1e-6 : 1.0;
+    setState(() {
+      if (next + 1e-12 >= minQ) {
+        item.quantity = next;
+      }
+    });
+  }
+
+  void _cartKbRemoveHighlighted() {
+    if (_lines.isEmpty) return;
+    final hi = _saleCartKeyboardIndex.clamp(0, _lines.length - 1).toInt();
+    setState(() {
+      final id = _lines[hi].lineId;
+      _expandedLineIds.remove(id);
+      _lines.removeAt(hi);
+      if (_lines.isEmpty) {
+        _saleCartKeyboardIndex = 0;
+      } else {
+        _saleCartKeyboardIndex = hi.clamp(0, _lines.length - 1);
+      }
+    });
+  }
+
+  void _cartKbEditQtyKey() {
+    if (_lines.isEmpty) return;
+    final hi = _saleCartKeyboardIndex.clamp(0, _lines.length - 1).toInt();
+    _promptEditQuantity(_lines[hi]);
+  }
+
+  void _syncCashAdvanceToTotalIfCash(LoyaltySettingsData loyalty) {
+    if (type != InvoiceType.cash) return;
+    final pay = saleTotal(loyalty);
+    final t = pay.round().clamp(0, 2000000000).toString();
+    _advanceController.value = TextEditingValue(
+      text: t,
+      selection: TextSelection.collapsed(offset: t.length),
+    );
   }
 }
 
@@ -4218,8 +4576,7 @@ class _SaleParkInvoiceDialogState extends State<_SaleParkInvoiceDialog> {
   Widget build(BuildContext context) {
     final palette = widget.palette;
     final isDark = widget.isDark;
-    final primary =
-        isDark ? const Color(0xFFE8E4DC) : palette.navy;
+    final primary = isDark ? const Color(0xFFE8E4DC) : palette.navy;
     final muted = isDark
         ? const Color(0xFF94A3B8)
         : palette.navy.withValues(alpha: 0.58);
@@ -4248,17 +4605,25 @@ class _SaleParkInvoiceDialogState extends State<_SaleParkInvoiceDialog> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 12,
+                ),
                 decoration: BoxDecoration(
                   color: palette.navy,
                   border: Border(
-                    bottom: BorderSide(color: palette.gold.withValues(alpha: 0.35)),
+                    bottom: BorderSide(
+                      color: palette.gold.withValues(alpha: 0.35),
+                    ),
                   ),
                 ),
                 child: Row(
                   children: [
-                    Icon(Icons.pause_circle_outline_rounded,
-                        color: palette.gold, size: 22),
+                    Icon(
+                      Icons.pause_circle_outline_rounded,
+                      color: palette.gold,
+                      size: 22,
+                    ),
                     const SizedBox(width: 10),
                     const Expanded(
                       child: Text(
@@ -4282,7 +4647,12 @@ class _SaleParkInvoiceDialogState extends State<_SaleParkInvoiceDialog> {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+                        padding: EdgeInsetsDirectional.only(
+                          start: ScreenLayout.of(context).pageHorizontalGap,
+                          end: ScreenLayout.of(context).pageHorizontalGap,
+                          top: 14,
+                          bottom: 8,
+                        ),
                         child: Text(
                           'يُحفظ محلياً على هذا الجهاز. يمكنك استئناف البيع لاحقاً من «الفواتير ← معلّقة مؤقتاً».',
                           style: TextStyle(
@@ -4294,7 +4664,11 @@ class _SaleParkInvoiceDialogState extends State<_SaleParkInvoiceDialog> {
                         ),
                       ),
                       Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        padding: EdgeInsets.symmetric(
+                          horizontal: ScreenLayout.of(
+                            context,
+                          ).pageHorizontalGap,
+                        ),
                         child: TextField(
                           controller: _controller,
                           style: TextStyle(
@@ -4303,7 +4677,10 @@ class _SaleParkInvoiceDialogState extends State<_SaleParkInvoiceDialog> {
                           ),
                           decoration: InputDecoration(
                             labelText: 'اسم للتعريف (يظهر في القائمة)',
-                            labelStyle: TextStyle(color: muted, fontFamily: AppFontFamilies.tajawal),
+                            labelStyle: TextStyle(
+                              color: muted,
+                              fontFamily: AppFontFamilies.tajawal,
+                            ),
                             filled: true,
                             fillColor: fieldFill,
                             contentPadding: const EdgeInsets.symmetric(
@@ -4316,7 +4693,10 @@ class _SaleParkInvoiceDialogState extends State<_SaleParkInvoiceDialog> {
                             ),
                             focusedBorder: OutlineInputBorder(
                               borderRadius: AppShape.none,
-                              borderSide: BorderSide(color: palette.gold, width: 1.6),
+                              borderSide: BorderSide(
+                                color: palette.gold,
+                                width: 1.6,
+                              ),
                             ),
                           ),
                           textDirection: TextDirection.rtl,
@@ -4336,9 +4716,9 @@ class _SaleParkInvoiceDialogState extends State<_SaleParkInvoiceDialog> {
                         style: OutlinedButton.styleFrom(
                           foregroundColor:
                               SaleAccessibleButtonColors.outlinedOnSalePanelText(
-                            palette.navy,
-                            isDark ? Brightness.dark : Brightness.light,
-                          ),
+                                palette.navy,
+                                isDark ? Brightness.dark : Brightness.light,
+                              ),
                           side: BorderSide(
                             color: palette.gold.withValues(alpha: 0.75),
                           ),
@@ -4427,8 +4807,8 @@ class _InvoiceLineState {
     String? unitLabel,
     this.unitFactor = 1.0,
   }) : unitLabel = (unitLabel == null || unitLabel.trim().isEmpty)
-            ? 'قطعة'
-            : unitLabel.trim();
+           ? 'قطعة'
+           : unitLabel.trim();
 
   final int lineId;
   final int? productId;
@@ -4501,8 +4881,8 @@ class _SaleInlineScannerCard extends StatelessWidget {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                          fontWeight: FontWeight.w900,
-                        ),
+                      fontWeight: FontWeight.w900,
+                    ),
                   ),
                 ),
                 IconButton(

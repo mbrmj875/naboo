@@ -436,55 +436,115 @@ class ProductRepository {
 
   /// استعلام صفحات للمنتجات لإدارة المخزون (بدون تحميل كل الجدول).
   ///
-  /// - [statusArabic]: "الكل" | "في المخزون" | "منخفض"
-  /// - [sortByArabic]: "الاسم" | "السعر" | "الكمية"
+  /// - [statusArabic]: "الكل" | "نشط" | "مخزون منخفض" | "نفذ من المخزون" | "معطّل"
+  ///   (يتوافق مع القيم السابقة: "في المخزون" → نشط تقريباً، "منخفض" → مخزون منخفض)
+  /// - [sortByArabic]: "الاسم" | "السعر" | "الكمية" | "تاريخ الإضافة"
   Future<List<Map<String, dynamic>>> queryProductsPage({
     required String keyword,
     required String barcode,
     required String productCode,
+    required String categoryName,
+    required String brandName,
     required String statusArabic,
     required String sortByArabic,
+    required bool sortAscending,
+    int? priceMinIqd,
+    int? priceMaxIqd,
     required int limit,
     required int offset,
   }) async {
     final db = await _db;
-    final where = <String>['p.isActive = 1'];
-    final args = <Object?>[];
+    final tid = _tenant.activeTenantId;
+    final where = <String>['p.tenantId = ?'];
+    final args = <Object?>[tid];
 
-    final kw = keyword.trim().toLowerCase();
-    if (kw.isNotEmpty) {
-      where.add('LOWER(p.name) LIKE ?');
-      args.add('%$kw%');
+    void addStatusAndActive() {
+      switch (statusArabic) {
+        case 'معطّل':
+          where.add('p.isActive = 0');
+          return;
+        default:
+          where.add('p.isActive = 1');
+      }
+      switch (statusArabic) {
+        case 'نشط':
+        case 'في المخزون':
+          where.add("(p.qty > 0 AND p.status = 'instock')");
+          break;
+        case 'مخزون منخفض':
+        case 'منخفض':
+          where.add("p.status = 'low'");
+          break;
+        case 'نفذ من المخزون':
+          where.add('p.qty <= 0');
+          break;
+        case 'الكل':
+        case 'معطّل':
+          break;
+      }
     }
+
+    addStatusAndActive();
+
+    final kwRaw = keyword.trim();
+    final kw = kwRaw.toLowerCase();
+    if (kw.isNotEmpty) {
+      final safe = kwRaw.replaceAll('%', '').replaceAll('_', '');
+      if (safe.isNotEmpty) {
+        final like = '%${kw}%';
+        final likeRaw = '%$safe%';
+        where.add('''
+(
+  LOWER(p.name) LIKE ? COLLATE NOCASE
+  OR IFNULL(p.barcode, '') LIKE ?
+  OR LOWER(IFNULL(p.productCode, '')) LIKE ? COLLATE NOCASE
+  OR CAST(p.id AS TEXT) LIKE ?
+)
+''');
+        args.addAll([like, likeRaw, like, '%$safe%']);
+      }
+    }
+
     final bc = barcode.trim();
     if (bc.isNotEmpty) {
-      where.add('p.barcode LIKE ?');
+      where.add('IFNULL(p.barcode, \'\') LIKE ?');
       args.add('%$bc%');
     }
     final pc = productCode.trim();
     if (pc.isNotEmpty) {
-      where.add('p.productCode LIKE ?');
-      args.add('%$pc%');
+      where.add('LOWER(IFNULL(p.productCode, \'\')) LIKE ? COLLATE NOCASE');
+      args.add('%${pc.toLowerCase()}%');
     }
 
-    switch (statusArabic) {
-      case 'في المخزون':
-        where.add("p.status = 'instock'");
-        break;
-      case 'منخفض':
-        where.add("p.status = 'low'");
-        break;
-      default:
-        break;
+    final cat = categoryName.trim();
+    if (cat.isNotEmpty && cat != 'جميع التصنيفات') {
+      where.add('IFNULL(TRIM(c.name), \'\') = ?');
+      args.add(cat);
+    }
+    final br = brandName.trim();
+    if (br.isNotEmpty && br != 'جميع الماركات') {
+      where.add('IFNULL(TRIM(b.name), \'\') = ?');
+      args.add(br);
     }
 
+    if (priceMinIqd != null && priceMinIqd > 0) {
+      where.add('p.sellPrice >= ?');
+      args.add(priceMinIqd.toDouble());
+    }
+    if (priceMaxIqd != null && priceMaxIqd > 0) {
+      where.add('p.sellPrice <= ?');
+      args.add(priceMaxIqd.toDouble());
+    }
+
+    final asc = sortAscending ? 'ASC' : 'DESC';
     final orderBy = switch (sortByArabic) {
-      'السعر' => 'p.sellPrice ASC, p.id DESC',
-      'الكمية' => 'p.qty ASC, p.id DESC',
-      _ => 'p.name COLLATE NOCASE ASC, p.id DESC',
+      'السعر' => 'p.sellPrice $asc, p.id DESC',
+      'الكمية' => 'p.qty $asc, p.id DESC',
+      'تاريخ الإضافة' => 'p.createdAt $asc, p.id DESC',
+      _ => 'p.name COLLATE NOCASE $asc, p.id DESC',
     };
 
-    final whereSql = where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}';
+    final whereSql = 'WHERE ${where.join(' AND ')}';
     return db.rawQuery('''
       SELECT
         p.id,
@@ -495,6 +555,8 @@ class ProductRepository {
         p.buyPrice AS buy,
         p.qty,
         p.status,
+        p.isActive AS isActive,
+        p.lowStockThreshold AS lowStockThreshold,
         IFNULL(p.isPinned, 0) AS isPinned,
         c.name AS categoryName,
         b.name AS brandName
@@ -505,6 +567,146 @@ class ProductRepository {
       ORDER BY $orderBy
       LIMIT ? OFFSET ?
     ''', [...args, limit, offset]);
+  }
+
+  /// عدد المنتجات المطابقة لنفس شروط [queryProductsPage] (بدون LIMIT/OFFSET).
+  Future<int> countInventoryProducts({
+    required String keyword,
+    required String barcode,
+    required String productCode,
+    required String categoryName,
+    required String brandName,
+    required String statusArabic,
+    int? priceMinIqd,
+    int? priceMaxIqd,
+  }) async {
+    final db = await _db;
+    final tid = _tenant.activeTenantId;
+    final where = <String>['p.tenantId = ?'];
+    final args = <Object?>[tid];
+
+    void addStatusAndActive() {
+      switch (statusArabic) {
+        case 'معطّل':
+          where.add('p.isActive = 0');
+          return;
+        default:
+          where.add('p.isActive = 1');
+      }
+      switch (statusArabic) {
+        case 'نشط':
+        case 'في المخزون':
+          where.add("(p.qty > 0 AND p.status = 'instock')");
+          break;
+        case 'مخزون منخفض':
+        case 'منخفض':
+          where.add("p.status = 'low'");
+          break;
+        case 'نفذ من المخزون':
+          where.add('p.qty <= 0');
+          break;
+        case 'الكل':
+        case 'معطّل':
+          break;
+      }
+    }
+
+    addStatusAndActive();
+
+    final kwRaw = keyword.trim();
+    final kw = kwRaw.toLowerCase();
+    if (kw.isNotEmpty) {
+      final safe = kwRaw.replaceAll('%', '').replaceAll('_', '');
+      if (safe.isNotEmpty) {
+        final like = '%${kw}%';
+        final likeRaw = '%$safe%';
+        where.add('''
+(
+  LOWER(p.name) LIKE ? COLLATE NOCASE
+  OR IFNULL(p.barcode, '') LIKE ?
+  OR LOWER(IFNULL(p.productCode, '')) LIKE ? COLLATE NOCASE
+  OR CAST(p.id AS TEXT) LIKE ?
+)
+''');
+        args.addAll([like, likeRaw, like, '%$safe%']);
+      }
+    }
+
+    final bc = barcode.trim();
+    if (bc.isNotEmpty) {
+      where.add('IFNULL(p.barcode, \'\') LIKE ?');
+      args.add('%$bc%');
+    }
+    final pc = productCode.trim();
+    if (pc.isNotEmpty) {
+      where.add('LOWER(IFNULL(p.productCode, \'\')) LIKE ? COLLATE NOCASE');
+      args.add('%${pc.toLowerCase()}%');
+    }
+
+    final cat = categoryName.trim();
+    if (cat.isNotEmpty && cat != 'جميع التصنيفات') {
+      where.add('IFNULL(TRIM(c.name), \'\') = ?');
+      args.add(cat);
+    }
+    final br = brandName.trim();
+    if (br.isNotEmpty && br != 'جميع الماركات') {
+      where.add('IFNULL(TRIM(b.name), \'\') = ?');
+      args.add(br);
+    }
+
+    if (priceMinIqd != null && priceMinIqd > 0) {
+      where.add('p.sellPrice >= ?');
+      args.add(priceMinIqd.toDouble());
+    }
+    if (priceMaxIqd != null && priceMaxIqd > 0) {
+      where.add('p.sellPrice <= ?');
+      args.add(priceMaxIqd.toDouble());
+    }
+
+    final whereSql = 'WHERE ${where.join(' AND ')}';
+    final rows = await db.rawQuery(
+      '''
+      SELECT COUNT(*) AS c
+      FROM products p
+      LEFT JOIN categories c ON c.id = p.categoryId
+      LEFT JOIN brands b ON b.id = p.brandId
+      $whereSql
+      ''',
+      args,
+    );
+    final v = rows.isEmpty ? null : rows.first['c'];
+    return (v as num?)?.toInt() ?? 0;
+  }
+
+  /// إجمالي المنتجات النشطة (للمقارنة «من أصل X»).
+  Future<int> countActiveProductsForTenant() async {
+    final db = await _db;
+    final tid = _tenant.activeTenantId;
+    final rows = await db.rawQuery(
+      '''
+      SELECT COUNT(*) AS c
+      FROM products p
+      WHERE p.tenantId = ? AND p.isActive = 1
+      ''',
+      [tid],
+    );
+    final v = rows.isEmpty ? null : rows.first['c'];
+    return (v as num?)?.toInt() ?? 0;
+  }
+
+  /// إعادة تفعيل منتج كان معطّلاً حذفاً منطقياً.
+  Future<void> activateProduct(int productId) async {
+    final db = await _db;
+    await db.update(
+      'products',
+      {
+        'isActive': 1,
+        'updatedAt': DateTime.now().toIso8601String(),
+      },
+      where: 'id = ?',
+      whereArgs: [productId],
+    );
+    CloudSyncService.instance.scheduleSyncSoon();
   }
 
   /// صفحات لشاشة «تحديث منتج موجود»: بحث موحّد (اسم / باركود / رمز / معرف) أو كل الأصناف عند فراغ النص.
@@ -546,6 +748,7 @@ class ProductRepository {
         p.qty,
         p.lowStockThreshold,
         p.trackInventory,
+        p.stockBaseKind AS stockBaseKind,
         p.status,
         c.name AS categoryName
       FROM products p
@@ -553,7 +756,7 @@ class ProductRepository {
       WHERE ${where.join(' AND ')}
       ORDER BY p.name COLLATE NOCASE ASC, p.id DESC
       LIMIT ? OFFSET ?
-      ''',
+''',
       [...args, limit, offset],
     );
   }
@@ -574,6 +777,7 @@ class ProductRepository {
         p.qty,
         p.lowStockThreshold,
         p.trackInventory,
+        p.stockBaseKind AS stockBaseKind,
         p.status,
         c.name AS categoryName
       FROM products p
@@ -799,12 +1003,8 @@ class ProductRepository {
 
   /// @nodoc — للتوافق المؤقت مع شاشات قديمة تعتمد رقماً تقديرياً.
   Future<int> peekNextSkuNumber() async {
-    final db = await _db;
-    final r = await db.rawQuery(
-        'SELECT COALESCE(MAX(id), 0) + 1 AS n FROM products');
-    final n = r.first['n'];
-    if (n is int) return n;
-    return (n as num).toInt();
+    final v = DateTime.now().microsecondsSinceEpoch % 1000000000;
+    return v.toInt();
   }
 
   Future<List<String>> listCategoryNames() async {
@@ -1244,6 +1444,43 @@ class ProductRepository {
     );
   }
 
+  /// أول منتج يملك هذا الباركود (جدول منتج أو وحدات بيع)، لاستثناء [excludeProductId] عند التحرير.
+  Future<int?> findConflictingProductIdForBarcode(
+    String barcode, {
+    int? excludeProductId,
+  }) async {
+    final bc = barcode.trim().toUpperCase();
+    if (bc.isEmpty) return null;
+    final db = await _db;
+    final prod = await db.query(
+      'products',
+      columns: ['id'],
+      where: excludeProductId == null
+          ? 'UPPER(IFNULL(barcode, "")) = ? AND isActive = 1'
+          : 'UPPER(IFNULL(barcode, "")) = ? AND isActive = 1 AND id != ?',
+      whereArgs:
+          excludeProductId == null ? [bc] : [bc, excludeProductId],
+      limit: 1,
+    );
+    if (prod.isNotEmpty) return prod.first['id'] as int?;
+    final vRows = await db.rawQuery(
+      '''
+      SELECT v.productId AS pid
+      FROM product_unit_variants v
+      JOIN products p ON p.id = v.productId
+      WHERE UPPER(IFNULL(v.barcode, "")) = ?
+        AND v.isActive = 1
+        AND p.isActive = 1
+      LIMIT 1
+      ''',
+      [bc],
+    );
+    if (vRows.isEmpty) return null;
+    final pid = (vRows.first['pid'] as num?)?.toInt();
+    if (excludeProductId != null && pid == excludeProductId) return null;
+    return pid;
+  }
+
   Future<Map<String, dynamic>?> findProductByBarcode(String barcode) async {
     final bc = barcode.trim();
     if (bc.isEmpty) return null;
@@ -1450,7 +1687,6 @@ class ProductRepository {
   }
 
   /// Inserts one product. [barcode] may be null (SQLite allows multiple NULLs on UNIQUE).
-  /// عند [useIdAsProductCode]: يُضبط [productCode] تلقائياً ليطابق رقم المعرّف (1، 2، 3…).
   Future<int> insertProduct({
     required String name,
     String? barcode,
@@ -1463,7 +1699,6 @@ class ProductRepository {
     double? minSellPrice,
     required double qty,
     required double lowStockThreshold,
-    bool useIdAsProductCode = false,
     String? description,
     String? imagePath,
     String? imageUrl,
@@ -1499,23 +1734,19 @@ class ProductRepository {
       bc = b;
     }
 
-    String? code;
-    if (!useIdAsProductCode) {
-      code = productCode?.trim() ?? '';
-      if (code.isEmpty) {
-        code = 'P-${DateTime.now().millisecondsSinceEpoch}';
-      }
-      for (var i = 0; i < 50; i++) {
-        final clash = await db.query(
-          'products',
-          columns: ['id'],
-          where: 'productCode = ?',
-          whereArgs: [code],
-          limit: 1,
-        );
-        if (clash.isEmpty) break;
-        code = 'P-${DateTime.now().millisecondsSinceEpoch}-$i';
-      }
+    final requestedCode = productCode?.trim() ?? '';
+    final code = requestedCode.isNotEmpty
+        ? requestedCode
+        : await _allocateTenantScopedProductCode(tid, db);
+    final clash = await db.query(
+      'products',
+      columns: ['id'],
+      where: 'tenantId = ? AND productCode = ?',
+      whereArgs: [tid, code],
+      limit: 1,
+    );
+    if (clash.isNotEmpty) {
+      throw StateError('duplicate_product_code');
     }
 
     String? nz(String? s) {
@@ -1559,16 +1790,6 @@ class ProductRepository {
       'grade': nz(grade),
       'expiryAlertDaysBefore': expiryAlertDaysBefore,
     });
-
-    if (useIdAsProductCode) {
-      final sku = '$id';
-      await db.update(
-        'products',
-        {'productCode': sku},
-        where: 'id = ?',
-        whereArgs: [id],
-      );
-    }
 
     // وحدة افتراضية للبيع/المسح (factor=1). تُكمّل مهاجرات قواعد قديمة لكنها لا تغطي المنتجات الجديدة بعد إنشاء الجدول.
     try {
@@ -1838,8 +2059,8 @@ class ProductRepository {
       final rows = await e.query(
         'products',
         columns: ['id'],
-        where: 'productCode = ?',
-        whereArgs: [code],
+        where: 'tenantId = ? AND productCode = ?',
+        whereArgs: [t, code],
         limit: 1,
       );
       if (rows.isEmpty) return code;

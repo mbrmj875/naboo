@@ -177,12 +177,12 @@ abstract final class AppThemeResolver {
 
     OutlineInputBorder outlineBorder(Color borderColor, double w) {
       return OutlineInputBorder(
-        borderRadius: ac.md,
+        borderRadius: BorderRadius.circular(8),
         borderSide: BorderSide(color: borderColor, width: w),
       );
     }
 
-    final inputBase = outlineBorder(outline, 1);
+    final inputBase = outlineBorder(outline, 1.5);
     final themedBase = _applyAppTypography(
       base.copyWith(
         extensions: <ThemeExtension<dynamic>>[ac],
@@ -211,9 +211,9 @@ abstract final class AppThemeResolver {
           border: inputBase,
           enabledBorder: inputBase,
           focusedBorder: outlineBorder(cs.primary, 2),
-          errorBorder: outlineBorder(cs.error, 1),
+          errorBorder: outlineBorder(cs.error, 1.5),
           focusedErrorBorder: outlineBorder(cs.error, 2),
-          disabledBorder: outlineBorder(outline.withValues(alpha: 0.5), 1),
+          disabledBorder: outlineBorder(outline.withValues(alpha: 0.5), 1.5),
         ),
         textButtonTheme: TextButtonThemeData(
           style: TextButton.styleFrom(
@@ -327,14 +327,14 @@ abstract final class AppThemeResolver {
         ).merge(themedBase.outlinedButtonTheme.style),
       ),
       inputDecorationTheme: themedBase.inputDecorationTheme.copyWith(
-        border: outlineBorder(mergedScheme.outline, 1),
-        enabledBorder: outlineBorder(mergedScheme.outline, 1),
+        border: outlineBorder(mergedScheme.outline, 1.5),
+        enabledBorder: outlineBorder(mergedScheme.outline, 1.5),
         focusedBorder: outlineBorder(palette.navy, 2),
-        errorBorder: outlineBorder(mergedScheme.error, 1),
+        errorBorder: outlineBorder(mergedScheme.error, 1.5),
         focusedErrorBorder: outlineBorder(mergedScheme.error, 2),
         disabledBorder: outlineBorder(
           mergedScheme.outline.withValues(alpha: 0.5),
-          1,
+          1.5,
         ),
       ),
       progressIndicatorTheme: themedBase.progressIndicatorTheme.copyWith(

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../theme/erp_input_constants.dart';
 import '../theme/design_tokens.dart';
 
 /// انتقالات متسقة عبر المنصات.
@@ -68,9 +69,42 @@ class AppTheme {
           : const Color(0xFF334155),
     );
 
-    final inputBorder = OutlineInputBorder(
-      borderRadius: AppShape.none,
-      borderSide: BorderSide(color: outline, width: 1),
+    final inputFill = brightness == Brightness.light
+        ? Colors.white
+        : const Color(0xFF0F172A);
+
+    final inputBorderThin = OutlineInputBorder(
+      borderRadius: ErpInputConstants.borderRadius,
+      borderSide: BorderSide(
+        color: outline,
+        width: ErpInputConstants.borderWidthDefault,
+      ),
+    );
+
+    final inputBorderFocus = OutlineInputBorder(
+      borderRadius: ErpInputConstants.borderRadius,
+      borderSide: BorderSide(
+        color: primary,
+        width: ErpInputConstants.borderWidthFocus,
+      ),
+    );
+
+    final inputBorderError = OutlineInputBorder(
+      borderRadius: ErpInputConstants.borderRadius,
+      borderSide: BorderSide(color: cs.error, width: ErpInputConstants.borderWidthDefault),
+    );
+
+    final inputBorderErrFocus = OutlineInputBorder(
+      borderRadius: ErpInputConstants.borderRadius,
+      borderSide: BorderSide(color: cs.error, width: ErpInputConstants.borderWidthFocus),
+    );
+
+    final inputBorderDis = OutlineInputBorder(
+      borderRadius: ErpInputConstants.borderRadius,
+      borderSide: BorderSide(
+        color: outline.withValues(alpha: 0.5),
+        width: ErpInputConstants.borderWidthDefault,
+      ),
     );
 
     return ThemeData(
@@ -133,34 +167,16 @@ class AppTheme {
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: brightness == Brightness.light
-            ? Colors.white
-            : const Color(0xFF0F172A),
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-        border: inputBorder,
-        enabledBorder: inputBorder,
-        focusedBorder: OutlineInputBorder(
-          borderRadius: AppShape.none,
-          borderSide: BorderSide(color: primary, width: 2),
-        ),
-        errorBorder: OutlineInputBorder(
-          borderRadius: AppShape.none,
-          borderSide: BorderSide(color: cs.error, width: 1),
-        ),
-        focusedErrorBorder: OutlineInputBorder(
-          borderRadius: AppShape.none,
-          borderSide: BorderSide(color: cs.error, width: 2),
-        ),
-        disabledBorder: OutlineInputBorder(
-          borderRadius: AppShape.none,
-          borderSide: BorderSide(
-            color: outline.withValues(alpha: 0.5),
-            width: 1,
-          ),
-        ),
-        labelStyle: TextStyle(color: onSurfaceVariant, fontSize: 14),
-        hintStyle: TextStyle(color: onSurfaceVariant.withValues(alpha: 0.8)),
+        fillColor: inputFill,
+        contentPadding: ErpInputConstants.contentPadding,
+        border: inputBorderThin,
+        enabledBorder: inputBorderThin,
+        focusedBorder: inputBorderFocus,
+        errorBorder: inputBorderError,
+        focusedErrorBorder: inputBorderErrFocus,
+        disabledBorder: inputBorderDis,
+        labelStyle: TextStyle(color: onSurfaceVariant, fontSize: 13, fontWeight: FontWeight.w500),
+        hintStyle: TextStyle(color: onSurfaceVariant.withValues(alpha: 0.82), fontSize: 13),
       ),
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(

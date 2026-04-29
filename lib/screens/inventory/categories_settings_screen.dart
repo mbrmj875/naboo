@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../services/product_repository.dart';
+import '../../utils/screen_layout.dart';
 
 /// إعدادات التصنيفات — بحث/فلترة وقائمة نتائج (بدون بيانات وهمية).
 class CategoriesSettingsScreen extends StatefulWidget {
@@ -72,12 +73,12 @@ class _CategoriesSettingsScreenState extends State<CategoriesSettingsScreen> {
           textDirection: TextDirection.rtl,
           child: StatefulBuilder(
             builder: (context, setModal) {
-              final parents = _rows
-                  .map((r) => Map<String, dynamic>.from(r))
-                  .toList()
-                ..sort((a, b) => (a['name'] as String)
-                    .toLowerCase()
-                    .compareTo((b['name'] as String).toLowerCase()));
+              final parents =
+                  _rows.map((r) => Map<String, dynamic>.from(r)).toList()..sort(
+                    (a, b) => (a['name'] as String).toLowerCase().compareTo(
+                      (b['name'] as String).toLowerCase(),
+                    ),
+                  );
 
               return AlertDialog(
                 title: const Text('تصنيف جديد'),
@@ -330,26 +331,17 @@ class _SearchCard extends StatelessWidget {
     final cs = theme.colorScheme;
 
     final nameItems = <DropdownMenuItem<int?>>[
-      const DropdownMenuItem<int?>(
-        value: null,
-        child: Text('الكل'),
-      ),
+      const DropdownMenuItem<int?>(value: null, child: Text('الكل')),
       ...rows.map(
         (r) => DropdownMenuItem<int?>(
           value: r['id'] as int,
-          child: Text(
-            r['name'] as String,
-            overflow: TextOverflow.ellipsis,
-          ),
+          child: Text(r['name'] as String, overflow: TextOverflow.ellipsis),
         ),
       ),
     ];
 
     final parentItems = <DropdownMenuItem<int>>[
-      DropdownMenuItem<int>(
-        value: kParentAll,
-        child: const Text('الكل'),
-      ),
+      DropdownMenuItem<int>(value: kParentAll, child: const Text('الكل')),
       DropdownMenuItem<int>(
         value: kParentRootsOnly,
         child: const Text('جذور فقط (بدون أب)'),
@@ -357,10 +349,7 @@ class _SearchCard extends StatelessWidget {
       ...rows.map(
         (r) => DropdownMenuItem<int>(
           value: r['id'] as int,
-          child: Text(
-            'تحت: ${r['name']}',
-            overflow: TextOverflow.ellipsis,
-          ),
+          child: Text('تحت: ${r['name']}', overflow: TextOverflow.ellipsis),
         ),
       ),
     ];
@@ -376,7 +365,7 @@ class _SearchCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Align(
-            alignment: Alignment.centerRight,
+            alignment: AlignmentDirectional.centerEnd,
             child: Text(
               'بحث',
               style: theme.textTheme.titleMedium?.copyWith(
@@ -460,9 +449,14 @@ class _ResultsCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+            padding: EdgeInsetsDirectional.only(
+              start: ScreenLayout.of(context).pageHorizontalGap,
+              end: ScreenLayout.of(context).pageHorizontalGap,
+              top: 14,
+              bottom: 8,
+            ),
             child: Align(
-              alignment: Alignment.centerRight,
+              alignment: AlignmentDirectional.centerEnd,
               child: Text(
                 'النتائج',
                 style: theme.textTheme.titleMedium?.copyWith(
@@ -498,8 +492,10 @@ class _ResultsCard extends StatelessWidget {
                     ? 'تحت: $parentName'
                     : null;
                 return Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -508,7 +504,11 @@ class _ResultsCard extends StatelessWidget {
                         borderRadius: BorderRadius.zero,
                         child: PopupMenuButton<String>(
                           padding: const EdgeInsets.all(8),
-                          child: Icon(Icons.more_horiz, color: cs.primary, size: 22),
+                          child: Icon(
+                            Icons.more_horiz,
+                            color: cs.primary,
+                            size: 22,
+                          ),
                           onSelected: (v) {
                             if (v == 'delete') onMenuDelete(row);
                           },

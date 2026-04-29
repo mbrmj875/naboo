@@ -13,6 +13,7 @@ import '../../services/database_helper.dart';
 import '../../theme/app_corner_style.dart';
 import '../../utils/invoice_barcode.dart';
 import '../../utils/iraqi_currency_format.dart';
+import '../../utils/screen_layout.dart';
 
 /// واجهة مرتجع مخصّصة: قائمة منتجات فقط + ملخص مالي يظهر عند اختيار الكميات.
 /// الربط الصريح: [Invoice.originalInvoiceId] = رقم الفاتورة الأصلية المفتوحة.
@@ -448,6 +449,7 @@ class _ProcessReturnScreenState extends State<ProcessReturnScreen> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final ac = context.appCorners;
+    final gap = context.screenLayout.pageHorizontalGap;
 
     if (_loading) {
       return Directionality(
@@ -518,7 +520,7 @@ class _ProcessReturnScreenState extends State<ProcessReturnScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+              padding: EdgeInsetsDirectional.fromSTEB(gap, 14, gap, 10),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -659,7 +661,7 @@ class _ProcessReturnScreenState extends State<ProcessReturnScreen> {
               ),
             ),
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              padding: EdgeInsetsDirectional.fromSTEB(gap, 0, gap, 8),
               child: Row(
                 children: [
                   Icon(
@@ -683,7 +685,7 @@ class _ProcessReturnScreenState extends State<ProcessReturnScreen> {
             ),
             Expanded(
               child: ListView.builder(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                padding: EdgeInsetsDirectional.fromSTEB(gap, 0, gap, 12),
                 itemCount: _lines.length,
                 itemBuilder: (ctx, i) {
                   final l = _lines[i];

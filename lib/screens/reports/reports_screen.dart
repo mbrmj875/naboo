@@ -8,6 +8,7 @@ import 'dart:async' show Timer, unawaited;
 
 import '../../models/invoice.dart';
 import '../../services/reports_repository.dart';
+import '../../services/cloud_sync_service.dart';
 import '../../theme/app_corner_style.dart';
 import '../../theme/design_tokens.dart';
 import '../../utils/screen_layout.dart';
@@ -32,6 +33,11 @@ String _toEnglishDigits(String input) {
     out = out.replaceAll(easternArabicIndic[i], '$i');
   }
   return out;
+}
+
+EdgeInsetsDirectional _reportPanelOuterPadding(BuildContext context) {
+  final g = ScreenLayout.of(context).pageHorizontalGap;
+  return EdgeInsetsDirectional.only(start: g, end: g, top: 8, bottom: 28);
 }
 
 /// مركز التقارير — فترات زمنية وتحليلات من قاعدة البيانات.
@@ -201,6 +207,16 @@ class _ReportsScreenState extends State<ReportsScreen> {
     }
   }
 
+  Future<void> _refreshFromServer() async {
+    await CloudSyncService.instance.syncNow(
+      forcePull: true,
+      forcePush: true,
+      forceImportOnPull: true,
+    );
+    if (!mounted) return;
+    await _reload();
+  }
+
   void _setRange(DateTime from, DateTime to) {
     setState(() {
       _from = from;
@@ -235,7 +251,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 sections: _sections,
                 selectedSection: _section,
                 onSectionChanged: (idx) => setState(() => _section = idx),
-                onRefresh: _loading ? null : _reload,
+                onRefresh: _loading ? null : _refreshFromServer,
                 onChanged: _setRange,
               ),
               Expanded(
@@ -332,9 +348,7 @@ class _ReportsSideRailState extends State<_ReportsSideRail> {
             ],
           ),
           border: BorderDirectional(
-            start: BorderSide(
-              color: cs.outlineVariant.withValues(alpha: 0.5),
-            ),
+            start: BorderSide(color: cs.outlineVariant.withValues(alpha: 0.5)),
           ),
           boxShadow: [
             BoxShadow(
@@ -353,15 +367,20 @@ class _ReportsSideRailState extends State<_ReportsSideRail> {
                 decoration: BoxDecoration(
                   color: cs.primaryContainer.withValues(alpha: 0.60),
                   borderRadius: ac.md,
-                  border: Border.all(
-                    color: cs.primary.withValues(alpha: 0.18),
-                  ),
+                  border: Border.all(color: cs.primary.withValues(alpha: 0.18)),
                 ),
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
                   child: Row(
                     children: [
-                      Icon(Icons.dashboard_customize_rounded, color: cs.primary, size: 18),
+                      Icon(
+                        Icons.dashboard_customize_rounded,
+                        color: cs.primary,
+                        size: 18,
+                      ),
                       const SizedBox(width: 8),
                       Text(
                         'أقسام التقارير',
@@ -407,7 +426,9 @@ class _ReportsSideRailState extends State<_ReportsSideRail> {
                           color: sel
                               ? null
                               : hovered
-                              ? cs.surfaceContainerHighest.withValues(alpha: 0.55)
+                              ? cs.surfaceContainerHighest.withValues(
+                                  alpha: 0.55,
+                                )
                               : cs.surface,
                           border: Border.all(
                             color: sel
@@ -419,7 +440,9 @@ class _ReportsSideRailState extends State<_ReportsSideRail> {
                           boxShadow: active
                               ? [
                                   BoxShadow(
-                                    color: cs.shadow.withValues(alpha: sel ? 0.18 : 0.08),
+                                    color: cs.shadow.withValues(
+                                      alpha: sel ? 0.18 : 0.08,
+                                    ),
                                     blurRadius: sel ? 16 : 10,
                                     offset: const Offset(0, 5),
                                   ),
@@ -442,19 +465,26 @@ class _ReportsSideRailState extends State<_ReportsSideRail> {
                                   Icon(
                                     s.icon,
                                     size: 22,
-                                    color: sel ? cs.onPrimary : cs.onSurfaceVariant,
+                                    color: sel
+                                        ? cs.onPrimary
+                                        : cs.onSurfaceVariant,
                                   ),
                                   const SizedBox(width: 12),
                                   Expanded(
                                     child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
                                       children: [
                                         Text(
                                           s.label,
                                           style: TextStyle(
-                                            fontWeight: sel ? FontWeight.w800 : FontWeight.w700,
+                                            fontWeight: sel
+                                                ? FontWeight.w800
+                                                : FontWeight.w700,
                                             fontSize: 13,
-                                            color: sel ? cs.onPrimary : cs.onSurface,
+                                            color: sel
+                                                ? cs.onPrimary
+                                                : cs.onSurface,
                                           ),
                                         ),
                                         const SizedBox(height: 2),
@@ -466,7 +496,9 @@ class _ReportsSideRailState extends State<_ReportsSideRail> {
                                             fontSize: 10.5,
                                             height: 1.25,
                                             color: sel
-                                                ? cs.onPrimary.withValues(alpha: 0.88)
+                                                ? cs.onPrimary.withValues(
+                                                    alpha: 0.88,
+                                                  )
                                                 : cs.onSurfaceVariant,
                                           ),
                                         ),
@@ -486,11 +518,19 @@ class _ReportsSideRailState extends State<_ReportsSideRail> {
                                       if (v == 'open') {
                                         widget.onSelect(i);
                                       } else if (v == 'copy') {
-                                        Clipboard.setData(ClipboardData(text: s.label));
-                                        ScaffoldMessenger.of(context).showSnackBar(
+                                        Clipboard.setData(
+                                          ClipboardData(text: s.label),
+                                        );
+                                        ScaffoldMessenger.of(
+                                          context,
+                                        ).showSnackBar(
                                           SnackBar(
-                                            content: Text('تم نسخ اسم القسم: ${s.label}'),
-                                            duration: const Duration(seconds: 2),
+                                            content: Text(
+                                              'تم نسخ اسم القسم: ${s.label}',
+                                            ),
+                                            duration: const Duration(
+                                              seconds: 2,
+                                            ),
                                           ),
                                         );
                                       } else if (v == 'about') {
@@ -502,7 +542,8 @@ class _ReportsSideRailState extends State<_ReportsSideRail> {
                                               content: Text(s.subtitle),
                                               actions: [
                                                 TextButton(
-                                                  onPressed: () => Navigator.of(ctx).pop(),
+                                                  onPressed: () =>
+                                                      Navigator.of(ctx).pop(),
                                                   child: const Text('حسنًا'),
                                                 ),
                                               ],
@@ -516,7 +557,9 @@ class _ReportsSideRailState extends State<_ReportsSideRail> {
                                         value: 'open',
                                         child: ListTile(
                                           dense: true,
-                                          leading: Icon(Icons.open_in_new_rounded),
+                                          leading: Icon(
+                                            Icons.open_in_new_rounded,
+                                          ),
                                           title: Text('فتح القسم'),
                                         ),
                                       ),
@@ -532,7 +575,9 @@ class _ReportsSideRailState extends State<_ReportsSideRail> {
                                         value: 'about',
                                         child: ListTile(
                                           dense: true,
-                                          leading: Icon(Icons.info_outline_rounded),
+                                          leading: Icon(
+                                            Icons.info_outline_rounded,
+                                          ),
                                           title: Text('عرض وصف القسم'),
                                         ),
                                       ),
@@ -588,10 +633,10 @@ class _DateStrip extends StatelessWidget {
     final ac = context.appCorners;
     final current = sections[selectedSection];
     final gap = ScreenLayout.of(context).pageHorizontalGap;
-    final narrow = ScreenLayout.of(context).isNarrowWidth ||
+    final narrow =
+        ScreenLayout.of(context).isNarrowWidth ||
         MediaQuery.sizeOf(context).width < 440;
-    final dateLine =
-        '${_dateFmt.format(from)}  ←  ${_dateFmt.format(to)}';
+    final dateLine = '${_dateFmt.format(from)}  ←  ${_dateFmt.format(to)}';
     final dateStyle = TextStyle(
       fontWeight: FontWeight.w600,
       fontSize: narrow ? 11.5 : 12.5,
@@ -778,7 +823,10 @@ class _DateStrip extends StatelessWidget {
         );
       },
       transitionBuilder: (_, animation, __, child) {
-        final curved = CurvedAnimation(parent: animation, curve: Curves.easeOutCubic);
+        final curved = CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeOutCubic,
+        );
         return FadeTransition(
           opacity: curved,
           child: ScaleTransition(
@@ -800,6 +848,7 @@ class _TopSlimMenuButton extends StatelessWidget {
 
   final IconData icon;
   final String label;
+
   /// على الشاشات الضيقة: أيقونة + سهم فقط مع [Tooltip] من الـ PopupMenuButton / [InkWell] الأب.
   final bool compact;
 
@@ -852,7 +901,11 @@ class _TopSlimMenuButton extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 2),
-          Icon(Icons.keyboard_arrow_down_rounded, size: 16, color: cs.onSurfaceVariant),
+          Icon(
+            Icons.keyboard_arrow_down_rounded,
+            size: 16,
+            color: cs.onSurfaceVariant,
+          ),
         ],
       ),
     );
@@ -867,7 +920,14 @@ class _FigmaLikeRangeDialog extends StatefulWidget {
   State<_FigmaLikeRangeDialog> createState() => _FigmaLikeRangeDialogState();
 }
 
-enum _RangeQuickPreset { today, yesterday, lastWeek, lastMonth, lastQuarter, reset }
+enum _RangeQuickPreset {
+  today,
+  yesterday,
+  lastWeek,
+  lastMonth,
+  lastQuarter,
+  reset,
+}
 
 class _FigmaLikeRangeDialogState extends State<_FigmaLikeRangeDialog> {
   late DateTime _start;
@@ -922,11 +982,16 @@ class _FigmaLikeRangeDialogState extends State<_FigmaLikeRangeDialog> {
             child: Row(
               children: [
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 7,
+                  ),
                   decoration: BoxDecoration(
                     color: cs.primaryContainer.withValues(alpha: 0.5),
                     borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: cs.primary.withValues(alpha: 0.22)),
+                    border: Border.all(
+                      color: cs.primary.withValues(alpha: 0.22),
+                    ),
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
@@ -940,7 +1005,11 @@ class _FigmaLikeRangeDialogState extends State<_FigmaLikeRangeDialog> {
                         ),
                       ),
                       const SizedBox(width: 4),
-                      Icon(Icons.keyboard_arrow_down_rounded, size: 16, color: cs.primary),
+                      Icon(
+                        Icons.keyboard_arrow_down_rounded,
+                        size: 16,
+                        color: cs.primary,
+                      ),
                     ],
                   ),
                 ),
@@ -963,7 +1032,9 @@ class _FigmaLikeRangeDialogState extends State<_FigmaLikeRangeDialog> {
                   padding: const EdgeInsets.fromLTRB(8, 10, 8, 10),
                   decoration: BoxDecoration(
                     border: BorderDirectional(
-                      end: BorderSide(color: cs.outlineVariant.withValues(alpha: 0.5)),
+                      end: BorderSide(
+                        color: cs.outlineVariant.withValues(alpha: 0.5),
+                      ),
                     ),
                   ),
                   child: Column(
@@ -974,25 +1045,30 @@ class _FigmaLikeRangeDialogState extends State<_FigmaLikeRangeDialog> {
                       ),
                       _QuickPresetTile(
                         label: 'أمس',
-                        onTap: () => _applyQuickPreset(_RangeQuickPreset.yesterday),
+                        onTap: () =>
+                            _applyQuickPreset(_RangeQuickPreset.yesterday),
                       ),
                       _QuickPresetTile(
                         label: 'آخر أسبوع',
-                        onTap: () => _applyQuickPreset(_RangeQuickPreset.lastWeek),
+                        onTap: () =>
+                            _applyQuickPreset(_RangeQuickPreset.lastWeek),
                       ),
                       _QuickPresetTile(
                         label: 'آخر شهر',
-                        onTap: () => _applyQuickPreset(_RangeQuickPreset.lastMonth),
+                        onTap: () =>
+                            _applyQuickPreset(_RangeQuickPreset.lastMonth),
                       ),
                       _QuickPresetTile(
                         label: 'آخر ربع سنة',
-                        onTap: () => _applyQuickPreset(_RangeQuickPreset.lastQuarter),
+                        onTap: () =>
+                            _applyQuickPreset(_RangeQuickPreset.lastQuarter),
                       ),
                       const Spacer(),
                       Align(
-                        alignment: Alignment.centerLeft,
+                        alignment: AlignmentDirectional.centerStart,
                         child: TextButton(
-                          onPressed: () => _applyQuickPreset(_RangeQuickPreset.reset),
+                          onPressed: () =>
+                              _applyQuickPreset(_RangeQuickPreset.reset),
                           child: const Text('إعادة ضبط'),
                         ),
                       ),
@@ -1010,7 +1086,9 @@ class _FigmaLikeRangeDialogState extends State<_FigmaLikeRangeDialog> {
                             Expanded(
                               child: Center(
                                 child: Text(
-                                  _toEnglishDigits(_monthFmt.format(_displayMonth)),
+                                  _toEnglishDigits(
+                                    _monthFmt.format(_displayMonth),
+                                  ),
                                   style: TextStyle(
                                     fontSize: 15,
                                     fontWeight: FontWeight.w800,
@@ -1067,11 +1145,12 @@ class _FigmaLikeRangeDialogState extends State<_FigmaLikeRangeDialog> {
                           child: GridView.builder(
                             physics: const NeverScrollableScrollPhysics(),
                             itemCount: monthCells.length,
-                            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                              crossAxisCount: 7,
-                              mainAxisSpacing: 4,
-                              crossAxisSpacing: 4,
-                            ),
+                            gridDelegate:
+                                const SliverGridDelegateWithFixedCrossAxisCount(
+                                  crossAxisCount: 7,
+                                  mainAxisSpacing: 4,
+                                  crossAxisSpacing: 4,
+                                ),
                             itemBuilder: (context, i) {
                               final day = monthCells[i];
                               final selectable = !day.isAfter(_today);
@@ -1082,7 +1161,9 @@ class _FigmaLikeRangeDialogState extends State<_FigmaLikeRangeDialog> {
                               final boundary = isStart || isEnd;
                               return InkWell(
                                 borderRadius: BorderRadius.circular(10),
-                                onTap: selectable ? () => _onPickDay(day) : null,
+                                onTap: selectable
+                                    ? () => _onPickDay(day)
+                                    : null,
                                 child: Container(
                                   decoration: BoxDecoration(
                                     color: boundary
@@ -1099,12 +1180,17 @@ class _FigmaLikeRangeDialogState extends State<_FigmaLikeRangeDialog> {
                                         color: boundary
                                             ? cs.onPrimary
                                             : !selectable
-                                            ? cs.onSurfaceVariant.withValues(alpha: 0.25)
+                                            ? cs.onSurfaceVariant.withValues(
+                                                alpha: 0.25,
+                                              )
                                             : inMonth
                                             ? cs.onSurface
-                                            : cs.onSurfaceVariant.withValues(alpha: 0.55),
-                                        fontWeight:
-                                            boundary ? FontWeight.w800 : FontWeight.w500,
+                                            : cs.onSurfaceVariant.withValues(
+                                                alpha: 0.55,
+                                              ),
+                                        fontWeight: boundary
+                                            ? FontWeight.w800
+                                            : FontWeight.w500,
                                       ),
                                     ),
                                   ),
@@ -1133,7 +1219,9 @@ class _FigmaLikeRangeDialogState extends State<_FigmaLikeRangeDialog> {
                   onPressed: () {
                     final start = _start.isBefore(_end) ? _start : _end;
                     final end = _end.isAfter(_start) ? _end : _start;
-                    Navigator.of(context).pop(DateTimeRange(start: start, end: end));
+                    Navigator.of(
+                      context,
+                    ).pop(DateTimeRange(start: start, end: end));
                   },
                   child: const Text('تطبيق'),
                 ),
@@ -1252,7 +1340,7 @@ class _QuickPresetTile extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
         child: Align(
-          alignment: Alignment.centerLeft,
+          alignment: AlignmentDirectional.centerStart,
           child: Text(
             label,
             style: TextStyle(
@@ -1283,7 +1371,7 @@ class _PanelDashboard extends StatelessWidget {
     );
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
+      padding: _reportPanelOuterPadding(context),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -1317,7 +1405,9 @@ class _PanelDashboard extends StatelessWidget {
                 title: 'صافي بعد المصروفات',
                 value: '${_numFmt.format(netAfterExpenses)} د.ع',
                 icon: Icons.savings_outlined,
-                color: netAfterExpenses >= 0 ? const Color(0xFF16A34A) : const Color(0xFFDC2626),
+                color: netAfterExpenses >= 0
+                    ? const Color(0xFF16A34A)
+                    : const Color(0xFFDC2626),
               ),
               _KpiCard(
                 title: 'فواتير / مرتجعات',
@@ -1372,7 +1462,8 @@ class _PanelDashboard extends StatelessWidget {
               for (final d in data.dailyExpenses) {
                 datesSet.add(d.dayLabel);
               }
-              final dates = datesSet.where((e) => e.isNotEmpty).toList()..sort();
+              final dates = datesSet.where((e) => e.isNotEmpty).toList()
+                ..sort();
               final salesMap = {
                 for (final d in data.dailySales) d.dayLabel: d.amount,
               };
@@ -1439,9 +1530,7 @@ class _PanelSales extends StatelessWidget {
       InvoiceType.delivery,
     ];
 
-    final typeTotals = <InvoiceType, double>{
-      for (final t in salesTypes) t: 0,
-    };
+    final typeTotals = <InvoiceType, double>{for (final t in salesTypes) t: 0};
     data.salesByType.forEach((typeIdx, sum) {
       if (typeIdx >= 0 && typeIdx < InvoiceType.values.length) {
         final t = InvoiceType.values[typeIdx];
@@ -1449,10 +1538,11 @@ class _PanelSales extends StatelessWidget {
       }
     });
 
-    final list = typeTotals.entries
-        .map((e) => _SalesTypeRow(type: e.key, total: e.value))
-        .toList()
-      ..sort((a, b) => b.total.compareTo(a.total));
+    final list =
+        typeTotals.entries
+            .map((e) => _SalesTypeRow(type: e.key, total: e.value))
+            .toList()
+          ..sort((a, b) => b.total.compareTo(a.total));
 
     final salesTotal = list.fold<double>(0, (s, r) => s + r.total);
     final netApprox = data.salesNet - data.returnsTotal;
@@ -1478,7 +1568,7 @@ class _PanelSales extends StatelessWidget {
     final kpiTotal = kpiPie.fold<double>(0, (a, b) => a + b.value);
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
+      padding: _reportPanelOuterPadding(context),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -1519,8 +1609,7 @@ class _PanelSales extends StatelessWidget {
           const SizedBox(height: 18),
           _AnalyticsCard(
             title: 'توزيع المبيعات حسب نوع الدفع',
-            subtitle:
-                'مخطط بيتزا تفاعلي — من فواتير البيع فقط (بدون السندات)',
+            subtitle: 'مخطط بيتزا تفاعلي — من فواتير البيع فقط (بدون السندات)',
             child: list.isEmpty || salesTotal <= 0
                 ? Padding(
                     padding: const EdgeInsets.symmetric(vertical: 20),
@@ -1567,12 +1656,15 @@ class _PanelSales extends StatelessWidget {
               for (final d in data.dailySalesByType) {
                 datesSet.add(d.dayLabel);
               }
-              final dates = datesSet.where((e) => e.isNotEmpty).toList()..sort();
+              final dates = datesSet.where((e) => e.isNotEmpty).toList()
+                ..sort();
               // بناء السلاسل بنفس ترتيب "list" (أكبر نوع أولًا).
               final byKey = <int, Map<String, double>>{};
               for (final d in data.dailySalesByType) {
-                byKey.putIfAbsent(d.typeIdx, () => <String, double>{})
-                    [d.dayLabel] = d.amount;
+                byKey.putIfAbsent(
+                  d.typeIdx,
+                  () => <String, double>{},
+                )[d.dayLabel] = d.amount;
               }
               final series = <_AreaSeries>[
                 for (final r in list)
@@ -1580,15 +1672,13 @@ class _PanelSales extends StatelessWidget {
                     name: _invoiceTypeLabel(r.type),
                     color: _invoiceTypeAccentColor(r.type, cs),
                     values: [
-                      for (final d in dates)
-                        (byKey[r.type.index]?[d] ?? 0.0),
+                      for (final d in dates) (byKey[r.type.index]?[d] ?? 0.0),
                     ],
                   ),
               ];
               return _StackedAreaCard(
                 title: 'اتجاه أنواع الدفع عبر الزمن',
-                subtitle:
-                    'مكدّس — يبني كل يوم مجموع كل نوع دفع مباشرة من SQL',
+                subtitle: 'مكدّس — يبني كل يوم مجموع كل نوع دفع مباشرة من SQL',
                 series: series,
                 dates: dates,
               );
@@ -1601,7 +1691,9 @@ class _PanelSales extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: const [
-                _BulletLine('هذا القسم يعرض المبيعات فقط: نقدي/دين/تقسيط/توصيل.'),
+                _BulletLine(
+                  'هذا القسم يعرض المبيعات فقط: نقدي/دين/تقسيط/توصيل.',
+                ),
                 _BulletLine(
                   'سندات التحصيل/تسديد الأقساط/دفع المورد تُستبعد من “المبيعات” (لأنها ليست إيراد بيع).',
                 ),
@@ -1698,7 +1790,8 @@ class _SalesByTypeTableState extends State<_SalesByTypeTable> {
     _sortColumnIndex = 1;
     _sortAscending = ascending;
     _rows.sort(
-      (a, b) => ascending ? a.total.compareTo(b.total) : b.total.compareTo(a.total),
+      (a, b) =>
+          ascending ? a.total.compareTo(b.total) : b.total.compareTo(a.total),
     );
     if (notify) setState(() {});
   }
@@ -1708,7 +1801,14 @@ class _SalesByTypeTableState extends State<_SalesByTypeTable> {
     final cs = Theme.of(context).colorScheme;
     final ac = context.appCorners;
     final w = MediaQuery.sizeOf(context).width;
-    final rowsPerPage = (w >= 1200 ? 8 : w >= 900 ? 6 : 5).clamp(5, 10).toInt();
+    final rowsPerPage =
+        (w >= 1200
+                ? 8
+                : w >= 900
+                ? 6
+                : 5)
+            .clamp(5, 10)
+            .toInt();
 
     return ClipRRect(
       borderRadius: ac.sm,
@@ -1743,10 +1843,7 @@ class _SalesByTypeTableState extends State<_SalesByTypeTable> {
                       numeric: true,
                       onSort: (_, asc) => _sortByTotal(ascending: asc),
                     ),
-                    const DataColumn(
-                      label: Text('النسبة'),
-                      numeric: true,
-                    ),
+                    const DataColumn(label: Text('النسبة'), numeric: true),
                   ],
                   source: _ds,
                 ),
@@ -1826,10 +1923,7 @@ class _PieCallout {
 }
 
 class _InteractiveSalesPie extends StatefulWidget {
-  const _InteractiveSalesPie({
-    required this.slices,
-    required this.total,
-  });
+  const _InteractiveSalesPie({required this.slices, required this.total});
   final List<_PieSlice> slices;
   final double total;
 
@@ -1882,7 +1976,9 @@ class _InteractiveSalesPieState extends State<_InteractiveSalesPie> {
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTapDown: (e) {
-              setState(() => _activeIndex = _sliceIndexAt(e.localPosition, size));
+              setState(
+                () => _activeIndex = _sliceIndexAt(e.localPosition, size),
+              );
             },
             child: CustomPaint(
               size: size,
@@ -2043,7 +2139,9 @@ class _PiePainter extends CustomPainter {
         textAlign: isRight ? TextAlign.right : TextAlign.left,
       )..layout(maxWidth: size.width * 0.30);
 
-      final textX = isRight ? end.dx - math.max(labelTp.width, pctTp.width) : end.dx;
+      final textX = isRight
+          ? end.dx - math.max(labelTp.width, pctTp.width)
+          : end.dx;
       final textY = end.dy - (labelTp.height + pctTp.height + 2) / 2;
       labelTp.paint(canvas, Offset(textX, textY));
       pctTp.paint(canvas, Offset(textX, textY + labelTp.height + 2));
@@ -2052,7 +2150,9 @@ class _PiePainter extends CustomPainter {
   }
 
   int _slicesSignature(List<_PieSlice> list) {
-    return Object.hashAll(list.map((s) => Object.hash(s.label, s.value, s.color.value)));
+    return Object.hashAll(
+      list.map((s) => Object.hash(s.label, s.value, s.color.value)),
+    );
   }
 
   @override
@@ -2111,11 +2211,7 @@ class _PanelCustomers extends StatelessWidget {
             .fold<double>(0, (s, e) => s + math.max(0.0, e.amount));
         if (rest > 0) {
           slices.add(
-            _PieSlice(
-              label: 'آخرون',
-              value: rest,
-              color: cs.outlineVariant,
-            ),
+            _PieSlice(label: 'آخرون', value: rest, color: cs.outlineVariant),
           );
         }
       }
@@ -2123,7 +2219,7 @@ class _PanelCustomers extends StatelessWidget {
     final pieTotal = slices.fold<double>(0, (a, b) => a + b.value);
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
+      padding: _reportPanelOuterPadding(context),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -2187,7 +2283,7 @@ class _PanelDebts extends StatelessWidget {
   Widget build(BuildContext context) {
     final total = data.debtors.fold<double>(0, (s, e) => s + e.balance);
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
+      padding: _reportPanelOuterPadding(context),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -2241,7 +2337,7 @@ class _PanelInstallments extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     final t = data.installmentTotals;
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
+      padding: _reportPanelOuterPadding(context),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -2352,7 +2448,7 @@ class _PanelStaff extends StatelessWidget {
     final pieTotal = slices.fold<double>(0, (a, b) => a + b.value);
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
+      padding: _reportPanelOuterPadding(context),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -2372,7 +2468,10 @@ class _PanelStaff extends StatelessWidget {
                   )
                 : SizedBox(
                     height: 300,
-                    child: _InteractiveSalesPie(slices: slices, total: pieTotal),
+                    child: _InteractiveSalesPie(
+                      slices: slices,
+                      total: pieTotal,
+                    ),
                   ),
           ),
           const SizedBox(height: 18),
@@ -2392,12 +2491,15 @@ class _PanelStaff extends StatelessWidget {
               for (final d in data.dailySalesByStaff) {
                 datesSet.add(d.dayLabel);
               }
-              final dates = datesSet.where((e) => e.isNotEmpty).toList()..sort();
+              final dates = datesSet.where((e) => e.isNotEmpty).toList()
+                ..sort();
 
               final byLabel = <String, Map<String, double>>{};
               for (final d in data.dailySalesByStaff) {
-                byLabel.putIfAbsent(d.label, () => <String, double>{})[d.dayLabel] =
-                    d.amount;
+                byLabel.putIfAbsent(
+                  d.label,
+                  () => <String, double>{},
+                )[d.dayLabel] = d.amount;
               }
 
               // نستخدم نفس أعلى الموظفين الظاهرين في البيتزا (بدون "آخرون") كبناء للسلاسل.
@@ -2470,7 +2572,7 @@ class _PanelAnalytics extends StatelessWidget {
         : const Color(0xFFDC2626);
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
+      padding: _reportPanelOuterPadding(context),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -2519,8 +2621,7 @@ class _PanelAnalytics extends StatelessWidget {
           // ─── تركيب الإيراد (تكلفة + هامش) — Gauges متسقة مع KPI
           _CategoryGaugesCard(
             title: 'تركيب الإيراد: تكلفة + هامش',
-            subtitle:
-                'Gauges — توزيع نسبي يوضح أين تذهب كل وحدة إيراد',
+            subtitle: 'Gauges — توزيع نسبي يوضح أين تذهب كل وحدة إيراد',
             total: ms.revenueNet <= 0 ? 1 : ms.revenueNet,
             items: [
               _GaugeItem(
@@ -2549,16 +2650,14 @@ class _PanelAnalytics extends StatelessWidget {
                   name: 'تكلفة',
                   color: const Color(0xFF8E3CF7),
                   values: [
-                    for (final d in data.dailyMargin)
-                      math.max(0.0, d.cost),
+                    for (final d in data.dailyMargin) math.max(0.0, d.cost),
                   ],
                 ),
                 _AreaSeries(
                   name: 'هامش',
                   color: const Color(0xFF059669),
                   values: [
-                    for (final d in data.dailyMargin)
-                      math.max(0.0, d.margin),
+                    for (final d in data.dailyMargin) math.max(0.0, d.margin),
                   ],
                 ),
               ];
@@ -2570,9 +2669,7 @@ class _PanelAnalytics extends StatelessWidget {
                   _AreaSeries(
                     name: 'مصروفات',
                     color: const Color(0xFFDC2626),
-                    values: [
-                      for (final d in dates) (expensesByDay[d] ?? 0.0),
-                    ],
+                    values: [for (final d in dates) (expensesByDay[d] ?? 0.0)],
                   ),
                 );
               }
@@ -2762,8 +2859,7 @@ class _DataQualityCard extends StatelessWidget {
 
     return _AnalyticsCard(
       title: 'جودة بيانات الهامش (Coverage)',
-      subtitle:
-          'كلما ارتفعت نسبة السطور ذات التكلفة المثبّتة، زادت دقة الرقم',
+      subtitle: 'كلما ارتفعت نسبة السطور ذات التكلفة المثبّتة، زادت دقة الرقم',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -2784,10 +2880,7 @@ class _DataQualityCard extends StatelessWidget {
                       ? 'لا توجد بنود في هذه الفترة.'
                       : 'من أصل ${_numFmt.format(total)} سطر بيع في الفترة، '
                             '${_numFmt.format(stamped + fb)} تملك تكلفة معروفة.',
-                  style: TextStyle(
-                    fontSize: 12.5,
-                    color: cs.onSurfaceVariant,
-                  ),
+                  style: TextStyle(fontSize: 12.5, color: cs.onSurfaceVariant),
                 ),
               ),
             ],
@@ -2917,7 +3010,7 @@ class _PanelSettingsState extends State<_PanelSettings> {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
+      padding: _reportPanelOuterPadding(context),
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 520),
         child: _AnalyticsCard(
@@ -3005,11 +3098,7 @@ class _ErrorPane extends StatelessWidget {
 
 /// بطاقة محتوى لمخطط أو جدول (أسلوب لوحات التحليلات / مكوّنات المخططات).
 class _AnalyticsCard extends StatelessWidget {
-  const _AnalyticsCard({
-    required this.child,
-    this.title,
-    this.subtitle,
-  });
+  const _AnalyticsCard({required this.child, this.title, this.subtitle});
 
   final Widget child;
   final String? title;
@@ -3026,9 +3115,7 @@ class _AnalyticsCard extends StatelessWidget {
       child: Ink(
         decoration: BoxDecoration(
           borderRadius: ac.lg,
-          border: Border.all(
-            color: cs.outlineVariant.withValues(alpha: 0.65),
-          ),
+          border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.65)),
           boxShadow: [
             BoxShadow(
               color: cs.shadow.withValues(alpha: 0.07),
@@ -3222,9 +3309,7 @@ class _KpiCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: cs.surface,
         borderRadius: ac.md,
-        border: Border.all(
-          color: cs.outlineVariant.withValues(alpha: 0.65),
-        ),
+        border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.65)),
         boxShadow: [
           BoxShadow(
             color: cs.shadow.withValues(alpha: 0.06),
@@ -3428,8 +3513,9 @@ class _CategoryGaugesCard extends StatelessWidget {
                   painter: _ReportsGaugesPainter(
                     items: items.take(6).toList(),
                     total: total,
-                    trackColor:
-                        cs.surfaceContainerHighest.withValues(alpha: 0.7),
+                    trackColor: cs.surfaceContainerHighest.withValues(
+                      alpha: 0.7,
+                    ),
                     labelColor: cs.onSurface,
                   ),
                 );
@@ -3494,7 +3580,10 @@ class _ReportsGaugesPainter extends CustomPainter {
       final tp = TextPainter(
         text: TextSpan(
           text: 'لا توجد بيانات',
-          style: TextStyle(color: labelColor.withValues(alpha: 0.8), fontSize: 12),
+          style: TextStyle(
+            color: labelColor.withValues(alpha: 0.8),
+            fontSize: 12,
+          ),
         ),
         textDirection: TextDirection.rtl,
       )..layout();
@@ -3573,11 +3662,7 @@ class _ReportsGaugesPainter extends CustomPainter {
 }
 
 class _AreaSeries {
-  _AreaSeries({
-    required this.name,
-    required this.color,
-    required this.values,
-  });
+  _AreaSeries({required this.name, required this.color, required this.values});
   final String name;
   final Color color;
   final List<double> values;
@@ -3694,7 +3779,8 @@ class _ReportsStackedAreaPainter extends CustomPainter {
     final xStep = n > 1 ? chartWidth / (n - 1) : 0.0;
 
     double xFor(int i) => leftPad + (n > 1 ? xStep * i : chartWidth / 2);
-    double yFor(double v) => topPad + chartHeight - (v / maxStack) * chartHeight;
+    double yFor(double v) =>
+        topPad + chartHeight - (v / maxStack) * chartHeight;
 
     final grid = Paint()
       ..color = gridColor
@@ -3728,11 +3814,7 @@ class _ReportsStackedAreaPainter extends CustomPainter {
       Offset(size.width - rightPad, origin.dy),
       axis,
     );
-    canvas.drawLine(
-      Offset(leftPad, topPad),
-      Offset(leftPad, origin.dy),
-      axis,
-    );
+    canvas.drawLine(Offset(leftPad, topPad), Offset(leftPad, origin.dy), axis);
 
     final cumulative = List<double>.filled(n, 0.0);
     for (var s = 0; s < series.length; s++) {

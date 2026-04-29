@@ -8,6 +8,7 @@ import '../../providers/parked_sales_provider.dart';
 import '../../services/cloud_sync_service.dart';
 import '../../services/database_helper.dart';
 import '../../theme/design_tokens.dart';
+import '../../utils/screen_layout.dart';
 import 'add_invoice_screen.dart';
 
 final _dateFmt = DateFormat('dd/MM/yyyy HH:mm', 'ar');
@@ -120,6 +121,7 @@ class _ParkedSalesScreenState extends State<ParkedSalesScreen> {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final bg = isDark ? AppColors.surfaceDark : AppColors.surfaceLight;
+    final gap = context.screenLayout.pageHorizontalGap;
 
     return Directionality(
       textDirection: TextDirection.rtl,
@@ -164,7 +166,7 @@ class _ParkedSalesScreenState extends State<ParkedSalesScreen> {
               color: AppColors.accent,
               onRefresh: () => prov.refresh(),
               child: ListView.builder(
-                padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
+                padding: EdgeInsetsDirectional.fromSTEB(gap, 12, gap, 24),
                 itemCount: prov.rows.length,
                 itemBuilder: (_, i) {
                   final row = prov.rows[i];
@@ -185,43 +187,33 @@ class _ParkedSalesScreenState extends State<ParkedSalesScreen> {
                       onTap: () => _resume(id),
                       child: Padding(
                         padding: const EdgeInsets.all(14),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(10),
-                              decoration: BoxDecoration(
-                                color: AppColors.accent.withValues(alpha: 0.12),
-                              ),
-                              child: Icon(Icons.pause_circle_filled_rounded, color: AppColors.accent, size: 28),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    sum.title,
-                                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                        child: LayoutBuilder(
+                          builder: (context, c) {
+                            final narrow = c.maxWidth < 560;
+                            final info = Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  sum.title,
+                                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                                ),
+                                if (sum.customer.isNotEmpty)
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 4),
+                                    child: Text(sum.customer, style: TextStyle(color: Theme.of(context).hintColor)),
                                   ),
-                                  if (sum.customer.isNotEmpty)
-                                    Padding(
-                                      padding: const EdgeInsets.only(top: 4),
-                                      child: Text(sum.customer, style: TextStyle(color: Theme.of(context).hintColor)),
-                                    ),
-                                  const SizedBox(height: 6),
-                                  Text(
-                                    '${sum.lineCount} صنف · ≈ ${sum.totalApprox.toStringAsFixed(0)} د.ع',
-                                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
-                                  ),
-                                  Text(
-                                    'آخر تحديث: ${_dateFmt.format(updated)}',
-                                    style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            Column(
+                                const SizedBox(height: 6),
+                                Text(
+                                  '${sum.lineCount} صنف · ≈ ${sum.totalApprox.toStringAsFixed(0)} د.ع',
+                                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+                                ),
+                                Text(
+                                  'آخر تحديث: ${_dateFmt.format(updated)}',
+                                  style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
+                                ),
+                              ],
+                            );
+                            final actions = Column(
                               children: [
                                 IconButton(
                                   tooltip: 'متابعة البيع',
@@ -234,8 +226,34 @@ class _ParkedSalesScreenState extends State<ParkedSalesScreen> {
                                   onPressed: () => _delete(id, sum.title),
                                 ),
                               ],
-                            ),
-                          ],
+                            );
+                            final leading = Container(
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: AppColors.accent.withValues(alpha: 0.12),
+                              ),
+                              child: Icon(Icons.pause_circle_filled_rounded, color: AppColors.accent, size: 28),
+                            );
+                            if (narrow) {
+                              return Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  Row(children: [leading, const SizedBox(width: 12), Expanded(child: info)]),
+                                  const SizedBox(height: 8),
+                                  Align(alignment: AlignmentDirectional.centerEnd, child: actions),
+                                ],
+                              );
+                            }
+                            return Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                leading,
+                                const SizedBox(width: 12),
+                                Expanded(child: info),
+                                actions,
+                              ],
+                            );
+                          },
                         ),
                       ),
                     ),

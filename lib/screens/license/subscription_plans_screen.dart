@@ -12,33 +12,44 @@ class SubscriptionPlansScreen extends StatelessWidget {
     super.key,
     this.currentPlan,
     this.highlightPlan,
+    this.nextRouteName,
   });
 
   final SubscriptionPlan? currentPlan;
   final SubscriptionPlan? highlightPlan;
+  final String? nextRouteName;
 
   @override
   Widget build(BuildContext context) {
+    final shouldForceContinue = nextRouteName != null;
     return Directionality(
       textDirection: TextDirection.rtl,
-      child: Scaffold(
-        backgroundColor: const Color(0xFF0D1B2A),
-        appBar: AppBar(
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          leading: IconButton(
-            icon: const Icon(Icons.arrow_back_ios, color: Colors.white, size: 18),
-            onPressed: () => Navigator.pop(context),
+      child: WillPopScope(
+        onWillPop: () async => !shouldForceContinue,
+        child: Scaffold(
+          backgroundColor: const Color(0xFF0D1B2A),
+          appBar: AppBar(
+            backgroundColor: Colors.transparent,
+            elevation: 0,
+            leading: shouldForceContinue
+                ? null
+                : IconButton(
+                    icon: const Icon(
+                      Icons.arrow_back_ios,
+                      color: Colors.white,
+                      size: 18,
+                    ),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+            title: const Text(
+              'خطط الاشتراك',
+              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+            ),
           ),
-          title: const Text(
-            'خطط الاشتراك',
-            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-          ),
-        ),
-        body: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(20, 8, 20, 40),
-          child: Column(
-            children: [
+          body: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 40),
+            child: Column(
+              children: [
               // ── العنوان ──────────────────────────────────────────────────
               const Text(
                 'اختر الخطة المناسبة لنشاطك',
@@ -129,12 +140,28 @@ class SubscriptionPlansScreen extends StatelessWidget {
                 value: '+964 7XX XXX XXXX',
               ),
               const SizedBox(height: 8),
-              _ContactRow(
-                icon:  Icons.email_outlined,
-                label: 'البريد الإلكتروني',
-                value: 'support@naboo.app',
-              ),
-            ],
+                _ContactRow(
+                  icon:  Icons.email_outlined,
+                  label: 'البريد الإلكتروني',
+                  value: 'support@naboo.app',
+                ),
+                if (shouldForceContinue) ...[
+                  const SizedBox(height: 24),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: () {
+                        Navigator.of(context).pushReplacementNamed(
+                          nextRouteName!,
+                        );
+                      },
+                      icon: const Icon(Icons.arrow_back_rounded),
+                      label: const Text('متابعة'),
+                    ),
+                  ),
+                ],
+              ],
+            ),
           ),
         ),
       ),

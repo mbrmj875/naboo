@@ -1,5 +1,6 @@
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import 'cloud_sync_service.dart';
@@ -66,6 +67,13 @@ class DatabaseHelper {
     }
   }
 
+  /// ترحيلات حرجة وقت الإقلاع، تُنفَّذ صراحةً حتى لو لم يُستدعَ onOpen مبكراً.
+  Future<void> runStartupCriticalMigrations() async {
+    final db = await database;
+    debugPrint('DB PATH: ${db.path}');
+    await _ensureMoneyFilsColumns(db);
+  }
+
   /// إغلاق ملف SQLite وحذفه — عند تبديل حساب سحابي (يُعاد إنشاء الملف عند أول وصول لاحق).
   Future<void> closeAndDeleteDatabaseFile() async {
     if (_database != null) {
@@ -83,17 +91,23 @@ class DatabaseHelper {
     final db = await database;
     await db.execute('PRAGMA foreign_keys = OFF');
     try {
-      final rows = await db.rawQuery(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
-      );
-      const keep = {'users', 'android_metadata'};
-      for (final r in rows) {
-        final name = (r['name'] ?? '').toString();
-        if (name.isEmpty || keep.contains(name)) continue;
-        try {
-          await db.delete(name);
-        } catch (_) {}
+      await db.transaction((txn) async {
+        final rows = await txn.rawQuery(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+        );
+        const keep = {'users', 'android_metadata'};
+        for (final r in rows) {
+          final name = (r['name'] ?? '').toString();
+          if (name.isEmpty || keep.contains(name)) continue;
+          await txn.delete(name);
+        }
+      });
+    } catch (e, st) {
+      if (kDebugMode) {
+        debugPrint('[DatabaseHelper.wipeBusinessDataKeepUsers] $e');
+        debugPrint('$st');
       }
+      rethrow;
     } finally {
       await db.execute('PRAGMA foreign_keys = ON');
     }
@@ -140,9 +154,11 @@ class DatabaseHelper {
     await _ensureSupplierApTables(db);
     await _ensureSupplierBillStockLinkColumns(db);
     await _ensureInstallmentFinanceColumns(db);
+    await _ensureMoneyFilsColumns(db);
     await _ensureMultiTenantFoundation(db);
     await _ensureStockVoucherSourceColumns(db);
     await _ensureRbacFoundation(db);
+    await _ensureUserProfilesTable(db);
     await _ensureBranchTopology(db);
     await _repairInstallmentInvoiceLinkage(db);
     await _reconcileInstallmentPlanPaidAmounts(db);
@@ -155,6 +171,102 @@ class DatabaseHelper {
     await _ensureInvoiceItemsUnitSnapshots(db);
     await _ensureProductsBaseStockKind(db);
     await _ensureProductPinning(db);
+    await _ensureProductsTenantScopedProductCodeUnique(db);
+  }
+
+  Future<void> _ensureMoneyFilsColumns(Database db) async {
+    Future<void> addIntFilsColumn(String table, String column) async {
+      if (!await _tableHasColumn(db, table, column)) {
+        await db.execute(
+          'ALTER TABLE $table ADD COLUMN $column INTEGER NOT NULL DEFAULT 0',
+        );
+      }
+    }
+
+    await addIntFilsColumn('invoices', 'discountFils');
+    await addIntFilsColumn('invoices', 'taxFils');
+    await addIntFilsColumn('invoices', 'advancePaymentFils');
+    await addIntFilsColumn('invoices', 'totalFils');
+    await addIntFilsColumn('invoices', 'loyaltyDiscountFils');
+
+    await addIntFilsColumn('invoice_items', 'priceFils');
+    await addIntFilsColumn('invoice_items', 'totalFils');
+    await addIntFilsColumn('invoice_items', 'unitCostFils');
+
+    await addIntFilsColumn('cash_ledger', 'amountFils');
+  }
+
+  /// جدول آمن للمزامنة: بيانات المستخدم العامة فقط بدون حقول تسجيل الدخول الحساسة.
+  Future<void> _ensureUserProfilesTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS user_profiles (
+        id INTEGER PRIMARY KEY,
+        username TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'staff',
+        email TEXT,
+        phone TEXT,
+        phone2 TEXT NOT NULL DEFAULT '',
+        displayName TEXT,
+        jobTitle TEXT,
+        isActive INTEGER NOT NULL DEFAULT 1,
+        createdAt TEXT NOT NULL,
+        updatedAt TEXT
+      )
+    ''');
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_user_profiles_active ON user_profiles(isActive)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_user_profiles_username ON user_profiles(username)',
+    );
+
+    final users = await db.query(
+      'users',
+      columns: const [
+        'id',
+        'username',
+        'role',
+        'email',
+        'phone',
+        'phone2',
+        'displayName',
+        'jobTitle',
+        'isActive',
+        'createdAt',
+        'updatedAt',
+      ],
+    );
+    if (users.isEmpty) return;
+    final now = DateTime.now().toIso8601String();
+    final batch = db.batch();
+    for (final u in users) {
+      final idNum = u['id'] as num?;
+      if (idNum == null) continue;
+      batch.insert(
+        'user_profiles',
+        {
+          'id': idNum.toInt(),
+          'username': (u['username'] ?? '').toString().trim().toLowerCase(),
+          'role': ((u['role'] ?? 'staff').toString().trim().isEmpty)
+              ? 'staff'
+              : (u['role'] ?? 'staff').toString().trim(),
+          'email': (u['email'] ?? '').toString().trim(),
+          'phone': (u['phone'] ?? '').toString().trim(),
+          'phone2': (u['phone2'] ?? '').toString().trim(),
+          'displayName': (u['displayName'] ?? '').toString().trim(),
+          'jobTitle': (u['jobTitle'] ?? '').toString().trim(),
+          'isActive': ((u['isActive'] as num?)?.toInt() ?? 1) == 1 ? 1 : 0,
+          'createdAt': ((u['createdAt'] ?? '').toString().trim().isEmpty)
+              ? now
+              : (u['createdAt'] ?? '').toString(),
+          'updatedAt': ((u['updatedAt'] ?? '').toString().trim().isEmpty)
+              ? now
+              : (u['updatedAt'] ?? '').toString(),
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    }
+    await batch.commit(noResult: true);
   }
 
   /// منتجات مثبّتة في لوحة التحكم — بطاقة وصول سريع لفاتورة جديدة.
@@ -172,6 +284,130 @@ class DatabaseHelper {
         'CREATE INDEX IF NOT EXISTS idx_products_pinned ON products(isPinned, pinnedAt)',
       );
     } catch (_) {}
+  }
+
+  Future<void> _ensureProductsTenantScopedProductCodeUnique(Database db) async {
+    if (!await _tableHasColumn(db, 'products', 'tenantId')) return;
+    if (!await _tableHasColumn(db, 'products', 'productCode')) return;
+
+    await db.execute(
+      "UPDATE products SET productCode = NULL WHERE productCode IS NOT NULL AND TRIM(productCode) = ''",
+    );
+
+    final rows = await db.rawQuery(
+      "SELECT sql FROM sqlite_master WHERE type='table' AND name='products' LIMIT 1",
+    );
+    final tableSql = rows.isEmpty
+        ? ''
+        : (rows.first['sql'] ?? '').toString().toLowerCase();
+    final hasLegacyGlobalUnique = tableSql.contains('productcode text unique');
+
+    if (!hasLegacyGlobalUnique) {
+      await db.execute(
+        'CREATE UNIQUE INDEX IF NOT EXISTS uq_products_tenant_product_code ON products(tenantId, productCode)',
+      );
+      return;
+    }
+
+    await db.execute('PRAGMA foreign_keys = OFF');
+    try {
+      await db.transaction((txn) async {
+        await txn.execute('''
+          CREATE TABLE products_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            barcode TEXT UNIQUE,
+            productCode TEXT,
+            categoryId INTEGER,
+            brandId INTEGER,
+            buyPrice REAL NOT NULL DEFAULT 0,
+            sellPrice REAL NOT NULL DEFAULT 0,
+            minSellPrice REAL NOT NULL DEFAULT 0,
+            qty REAL NOT NULL DEFAULT 0,
+            lowStockThreshold REAL NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'instock',
+            isActive INTEGER NOT NULL DEFAULT 1,
+            createdAt TEXT NOT NULL,
+            updatedAt TEXT,
+            description TEXT,
+            imagePath TEXT,
+            imageUrl TEXT,
+            internalNotes TEXT,
+            tags TEXT,
+            saleUnit TEXT,
+            supplierName TEXT,
+            taxPercent REAL NOT NULL DEFAULT 0,
+            discountPercent REAL NOT NULL DEFAULT 0,
+            discountAmount REAL NOT NULL DEFAULT 0,
+            buyConversionLabel TEXT,
+            trackInventory INTEGER NOT NULL DEFAULT 1,
+            allowNegativeStock INTEGER NOT NULL DEFAULT 0,
+            supplierItemCode TEXT,
+            netWeightGrams REAL,
+            manufacturingDate TEXT,
+            expiryDate TEXT,
+            grade TEXT,
+            batchNumber TEXT,
+            expiryAlertDaysBefore INTEGER,
+            tenantId INTEGER NOT NULL DEFAULT 1,
+            stockBaseKind INTEGER NOT NULL DEFAULT 0,
+            isPinned INTEGER NOT NULL DEFAULT 0,
+            pinnedAt INTEGER,
+            FOREIGN KEY(categoryId) REFERENCES categories(id) ON DELETE SET NULL,
+            FOREIGN KEY(brandId) REFERENCES brands(id) ON DELETE SET NULL
+          )
+        ''');
+
+        await txn.execute('''
+          INSERT INTO products_new (
+            id, name, barcode, productCode, categoryId, brandId, buyPrice, sellPrice,
+            minSellPrice, qty, lowStockThreshold, status, isActive, createdAt, updatedAt,
+            description, imagePath, imageUrl, internalNotes, tags, saleUnit, supplierName,
+            taxPercent, discountPercent, discountAmount, buyConversionLabel, trackInventory,
+            allowNegativeStock, supplierItemCode, netWeightGrams, manufacturingDate, expiryDate,
+            grade, batchNumber, expiryAlertDaysBefore, tenantId, stockBaseKind, isPinned, pinnedAt
+          )
+          SELECT
+            id, name, barcode, productCode, categoryId, brandId, buyPrice, sellPrice,
+            minSellPrice, qty, lowStockThreshold, status, isActive, createdAt, updatedAt,
+            description, imagePath, imageUrl, internalNotes, tags, saleUnit, supplierName,
+            taxPercent, discountPercent, discountAmount, buyConversionLabel, trackInventory,
+            allowNegativeStock, supplierItemCode, netWeightGrams, manufacturingDate, expiryDate,
+            grade, batchNumber, expiryAlertDaysBefore, tenantId, stockBaseKind, isPinned, pinnedAt
+          FROM products
+        ''');
+
+        await txn.execute('DROP TABLE products');
+        await txn.execute('ALTER TABLE products_new RENAME TO products');
+
+        await txn.execute(
+          'CREATE INDEX IF NOT EXISTS idx_products_name ON products(name)',
+        );
+        await txn.execute(
+          'CREATE INDEX IF NOT EXISTS idx_products_barcode ON products(barcode)',
+        );
+        await txn.execute(
+          'CREATE INDEX IF NOT EXISTS idx_products_code ON products(productCode)',
+        );
+        await txn.execute(
+          'CREATE INDEX IF NOT EXISTS idx_products_status ON products(status)',
+        );
+        await txn.execute(
+          'CREATE INDEX IF NOT EXISTS idx_products_createdAt ON products(createdAt)',
+        );
+        await txn.execute(
+          'CREATE INDEX IF NOT EXISTS idx_products_tenantId ON products(tenantId)',
+        );
+        await txn.execute(
+          'CREATE INDEX IF NOT EXISTS idx_products_pinned ON products(isPinned, pinnedAt)',
+        );
+        await txn.execute(
+          'CREATE UNIQUE INDEX IF NOT EXISTS uq_products_tenant_product_code ON products(tenantId, productCode)',
+        );
+      });
+    } finally {
+      await db.execute('PRAGMA foreign_keys = ON');
+    }
   }
 
   /// نظام وحدات/تحويلات لكل منتج (قطعة/طبقة/باكيت/غم/كغم...) مع باركود لكل وحدة (اختياري).
@@ -446,9 +682,13 @@ class DatabaseHelper {
         date TEXT,
         type INTEGER,
         discount REAL,
+        discountFils INTEGER NOT NULL DEFAULT 0,
         tax REAL,
+        taxFils INTEGER NOT NULL DEFAULT 0,
         advancePayment REAL,
+        advancePaymentFils INTEGER NOT NULL DEFAULT 0,
         total REAL,
+        totalFils INTEGER NOT NULL DEFAULT 0,
         isReturned INTEGER,
         originalInvoiceId INTEGER,
         deliveryAddress TEXT,
@@ -457,6 +697,7 @@ class DatabaseHelper {
         workShiftId INTEGER,
         customerId INTEGER,
         loyaltyDiscount REAL NOT NULL DEFAULT 0,
+        loyaltyDiscountFils INTEGER NOT NULL DEFAULT 0,
         loyaltyPointsRedeemed INTEGER NOT NULL DEFAULT 0,
         loyaltyPointsEarned INTEGER NOT NULL DEFAULT 0
       )
@@ -469,7 +710,10 @@ class DatabaseHelper {
         productName TEXT,
         quantity INTEGER,
         price REAL,
+        priceFils INTEGER NOT NULL DEFAULT 0,
         total REAL,
+        totalFils INTEGER NOT NULL DEFAULT 0,
+        unitCostFils INTEGER NOT NULL DEFAULT 0,
         productId INTEGER,
         FOREIGN KEY(invoiceId) REFERENCES invoices(id) ON DELETE CASCADE,
         FOREIGN KEY(productId) REFERENCES products(id) ON DELETE SET NULL
@@ -481,6 +725,7 @@ class DatabaseHelper {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         transactionType TEXT NOT NULL,
         amount REAL NOT NULL,
+        amountFils INTEGER NOT NULL DEFAULT 0,
         description TEXT,
         invoiceId INTEGER,
         workShiftId INTEGER,
@@ -545,6 +790,30 @@ class DatabaseHelper {
       if (name != null && name.toLowerCase() == want) return true;
     }
     return false;
+  }
+
+  Future<void> _insertActivityLogInTxn(
+    DatabaseExecutor ex, {
+    required String type,
+    String? refTable,
+    int? refId,
+    required String title,
+    String? details,
+    double? amount,
+    int? createdByUserId,
+    int tenantId = 1,
+  }) async {
+    await ex.insert('activity_logs', {
+      'type': type,
+      'refTable': refTable,
+      'refId': refId,
+      'title': title,
+      'details': details,
+      'amount': amount,
+      'createdByUserId': createdByUserId,
+      'createdAt': DateTime.now().toIso8601String(),
+      'tenantId': tenantId,
+    });
   }
 
   Future<void> _ensureLoyaltySchema(Database db) async {
@@ -1661,6 +1930,27 @@ class DatabaseHelper {
         updatedAt TEXT
       )
     ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS user_profiles (
+        id INTEGER PRIMARY KEY,
+        username TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'staff',
+        email TEXT,
+        phone TEXT,
+        phone2 TEXT NOT NULL DEFAULT '',
+        displayName TEXT,
+        jobTitle TEXT,
+        isActive INTEGER NOT NULL DEFAULT 1,
+        createdAt TEXT NOT NULL,
+        updatedAt TEXT
+      )
+    ''');
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_user_profiles_active ON user_profiles(isActive)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_user_profiles_username ON user_profiles(username)',
+    );
 
     await db.execute('''
       CREATE TABLE IF NOT EXISTS customers (
@@ -1720,7 +2010,7 @@ class DatabaseHelper {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
         barcode TEXT UNIQUE,
-        productCode TEXT UNIQUE,
+        productCode TEXT,
         categoryId INTEGER,
         brandId INTEGER,
         buyPrice REAL NOT NULL DEFAULT 0,
@@ -1881,6 +2171,9 @@ class DatabaseHelper {
       'CREATE INDEX IF NOT EXISTS idx_products_status ON products(status)',
     );
     await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_products_createdAt ON products(createdAt)',
+    );
+    await db.execute(
       'CREATE INDEX IF NOT EXISTS idx_invoice_items_invoiceId ON invoice_items(invoiceId)',
     );
     await db.execute(
@@ -1905,7 +2198,19 @@ class DatabaseHelper {
       'CREATE INDEX IF NOT EXISTS idx_invoices_type_returned ON invoices(type, isReturned)',
     );
     await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_invoices_shift_type_returned ON invoices(workShiftId, type, isReturned)',
+    );
+    await db.execute(
       'CREATE INDEX IF NOT EXISTS idx_stock_voucher_items_voucherId ON stock_voucher_items(voucherId)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_cash_ledger_createdAt ON cash_ledger(createdAt)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_cash_ledger_workShift_createdAt ON cash_ledger(workShiftId, createdAt)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_cash_ledger_invoice_type ON cash_ledger(invoiceId, transactionType)',
     );
     await db.execute(
       'CREATE INDEX IF NOT EXISTS idx_customers_balance ON customers(balance)',
@@ -1920,6 +2225,15 @@ class DatabaseHelper {
     // Finance badges batch counts: speed up grouping by customerId.
     await db.execute(
       'CREATE INDEX IF NOT EXISTS idx_installment_plans_customerId ON installment_plans(customerId)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_activity_logs_createdAt ON activity_logs(createdAt)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_activity_logs_type_createdAt ON activity_logs(type, createdAt)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_activity_logs_ref ON activity_logs(refTable, refId)',
     );
   }
 

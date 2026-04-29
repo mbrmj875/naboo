@@ -3,6 +3,11 @@ part of 'database_helper.dart';
 // ── الصندوق (cash ledger) ─────────────────────────────────────────────────
 
 extension DbCash on DatabaseHelper {
+  int _toFils(double amount) {
+    if (!amount.isFinite || amount.isNaN) return 0;
+    return (amount * 1000).round();
+  }
+
   /// حركات الصندوق (الأحدث أولاً).
   Future<List<Map<String, dynamic>>> getCashLedgerEntries({
     int limit = 300,
@@ -35,16 +40,16 @@ extension DbCash on DatabaseHelper {
     final db = await database;
     final rows = await db.rawQuery('''
       SELECT 
-        COALESCE(SUM(amount), 0) AS balance,
-        COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0) AS totalIn,
-        COALESCE(SUM(CASE WHEN amount < 0 THEN -amount ELSE 0 END), 0) AS totalOut
+        COALESCE(SUM(CASE WHEN amountFils != 0 THEN amountFils ELSE ROUND(amount * 1000) END), 0) AS balanceFils,
+        COALESCE(SUM(CASE WHEN (CASE WHEN amountFils != 0 THEN amountFils ELSE ROUND(amount * 1000) END) > 0 THEN (CASE WHEN amountFils != 0 THEN amountFils ELSE ROUND(amount * 1000) END) ELSE 0 END), 0) AS totalInFils,
+        COALESCE(SUM(CASE WHEN (CASE WHEN amountFils != 0 THEN amountFils ELSE ROUND(amount * 1000) END) < 0 THEN -(CASE WHEN amountFils != 0 THEN amountFils ELSE ROUND(amount * 1000) END) ELSE 0 END), 0) AS totalOutFils
       FROM cash_ledger
     ''');
     final m = rows.first;
     return {
-      'balance': (m['balance'] as num).toDouble(),
-      'totalIn': (m['totalIn'] as num).toDouble(),
-      'totalOut': (m['totalOut'] as num).toDouble(),
+      'balance': ((m['balanceFils'] as num?)?.toDouble() ?? 0) / 1000.0,
+      'totalIn': ((m['totalInFils'] as num?)?.toDouble() ?? 0) / 1000.0,
+      'totalOut': ((m['totalOutFils'] as num?)?.toDouble() ?? 0) / 1000.0,
     };
   }
 
@@ -68,6 +73,7 @@ extension DbCash on DatabaseHelper {
     final id = await db.insert('cash_ledger', {
       'transactionType': transactionType,
       'amount': amount,
+      'amountFils': _toFils(amount),
       'description': description,
       'invoiceId': null,
       'workShiftId': openShiftId,

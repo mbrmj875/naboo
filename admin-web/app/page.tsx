@@ -6,17 +6,20 @@ import {
   type UserRow,
   type DeviceRow,
   type LicenseRow,
+  type LicenseSummaryRow,
   type SnapshotRow,
   type ChunkRow,
   type AppRemoteConfigPayload,
 } from "@/lib/dashboard-data";
+import { PLAN_KEYS, planLabelAr } from "@/lib/plan-presets";
 
-type Tab = "users" | "devices" | "licenses" | "sync" | "settings";
+type Tab = "licenses" | "users" | "devices" | "sync" | "settings";
 
 type Payload = {
   users: UserRow[];
   devices: DeviceRow[];
   licenses: LicenseRow[];
+  licenseSummary: LicenseSummaryRow;
   snapshots: SnapshotRow[];
   snapshotChunks: ChunkRow[];
   remoteConfig: AppRemoteConfigPayload;
@@ -42,13 +45,25 @@ function shortId(id: string): string {
   return id.length > 12 ? `${id.slice(0, 8)}…` : id;
 }
 
+function expireSummaryLine(r: LicenseRow): string {
+  const st = (r.status ?? "").toLowerCase();
+  if (!r.expires_at) {
+    if (st === "active") return "نشط — بدون تاريخ انتهاء في السجل";
+    return "";
+  }
+  const d = r.expires_days_left;
+  if (d == null) return "";
+  if (d < 0) return `منتهي منذ ${Math.abs(d).toLocaleString("ar-IQ")} يوماً تقريباً`;
+  return `متبقي ≈ ${d.toLocaleString("ar-IQ")} يوماً`;
+}
+
 function isUserBanned(u: UserRow): boolean {
   if (!u.banned_until) return false;
   return new Date(u.banned_until).getTime() > Date.now();
 }
 
 export default function DashboardPage() {
-  const [tab, setTab] = useState<Tab>("users");
+  const [tab, setTab] = useState<Tab>("licenses");
   const [data, setData] = useState<Payload | null>(null);
   const [loadErr, setLoadErr] = useState("");
   const [search, setSearch] = useState("");
@@ -65,6 +80,11 @@ export default function DashboardPage() {
   } | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [rcEdit, setRcEdit] = useState<AppRemoteConfigPayload | null>(null);
+  const [issuePlan, setIssuePlan] = useState<string>("pro");
+  const [issueBusiness, setIssueBusiness] = useState("");
+  const [issueMonths, setIssueMonths] = useState("");
+  const [issueAsTrial, setIssueAsTrial] = useState(false);
+  const [issueAssignedUserId, setIssueAssignedUserId] = useState("");
 
   const load = useCallback(async () => {
     setLoadErr("");
@@ -105,6 +125,7 @@ export default function DashboardPage() {
         u.display_name,
         u.id,
         u.providers,
+        String(u.linked_devices_count ?? 0),
       ]
         .filter(Boolean)
         .join(" ")
@@ -135,6 +156,9 @@ export default function DashboardPage() {
         r.business_name,
         r.plan,
         r.db_id != null ? String(r.db_id) : "",
+        r.assigned_user_email,
+        r.assigned_user_id,
+        r.expires_days_left != null ? String(r.expires_days_left) : "",
       ]
         .filter(Boolean)
         .join(" ")
@@ -282,6 +306,97 @@ export default function DashboardPage() {
     }
   }
 
+  async function issueLicense(): Promise<void> {
+    setFeedback(null);
+    setBusy(true);
+    try {
+      let months_valid: number | null = null;
+      if (!issueAsTrial && issueMonths.trim() !== "") {
+        const n = parseInt(issueMonths, 10);
+        if (!Number.isFinite(n) || n < 1 || n > 120) {
+          setFeedback({
+            kind: "err",
+            text: "مدة الاشتراك بالشهور: رقم بين 1 و 120 أو اترك الحقل فارغاً (بدون تاريخ انتهاء).",
+          });
+          setBusy(false);
+          return;
+        }
+        months_valid = n;
+      }
+      if (!issueAsTrial && issueMonths.trim() === "") {
+        months_valid = null;
+      }
+      const res = await fetch("/api/actions/license-create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          plan: issuePlan,
+          business_name: issueBusiness.trim() || null,
+          months_valid,
+          status: issueAsTrial ? "trial" : "active",
+          assigned_user_id:
+            issueAssignedUserId.trim() === ""
+              ? null
+              : issueAssignedUserId.trim(),
+        }),
+      });
+      const json = (await res.json()) as {
+        error?: string;
+        license_key?: string;
+      };
+      if (!res.ok) {
+        setFeedback({
+          kind: "err",
+          text: json.error ?? "فشل إنشاء الترخيص",
+        });
+        setBusy(false);
+        return;
+      }
+      const key = json.license_key ?? "";
+      setFeedback({
+        kind: "ok",
+        text:
+          key.length > 0
+            ? `تم إنشاء ترخيص جديد. انسخ المفتاح: ${key}`
+            : "تم إنشاء الترخيص",
+      });
+      try {
+        await navigator.clipboard.writeText(key);
+      } catch {
+        /* ignore clipboard */
+      }
+      await load();
+    } catch {
+      setFeedback({ kind: "err", text: "خطأ شبكة" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function copyFullLicenseKey(licenseId: number): Promise<void> {
+    setFeedback(null);
+    setBusy(true);
+    try {
+      const res = await fetch("/api/actions/license-reveal-key", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ licenseId }),
+      });
+      const json = (await res.json()) as { error?: string; license_key?: string };
+      if (!res.ok) {
+        setFeedback({ kind: "err", text: json.error ?? "فشل جلب المفتاح" });
+        return;
+      }
+      const k = json.license_key ?? "";
+      await navigator.clipboard.writeText(k);
+      setFeedback({ kind: "ok", text: "تم نسخ المفتاح الكامل للحافظة" });
+    } catch {
+      setFeedback({ kind: "err", text: "تعذر النسخ" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function saveRemoteConfig() {
     const cfg = rcEdit ?? data?.remoteConfig ?? defaultAppRemoteConfig();
     setFeedback(null);
@@ -314,7 +429,7 @@ export default function DashboardPage() {
         <div>
           <h1>لوحة إدارة NABOO</h1>
           <div className="meta">
-            بيانات من Supabase — تحكم داخلي (قراءة وتعديل محدود)
+            لوحة تحكم داخلية — التراخيص والحسابات والمزامنة (Supabase)
             {data?.fetchedAt ? (
               <>
                 {" "}
@@ -362,6 +477,14 @@ export default function DashboardPage() {
           <div className="l">تراخيص (كامل)</div>
         </div>
         <div className="stat">
+          <div className="n">{data?.licenseSummary?.activePaid ?? 0}</div>
+          <div className="l">تراخيص نشطة (active)</div>
+        </div>
+        <div className="stat">
+          <div className="n">{data?.licenseSummary?.expiringWithinWeek ?? 0}</div>
+          <div className="l">نشط — تنتهي خلال 7 أيام</div>
+        </div>
+        <div className="stat">
           <div className="n">{(data?.snapshots ?? []).length}</div>
           <div className="l">لقطات مزامنة (app_snapshots)</div>
         </div>
@@ -385,6 +508,13 @@ export default function DashboardPage() {
       <nav className="tabs" aria-label="أقسام">
         <button
           type="button"
+          className={tab === "licenses" ? "active" : ""}
+          onClick={() => setTab("licenses")}
+        >
+          التراخيص ({licenses.length})
+        </button>
+        <button
+          type="button"
           className={tab === "users" ? "active" : ""}
           onClick={() => setTab("users")}
         >
@@ -396,13 +526,6 @@ export default function DashboardPage() {
           onClick={() => setTab("devices")}
         >
           الأجهزة ({devices.length})
-        </button>
-        <button
-          type="button"
-          className={tab === "licenses" ? "active" : ""}
-          onClick={() => setTab("licenses")}
-        >
-          التراخيص ({licenses.length})
         </button>
         <button
           type="button"
@@ -429,6 +552,8 @@ export default function DashboardPage() {
                 <th>البريد / الهاتف</th>
                 <th>الاسم</th>
                 <th>المزوّد</th>
+                <th>عدد الأجهزة</th>
+                <th>رسالة مخصصة</th>
                 <th>الحظر</th>
                 <th>بداية التجربة</th>
                 <th>نهاية التجربة</th>
@@ -454,6 +579,14 @@ export default function DashboardPage() {
                   </td>
                   <td>{u.display_name ?? "—"}</td>
                   <td>{u.providers}</td>
+                  <td title="من جدول account_devices بحسب هذا المستخدم">
+                    {u.linked_devices_count.toLocaleString("ar-IQ")}
+                  </td>
+                  <td>
+                    {u.custom_message_active && u.custom_message_body_ar
+                      ? `فعالة · ${fmtDate(u.custom_message_updated_at)}`
+                      : "لا توجد"}
+                  </td>
                   <td>
                     {isUserBanned(u) ? (
                       <span style={{ color: "var(--danger)" }}>
@@ -506,6 +639,57 @@ export default function DashboardPage() {
                       className="btn-sm"
                       disabled={busy}
                       onClick={() => {
+                        const title = window.prompt(
+                          "عنوان الرسالة (اختياري):",
+                          u.custom_message_title_ar ?? "رسالة من الإدارة",
+                        );
+                        if (title == null) return;
+                        const body = window.prompt(
+                          "نص الرسالة للمستخدم (سيظهر له بتصميم ذهبي ملكي):",
+                          u.custom_message_body_ar ?? "",
+                        );
+                        if (body == null) return;
+                        if (body.trim().length < 2) {
+                          setFeedback({
+                            kind: "err",
+                            text: "نص الرسالة قصير جداً",
+                          });
+                          return;
+                        }
+                        void apiAction(
+                          "/api/actions/profile-message",
+                          {
+                            userId: u.id,
+                            title_ar: title.trim(),
+                            body_ar: body.trim(),
+                            active: true,
+                          },
+                          "تم حفظ الرسالة المخصصة لهذا المستخدم",
+                        );
+                      }}
+                    >
+                      رسالة مخصصة
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-sm btn-danger"
+                      disabled={busy}
+                      onClick={() => {
+                        if (!confirm("إلغاء الرسالة المخصصة لهذا المستخدم؟")) return;
+                        void apiAction(
+                          "/api/actions/profile-message",
+                          { userId: u.id, clear: true },
+                          "تم إلغاء الرسالة المخصصة",
+                        );
+                      }}
+                    >
+                      حذف الرسالة
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-sm"
+                      disabled={busy}
+                      onClick={() => {
                         if (
                           !confirm(
                             "إعادة ضبط بداية التجربة السحابية (15 يوم من هذا التاريخ) لهذا المستخدم؟",
@@ -545,6 +729,54 @@ export default function DashboardPage() {
                       }}
                     >
                       مسح سحابة
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-sm btn-danger"
+                      disabled={busy}
+                      onClick={() => {
+                        if (
+                          !confirm(
+                            "حذف الحساب نهائياً من نظام الدخول والسحابة؟ لا يمكن التراجع. البيانات المحلية على أجهزة العميل لا تُمس.",
+                          )
+                        )
+                          return;
+                        const mail = window.prompt(
+                          "أدخل البريد الإلكتروني للمستخدم حرفياً (للتأكيد):",
+                          u.email ?? "",
+                        );
+                        if (!mail?.trim()) return;
+                        void (async () => {
+                          setFeedback(null);
+                          setBusy(true);
+                          try {
+                            const res = await fetch("/api/actions/user-delete", {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({
+                                userId: u.id,
+                                emailConfirm: mail.trim(),
+                              }),
+                            });
+                            const json = (await res.json()) as { error?: string };
+                            if (!res.ok) {
+                              setFeedback({
+                                kind: "err",
+                                text: json.error ?? "فشل حذف الحساب",
+                              });
+                              return;
+                            }
+                            setFeedback({ kind: "ok", text: "تم حذف الحساب نهائياً" });
+                            await load();
+                          } catch {
+                            setFeedback({ kind: "err", text: "خطأ شبكة" });
+                          } finally {
+                            setBusy(false);
+                          }
+                        })();
+                      }}
+                    >
+                      حذف الحساب
                     </button>
                   </td>
                 </tr>
@@ -628,10 +860,117 @@ export default function DashboardPage() {
       {tab === "licenses" ? (
         <>
           <p className="meta" style={{ marginBottom: "0.75rem" }}>
-            تعديل الترخيص يتطلب عمود <code className="mono">id</code> في جدول{" "}
-            <code className="mono">licenses</code>. إن لم يظهر رقم # فالتحديث عبر الـ API لن
-            يعمل حتى تضيف المفتاح الأساسي.
+            التحكم الكامل: الخطة، الحالة، الربط بحساب، الانتهاء، الحدّ، مسجّلي الأجهزة في JSON،
+            أو حذف الصف نهائياً. عمود <code className="mono">#</code> هو المعرف الأساسي في PostgreSQL؛
+            المفتاح المعروض مقنع — للنسخ الكامل استخدم «نسخ المفتاح الكامل».
           </p>
+
+          <div className="license-summary-cards">
+            <div className="mini-card">
+              <strong>الحالات</strong>
+              <ul>
+                {Object.entries(data?.licenseSummary?.byStatus ?? {}).map(([k, v]) => (
+                  <li key={k}>
+                    {k}: {v.toLocaleString("ar-IQ")}
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div className="mini-card">
+              <strong>الخطط</strong>
+              <ul>
+                {Object.entries(data?.licenseSummary?.byPlan ?? {}).map(([k, v]) => (
+                  <li key={k}>
+                    {k}: {v.toLocaleString("ar-IQ")}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+
+          <div className="license-issue-panel">
+            <strong style={{ display: "block", marginBottom: "0.75rem" }}>
+              إصدار ترخيص جديد (يُنشئ صفاً في جدول licenses)
+            </strong>
+            <div className="rc-form">
+              <label htmlFor="issue-plan">
+                الخطة
+                <select
+                  id="issue-plan"
+                  value={issuePlan}
+                  onChange={(e) => setIssuePlan(e.target.value)}
+                  disabled={busy}
+                >
+                  {PLAN_KEYS.map((pk) => (
+                    <option key={pk} value={pk}>
+                      {planLabelAr(pk)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label htmlFor="issue-business">
+                اسم المنشأة (اختياري)
+                <input
+                  id="issue-business"
+                  type="text"
+                  value={issueBusiness}
+                  onChange={(e) => setIssueBusiness(e.target.value)}
+                  disabled={busy}
+                  autoComplete="off"
+                />
+              </label>
+              <label htmlFor="issue-assign-user">
+                ربط المفتاح بحساب مستخدم (اختياري — لمتابعة الباقات وتجددها في الجدول)
+                <select
+                  id="issue-assign-user"
+                  value={issueAssignedUserId}
+                  onChange={(e) => setIssueAssignedUserId(e.target.value)}
+                  disabled={busy}
+                >
+                  <option value="">— بدون ربط —</option>
+                  {(data?.users ?? []).map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {u.email ?? u.phone ?? shortId(u.id)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="rc-row">
+                <input
+                  id="issueTrial"
+                  type="checkbox"
+                  checked={issueAsTrial}
+                  onChange={(e) => setIssueAsTrial(e.target.checked)}
+                  disabled={busy}
+                />
+                <label htmlFor="issueTrial">وضع تجربة بالمفتاح (status=trial)</label>
+              </div>
+              {!issueAsTrial ? (
+                <label htmlFor="issue-months">
+                  مدة الاشتراك بالشهور (اترك الحقل فارغاً لاشتراك نشط بدون تاريخ انتهاء)
+                  <input
+                    id="issue-months"
+                    type="number"
+                    min={1}
+                    max={120}
+                    placeholder=""
+                    value={issueMonths}
+                    onChange={(e) => setIssueMonths(e.target.value)}
+                    disabled={busy}
+                  />
+                </label>
+              ) : null}
+              <button
+                type="button"
+                className="btn-primary"
+                disabled={busy}
+                onClick={() => void issueLicense()}
+              >
+                إنشاء مفتاح ونسخه
+              </button>
+            </div>
+          </div>
+
           <div className="table-wrap">
             <table>
               <thead>
@@ -642,7 +981,8 @@ export default function DashboardPage() {
                   <th>المنشأة</th>
                   <th>الخطة</th>
                   <th>حد الأجهزة</th>
-                  <th>الانتهاء</th>
+                  <th>مسند إلى (Auth)</th>
+                  <th>انتهاء البطاقة</th>
                   <th>أجهزة</th>
                   <th>تحكم</th>
                 </tr>
@@ -657,9 +997,87 @@ export default function DashboardPage() {
                       <td className="mono">{r.license_key}</td>
                       <td>{r.status ?? "—"}</td>
                       <td>{r.business_name ?? "—"}</td>
-                      <td>{r.plan ?? "—"}</td>
+                      <td style={{ minWidth: "7.5rem" }}>
+                        {lid != null ? (
+                          <select
+                            className="mono"
+                            aria-label="خطة الترخيص"
+                            value={(r.plan ?? "basic").toLowerCase()}
+                            disabled={busy}
+                            onChange={(e) => {
+                              void apiAction(
+                                "/api/actions/license",
+                                {
+                                  licenseId: lid,
+                                  patch: { plan: e.target.value },
+                                },
+                                "تم تحديث الخطة",
+                              );
+                            }}
+                          >
+                            {PLAN_KEYS.map((pk) => (
+                              <option key={pk} value={pk}>
+                                {pk}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          r.plan ?? "—"
+                        )}
+                      </td>
                       <td>{r.max_devices ?? "—"}</td>
-                      <td>{fmtDate(r.expires_at)}</td>
+                      <td style={{ minWidth: "12rem" }}>
+                        {lid != null ? (
+                          <select
+                            className="mono"
+                            aria-label="ربط الحساب"
+                            value={r.assigned_user_id ?? ""}
+                            disabled={busy}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              void apiAction(
+                                "/api/actions/license",
+                                {
+                                  licenseId: lid,
+                                  patch: {
+                                    assigned_user_id: v === "" ? null : v,
+                                  },
+                                },
+                                "تم تحديث ربط الحساب",
+                              );
+                            }}
+                          >
+                            <option value="">— بدون ربط —</option>
+                            {(data?.users ?? []).map((u) => (
+                              <option key={u.id} value={u.id}>
+                                {u.email ?? u.phone ?? shortId(u.id)}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <span className="mono" title={r.assigned_user_id ?? undefined}>
+                            {r.assigned_user_email ?? "—"}
+                          </span>
+                        )}
+                      </td>
+                      <td>
+                        <div>{fmtDate(r.expires_at)}</div>
+                        <div
+                          className="meta"
+                          style={{
+                            marginTop: "0.2rem",
+                            color:
+                              r.expires_days_left != null &&
+                              r.expires_days_left <= 14 &&
+                              r.expires_days_left >= 0 &&
+                              (r.status ?? "").toLowerCase() === "active"
+                                ? "var(--accent)"
+                                : undefined,
+                          }}
+                        >
+                          {expireSummaryLine(r)}
+                        </div>
+                      </td>
                       <td>
                         {r.registered_devices
                           ? String(Object.keys(r.registered_devices).length)
@@ -675,6 +1093,14 @@ export default function DashboardPage() {
                       <td>
                         {lid != null ? (
                           <div className="license-tools">
+                            <button
+                              type="button"
+                              className="btn-sm"
+                              disabled={busy}
+                              onClick={() => void copyFullLicenseKey(lid)}
+                            >
+                              نسخ المفتاح الكامل
+                            </button>
                             <button
                               type="button"
                               className="btn-sm"
@@ -738,6 +1164,54 @@ export default function DashboardPage() {
                                 )
                               }
                             />
+                            <button
+                              type="button"
+                              className="btn-sm"
+                              disabled={busy}
+                              onClick={() => {
+                                if (
+                                  !confirm(
+                                    "مسح قائمة الأجهزة المسجَّلة لهذا الترخيص (JSON)؟ سيتمكن العملاء من التسجيل مجدداً ضمن الحد.",
+                                  )
+                                )
+                                  return;
+                                void apiAction(
+                                  "/api/actions/license",
+                                  {
+                                    licenseId: lid,
+                                    patch: { registered_devices: {} },
+                                  },
+                                  "تم مسح الأجهزة من الترخيص",
+                                );
+                              }}
+                            >
+                              مسح أجهزة الترخيص
+                            </button>
+                            <button
+                              type="button"
+                              className="btn-sm btn-danger"
+                              disabled={busy}
+                              onClick={() => {
+                                if (
+                                  !confirm(
+                                    "حذف هذا الترخيص نهائياً من قاعدة البيانات؟ لا يمكن التراجع.",
+                                  )
+                                )
+                                  return;
+                                const typed = window.prompt(
+                                  `اكتب رقم المعرف ${lid} للتأكيد بالحذف:`,
+                                  "",
+                                );
+                                if (typed !== String(lid)) return;
+                                void apiAction(
+                                  "/api/actions/license-delete",
+                                  { licenseId: lid },
+                                  "تم حذف الترخيص من الجدول",
+                                );
+                              }}
+                            >
+                              حذف من الجدول
+                            </button>
                           </div>
                         ) : (
                           "—"

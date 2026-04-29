@@ -37,7 +37,7 @@ extension DbShifts on DatabaseHelper {
     required String shiftStaffPin,
   }) async {
     final db = await database;
-    return db.transaction((txn) async {
+    final id = await db.transaction((txn) async {
       final id = await txn.insert('work_shifts', {
         'sessionUserId': sessionUserId,
         'shiftStaffUserId': shiftStaffUserId,
@@ -65,6 +65,8 @@ extension DbShifts on DatabaseHelper {
       }
       return id;
     });
+    CloudSyncService.instance.scheduleSyncSoon();
+    return id;
   }
 
   /// إغلاق وردية: تسجيل الجرد، سحب المستخدم، وقيد manual_out عند السحب.
@@ -107,6 +109,7 @@ extension DbShifts on DatabaseHelper {
         whereArgs: [shiftId],
       );
     });
+    CloudSyncService.instance.scheduleSyncSoon();
   }
 
   /// عدد فواتير البيع وعدد المرتجعات المرتبطة بوردية محددة.

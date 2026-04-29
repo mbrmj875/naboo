@@ -7,6 +7,10 @@ export type ProfileRow = {
   id: string;
   email: string | null;
   trial_started_at: string | null;
+  custom_message_title_ar?: string | null;
+  custom_message_body_ar?: string | null;
+  custom_message_active?: boolean | null;
+  custom_message_updated_at?: string | null;
   updated_at: string | null;
 };
 
@@ -32,6 +36,11 @@ export type LicenseRow = {
   expires_at: string | null;
   trial_started_at?: string | null;
   registered_devices?: Record<string, unknown> | null;
+  /** حقل اختياري من DB: ربط إداري بالحساب في Auth */
+  assigned_user_id: string | null;
+  assigned_user_email: string | null;
+  /** فرق بالأيام التقريبية حتى expires_at؛ سالب إن انتهى؛ null إن لا يوجد تاريخ */
+  expires_days_left: number | null;
 };
 
 /** لقطة مزامنة واحدة لكل مستخدم عادةً — بدون حمولة في القائمة لتفادي البطء */
@@ -122,12 +131,75 @@ export type UserRow = {
   trial_days_left: number | null;
   /** إن وُجد: المستخدم ممنوع حتى هذا التاريخ (UTC) */
   banned_until: string | null;
+  /** عدد سجلات الجهاز في جدول account_devices لهذا الحساب */
+  linked_devices_count: number;
+  custom_message_title_ar: string | null;
+  custom_message_body_ar: string | null;
+  custom_message_active: boolean;
+  custom_message_updated_at: string | null;
 };
+
+/** ملخص للوحة الاشتراكات (من صفوف خام قبل إخفاء المفتاح). */
+export type LicenseSummaryRow = {
+  total: number;
+  byStatus: Record<string, number>;
+  byPlan: Record<string, number>;
+  activePaid: number;
+  expiringWithinWeek: number;
+};
+
+function buildLicenseSummary(rawRows: Record<string, unknown>[]): LicenseSummaryRow {
+  const byStatus: Record<string, number> = {};
+  const byPlan: Record<string, number> = {};
+  let activePaid = 0;
+  let expiringWithinWeek = 0;
+  const now = Date.now();
+  const weekMs = 7 * 86400000;
+
+  for (const r of rawRows) {
+    const st = String(r.status ?? "—");
+    const pl = String(r.plan ?? "—");
+    byStatus[st] = (byStatus[st] ?? 0) + 1;
+    byPlan[pl] = (byPlan[pl] ?? 0) + 1;
+    if (st === "active") {
+      activePaid += 1;
+      const expStr = r.expires_at as string | null | undefined;
+      if (expStr) {
+        try {
+          const exp = new Date(expStr).getTime();
+          if (exp >= now && exp - now <= weekMs) expiringWithinWeek += 1;
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+  }
+
+  return {
+    total: rawRows.length,
+    byStatus,
+    byPlan,
+    activePaid,
+    expiringWithinWeek,
+  };
+}
 
 function maskLicenseKey(key: string): string {
   const k = key.trim();
   if (k.length <= 8) return "****";
   return `${k.slice(0, 4)}…${k.slice(-4)}`;
+}
+
+/** فرق بالأيام حتى تاريخ ISO؛ سالب بعد المرور. */
+function expiresDaysLeft(iso: string | null | undefined): number | null {
+  if (iso == null || iso === "") return null;
+  try {
+    const end = new Date(iso).getTime();
+    if (Number.isNaN(end)) return null;
+    return Math.ceil((end - Date.now()) / 86400000);
+  } catch {
+    return null;
+  }
 }
 
 function userProviders(u: User): string {
@@ -149,6 +221,7 @@ export async function loadDashboardData(): Promise<{
   users: UserRow[];
   devices: DeviceRow[];
   licenses: LicenseRow[];
+  licenseSummary: LicenseSummaryRow;
   snapshots: SnapshotRow[];
   snapshotChunks: ChunkRow[];
   remoteConfig: AppRemoteConfigPayload;
@@ -179,9 +252,36 @@ export async function loadDashboardData(): Promise<{
     if (page > 50) break;
   }
 
-  const { data: profiles, error: pErr } = await supabase
-    .from("profiles")
-    .select("id,email,trial_started_at,updated_at");
+  const authEmailByUserId = new Map<string, string>();
+  for (const u of users) {
+    const em = u.email?.trim();
+    if (em) authEmailByUserId.set(u.id, em);
+  }
+
+  let profiles: Record<string, unknown>[] | null = null;
+  let pErr: { message: string } | null = null;
+  {
+    const q1 = await supabase
+      .from("profiles")
+      .select(
+        "id,email,trial_started_at,custom_message_title_ar,custom_message_body_ar,custom_message_active,custom_message_updated_at,updated_at",
+      );
+    profiles = q1.data as Record<string, unknown>[] | null;
+    pErr = q1.error;
+    if (
+      pErr?.message?.includes("column") &&
+      pErr.message.includes("custom_message_title_ar")
+    ) {
+      const qFallback = await supabase
+        .from("profiles")
+        .select("id,email,trial_started_at,updated_at");
+      profiles = qFallback.data as Record<string, unknown>[] | null;
+      pErr = qFallback.error;
+      errors.push(
+        "لا توجد أعمدة الرسالة المخصصة — نفّذ admin-web/supabase/profiles_custom_message.sql.",
+      );
+    }
+  }
 
   if (pErr) errors.push(`profiles: ${pErr.message}`);
 
@@ -217,12 +317,36 @@ export async function loadDashboardData(): Promise<{
       trial_ends_at: trialEnds,
       trial_days_left: daysLeft,
       banned_until: u.banned_until ?? null,
+      linked_devices_count: 0,
+      custom_message_title_ar: p?.custom_message_title_ar ?? null,
+      custom_message_body_ar: p?.custom_message_body_ar ?? null,
+      custom_message_active: p?.custom_message_active == true,
+      custom_message_updated_at: p?.custom_message_updated_at ?? null,
     };
   });
 
   userRows.sort(
     (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
   );
+
+  /** عدد الأجهزة لكل حساب (من عمود user_id)، للدقة خارج حد قائمة الجدول. */
+  let linkedDeviceCountByUser = new Map<string, number>();
+  {
+    const { data: idsOnly, error: dcErr } = await supabase
+      .from("account_devices")
+      .select("user_id");
+    if (dcErr) errors.push(`account_devices (عدّ الأجهزة): ${dcErr.message}`);
+    for (const r of idsOnly ?? []) {
+      const uid = String((r as { user_id: string }).user_id ?? "");
+      if (!uid) continue;
+      linkedDeviceCountByUser.set(uid, (linkedDeviceCountByUser.get(uid) ?? 0) + 1);
+    }
+  }
+
+  const userRowsWithDevices: UserRow[] = userRows.map((row) => ({
+    ...row,
+    linked_devices_count: linkedDeviceCountByUser.get(row.id) ?? 0,
+  }));
 
   const { data: devices, error: dErr } = await supabase
     .from("account_devices")
@@ -237,15 +361,34 @@ export async function loadDashboardData(): Promise<{
   let licenseRows: Record<string, unknown>[] | null = null;
   let lErr: { message: string } | null = null;
   {
-    const q = await supabase
+    const qFull = await supabase
       .from("licenses")
       .select(
-        "id,license_key,status,business_name,plan,max_devices,expires_at,trial_started_at,registered_devices",
+        "id,license_key,status,business_name,plan,max_devices,expires_at,trial_started_at,registered_devices,assigned_user_id",
       )
       .order("license_key", { ascending: true })
       .limit(500);
-    licenseRows = q.data as Record<string, unknown>[] | null;
-    lErr = q.error;
+    licenseRows = qFull.data as Record<string, unknown>[] | null;
+    lErr = qFull.error;
+
+    const msgNoCol = (e: typeof lErr, col: string) =>
+      !!(e?.message?.includes("column") && e.message.includes(col));
+
+    if (lErr && msgNoCol(lErr, "assigned_user_id")) {
+      const qFallback = await supabase
+        .from("licenses")
+        .select(
+          "id,license_key,status,business_name,plan,max_devices,expires_at,trial_started_at,registered_devices",
+        )
+        .order("license_key", { ascending: true })
+        .limit(500);
+      licenseRows = qFallback.data as Record<string, unknown>[] | null;
+      lErr = qFallback.error;
+      errors.push(
+        "لم يُعثر على عمود assigned_user_id — نفّذ admin-web/supabase/licenses_assigned_user_id.sql من لوحة Supabase.",
+      );
+    }
+
     if (lErr?.message?.includes("column") && lErr.message.includes("id")) {
       const q2 = await supabase
         .from("licenses")
@@ -292,6 +435,8 @@ export async function loadDashboardData(): Promise<{
       rcRes.data.updated_at != null ? String(rcRes.data.updated_at) : null;
   }
 
+  const licenseSummary = buildLicenseSummary(licenseRows ?? []);
+
   const licenses: LicenseRow[] = (licenseRows ?? []).map((r) => {
     const rawId = r["id"];
     const dbId =
@@ -300,6 +445,12 @@ export async function loadDashboardData(): Promise<{
         : typeof rawId === "string" && /^\d+$/.test(rawId)
           ? parseInt(rawId, 10)
           : null;
+    const expIso = (r.expires_at as string) ?? null;
+    const assignedRaw = r["assigned_user_id"];
+    const assignedId =
+      assignedRaw != null && String(assignedRaw).trim() !== ""
+        ? String(assignedRaw)
+        : null;
     return {
       db_id: dbId,
       license_key: maskLicenseKey(String(r.license_key ?? "")),
@@ -310,19 +461,25 @@ export async function loadDashboardData(): Promise<{
         r.max_devices === null || r.max_devices === undefined
           ? null
           : Number(r.max_devices),
-      expires_at: (r.expires_at as string) ?? null,
+      expires_at: expIso,
       trial_started_at: (r.trial_started_at as string) ?? null,
       registered_devices:
         r.registered_devices && typeof r.registered_devices === "object"
           ? (r.registered_devices as Record<string, unknown>)
           : null,
+      assigned_user_id: assignedId,
+      assigned_user_email: assignedId
+        ? authEmailByUserId.get(assignedId) ?? null
+        : null,
+      expires_days_left: expiresDaysLeft(expIso),
     };
   });
 
   return {
-    users: userRows,
+    users: userRowsWithDevices,
     devices: (devices ?? []) as DeviceRow[],
     licenses,
+    licenseSummary,
     snapshots: (snapRows ?? []) as SnapshotRow[],
     snapshotChunks: (chunkRows ?? []) as ChunkRow[],
     remoteConfig,

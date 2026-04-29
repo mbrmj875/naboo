@@ -24,8 +24,9 @@ class BarcodeLabelProduct {
 }
 
 enum BarcodeLabelSize {
-  mm40x30,
   mm50x30,
+  mm40x30,
+  mm30x50,
 }
 
 extension BarcodeLabelSizeX on BarcodeLabelSize {
@@ -34,14 +35,31 @@ extension BarcodeLabelSizeX on BarcodeLabelSize {
     return switch (this) {
       BarcodeLabelSize.mm40x30 => PdfPageFormat(40 * mm, 30 * mm),
       BarcodeLabelSize.mm50x30 => PdfPageFormat(50 * mm, 30 * mm),
+      BarcodeLabelSize.mm30x50 => PdfPageFormat(30 * mm, 50 * mm),
     };
   }
 
+  /// عرض ملصق مبسّط لقائمة الاختيار (نفس نسب الصفحة).
+  Size get thumbnailLogicalSize => switch (this) {
+        BarcodeLabelSize.mm40x30 => const Size(40, 30),
+        BarcodeLabelSize.mm50x30 => const Size(50, 30),
+        BarcodeLabelSize.mm30x50 => const Size(30, 50),
+      };
+
+  /// نص المواصفات: عرض × ارتفاع (مثل واجهة الطابعة الشائعة).
   String get labelAr => switch (this) {
-        BarcodeLabelSize.mm40x30 => '40×30 مم',
-        BarcodeLabelSize.mm50x30 => '50×30 مم',
+        BarcodeLabelSize.mm50x30 => '50 × 30 مم',
+        BarcodeLabelSize.mm40x30 => '40 × 30 مم',
+        BarcodeLabelSize.mm30x50 => '30 × 50 مم',
       };
 }
+
+/// ترتيب عرض مقاسات الملصقات الشائعة أولاً.
+const List<BarcodeLabelSize> kBarcodeLabelSizesCommonFirst = [
+  BarcodeLabelSize.mm50x30,
+  BarcodeLabelSize.mm40x30,
+  BarcodeLabelSize.mm30x50,
+];
 
 class BarcodeLabelsPdf {
   static Future<Uint8List> build({
@@ -126,7 +144,7 @@ class BarcodeLabelsPdf {
     }
 
     for (final p in products) {
-      final c = (copiesByProductId[p.id] ?? 0).clamp(0, 500);
+      final c = (copiesByProductId[p.id] ?? 0).clamp(0, 999);
       for (var i = 0; i < c; i++) {
         pdf.addPage(
           pw.Page(

@@ -7,6 +7,7 @@ import '../../models/installment.dart';
 import '../../models/installment_settings_data.dart';
 import '../../services/database_helper.dart';
 import '../../theme/design_tokens.dart';
+import '../../utils/screen_layout.dart';
 
 final _numFmt = NumberFormat('#,##0', 'en');
 final _dateFmt = DateFormat('dd/MM/yyyy', 'en');
@@ -46,11 +47,13 @@ class _AddInstallmentPlanScreenState extends State<AddInstallmentPlanScreen> {
 
   InstallmentSettingsData _settings = InstallmentSettingsData.defaults();
   int? _linkedCustomerId;
+
   /// صف العميل المرتبط حالياً (للعرض فقط — لا نحمّل جدول العملاء كاملاً).
   Map<String, dynamic>? _linkedCustomerRow;
   DateTime _startDate = DateTime.now();
   bool _loading = true;
   String? _loadError;
+
   /// لقطة حقول الفائدة المحفوظة مع الخطة — تُعاد عند إعادة الجدولة دون مسحها من قاعدة البيانات.
   InstallmentPlan? _financeSnapshot;
 
@@ -83,7 +86,8 @@ class _AddInstallmentPlanScreenState extends State<AddInstallmentPlanScreen> {
           ? installmentShiftCalendarMonths(first, -step)
           : first.subtract(Duration(days: 30 * step));
     } else {
-      anchor = settings.defaultFirstDueAnchor ==
+      anchor =
+          settings.defaultFirstDueAnchor ==
               InstallmentSettingsData.anchorInvoiceDate
           ? DateTime(
               widget.invoiceDate.year,
@@ -333,9 +337,7 @@ class _AddInstallmentPlanScreenState extends State<AddInstallmentPlanScreen> {
                       _SummaryRow('رقم الفاتورة', '#${widget.invoiceId}'),
                       _SummaryRow(
                         'العميل',
-                        widget.customerName.isEmpty
-                            ? '—'
-                            : widget.customerName,
+                        widget.customerName.isEmpty ? '—' : widget.customerName,
                       ),
                       _SummaryRow(
                         'الإجمالي',
@@ -617,16 +619,23 @@ class _InstallmentCustomerPickerSheetState
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Padding(
-                padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                padding: EdgeInsetsDirectional.only(
+                  start: ScreenLayout.of(context).pageHorizontalGap,
+                  end: ScreenLayout.of(context).pageHorizontalGap,
+                  top: 4,
+                  bottom: 8,
+                ),
                 child: Text(
                   'اختر عميلاً مسجّلاً',
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.bold,
-                      ),
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ),
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
+                padding: EdgeInsets.symmetric(
+                  horizontal: ScreenLayout.of(context).pageHorizontalGap,
+                ),
                 child: TextField(
                   controller: _searchCtrl,
                   decoration: const InputDecoration(
@@ -642,8 +651,7 @@ class _InstallmentCustomerPickerSheetState
               ListTile(
                 leading: const Icon(Icons.link_off_rounded),
                 title: const Text('بدون ربط — الاعتماد على الاسم من الفاتورة'),
-                onTap: () =>
-                    Navigator.pop(context, _unlinkCustomerSentinel),
+                onTap: () => Navigator.pop(context, _unlinkCustomerSentinel),
               ),
               const Divider(height: 1),
               Expanded(
@@ -662,9 +670,7 @@ class _InstallmentCustomerPickerSheetState
                               nm.isEmpty ? 'عميل #$id' : nm,
                               overflow: TextOverflow.ellipsis,
                             ),
-                            subtitle: ph.isEmpty
-                                ? null
-                                : Text(ph, maxLines: 1),
+                            subtitle: ph.isEmpty ? null : Text(ph, maxLines: 1),
                             onTap: () => Navigator.pop(context, id),
                           );
                         },

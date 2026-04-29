@@ -5,6 +5,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'services/cloud_sync_service.dart';
+import 'services/database_helper.dart';
 import 'services/system_notification_service.dart';
 import 'services/license_service.dart';
 import 'screens/license/license_expired_screen.dart';
@@ -33,6 +34,7 @@ import 'services/tenant_context_service.dart';
 import 'services/supabase_config.dart';
 import 'screens/auth/device_kicked_out_screen.dart';
 import 'screens/splash_screen.dart';
+import 'screens/onboarding/business_setup_wizard_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/shift/open_shift_screen.dart';
@@ -79,6 +81,7 @@ void main() async {
       autoRefreshToken: false,
     ),
   );
+  await DatabaseHelper().runStartupCriticalMigrations();
   await LicenseService.instance.initialize();
   await SystemNotificationService.instance.initialize();
   unawaited(MacStyleSettingsPrefs.isMacStylePanelEnabled());
@@ -200,11 +203,13 @@ class MyApp extends StatelessWidget {
                   '/login': (context) => const LoginScreen(),
                   '/home': (context) => const HomeScreen(),
                   '/open-shift': (context) => const OpenShiftScreen(),
+                  '/onboarding': (context) => const BusinessSetupWizardScreen(),
                   '/dev/stress': (context) => const StressToolsScreen(),
                 },
                 onGenerateRoute: (settings) {
                   if (settings.name == '/home' ||
-                      settings.name == '/open-shift') {
+                      settings.name == '/open-shift' ||
+                      settings.name == '/onboarding') {
                     final auth = Provider.of<AuthProvider>(
                       context,
                       listen: false,

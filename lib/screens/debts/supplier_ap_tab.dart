@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 
 import '../../services/database_helper.dart';
 import '../../theme/design_tokens.dart';
+import '../../utils/screen_layout.dart';
 import '../../providers/suppliers_ap_provider.dart';
 import 'supplier_detail_screen.dart';
 
@@ -135,6 +136,7 @@ class _SupplierApTabState extends State<SupplierApTab> {
 
     return Consumer<SuppliersApProvider>(
       builder: (context, prov, _) {
+        final gap = ScreenLayout.of(context).pageHorizontalGap;
         final filtered = prov.items;
         final totalOpen = prov.totalOpen;
         if (prov.isLoading && filtered.isEmpty) {
@@ -155,7 +157,12 @@ class _SupplierApTabState extends State<SupplierApTab> {
               },
               child: ListView(
                 physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
+                padding: EdgeInsetsDirectional.only(
+                  start: gap,
+                  end: gap,
+                  top: 12,
+                  bottom: 100,
+                ),
                 children: [
                   Container(
                     width: double.infinity,
@@ -284,20 +291,19 @@ class _SupplierApTabState extends State<SupplierApTab> {
                                             _quickActionChip(
                                               context,
                                               label: 'وصل',
-                                              icon:
-                                                  Icons.receipt_long_rounded,
+                                              icon: Icons.receipt_long_rounded,
                                               onTap: () async {
                                                 await Navigator.push<void>(
                                                   context,
                                                   MaterialPageRoute<void>(
                                                     builder: (_) =>
                                                         SupplierDetailScreen(
-                                                      supplierId:
-                                                          s.supplier.id,
-                                                      initialAction:
-                                                          SupplierDetailInitialAction
-                                                              .addBill,
-                                                    ),
+                                                          supplierId:
+                                                              s.supplier.id,
+                                                          initialAction:
+                                                              SupplierDetailInitialAction
+                                                                  .addBill,
+                                                        ),
                                                   ),
                                                 );
                                                 if (context.mounted) {
@@ -315,12 +321,12 @@ class _SupplierApTabState extends State<SupplierApTab> {
                                                   MaterialPageRoute<void>(
                                                     builder: (_) =>
                                                         SupplierDetailScreen(
-                                                      supplierId:
-                                                          s.supplier.id,
-                                                      initialAction:
-                                                          SupplierDetailInitialAction
-                                                              .payout,
-                                                    ),
+                                                          supplierId:
+                                                              s.supplier.id,
+                                                          initialAction:
+                                                              SupplierDetailInitialAction
+                                                                  .payout,
+                                                        ),
                                                   ),
                                                 );
                                                 if (context.mounted) {
@@ -339,12 +345,12 @@ class _SupplierApTabState extends State<SupplierApTab> {
                                                   MaterialPageRoute<void>(
                                                     builder: (_) =>
                                                         SupplierDetailScreen(
-                                                      supplierId:
-                                                          s.supplier.id,
-                                                      initialAction:
-                                                          SupplierDetailInitialAction
-                                                              .supplierReturn,
-                                                    ),
+                                                          supplierId:
+                                                              s.supplier.id,
+                                                          initialAction:
+                                                              SupplierDetailInitialAction
+                                                                  .supplierReturn,
+                                                        ),
                                                   ),
                                                 );
                                                 if (context.mounted) {
@@ -358,8 +364,7 @@ class _SupplierApTabState extends State<SupplierApTab> {
                                     ),
                                   ),
                                   Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.end,
+                                    crossAxisAlignment: CrossAxisAlignment.end,
                                     children: [
                                       Text(
                                         '${_numFmt.format(s.openPayable)} د.ع',

@@ -23,6 +23,7 @@ class InventoryRepository {
         w.code,
         w.branchId,
         b.name AS branchName,
+        b.code AS branchCode,
         w.location,
         w.isDefault,
         w.isActive,
@@ -41,7 +42,7 @@ class InventoryRepository {
     );
   }
 
-  Future<int> createWarehouse({
+  Future<({int id, String resolvedCode})> createWarehouse({
     required String name,
     required String code,
     required String location,
@@ -51,7 +52,10 @@ class InventoryRepository {
   }) async {
     final db = await _db;
     final tenantId = _tenantId;
-    return db.transaction((txn) async {
+    final resolvedCode = code.trim().isEmpty
+        ? 'WH-${DateTime.now().millisecondsSinceEpoch}'
+        : code.trim();
+    final id = await db.transaction<int>((txn) async {
       if (isDefault) {
         await txn.update(
           'warehouses',
@@ -63,7 +67,7 @@ class InventoryRepository {
       return txn.insert('warehouses', {
         'tenantId': tenantId,
         'name': name.trim(),
-        'code': code.trim(),
+        'code': resolvedCode,
         'branchId': branchId,
         'location': location.trim(),
         'isDefault': isDefault ? 1 : 0,
@@ -71,6 +75,57 @@ class InventoryRepository {
         'createdAt': DateTime.now().toIso8601String(),
       });
     });
+    return (id: id, resolvedCode: resolvedCode);
+  }
+
+  /// يتحقّق من وجود مستودع بنفس الاسم (نفس المستأجر)، مع تجاهل [excludingWarehouseId] عند التعديل.
+  Future<bool> warehouseNameExists(String name,
+      {int? excludingWarehouseId}) async {
+    final db = await _db;
+    final tenantId = _tenantId;
+    final nm = name.trim().toLowerCase();
+    final rows = await db.rawQuery(
+      '''
+      SELECT 1 FROM warehouses
+      WHERE tenantId = ?
+        AND LOWER(TRIM(name)) = ?
+        AND (? IS NULL OR id != ?)
+      LIMIT 1
+      ''',
+      [tenantId, nm, excludingWarehouseId, excludingWarehouseId],
+    );
+    return rows.isNotEmpty;
+  }
+
+  /// يتحقّق من تكرار كود المستودع (بدون تجاهل الكود الفارغ).
+  Future<bool> warehouseCodeExists(String code,
+      {int? excludingWarehouseId}) async {
+    final c = code.trim();
+    if (c.isEmpty) return false;
+    final db = await _db;
+    final tenantId = _tenantId;
+    final normalized = c.toUpperCase();
+    final rows = await db.rawQuery(
+      '''
+      SELECT 1 FROM warehouses
+      WHERE tenantId = ?
+        AND UPPER(TRIM(IFNULL(code, ''))) = ?
+        AND (? IS NULL OR id != ?)
+      LIMIT 1
+      ''',
+      [tenantId, normalized, excludingWarehouseId, excludingWarehouseId],
+    );
+    return rows.isNotEmpty;
+  }
+
+  Future<void> setWarehouseActive(int id, bool active) async {
+    final db = await _db;
+    await db.update(
+      'warehouses',
+      {'isActive': active ? 1 : 0},
+      where: 'id = ? AND tenantId = ?',
+      whereArgs: [id, _tenantId],
+    );
   }
 
   Future<void> updateWarehouse({

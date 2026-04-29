@@ -7,6 +7,7 @@ import '../../services/database_helper.dart';
 import '../../services/cloud_sync_service.dart';
 import '../../theme/design_tokens.dart';
 import '../../utils/iraqi_currency_format.dart';
+import '../../utils/screen_layout.dart';
 import '../../widgets/invoice_detail_sheet.dart';
 
 /// أرقام مبالغ وواجهات الصندوق بالأرقام اللاتينية مع فواصل آلاف.
@@ -213,6 +214,7 @@ Future<void> _showCashShiftDetailDialog(
           ? 'تفاصيل الحركات (بدون وردية)'
           : 'تفاصيل الوردية #$shiftId';
 
+      final titleHGap = ScreenLayout.of(ctx).pageHorizontalGap;
       return Directionality(
         textDirection: TextDirection.rtl,
         child: AlertDialog(
@@ -221,7 +223,10 @@ Future<void> _showCashShiftDetailDialog(
           title: ColoredBox(
             color: AppColors.primary,
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              padding: EdgeInsets.symmetric(
+                horizontal: titleHGap,
+                vertical: 14,
+              ),
               child: Row(
                 children: [
                   const Icon(
@@ -625,6 +630,16 @@ class _CashScreenState extends State<CashScreen>
     });
   }
 
+  Future<void> _refreshFromServer() async {
+    await CloudSyncService.instance.syncNow(
+      forcePull: true,
+      forcePush: true,
+      forceImportOnPull: true,
+    );
+    if (!mounted) return;
+    await _reload();
+  }
+
   Future<void> _openInvoiceDetail(int invoiceId) async {
     await showInvoiceDetailSheet(context, _db, invoiceId);
   }
@@ -687,7 +702,7 @@ class _CashScreenState extends State<CashScreen>
         IconButton(
           icon: const Icon(Icons.refresh_rounded),
           tooltip: 'تحديث',
-          onPressed: _loading ? null : _reload,
+          onPressed: _loading ? null : _refreshFromServer,
         ),
         const SizedBox(width: 4),
       ],
@@ -767,10 +782,7 @@ class _CashScreenState extends State<CashScreen>
           icon: Icon(Icons.add_rounded, color: cs.onPrimary),
           label: Text(
             'قيد يدوي',
-            style: TextStyle(
-              color: cs.onPrimary,
-              fontWeight: FontWeight.bold,
-            ),
+            style: TextStyle(color: cs.onPrimary, fontWeight: FontWeight.bold),
           ),
         ),
       ),
@@ -788,10 +800,7 @@ class _CashScreenState extends State<CashScreen>
         unselectedLabelColor: cs.onSurfaceVariant,
         indicatorColor: cs.secondary,
         indicatorWeight: 3,
-        labelStyle: const TextStyle(
-          fontWeight: FontWeight.w700,
-          fontSize: 13,
-        ),
+        labelStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
         unselectedLabelStyle: const TextStyle(
           fontWeight: FontWeight.w600,
           fontSize: 12,
@@ -856,10 +865,11 @@ class _BalanceCard extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     final p = cs.primary;
     final pDeep = Color.lerp(p, Colors.black, 0.22) ?? p;
+    final gap = ScreenLayout.of(context).pageHorizontalGap;
 
     return Container(
-      margin: const EdgeInsets.all(14),
-      padding: const EdgeInsets.all(20),
+      margin: EdgeInsets.symmetric(horizontal: gap, vertical: 14),
+      padding: EdgeInsets.symmetric(horizontal: gap, vertical: 20),
       decoration: BoxDecoration(
         gradient: LinearGradient(
           colors: [p, pDeep],
@@ -977,9 +987,10 @@ class _QuickActions extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final surface = Theme.of(context).colorScheme.surface;
+    final gap = ScreenLayout.of(context).pageHorizontalGap;
     return Container(
       color: surface,
-      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 20),
+      padding: EdgeInsets.symmetric(vertical: 12, horizontal: gap),
       child: Row(
         children: [
           Expanded(
@@ -1204,6 +1215,7 @@ class _CashShiftSectionHeader extends StatelessWidget {
     final primary = cs.primary;
     final onV = cs.onSurfaceVariant;
     final n = movements.length;
+    final gap = ScreenLayout.of(context).pageHorizontalGap;
 
     if (shiftId == null) {
       return Material(
@@ -1213,18 +1225,14 @@ class _CashShiftSectionHeader extends StatelessWidget {
           child: Container(
             width: double.infinity,
             margin: const EdgeInsets.only(bottom: 8, top: 4),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            padding: EdgeInsets.symmetric(horizontal: gap, vertical: 10),
             decoration: BoxDecoration(
               color: headerBg,
               border: Border.all(color: headerBorder),
             ),
             child: Row(
               children: [
-                Icon(
-                  Icons.help_outline_rounded,
-                  size: 20,
-                  color: onV,
-                ),
+                Icon(Icons.help_outline_rounded, size: 20, color: onV),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Column(
@@ -1240,10 +1248,7 @@ class _CashShiftSectionHeader extends StatelessWidget {
                       const SizedBox(height: 4),
                       Text(
                         'اضغط لعرض التفاصيل',
-                        style: TextStyle(
-                          fontSize: 11.5,
-                          color: onV,
-                        ),
+                        style: TextStyle(fontSize: 11.5, color: onV),
                       ),
                     ],
                   ),
@@ -1264,7 +1269,7 @@ class _CashShiftSectionHeader extends StatelessWidget {
           child: Container(
             width: double.infinity,
             margin: const EdgeInsets.only(bottom: 8, top: 4),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            padding: EdgeInsets.symmetric(horizontal: gap, vertical: 10),
             decoration: BoxDecoration(
               color: headerBg,
               border: Border.all(color: headerBorder),
@@ -1311,10 +1316,7 @@ class _CashShiftSectionHeader extends StatelessWidget {
                       const SizedBox(height: 4),
                       Text(
                         'اضغط لعرض التفاصيل',
-                        style: TextStyle(
-                          fontSize: 11.5,
-                          color: onV,
-                        ),
+                        style: TextStyle(fontSize: 11.5, color: onV),
                       ),
                     ],
                   ),
@@ -1337,7 +1339,7 @@ class _CashShiftSectionHeader extends StatelessWidget {
         child: Container(
           width: double.infinity,
           margin: const EdgeInsets.only(bottom: 8, top: 4),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          padding: EdgeInsets.symmetric(horizontal: gap, vertical: 12),
           decoration: BoxDecoration(
             color: headerBg,
             border: Border.all(color: headerBorder),
@@ -1394,10 +1396,7 @@ class _CashShiftSectionHeader extends StatelessWidget {
                     const SizedBox(height: 4),
                     Text(
                       'اضغط لعرض التفاصيل',
-                      style: TextStyle(
-                        fontSize: 11.5,
-                        color: onV,
-                      ),
+                      style: TextStyle(fontSize: 11.5, color: onV),
                     ),
                   ],
                 ),
@@ -1426,11 +1425,17 @@ class _CashLedgerList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final gap = ScreenLayout.of(context).pageHorizontalGap;
     if (txs.isEmpty) {
       final h = MediaQuery.sizeOf(context).height;
       return ListView(
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(14, 20, 14, 100),
+        padding: EdgeInsetsDirectional.only(
+          start: gap,
+          end: gap,
+          top: 20,
+          bottom: 100,
+        ),
         children: [
           SizedBox(
             height: math.max(240, h * 0.38),
@@ -1491,7 +1496,12 @@ class _CashLedgerList extends StatelessWidget {
     }
 
     return ListView(
-      padding: const EdgeInsets.fromLTRB(14, 12, 14, 100),
+      padding: EdgeInsetsDirectional.only(
+        start: gap,
+        end: gap,
+        top: 12,
+        bottom: 100,
+      ),
       children: children,
     );
   }
@@ -1524,9 +1534,9 @@ class _TxCard extends StatelessWidget {
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
             border: Border.all(
-              color: Theme.of(context).colorScheme.outline.withValues(
-                    alpha: 0.4,
-                  ),
+              color: Theme.of(
+                context,
+              ).colorScheme.outline.withValues(alpha: 0.4),
             ),
           ),
           child: Row(
@@ -1668,8 +1678,9 @@ class _AddTransactionSheetState extends State<_AddTransactionSheet> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final gap = ScreenLayout.of(context).pageHorizontalGap;
     return Container(
-      margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+      margin: EdgeInsetsDirectional.only(start: gap, end: gap, bottom: 12),
       padding: EdgeInsets.only(
         bottom: MediaQuery.of(context).viewInsets.bottom,
       ),
@@ -1683,7 +1694,7 @@ class _AddTransactionSheetState extends State<_AddTransactionSheet> {
       child: Directionality(
         textDirection: TextDirection.rtl,
         child: Padding(
-          padding: const EdgeInsets.all(20),
+          padding: EdgeInsets.symmetric(horizontal: gap, vertical: 20),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1713,7 +1724,9 @@ class _AddTransactionSheetState extends State<_AddTransactionSheet> {
                       onTap: () => setState(() => _type = t),
                       child: AnimatedContainer(
                         duration: const Duration(milliseconds: 150),
-                        margin: EdgeInsets.only(left: t == 'إخراج' ? 0 : 8),
+                        margin: EdgeInsetsDirectional.only(
+                          start: t == 'إخراج' ? 0 : 8,
+                        ),
                         padding: const EdgeInsets.symmetric(vertical: 10),
                         decoration: BoxDecoration(
                           color: sel ? c : c.withValues(alpha: 0.08),
