@@ -1,6 +1,6 @@
 ; Inno Setup script لإنتاج مُثبّت ويندوز كلاسيكي لـ NABOO
 ; يعمل بدبل كليك: Next → Install → اختصار سطح المكتب → Run.
-; يُبنى تلقائيًا داخل GitHub Actions (release-windows.yml).
+; يُبنى تلقائيًا داخل GitHub Actions (.github/workflows/release.yml).
 
 #define MyAppName "NABOO"
 #define MyAppPublisher "NABOO Systems"

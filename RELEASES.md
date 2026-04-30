@@ -6,9 +6,8 @@
 الحل العملي: **استخدم GitHub Actions** لبناء النسخة وإرفاقها كـ Release.
 
 ### 2) نشر إصدار جديد (Android + Windows) عبر GitHub Releases
-في هذا المستودع يوجد Workflow جاهز:
-- `.github/workflows/release-android.yml`
-- `.github/workflows/release-windows.yml`
+في هذا المستودع يوجد Workflow واحد يجمع المنصتين:
+- `.github/workflows/release.yml` (أولاً Android ينشئ الإصدار، ثم Windows يرفق المثبّت)
 
 لإصدار نسخة جديدة:
 
