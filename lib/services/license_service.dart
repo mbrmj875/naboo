@@ -7,6 +7,9 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'license/license_engine.dart';
+import 'license/license_engine_v1.dart';
+
 // ── إعداد Supabase ────────────────────────────────────────────────────────────
 abstract class _Supabase {
   static const url = 'https://rkofqwcuvbzrnmelvxhz.supabase.co';
@@ -173,17 +176,22 @@ class LicenseService extends ChangeNotifier {
   LicenseService._();
   static final LicenseService instance = LicenseService._();
 
+  late final LicenseEngine _engine = LicenseEngineV1(this);
+
   LicenseState _state = LicenseState.checking;
   LicenseState get state => _state;
   String? _cachedDeviceId;
 
   // ── تهيئة ─────────────────────────────────────────────────────────────────
 
-  Future<void> initialize() => checkLicense();
+  Future<void> initialize() => _engine.initialize();
 
   // ── معرّف الجهاز ──────────────────────────────────────────────────────────
 
-  Future<String> getDeviceId() async {
+  Future<String> getDeviceId() => _engine.getDeviceId();
+
+  /// تنفيذ v1 الحالي (سيتحول إلى UUID لاحقاً في v2).
+  Future<String> getDeviceIdV1() async {
     if (_cachedDeviceId != null) return _cachedDeviceId!;
     final prefs = await SharedPreferences.getInstance();
     final saved = prefs.getString(_Prefs.deviceId);
@@ -215,7 +223,9 @@ class LicenseService extends ChangeNotifier {
     return id;
   }
 
-  Future<String> getDeviceName() async {
+  Future<String> getDeviceName() => _engine.getDeviceName();
+
+  Future<String> getDeviceNameV1() async {
     try {
       final p = DeviceInfoPlugin();
       if (Platform.isMacOS) {
@@ -372,7 +382,12 @@ class LicenseService extends ChangeNotifier {
     }
   }
 
-  Future<void> checkLicense({bool forceRemote = false}) async {
+  Future<void> checkLicense({bool forceRemote = false}) =>
+      _engine.checkLicense(forceRemote: forceRemote);
+
+  Future<void> initializeV1() => checkLicenseV1();
+
+  Future<void> checkLicenseV1({bool forceRemote = false}) async {
     _setState(LicenseState.checking);
     final prefs = await SharedPreferences.getInstance();
     await _syncAssignedLicenseFromSupabaseIntoPrefs(prefs);
@@ -508,7 +523,10 @@ class LicenseService extends ChangeNotifier {
   ///
   /// مهم: لا نستخدم `upsert` بحقول جزئية فقط — في PostgreSQL قد يصفّر ذلك
   /// أعمدة أخرى مثل `trial_started_at` فيُعاد احتساب الـ 15 يوماً عند كل تسجيل دخول.
-  Future<void> applyTrialFromSupabaseProfile() async {
+  Future<void> applyTrialFromSupabaseProfile() =>
+      _engine.applyTrialFromSupabaseProfile();
+
+  Future<void> applyTrialFromSupabaseProfileV1() async {
     final user = Supabase.instance.client.auth.currentUser;
     if (user == null) {
       await ensureLocalTrialStarted();
@@ -577,7 +595,9 @@ class LicenseService extends ChangeNotifier {
     return DateTime.now().toUtc().toIso8601String();
   }
 
-  Future<void> ensureLocalTrialStarted() async {
+  Future<void> ensureLocalTrialStarted() => _engine.ensureLocalTrialStarted();
+
+  Future<void> ensureLocalTrialStartedV1() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_Prefs.useCloudTrial, false);
     if (!prefs.containsKey(_Prefs.localTrialStartAt)) {
@@ -725,7 +745,10 @@ class LicenseService extends ChangeNotifier {
 
   // ── تفعيل مفتاح جديد ─────────────────────────────────────────────────────
 
-  Future<({bool ok, String message})> activateLicense(String key) async {
+  Future<({bool ok, String message})> activateLicense(String key) =>
+      _engine.activateLicense(key);
+
+  Future<({bool ok, String message})> activateLicenseV1(String key) async {
     final cleaned = key.trim().toUpperCase();
     if (cleaned.isEmpty) return (ok: false, message: 'أدخل مفتاح الترخيص');
     try {
@@ -770,7 +793,9 @@ class LicenseService extends ChangeNotifier {
 
   // ── إلغاء الترخيص ────────────────────────────────────────────────────────
 
-  Future<void> deactivate() async {
+  Future<void> deactivate() => _engine.deactivate();
+
+  Future<void> deactivateV1() async {
     final prefs = await SharedPreferences.getInstance();
     for (final k in [
       _Prefs.licenseKey,
