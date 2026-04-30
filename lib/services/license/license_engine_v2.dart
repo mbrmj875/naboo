@@ -3,6 +3,7 @@ import 'license_storage.dart';
 import 'license_token.dart';
 import 'jwt_rs256_verifier.dart';
 import 'device_uuid_migrator.dart';
+import 'package:flutter/foundation.dart';
 
 /// محرك v2: سيتم بناؤه لاحقاً (JWT + TrustedTime + Restricted + ExpiredPendingLock).
 class LicenseEngineV2 implements LicenseEngine {
@@ -100,7 +101,10 @@ GQIDAQAB
   Future<String> getDeviceId() async {
     final id = await _uuidMigrator.getDeviceIdForUse();
     // محاولة ترحيل على السيرفر (لا تكسر إذا فشلت/لا يوجد user).
-    await _uuidMigrator.tryMigrateOnServer();
+    await _uuidMigrator.tryMigrateOnServer(
+      deviceName: 'هذا الجهاز',
+      platform: defaultTargetPlatform.name,
+    );
     return id;
   }
 

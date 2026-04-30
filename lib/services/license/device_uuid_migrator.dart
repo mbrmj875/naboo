@@ -65,7 +65,10 @@ class DeviceUuidMigrator {
   ///
   /// - تُستدعى عند توفر اتصال/جلسة مستخدم.
   /// - عند النجاح: state=completed وحذف legacy من prefs.
-  Future<void> tryMigrateOnServer() async {
+  Future<void> tryMigrateOnServer({
+    required String deviceName,
+    required String platform,
+  }) async {
     final prefs = await _getPrefs();
     final user = Supabase.instance.client.auth.currentUser;
     if (user == null) return; // لا ترحيل بدون user_id
@@ -97,8 +100,17 @@ class DeviceUuidMigrator {
       }
 
       if (legacy.isEmpty) {
-        // لا legacy: لا يمكن "تبديل"؛ نفترض أن تسجيل الجهاز سيتم لاحقاً بـ uuid.
-        await prefs.setString(_Keys.migrationState, UuidMigrationState.failedRetry);
+        // لا legacy (مثلاً إعادة تثبيت): نضمن وجود صف للجهاز بـ UUID.
+        await client.from('account_devices').upsert({
+          'user_id': user.id,
+          'device_id': uuid,
+          'device_name': deviceName,
+          'platform': platform,
+          'last_seen_at': DateTime.now().toUtc().toIso8601String(),
+          'created_at': DateTime.now().toUtc().toIso8601String(),
+          'access_status': 'active',
+        }, onConflict: 'user_id,device_id');
+        await prefs.setString(_Keys.migrationState, UuidMigrationState.completed);
         return;
       }
 
