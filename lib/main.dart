@@ -31,6 +31,7 @@ import 'providers/dashboard_layout_provider.dart';
 import 'providers/global_barcode_route_bridge.dart';
 import 'providers/open_ops_registry.dart';
 import 'widgets/global_barcode_keyboard_listener.dart';
+import 'widgets/restricted_mode_banner_controller.dart';
 import 'navigation/app_root_navigator_key.dart';
 import 'services/mac_style_settings_prefs.dart';
 import 'services/tenant_context_service.dart';
@@ -99,6 +100,8 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
+        // توفير خدمة الترخيص عالمياً لاستخدامها في البانر/التعطيل داخل Restricted Mode.
+        ChangeNotifierProvider.value(value: LicenseService.instance),
         ChangeNotifierProvider(create: (_) => AuthProvider()),
         ChangeNotifierProvider(create: (_) => InvoiceProvider()),
         ChangeNotifierProvider(create: (_) => ThemeProvider()),
@@ -176,6 +179,7 @@ class MyApp extends StatelessWidget {
                     },
                     child: content,
                   );
+                  content = RestrictedModeBannerController(child: content);
                   final sz = MediaQuery.sizeOf(context);
                   final compactUi = sz.width < 360 || sz.height < 640;
                   final base = Theme.of(context);

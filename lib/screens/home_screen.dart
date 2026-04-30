@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../providers/auth_provider.dart';
 import '../services/app_settings_repository.dart';
 import '../services/business_setup_settings.dart';
+import '../services/license_service.dart';
 import '../providers/notification_provider.dart';
 import '../providers/shift_provider.dart';
 import '../providers/product_provider.dart';
@@ -2463,6 +2464,8 @@ class _HomeScreenState extends State<HomeScreen>
   // ── الشريط الجانبي الثابت ──────────────────────────────────────────────────
   Widget _buildPersistentSidebar(bool isExpanded) {
     final auth = Provider.of<AuthProvider>(context, listen: false);
+    final lic = context.watch<LicenseService>();
+    final isRestricted = lic.state.status == LicenseStatus.restricted;
 
     void navToTagged(
       String routeId,
@@ -2470,6 +2473,20 @@ class _HomeScreenState extends State<HomeScreen>
       Widget Function(BuildContext) destination,
     ) {
       _pushInContentTagged(routeId, breadcrumbTitle, destination);
+    }
+
+    bool blockedInRestricted(String routeId) {
+      if (!isRestricted) return false;
+      if (routeId == AppContentRoutes.invoices ||
+          routeId == AppContentRoutes.addInvoice ||
+          routeId == AppContentRoutes.parkedSales ||
+          routeId.startsWith('app_process_return_') ||
+          routeId == AppContentRoutes.customers ||
+          routeId == AppContentRoutes.customerContacts ||
+          routeId == AppContentRoutes.printing) {
+        return false;
+      }
+      return true;
     }
 
     // قائمة العناصر في الشريط الجانبي
@@ -2484,16 +2501,29 @@ class _HomeScreenState extends State<HomeScreen>
                 (s) => _SubItem(
                   title: s.title,
                   icon: s.icon,
-                  onTap: () =>
-                      navToTagged(s.routeId, s.breadcrumbTitle, s.destination),
+                  disabledTooltip: blockedInRestricted(s.routeId)
+                      ? 'غير متاح في الوضع المقيّد'
+                      : null,
+                  onTap: blockedInRestricted(s.routeId)
+                      ? null
+                      : () => navToTagged(
+                            s.routeId,
+                            s.breadcrumbTitle,
+                            s.destination,
+                          ),
                 ),
               )
               .toList(),
-          onTap: () => navToTagged(
-            module.routeId,
-            module.breadcrumbTitle,
-            module.destination,
-          ),
+          disabledTooltip: blockedInRestricted(module.routeId)
+              ? 'غير متاح في الوضع المقيّد'
+              : null,
+          onTap: blockedInRestricted(module.routeId)
+              ? null
+              : () => navToTagged(
+                    module.routeId,
+                    module.breadcrumbTitle,
+                    module.destination,
+                  ),
         ),
       ),
       _SidebarItem(
@@ -2631,18 +2661,23 @@ class _HomeScreenState extends State<HomeScreen>
     final cs = Theme.of(context).colorScheme;
     final hasSubmenu = item.subItems != null && item.subItems!.isNotEmpty;
     final isSubmenuOpen = _expandedSubmenus.contains(item.title);
+    final enabled = hasSubmenu || item.onTap != null;
 
     return Column(
       children: [
         Tooltip(
-          message: isExpanded ? '' : item.title,
+          message: item.onTap == null && !hasSubmenu
+              ? (item.disabledTooltip ?? 'غير متاح في الوضع المقيّد')
+              : (isExpanded ? '' : item.title),
           preferBelow: false,
           child: Material(
             color: Colors.transparent,
             child: InkWell(
               splashColor: cs.onPrimary.withValues(alpha: 0.14),
               highlightColor: cs.onPrimary.withValues(alpha: 0.07),
-              onTap: () {
+              onTap: !enabled
+                  ? null
+                  : () {
                 if (hasSubmenu) {
                   setState(() {
                     if (isSubmenuOpen) {
@@ -2654,7 +2689,7 @@ class _HomeScreenState extends State<HomeScreen>
                     }
                   });
                 } else {
-                  item.onTap();
+                  item.onTap?.call();
                 }
               },
               child: SizedBox(
@@ -2693,7 +2728,9 @@ class _HomeScreenState extends State<HomeScreen>
                           ),
                           child: Icon(
                             item.icon,
-                            color: isActive ? cs.primary : item.iconColor,
+                            color: !enabled
+                                ? cs.onPrimary.withValues(alpha: 0.35)
+                                : (isActive ? cs.primary : item.iconColor),
                             size: 22,
                           ),
                         ),
@@ -4029,20 +4066,28 @@ class _SidebarItem {
   final IconData icon;
   final String title;
   final Color iconColor;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
   final List<_SubItem>? subItems;
+  final String? disabledTooltip;
   _SidebarItem({
     required this.icon,
     required this.title,
     required this.iconColor,
     required this.onTap,
     this.subItems,
+    this.disabledTooltip,
   });
 }
 
 class _SubItem {
   final String title;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
   final IconData? icon;
-  _SubItem({required this.title, required this.onTap, this.icon});
+  final String? disabledTooltip;
+  _SubItem({
+    required this.title,
+    required this.onTap,
+    this.icon,
+    this.disabledTooltip,
+  });
 }
