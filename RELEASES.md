@@ -6,8 +6,9 @@
 الحل العملي: **استخدم GitHub Actions** لبناء النسخة وإرفاقها كـ Release.
 
 ### 2) نشر إصدار جديد (Android + Windows) عبر GitHub Releases
-في هذا المستودع يوجد Workflow واحد يجمع المنصتين:
-- `.github/workflows/release.yml` (أولاً Android ينشئ الإصدار، ثم Windows يرفق المثبّت)
+في هذا المستودع يوجد Workflow لـ **Windows فقط**:
+- `.github/workflows/release.yml` — يبني `naboo-windows-setup.exe` ويرفقه لوسم الإصدار على GitHub.
+- **Android:** ارفع `naboo.apk` يدوياً من واجهة GitHub Release عند الحاجة (لا يُبنى في CI في هذا الملف).
 
 لإصدار نسخة جديدة:
 
