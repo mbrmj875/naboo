@@ -32,6 +32,8 @@ dependencies:
   # Utilities
   intl: ^0.20.2
   crypto: ^3.0.6
+  basic_utils: ^5.7.0
+  pointycastle: ^4.0.0
   app_links: ^6.3.3
   archive: ^4.0.7
 
