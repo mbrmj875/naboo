@@ -2,6 +2,7 @@ import 'license_engine.dart';
 import 'license_storage.dart';
 import 'license_token.dart';
 import 'jwt_rs256_verifier.dart';
+import 'device_uuid_migrator.dart';
 
 /// محرك v2: سيتم بناؤه لاحقاً (JWT + TrustedTime + Restricted + ExpiredPendingLock).
 class LicenseEngineV2 implements LicenseEngine {
@@ -15,6 +16,7 @@ class LicenseEngineV2 implements LicenseEngine {
 
   final LicenseStorage _storage;
   final JwtRs256Verifier _verifier;
+  final DeviceUuidMigrator _uuidMigrator = DeviceUuidMigrator();
 
   static const Map<String, String> trustedPublicKeysPemByKid = {
     // مفتاح تجريبي للتطوير فقط — سيتم استبداله بالمفتاح الحقيقي لاحقاً.
@@ -95,10 +97,11 @@ GQIDAQAB
   }
 
   @override
-  Future<String> getDeviceId() {
-    // UUID migration سيتم بناؤها لاحقاً ضمن v2.
-    // الآن نُبقيها غير مستخدمة لأن engine v2 غير مفعّل بعد.
-    throw UnimplementedError('getDeviceId v2 not implemented yet');
+  Future<String> getDeviceId() async {
+    final id = await _uuidMigrator.getDeviceIdForUse();
+    // محاولة ترحيل على السيرفر (لا تكسر إذا فشلت/لا يوجد user).
+    await _uuidMigrator.tryMigrateOnServer();
+    return id;
   }
 
   @override
