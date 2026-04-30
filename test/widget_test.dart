@@ -81,7 +81,8 @@ void main() {
         netBeforeLoyalty: 10000,
         s: settings,
       );
-      expect(max, 1);
+      // 10% من 10,000 = 1,000 د.ع. وكل نقطة = 100 د.ع → 10 نقاط.
+      expect(max, 10);
     });
 
     test('maxRedeemablePoints يُعيد 0 إذا كانت الولاء معطّلة', () {

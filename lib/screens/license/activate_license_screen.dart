@@ -3,8 +3,6 @@ import 'package:flutter/services.dart';
 
 import '../../services/license_service.dart';
 
-const Color _kAccent = Color(0xFF1E3A5F);
-
 class ActivateLicenseScreen extends StatefulWidget {
   const ActivateLicenseScreen({super.key, this.showBackButton = false});
   final bool showBackButton;
@@ -14,9 +12,9 @@ class ActivateLicenseScreen extends StatefulWidget {
 }
 
 class _ActivateLicenseScreenState extends State<ActivateLicenseScreen> {
-  final _keyCtrl    = TextEditingController();
-  final _focusNode  = FocusNode();
-  bool  _loading    = false;
+  final _keyCtrl = TextEditingController();
+  final _focusNode = FocusNode();
+  bool _loading = false;
   String? _error;
 
   @override
@@ -33,8 +31,14 @@ class _ActivateLicenseScreenState extends State<ActivateLicenseScreen> {
       setState(() => _error = 'أدخل مفتاح الترخيص');
       return;
     }
-    setState(() { _loading = true; _error = null; });
-    final result = await LicenseService.instance.activateLicense(key);
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    final isJwt = key.split('.').length == 3;
+    final result = isJwt
+        ? await LicenseService.instance.activateSignedToken(key)
+        : await LicenseService.instance.activateLicense(key);
     if (!mounted) return;
     setState(() => _loading = false);
     if (!result.ok) {
@@ -45,175 +49,148 @@ class _ActivateLicenseScreenState extends State<ActivateLicenseScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Directionality(
-      textDirection: TextDirection.rtl,
-      child: Scaffold(
-        backgroundColor: _kAccent,
-        body: Center(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // شعار
-                const Text(
-                  'NaBoo',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 48,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 3,
-                  ),
+    final cs = Theme.of(context).colorScheme;
+    return Scaffold(
+      backgroundColor: cs.primary,
+      body: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsetsDirectional.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'NaBoo',
+                style: TextStyle(
+                  color: cs.onPrimary,
+                  fontSize: 48,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 3,
                 ),
-                const Text(
-                  'نظام إدارة المتاجر',
-                  style: TextStyle(color: Colors.white70, fontSize: 14),
-                ),
-                const SizedBox(height: 40),
+              ),
+              Text(
+                'نظام إدارة المتاجر',
+                style: TextStyle(color: cs.onPrimary.withOpacity(0.75), fontSize: 14),
+              ),
+              const SizedBox(height: 40),
 
-                // بطاقة التفعيل
-                Container(
-                  width: 440,
-                  padding: const EdgeInsets.all(32),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      const Icon(
-                        Icons.lock_open_outlined,
-                        size: 48,
-                        color: _kAccent,
-                      ),
-                      const SizedBox(height: 12),
-                      const Text(
-                        'تفعيل الترخيص',
-                        style: TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.bold,
-                          color: _kAccent,
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 460),
+                child: Card(
+                  margin: EdgeInsets.zero,
+                  child: Padding(
+                    padding: const EdgeInsetsDirectional.all(24),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Icon(Icons.lock_open_outlined, size: 48, color: cs.primary),
+                        const SizedBox(height: 12),
+                        Text(
+                          'تفعيل الترخيص',
+                          style: TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.bold,
+                            color: cs.primary,
+                          ),
+                          textAlign: TextAlign.center,
                         ),
-                        textAlign: TextAlign.center,
-                      ),
-                      const SizedBox(height: 6),
-                      const Text(
-                        'أدخل مفتاح الترخيص للحصول على 15 يوم تجربة مجانية',
-                        style: TextStyle(color: Colors.grey, fontSize: 13),
-                        textAlign: TextAlign.center,
-                      ),
-                      const SizedBox(height: 28),
+                        const SizedBox(height: 6),
+                        Text(
+                          'أدخل مفتاح الترخيص للمتابعة',
+                          style: TextStyle(
+                            color: cs.onSurfaceVariant,
+                            fontSize: 13,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 20),
 
-                      // حقل المفتاح
-                      TextField(
-                        controller: _keyCtrl,
-                        focusNode: _focusNode,
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
-                          letterSpacing: 2,
-                        ),
-                        decoration: InputDecoration(
-                          hintText: 'NABOO-XXXX-XXXX-XXXX',
-                          hintStyle: TextStyle(
-                            color: Colors.grey.shade400,
-                            fontSize: 14,
-                            letterSpacing: 1,
+                        TextField(
+                          controller: _keyCtrl,
+                          focusNode: _focusNode,
+                          textAlign: TextAlign.start,
+                          textDirection: TextDirection.ltr,
+                          maxLines: 3,
+                          minLines: 1,
+                          decoration: InputDecoration(
+                            hintText: 'NABOO-XXXX-XXXX-XXXX أو JWT',
+                            errorText: _error,
+                            suffixIcon: _keyCtrl.text.isNotEmpty
+                                ? IconButton(
+                                    icon: const Icon(Icons.clear, size: 18),
+                                    onPressed: () {
+                                      _keyCtrl.clear();
+                                      setState(() => _error = null);
+                                    },
+                                  )
+                                : null,
                           ),
-                          errorText: _error,
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(10),
-                            borderSide: BorderSide(color: Colors.grey.shade300),
-                          ),
-                          focusedBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(10),
-                            borderSide: const BorderSide(color: _kAccent, width: 2),
-                          ),
-                          contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 16, vertical: 14),
-                          suffixIcon: _keyCtrl.text.isNotEmpty
-                              ? IconButton(
-                                  icon: const Icon(Icons.clear, size: 18),
-                                  onPressed: () {
-                                    _keyCtrl.clear();
-                                    setState(() => _error = null);
-                                  },
-                                )
-                              : null,
-                        ),
-                        onChanged: (_) => setState(() => _error = null),
-                        onSubmitted: (_) => _activate(),
-                        inputFormatters: [
-                          FilteringTextInputFormatter.allow(
-                            RegExp(r'[a-zA-Z0-9\-]'),
-                          ),
-                          TextInputFormatter.withFunction((old, n) =>
-                              n.copyWith(text: n.text.toUpperCase())),
-                        ],
-                      ),
-                      const SizedBox(height: 20),
-
-                      // زر التفعيل
-                      SizedBox(
-                        height: 50,
-                        child: FilledButton(
-                          style: FilledButton.styleFrom(
-                            backgroundColor: _kAccent,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(10),
+                          onChanged: (_) => setState(() => _error = null),
+                          onSubmitted: (_) => _activate(),
+                          inputFormatters: [
+                            FilteringTextInputFormatter.allow(
+                              RegExp(r'[a-zA-Z0-9\-\._]'),
                             ),
-                          ),
-                          onPressed: _loading ? null : _activate,
-                          child: _loading
-                              ? const SizedBox(
-                                  width: 22, height: 22,
-                                  child: CircularProgressIndicator(
-                                    color: Colors.white, strokeWidth: 2,
-                                  ),
-                                )
-                              : const Text(
-                                  'تفعيل',
-                                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                                ),
+                          ],
                         ),
-                      ),
 
-                      const SizedBox(height: 16),
-                      const Divider(),
-                      const SizedBox(height: 12),
+                        const SizedBox(height: 16),
 
-                      // معلومات المساعدة
-                      Row(
-                        children: [
-                          const Icon(Icons.info_outline, size: 16, color: Colors.grey),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              'للحصول على مفتاح ترخيص، تواصل مع فريق NaBoo.',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: Colors.grey.shade600,
+                        SizedBox(
+                          height: 48,
+                          child: FilledButton(
+                            onPressed: _loading ? null : _activate,
+                            child: _loading
+                                ? const SizedBox(
+                                    width: 22,
+                                    height: 22,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Text(
+                                    'تفعيل',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                          ),
+                        ),
+
+                        const SizedBox(height: 16),
+                        Divider(color: cs.outlineVariant),
+                        const SizedBox(height: 12),
+
+                        Row(
+                          children: [
+                            Icon(Icons.info_outline, size: 16, color: cs.onSurfaceVariant),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'للحصول على مفتاح ترخيص، تواصل مع فريق NaBoo.',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: cs.onSurfaceVariant,
+                                ),
                               ),
                             ),
-                          ),
-                        ],
-                      ),
-                    ],
+                          ],
+                        ),
+                      ],
+                    ),
                   ),
                 ),
+              ),
 
-                const SizedBox(height: 24),
-                Text(
-                  'NaBoo v2.0 — جميع الحقوق محفوظة',
-                  style: TextStyle(
-                    color: Colors.white.withOpacity(0.4),
-                    fontSize: 11,
-                  ),
+              const SizedBox(height: 24),
+              Text(
+                'NaBoo v2.0 — جميع الحقوق محفوظة',
+                style: TextStyle(
+                  color: cs.onPrimary.withOpacity(0.45),
+                  fontSize: 11,
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
       ),

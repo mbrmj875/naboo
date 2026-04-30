@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../services/license_service.dart';
 import 'subscription_plans_screen.dart';
-
-const Color _kAccent = Color(0xFF1E3A5F);
 
 class LicenseExpiredScreen extends StatefulWidget {
   const LicenseExpiredScreen({super.key, required this.state});
@@ -15,6 +14,9 @@ class LicenseExpiredScreen extends StatefulWidget {
 
 class _LicenseExpiredScreenState extends State<LicenseExpiredScreen> {
   bool _checking = false;
+  final _keyCtrl = TextEditingController();
+  bool _activating = false;
+  String? _activateError;
 
   String _fmtDate(DateTime? d) {
     if (d == null) return '—';
@@ -29,17 +31,46 @@ class _LicenseExpiredScreenState extends State<LicenseExpiredScreen> {
       widget.state.status == LicenseStatus.suspended && !_isDeviceLimitExceeded;
 
   @override
+  void dispose() {
+    _keyCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _activate() async {
+    if (_activating) return;
+    final key = _keyCtrl.text.trim();
+    if (key.isEmpty) {
+      setState(() => _activateError = 'أدخل مفتاح الترخيص');
+      return;
+    }
+    setState(() {
+      _activating = true;
+      _activateError = null;
+    });
+    final isJwt = key.split('.').length == 3;
+    final result = isJwt
+        ? await LicenseService.instance.activateSignedToken(key)
+        : await LicenseService.instance.activateLicense(key);
+    if (!mounted) return;
+    setState(() => _activating = false);
+    if (!result.ok) {
+      setState(() => _activateError = result.message);
+      return;
+    }
+    await LicenseService.instance.checkLicense(forceRemote: true);
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Directionality(
-      textDirection: TextDirection.rtl,
-      child: Scaffold(
-        backgroundColor: const Color(0xFF0D1B2A),
-        body: Center(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
+    final cs = Theme.of(context).colorScheme;
+    return Scaffold(
+      backgroundColor: cs.surface,
+      body: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsetsDirectional.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
                 // ── الحالة الرئيسية ────────────────────────────────────
                 _StatusBadge(
                   icon: _isDeviceLimitExceeded
@@ -48,10 +79,10 @@ class _LicenseExpiredScreenState extends State<LicenseExpiredScreen> {
                           ? Icons.block_outlined
                           : Icons.access_time_outlined,
                   color: _isDeviceLimitExceeded
-                      ? Colors.orange
+                      ? cs.tertiary
                       : _isSuspended
-                          ? Colors.red
-                          : Colors.amber,
+                          ? cs.error
+                          : cs.secondary,
                   label: _isDeviceLimitExceeded
                       ? 'تجاوز حد الأجهزة'
                       : _isSuspended
@@ -61,22 +92,20 @@ class _LicenseExpiredScreenState extends State<LicenseExpiredScreen> {
                 const SizedBox(height: 20),
 
                 // ── البطاقة الرئيسية ──────────────────────────────────
-                Container(
-                  width: 460,
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.07),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: Colors.white.withOpacity(0.12)),
-                  ),
-                  padding: const EdgeInsets.all(28),
-                  child: Column(
-                    children: [
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 520),
+                  child: Card(
+                    margin: EdgeInsets.zero,
+                    child: Padding(
+                      padding: const EdgeInsetsDirectional.all(24),
+                      child: Column(
+                        children: [
                       // اسم النشاط
                       if (widget.state.businessName?.isNotEmpty == true) ...[
                         Text(
                           widget.state.businessName!,
-                          style: const TextStyle(
-                            color: Colors.white,
+                          style: TextStyle(
+                            color: cs.onSurface,
                             fontSize: 18,
                             fontWeight: FontWeight.bold,
                           ),
@@ -91,7 +120,7 @@ class _LicenseExpiredScreenState extends State<LicenseExpiredScreen> {
                                 ? 'تم إيقاف حسابك. تواصل مع الدعم الفني.'
                                 : 'انتهى اشتراكك. جدّد للمتابعة.'),
                         style: TextStyle(
-                          color: Colors.white.withOpacity(0.7),
+                          color: cs.onSurfaceVariant,
                           fontSize: 13,
                           height: 1.5,
                         ),
@@ -106,7 +135,7 @@ class _LicenseExpiredScreenState extends State<LicenseExpiredScreen> {
                           icon:  Icons.inventory_2_outlined,
                           label: 'خطتك الحالية',
                           value: widget.state.plan!.nameAr,
-                          valueColor: Colors.white,
+                          valueColor: cs.onSurface,
                         ),
                         if (!widget.state.isUnlimited)
                           _InfoRow(
@@ -114,8 +143,8 @@ class _LicenseExpiredScreenState extends State<LicenseExpiredScreen> {
                             label: 'الأجهزة المسجّلة',
                             value: widget.state.devicesInfo,
                             valueColor: _isDeviceLimitExceeded
-                                ? Colors.orange
-                                : Colors.white,
+                                ? cs.tertiary
+                                : cs.onSurface,
                           ),
                       ],
 
@@ -129,11 +158,11 @@ class _LicenseExpiredScreenState extends State<LicenseExpiredScreen> {
                           value: _fmtDate(
                             widget.state.expiresAt ?? widget.state.trialEndsAt,
                           ),
-                          valueColor: Colors.red.shade300,
+                          valueColor: cs.error,
                         ),
 
                       const SizedBox(height: 20),
-                      Divider(color: Colors.white.withOpacity(0.1)),
+                      Divider(color: cs.outlineVariant),
                       const SizedBox(height: 16),
 
                       // ── خيارات الترقية / التجديد ─────────────────────
@@ -143,13 +172,6 @@ class _LicenseExpiredScreenState extends State<LicenseExpiredScreen> {
                         SizedBox(
                           width: double.infinity,
                           child: FilledButton.icon(
-                            style: FilledButton.styleFrom(
-                              backgroundColor: _kAccent,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              padding: const EdgeInsets.symmetric(vertical: 14),
-                            ),
                             icon: const Icon(Icons.upgrade_outlined),
                             label: Text(
                               _isDeviceLimitExceeded
@@ -176,14 +198,6 @@ class _LicenseExpiredScreenState extends State<LicenseExpiredScreen> {
                         SizedBox(
                           width: double.infinity,
                           child: OutlinedButton.icon(
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: Colors.white70,
-                              side: BorderSide(color: Colors.white.withOpacity(0.2)),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              padding: const EdgeInsets.symmetric(vertical: 12),
-                            ),
                             icon: const Icon(Icons.compare_arrows_outlined, size: 18),
                             label: const Text('مقارنة خطط الاشتراك'),
                             onPressed: () => Navigator.push(
@@ -199,22 +213,59 @@ class _LicenseExpiredScreenState extends State<LicenseExpiredScreen> {
                         const SizedBox(height: 12),
                       ],
 
+                      // ── إدخال مفتاح جديد (Legacy أو JWT) ─────────────────
+                      Align(
+                        alignment: AlignmentDirectional.centerStart,
+                        child: Text(
+                          'إدخال مفتاح جديد',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: cs.onSurface,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: _keyCtrl,
+                        textDirection: TextDirection.ltr,
+                        maxLines: 3,
+                        minLines: 1,
+                        decoration: InputDecoration(
+                          hintText: 'NABOO-XXXX-XXXX-XXXX أو JWT',
+                          errorText: _activateError,
+                        ),
+                        onChanged: (_) => setState(() => _activateError = null),
+                        inputFormatters: [
+                          FilteringTextInputFormatter.allow(
+                            RegExp(r'[a-zA-Z0-9\-\._]'),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        width: double.infinity,
+                        child: FilledButton(
+                          onPressed: _activating ? null : _activate,
+                          child: _activating
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : const Text('تفعيل'),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+
                       // زر إعادة التحقق
                       SizedBox(
                         width: double.infinity,
                         child: OutlinedButton.icon(
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: Colors.white54,
-                            side: BorderSide(color: Colors.white.withOpacity(0.15)),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                          ),
                           icon: _checking
                               ? const SizedBox(
                                   width: 16, height: 16,
                                   child: CircularProgressIndicator(
-                                    strokeWidth: 2, color: Colors.white54,
+                                    strokeWidth: 2,
                                   ),
                                 )
                               : const Icon(Icons.refresh_outlined, size: 18),
@@ -235,15 +286,17 @@ class _LicenseExpiredScreenState extends State<LicenseExpiredScreen> {
                       // تغيير المفتاح
                       TextButton.icon(
                         icon: const Icon(Icons.vpn_key_outlined,
-                            size: 16, color: Colors.white38),
+                            size: 16),
                         label: const Text(
                           'استخدام مفتاح آخر',
-                          style: TextStyle(color: Colors.white38, fontSize: 12),
+                          style: TextStyle(fontSize: 12),
                         ),
                         onPressed: () async =>
                             LicenseService.instance.deactivate(),
                       ),
-                    ],
+                        ],
+                      ),
+                    ),
                   ),
                 ),
 
@@ -251,12 +304,11 @@ class _LicenseExpiredScreenState extends State<LicenseExpiredScreen> {
                 Text(
                   'NaBoo v2.0 — جميع الحقوق محفوظة',
                   style: TextStyle(
-                    color: Colors.white.withOpacity(0.2),
+                    color: cs.onSurfaceVariant,
                     fontSize: 11,
                   ),
                 ),
-              ],
-            ),
+            ],
           ),
         ),
       ),
@@ -314,12 +366,18 @@ class _InfoRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsetsDirectional.only(bottom: 10),
       child: Row(
         children: [
-          Icon(icon, size: 16, color: Colors.white38),
+          Icon(icon, size: 16, color: Theme.of(context).colorScheme.onSurfaceVariant),
           const SizedBox(width: 10),
-          Text(label, style: const TextStyle(color: Colors.white54, fontSize: 12)),
+          Text(
+            label,
+            style: TextStyle(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+              fontSize: 12,
+            ),
+          ),
           const Spacer(),
           Text(
             value,

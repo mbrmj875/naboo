@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'license/license_engine.dart';
 import 'license/license_engine_v1.dart';
+import 'license/license_engine_v2.dart';
 
 // ── خطط الاشتراك ─────────────────────────────────────────────────────────────
 
@@ -162,6 +163,8 @@ class LicenseService extends ChangeNotifier {
   static final LicenseService instance = LicenseService._();
 
   late final LicenseEngine _engine = LicenseEngineV1(this);
+  // v2 activator فقط لتخزين/تحقق JWT من شاشة التفعيل — لا يغير حالة v1 حتى يتم تفعيل feature-flag لاحقاً.
+  final LicenseEngineV2 _v2Activator = LicenseEngineV2();
 
   LicenseState _state = LicenseState.checking;
   LicenseState get state => _state;
@@ -720,6 +723,10 @@ class LicenseService extends ChangeNotifier {
 
   Future<({bool ok, String message})> activateLicense(String key) =>
       _engine.activateLicense(key);
+
+  /// تفعيل JWT موقّع (v2). يُستخدم من واجهة إدخال المفتاح فقط.
+  Future<({bool ok, String message})> activateSignedToken(String jwt) =>
+      _v2Activator.activateLicense(jwt);
 
   Future<({bool ok, String message})> activateLicenseV1(String key) async {
     final cleaned = key.trim().toUpperCase();
