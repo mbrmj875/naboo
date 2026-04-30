@@ -30,6 +30,25 @@ class _LicenseExpiredScreenState extends State<LicenseExpiredScreen> {
   bool get _isSuspended =>
       widget.state.status == LicenseStatus.suspended && !_isDeviceLimitExceeded;
 
+  String get _title {
+    if (widget.state.lockReason == LockReason.timeTamper) {
+      return 'تعارض في إعدادات الوقت';
+    }
+    if (_isSuspended) return 'الترخيص موقوف';
+    if (_isDeviceLimitExceeded) return 'تجاوز حد الأجهزة';
+    return 'انتهى الاشتراك';
+  }
+
+  String get _bodyMessage {
+    if (widget.state.lockReason == LockReason.timeTamper) {
+      return 'تم اكتشاف تعارض في إعدادات الوقت. تواصل مع الدعم للمساعدة في إعادة التحقق.';
+    }
+    return widget.state.message ??
+        (_isSuspended
+            ? 'تم إيقاف حسابك. تواصل مع الدعم الفني.'
+            : 'انتهى اشتراكك. جدّد للمتابعة.');
+  }
+
   @override
   void dispose() {
     _keyCtrl.dispose();
@@ -83,11 +102,7 @@ class _LicenseExpiredScreenState extends State<LicenseExpiredScreen> {
                       : _isSuspended
                           ? cs.error
                           : cs.secondary,
-                  label: _isDeviceLimitExceeded
-                      ? 'تجاوز حد الأجهزة'
-                      : _isSuspended
-                          ? 'الترخيص موقوف'
-                          : 'انتهى الاشتراك',
+                  label: _title,
                 ),
                 const SizedBox(height: 20),
 
@@ -115,10 +130,7 @@ class _LicenseExpiredScreenState extends State<LicenseExpiredScreen> {
 
                       // الرسالة
                       Text(
-                        widget.state.message ??
-                            (_isSuspended
-                                ? 'تم إيقاف حسابك. تواصل مع الدعم الفني.'
-                                : 'انتهى اشتراكك. جدّد للمتابعة.'),
+                        _bodyMessage,
                         style: TextStyle(
                           color: cs.onSurfaceVariant,
                           fontSize: 13,

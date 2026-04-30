@@ -1,3 +1,4 @@
+import 'dart:async' show unawaited;
 import 'dart:io';
 
 import 'package:device_info_plus/device_info_plus.dart';
@@ -8,6 +9,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'license/license_engine.dart';
 import 'license/license_engine_v1.dart';
 import 'license/license_engine_v2.dart';
+import 'license/trusted_time_service.dart';
+import '../providers/open_ops_registry.dart';
 
 // ── خطط الاشتراك ─────────────────────────────────────────────────────────────
 
@@ -124,6 +127,12 @@ enum LicenseStatus {
   pendingLock,
 }
 
+enum LockReason {
+  expired,
+  suspended,
+  timeTamper,
+}
+
 class LicenseState {
   const LicenseState({
     required this.status,
@@ -135,6 +144,7 @@ class LicenseState {
     this.plan,
     this.registeredDeviceCount = 0,
     this.maxDevices = 1,
+    this.lockReason,
   });
 
   final LicenseStatus status;
@@ -146,6 +156,7 @@ class LicenseState {
   final SubscriptionPlan? plan;
   final int registeredDeviceCount;
   final int maxDevices;
+  final LockReason? lockReason;
 
   bool get isAllowed =>
       status == LicenseStatus.trial || status == LicenseStatus.active;
@@ -167,6 +178,30 @@ class LicenseService extends ChangeNotifier {
   late final LicenseEngine _engine = LicenseEngineV1(this);
   // v2 activator فقط لتخزين/تحقق JWT من شاشة التفعيل — لا يغير حالة v1 حتى يتم تفعيل feature-flag لاحقاً.
   final LicenseEngineV2 _v2Activator = LicenseEngineV2();
+  final TrustedTimeService _trustedTime = TrustedTimeService();
+
+  OpenOpsRegistry? _openOps;
+  void attachOpenOpsRegistry(OpenOpsRegistry r) {
+    if (_openOps == r) return;
+    _openOps?.removeListener(_onOpenOpsChanged);
+    _openOps = r;
+    _openOps?.addListener(_onOpenOpsChanged);
+  }
+
+  void _onOpenOpsChanged() {
+    if (_state.status != LicenseStatus.pendingLock) return;
+    final hasOpen = _openOps?.hasOpenOperation ?? false;
+    if (!hasOpen) {
+      _setState(
+        LicenseState(
+          status: LicenseStatus.expired,
+          lockReason: LockReason.timeTamper,
+          message:
+              'تم اكتشاف تعارض في إعدادات الوقت. تواصل مع الدعم للمساعدة في إعادة التحقق.',
+        ),
+      );
+    }
+  }
 
   LicenseState _state = LicenseState.checking;
   LicenseState get state => _state;
@@ -360,8 +395,73 @@ class LicenseService extends ChangeNotifier {
     }
   }
 
-  Future<void> checkLicense({bool forceRemote = false}) =>
-      _engine.checkLicense(forceRemote: forceRemote);
+  Future<void> checkLicense({bool forceRemote = false}) async {
+    await _engine.checkLicense(forceRemote: forceRemote);
+    await _maybeApplySignedTokenAndTrustedTimeOverlay();
+  }
+
+  Future<void> _maybeApplySignedTokenAndTrustedTimeOverlay() async {
+    // إذا لا يوجد توكن v2 مخزّن، لا نفعل شيئاً.
+    final tok = await _v2Activator.loadAndVerifyStoredToken();
+    if (tok == null) return;
+
+    // محاولة تأكيد وقت السيرفر عند أي تحقق عن بُعد (إن أمكن).
+    unawaited(_trustedTime.confirmWithServer());
+    final local = await _trustedTime.checkLocalClock(
+      backJumpTolerance: const Duration(minutes: 10),
+    );
+
+    if (local.isTampered) {
+      // سياسة عقوبة مرنة: أول مرة -> restricted. تكرار أو فرق كبير -> pendingLock.
+      final prefs = await SharedPreferences.getInstance();
+      final countKey = 'lic.v2.time_tamper_count';
+      final count = (prefs.getInt(countKey) ?? 0) + 1;
+      await prefs.setInt(countKey, count);
+
+      final diff = local.deltaFromLastKnown.abs();
+      final severe = diff >= const Duration(hours: 2);
+      if (severe || count >= 2) {
+        _setState(
+          LicenseState(
+            status: LicenseStatus.pendingLock,
+            lockReason: LockReason.timeTamper,
+            message:
+                'تم اكتشاف تعارض في إعدادات الوقت. أكمل العملية الحالية ثم سيُقفل التطبيق.',
+          ),
+        );
+      } else {
+        _setState(
+          LicenseState(
+            status: LicenseStatus.restricted,
+            lockReason: LockReason.timeTamper,
+            message: 'يرجى الاتصال بالإنترنت للتحقق من الوقت.',
+          ),
+        );
+      }
+      // إذا أصبح pendingLock وكان لا توجد عملية مفتوحة -> اقفل فوراً.
+      _onOpenOpsChanged();
+      return;
+    }
+
+    // إن لم يوجد تلاعب وقت: اجعل حالة الترخيص "نشط" حسب التوكن (overlay مؤقت قبل feature-flag).
+    if (tok.isExpired) {
+      _setState(
+        LicenseState(
+          status: LicenseStatus.expired,
+          lockReason: LockReason.expired,
+          message: 'انتهى اشتراكك. جدّد للمتابعة.',
+        ),
+      );
+      return;
+    }
+    _setState(
+      LicenseState(
+        status: tok.isTrial ? LicenseStatus.trial : LicenseStatus.active,
+        lockReason: null,
+        message: null,
+      ),
+    );
+  }
 
   Future<void> initializeV1() => checkLicenseV1();
 
@@ -727,8 +827,15 @@ class LicenseService extends ChangeNotifier {
       _engine.activateLicense(key);
 
   /// تفعيل JWT موقّع (v2). يُستخدم من واجهة إدخال المفتاح فقط.
-  Future<({bool ok, String message})> activateSignedToken(String jwt) =>
-      _v2Activator.activateLicense(jwt);
+  Future<({bool ok, String message})> activateSignedToken(String jwt) async {
+    final r = await _v2Activator.activateLicense(jwt);
+    if (!r.ok) return r;
+    // محاولة تأكيد وقت السيرفر فوراً (إن توفر).
+    unawaited(_trustedTime.confirmWithServer());
+    // لا نغيّر حالة التطبيق بالكامل هنا؛ لكن نزيل القفل فوراً بإعادة check.
+    await checkLicense(forceRemote: true);
+    return r;
+  }
 
   Future<({bool ok, String message})> activateLicenseV1(String key) async {
     final cleaned = key.trim().toUpperCase();

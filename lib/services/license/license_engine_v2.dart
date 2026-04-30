@@ -4,20 +4,39 @@ import 'license_token.dart';
 import 'jwt_rs256_verifier.dart';
 import 'device_uuid_migrator.dart';
 import 'package:flutter/foundation.dart';
+import 'trusted_time_service.dart';
 
 /// محرك v2: سيتم بناؤه لاحقاً (JWT + TrustedTime + Restricted + ExpiredPendingLock).
 class LicenseEngineV2 implements LicenseEngine {
   LicenseEngineV2({
     LicenseStorage? storage,
     JwtRs256Verifier? verifier,
+    TrustedTimeService? trustedTime,
   }) : _storage = storage ?? LicenseStorage(),
        _verifier =
            verifier ??
-           JwtRs256Verifier(trustedPublicKeysPemByKid: trustedPublicKeysPemByKid);
+           JwtRs256Verifier(trustedPublicKeysPemByKid: trustedPublicKeysPemByKid),
+       _trustedTime = trustedTime ?? TrustedTimeService();
 
   final LicenseStorage _storage;
   final JwtRs256Verifier _verifier;
   final DeviceUuidMigrator _uuidMigrator = DeviceUuidMigrator();
+  final TrustedTimeService _trustedTime;
+
+  LicenseEngineV2._internal(
+    this._storage,
+    this._verifier,
+    this._trustedTime,
+  );
+
+  factory LicenseEngineV2.withDefaults() {
+    final storage = LicenseStorage();
+    final verifier = JwtRs256Verifier(
+      trustedPublicKeysPemByKid: trustedPublicKeysPemByKid,
+    );
+    final trustedTime = TrustedTimeService();
+    return LicenseEngineV2._internal(storage, verifier, trustedTime);
+  }
 
   static const Map<String, String> trustedPublicKeysPemByKid = {
     // مفتاح تجريبي للتطوير فقط — سيتم استبداله بالمفتاح الحقيقي لاحقاً.
@@ -63,6 +82,15 @@ GQIDAQAB
     // سيتم ربطه لاحقاً بـ TrustedTime + server checks.
     return Future.value();
   }
+
+  Future<LicenseToken?> loadAndVerifyStoredToken() async {
+    final jwt = await _storage.loadToken();
+    if (jwt == null) return null;
+    final tok = verifyToken(jwt);
+    return tok;
+  }
+
+  Future<bool> confirmTrustedTimeWithServer() => _trustedTime.confirmWithServer();
 
   @override
   Future<({bool ok, String message})> activateLicense(String key) {

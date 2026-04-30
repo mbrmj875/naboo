@@ -135,6 +135,9 @@ class MyApp extends StatelessWidget {
                     : ThemeMode.light,
                 builder: (context, child) {
                   _registerRemoteDeviceRevokeHandler();
+                  LicenseService.instance.attachOpenOpsRegistry(
+                    Provider.of<OpenOpsRegistry>(context, listen: false),
+                  );
                   final salePosSettings = Provider.of<SalePosSettingsProvider>(
                     context,
                     listen: false,
