@@ -65,10 +65,24 @@ jobs:
           Get-ChildItem Output | Format-List
           Copy-Item "Output\naboo-windows-setup.exe" -Destination "naboo-windows-setup.exe" -Force
 
-      - name: Create GitHub Release with Windows artifacts
-        uses: softprops/action-gh-release@v2
-        with:
-          generate_release_notes: true
-          files: |
-            naboo-windows-setup.exe
-            naboo-windows.zip
+      # لا نستخدم action-gh-release هنا: workflow الأندرويد ينشئ الإصدار في نفس الوقت
+      # فيحدث تعارض (سباق). ننتظر ظهور الإصدار ثم نرفق ملفات ويندوز فقط.
+      - name: Attach Windows assets to existing release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          TAG="${{ github.ref_name }}"
+          REPO="${{ github.repository }}"
+          for i in $(seq 1 36); do
+            if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+              gh release upload "$TAG" naboo-windows-setup.exe naboo-windows.zip --clobber --repo "$REPO"
+              echo "Uploaded Windows assets to $TAG"
+              exit 0
+            fi
+            echo "Waiting for release $TAG to exist (attempt $i/36)..."
+            sleep 20
+          done
+          echo "Timeout: release $TAG was not created (check Android workflow)."
+          exit 1
