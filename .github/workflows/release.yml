@@ -61,8 +61,12 @@ jobs:
           }
           if (-not (Test-Path $iscc)) { throw "Inno Setup compiler (ISCC.exe) not found." }
           $version = "${{ steps.paths.outputs.APP_VERSION }}"
-          $src = "${{ steps.paths.outputs.BUILD_SRC }}"
-          & $iscc "/DMyAppVersion=$version" "/DBuildSrc=$src" "/OOutput" "windows\installer\naboo-setup.iss"
+          $srcRel = "${{ steps.paths.outputs.BUILD_SRC }}"
+          if (-not (Test-Path $srcRel)) { throw "Release folder not found: $srcRel" }
+          # Inno يفسّر BuildSrc النسبي من مجلد naboo-setup.iss فيصبح مساراً خاطئاً — نمرّر مساراً مطلقاً
+          $buildSrcAbs = (Resolve-Path $srcRel).Path
+          Write-Host "Inno BuildSrc: $buildSrcAbs"
+          & $iscc "/DMyAppVersion=$version" "/DBuildSrc=$buildSrcAbs" "/OOutput" "windows\installer\naboo-setup.iss"
           Get-ChildItem Output | Format-List
           Copy-Item "Output\naboo-windows-setup.exe" -Destination "naboo-windows-setup.exe" -Force
 

@@ -11,8 +11,9 @@
 #ifndef MyAppVersion
   #define MyAppVersion "0.0.0"
 #endif
+; مسارات [Files] نسبية لمجلد السكربت (windows\installer\) — أو يُمرَّر مطلق من CI
 #ifndef BuildSrc
-  #define BuildSrc "build\windows\x64\runner\Release"
+  #define BuildSrc "..\..\build\windows\x64\runner\Release"
 #endif
 #ifndef OutputBaseFilename
   #define OutputBaseFilename "naboo-windows-setup"
