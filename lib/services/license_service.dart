@@ -1,27 +1,12 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'license/license_engine.dart';
 import 'license/license_engine_v1.dart';
-
-// ── إعداد Supabase ────────────────────────────────────────────────────────────
-abstract class _Supabase {
-  static const url = 'https://rkofqwcuvbzrnmelvxhz.supabase.co';
-  static const key =
-      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJrb2Zxd2N1dmJ6cm5tZWx2eGh6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYzNDEyNjksImV4cCI6MjA5MTkxNzI2OX0.F5x59dpqtEqQn_MrxA7S07qw6HH136ZMW_P7nfgGFkQ';
-
-  static Map<String, String> get headers => {
-    'apikey': key,
-    'Authorization': 'Bearer $key',
-    'Content-Type': 'application/json',
-  };
-}
 
 // ── خطط الاشتراك ─────────────────────────────────────────────────────────────
 
@@ -244,34 +229,22 @@ class LicenseService extends ChangeNotifier {
     return 'Unknown Device';
   }
 
-  // ── Supabase REST API ─────────────────────────────────────────────────────
+  // ── Supabase (عبر Supabase.instance.client) ──────────────────────────────
 
   Future<Map<String, dynamic>?> _fetchLicense(String key) async {
-    final uri = Uri.parse(
-      '${_Supabase.url}/rest/v1/licenses'
-      '?license_key=eq.${Uri.encodeComponent(key)}'
-      '&select=*',
-    );
-    final res = await http
-        .get(uri, headers: _Supabase.headers)
-        .timeout(const Duration(seconds: 12));
-    if (res.statusCode != 200) return null;
-    final list = jsonDecode(res.body) as List;
-    return list.isEmpty ? null : list.first as Map<String, dynamic>;
+    final client = Supabase.instance.client;
+    final row = await client
+        .from('licenses')
+        .select()
+        .eq('license_key', key)
+        .maybeSingle();
+    if (row == null) return null;
+    return Map<String, dynamic>.from(row);
   }
 
   Future<void> _patchLicense(String key, Map<String, dynamic> data) async {
-    final uri = Uri.parse(
-      '${_Supabase.url}/rest/v1/licenses'
-      '?license_key=eq.${Uri.encodeComponent(key)}',
-    );
-    await http
-        .patch(
-          uri,
-          headers: {..._Supabase.headers, 'Prefer': 'return=minimal'},
-          body: jsonEncode(data),
-        )
-        .timeout(const Duration(seconds: 12));
+    final client = Supabase.instance.client;
+    await client.from('licenses').update(data).eq('license_key', key);
   }
 
   // ── التحقق من الترخيص ─────────────────────────────────────────────────────
