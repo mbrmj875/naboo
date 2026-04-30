@@ -1,6 +1,8 @@
 import 'dart:async' show unawaited;
 
 import 'package:flutter/material.dart';
+import 'storage/sqlite_desktop_init.dart'
+    if (dart.library.html) 'storage/sqlite_desktop_init_web.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -72,6 +74,7 @@ void _registerRemoteDeviceRevokeHandler() {
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  initSqliteForPlatform();
   await Supabase.initialize(
     url: SupabaseConfig.url,
     anonKey: SupabaseConfig.anonKey,

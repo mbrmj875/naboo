@@ -54,6 +54,7 @@ dependencies:
   # مطلوب لـ lib/firebase_options.dart (FlutterFire)؛ التهيئة الفعلية اختيارية في main.
   firebase_core: ^3.8.0
   url_launcher: ^6.3.2
+  sqflite_common_ffi: ^2.4.0+3
 
 dev_dependencies:
   flutter_test:
