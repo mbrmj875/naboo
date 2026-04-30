@@ -4,7 +4,12 @@ on:
   push:
     tags:
       - "v*"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "وسم الإصدار على GitHub لربط الملفات به (مثل v2.0.8) — عند التشغيل اليدوي فقط"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -34,7 +39,11 @@ jobs:
           if (-not (Test-Path $src)) { $src = "build\windows\runner\Release" }
           if (-not (Test-Path $src)) { throw "Could not find Flutter Windows build output." }
           Write-Host "Build output: $src"
-          $version = "${{ github.ref_name }}".TrimStart('v')
+          $refName = "${{ github.ref_name }}"
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $refName = "${{ inputs.release_tag }}".Trim()
+          }
+          $version = $refName.TrimStart('v')
           if ([string]::IsNullOrWhiteSpace($version)) { $version = "0.0.0" }
           Write-Host "Version: $version"
           # UTF-8 بدون BOM — Out-File الافتراضي قد يفسد parsing لـ GITHUB_OUTPUT
@@ -73,7 +82,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -e
-          TAG="${{ github.ref_name }}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.release_tag }}"
+          else
+            TAG="${{ github.ref_name }}"
+          fi
           REPO="${{ github.repository }}"
           for i in $(seq 1 36); do
             if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
