@@ -120,6 +120,8 @@ enum LicenseStatus {
   none,
   checking,
   offline,
+  restricted,
+  pendingLock,
 }
 
 class LicenseState {

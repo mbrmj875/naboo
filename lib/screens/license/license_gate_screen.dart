@@ -33,6 +33,12 @@ class _LicenseGateState extends State<LicenseGate> {
             case LicenseStatus.active:
               return widget.child;
 
+            case LicenseStatus.restricted:
+            case LicenseStatus.pendingLock:
+              // سيتم ربط البانر/الحالة لاحقاً ضمن RestrictedMode + ExpiredPendingLock.
+              // الآن نُبقي الدخول متاحاً حتى لا نكسر v1.
+              return widget.child;
+
             case LicenseStatus.expired:
             case LicenseStatus.suspended:
               return LicenseExpiredScreen(state: lic.state);
