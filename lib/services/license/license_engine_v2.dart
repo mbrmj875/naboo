@@ -19,7 +19,9 @@ class LicenseEngineV2 implements LicenseEngine {
   }) : _storage = storage ?? LicenseStorage(),
        _verifier =
            verifier ??
-           JwtRs256Verifier(trustedPublicKeysPemByKid: trustedPublicKeysPemByKid),
+           JwtRs256Verifier(
+             trustedPublicKeysPemByKid: trustedPublicKeysPemByKid,
+           ),
        _trustedTime = trustedTime ?? TrustedTimeService();
 
   final LicenseStorage _storage;
@@ -27,11 +29,7 @@ class LicenseEngineV2 implements LicenseEngine {
   final DeviceUuidMigrator _uuidMigrator = DeviceUuidMigrator();
   final TrustedTimeService _trustedTime;
 
-  LicenseEngineV2._internal(
-    this._storage,
-    this._verifier,
-    this._trustedTime,
-  );
+  LicenseEngineV2._internal(this._storage, this._verifier, this._trustedTime);
 
   factory LicenseEngineV2.withDefaults() {
     final storage = LicenseStorage();
@@ -99,7 +97,8 @@ PwIDAQAB
     return tok;
   }
 
-  Future<bool> confirmTrustedTimeWithServer() => _trustedTime.confirmWithServer();
+  Future<bool> confirmTrustedTimeWithServer() =>
+      _trustedTime.confirmWithServer();
 
   @override
   Future<({bool ok, String message})> activateLicense(String key) {
@@ -149,8 +148,9 @@ PwIDAQAB
   Future<String> getDeviceId() async {
     final id = await _uuidMigrator.getDeviceIdForUse();
     // محاولة ترحيل على السيرفر (لا تكسر إذا فشلت/لا يوجد user).
+    final name = await getDeviceName();
     await _uuidMigrator.tryMigrateOnServer(
-      deviceName: 'هذا الجهاز',
+      deviceName: name,
       platform: defaultTargetPlatform.name,
     );
     return id;
@@ -176,4 +176,3 @@ PwIDAQAB
     return 'Unknown Device';
   }
 }
-

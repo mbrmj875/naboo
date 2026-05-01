@@ -30,11 +30,11 @@ class DeviceUuidMigrator {
   /// - إذا لم يكن المستخدم مسجل دخول، يتم الاكتفاء بالمنطق المحلي (بدون اتصال سيرفر).
   Future<String> getDeviceIdForUse() async {
     final prefs = await _getPrefs();
-    final state = prefs.getString(_Keys.migrationState) ??
-        UuidMigrationState.notStarted;
+    final state =
+        prefs.getString(_Keys.migrationState) ?? UuidMigrationState.notStarted;
 
     final uuid = (prefs.getString(_Keys.deviceUuid) ?? '').trim();
-    final legacy = (prefs.getString(_Keys.legacyDeviceId) ?? '').trim();
+    // legacy يبقى في SharedPreferences ليتم إلغاؤه/ترحيله على السيرفر لاحقاً.
 
     if (state == UuidMigrationState.completed && uuid.isNotEmpty) {
       return uuid;
@@ -44,14 +44,16 @@ class DeviceUuidMigrator {
     if (state == UuidMigrationState.notStarted) {
       final newUuid = uuid.isNotEmpty ? uuid : _newUuidV4();
       await prefs.setString(_Keys.deviceUuid, newUuid);
-      await prefs.setString(_Keys.migrationState, UuidMigrationState.inProgress);
-      // نستمر باستخدام legacy مؤقتاً حتى يثبت السيرفر UUID.
-      if (legacy.isNotEmpty) return legacy;
+      await prefs.setString(
+        _Keys.migrationState,
+        UuidMigrationState.inProgress,
+      );
+      // لا نستخدم legacy هنا لتجنّب إدراج صفّين لنفس الجهاز (legacy + uuid) على السيرفر.
+      // الـ legacy يبقى محفوظاً ليتم إلغاؤه/ترحيله على السيرفر لاحقاً.
       return newUuid;
     }
 
-    // in_progress/failed_retry: نستخدم legacy إذا موجود لتجنّب اعتبار الجهاز جديداً.
-    if (legacy.isNotEmpty) return legacy;
+    // in_progress/failed_retry: استخدم UUID إن توفر لتثبيت معرّف الجهاز وعدم تكرار السجلات.
     if (uuid.isNotEmpty) return uuid;
 
     // حالة نادرة: لا legacy ولا uuid (إعادة تثبيت مثلاً) → ولّد uuid محلياً.
@@ -59,6 +61,33 @@ class DeviceUuidMigrator {
     await prefs.setString(_Keys.deviceUuid, newUuid);
     await prefs.setString(_Keys.migrationState, UuidMigrationState.inProgress);
     return newUuid;
+  }
+
+  Future<void> _revokeOrDeleteLegacyDeviceRow({
+    required String userId,
+    required String legacyDeviceId,
+  }) async {
+    if (legacyDeviceId.trim().isEmpty) return;
+    final client = Supabase.instance.client;
+    try {
+      await client
+          .from('account_devices')
+          .update({'access_status': 'revoked'})
+          .eq('user_id', userId)
+          .eq('device_id', legacyDeviceId);
+    } on PostgrestException catch (e) {
+      final m = e.message.toLowerCase();
+      final missingAccessStatus =
+          m.contains('access_status') &&
+          (m.contains('could not find') || m.contains('column'));
+      if (!missingAccessStatus) rethrow;
+      // في بيئات قديمة بدون access_status: نحذف السجل القديم لتفادي احتسابه ضمن حد الأجهزة.
+      await client
+          .from('account_devices')
+          .delete()
+          .eq('user_id', userId)
+          .eq('device_id', legacyDeviceId);
+    }
   }
 
   /// محاولة ترحيل legacy→uuid على السيرفر (idempotent).
@@ -75,8 +104,8 @@ class DeviceUuidMigrator {
 
     final legacy = (prefs.getString(_Keys.legacyDeviceId) ?? '').trim();
     final uuid = (prefs.getString(_Keys.deviceUuid) ?? '').trim();
-    final state = prefs.getString(_Keys.migrationState) ??
-        UuidMigrationState.notStarted;
+    final state =
+        prefs.getString(_Keys.migrationState) ?? UuidMigrationState.notStarted;
 
     // لا شيء لفعله.
     if (uuid.isEmpty || state == UuidMigrationState.completed) return;
@@ -92,9 +121,20 @@ class DeviceUuidMigrator {
           .inFilter('device_id', [if (legacy.isNotEmpty) legacy, uuid]);
 
       final rows = (existing as List).whereType<Map>().toList();
-      final hasUuid = rows.any((r) => (r['device_id'] ?? '').toString() == uuid);
+      final hasUuid = rows.any(
+        (r) => (r['device_id'] ?? '').toString() == uuid,
+      );
       if (hasUuid) {
-        await prefs.setString(_Keys.migrationState, UuidMigrationState.completed);
+        if (legacy.isNotEmpty && legacy != uuid) {
+          await _revokeOrDeleteLegacyDeviceRow(
+            userId: user.id,
+            legacyDeviceId: legacy,
+          );
+        }
+        await prefs.setString(
+          _Keys.migrationState,
+          UuidMigrationState.completed,
+        );
         if (legacy.isNotEmpty) await prefs.remove(_Keys.legacyDeviceId);
         return;
       }
@@ -110,14 +150,20 @@ class DeviceUuidMigrator {
           'created_at': DateTime.now().toUtc().toIso8601String(),
           'access_status': 'active',
         }, onConflict: 'user_id,device_id');
-        await prefs.setString(_Keys.migrationState, UuidMigrationState.completed);
+        await prefs.setString(
+          _Keys.migrationState,
+          UuidMigrationState.completed,
+        );
         return;
       }
 
       // 2) UPDATE legacy → uuid (نستخدم .select() لمعرفة affected_rows).
       final updated = await client
           .from('account_devices')
-          .update({'device_id': uuid, 'last_seen_at': DateTime.now().toUtc().toIso8601String()})
+          .update({
+            'device_id': uuid,
+            'last_seen_at': DateTime.now().toUtc().toIso8601String(),
+          })
           .eq('user_id', user.id)
           .eq('device_id', legacy)
           .select('device_id');
@@ -125,7 +171,10 @@ class DeviceUuidMigrator {
       final updatedRows = (updated as List).whereType<Map>().toList();
       if (updatedRows.length == 1) {
         // affected_rows == 1
-        await prefs.setString(_Keys.migrationState, UuidMigrationState.completed);
+        await prefs.setString(
+          _Keys.migrationState,
+          UuidMigrationState.completed,
+        );
         await prefs.remove(_Keys.legacyDeviceId);
         return;
       }
@@ -138,15 +187,24 @@ class DeviceUuidMigrator {
           .eq('device_id', uuid)
           .maybeSingle();
       if (after != null) {
-        await prefs.setString(_Keys.migrationState, UuidMigrationState.completed);
+        await prefs.setString(
+          _Keys.migrationState,
+          UuidMigrationState.completed,
+        );
         await prefs.remove(_Keys.legacyDeviceId);
         return;
       }
 
-      await prefs.setString(_Keys.migrationState, UuidMigrationState.failedRetry);
+      await prefs.setString(
+        _Keys.migrationState,
+        UuidMigrationState.failedRetry,
+      );
     } catch (_) {
       // فشل شبكي/سباق (unique violation) → نعيد المحاولة لاحقاً.
-      await prefs.setString(_Keys.migrationState, UuidMigrationState.failedRetry);
+      await prefs.setString(
+        _Keys.migrationState,
+        UuidMigrationState.failedRetry,
+      );
     }
   }
 
@@ -161,4 +219,3 @@ class DeviceUuidMigrator {
     return '${b.substring(0, 8)}-${b.substring(8, 12)}-${b.substring(12, 16)}-${b.substring(16, 20)}-${b.substring(20)}';
   }
 }
-
