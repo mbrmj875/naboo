@@ -1,5 +1,13 @@
 import 'dart:convert';
 
+/// يزيل المسافات والأسطر والعلامات الخفية من JWT المضغوط (أخطاء لصق شائعة).
+String normalizeJwtCompactInput(String raw) {
+  return raw
+      .trim()
+      .replaceAll(RegExp(r'[\u200B-\u200D\uFEFF]'), '')
+      .replaceAll(RegExp(r'\s+'), '');
+}
+
 /// رخصة v2 — ناتجة من JWT (RS256) بعد التحقق.
 class LicenseToken {
   const LicenseToken({

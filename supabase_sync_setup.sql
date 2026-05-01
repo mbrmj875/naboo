@@ -31,6 +31,10 @@ create table if not exists public.app_snapshots (
   updated_at timestamptz not null default now()
 );
 
+-- عمود مطلوب من تطبيق Flutter (رفع لقطة بمفتاح إيديمبوتنسي لجلسة الرفع).
+alter table public.app_snapshots
+  add column if not exists idempotency_key text;
+
 create unique index if not exists ux_app_snapshots_user
   on public.app_snapshots(user_id);
 

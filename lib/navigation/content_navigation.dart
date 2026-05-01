@@ -59,6 +59,7 @@ abstract class AppContentRoutes {
   static const settingsDashboardLayout = 'app_settings_dashboard_layout';
   static const settingsRestore = 'app_settings_restore';
   static const settingsSubscriptionAccount = 'app_settings_subscription_account';
+  static const settingsBusinessFeatures = 'app_settings_business_features';
   static const subscriptionPlans = 'app_subscription_plans';
   static const reportsPrefix = 'app_reports_';
   static String reports(int section) => '$reportsPrefix$section';
@@ -214,6 +215,8 @@ String breadcrumbFallbackTitleForRouteId(String id) {
       return 'تخصيص الشاشة الرئيسية';
     case AppContentRoutes.settingsSubscriptionAccount:
       return 'خطة الاشتراك والحساب';
+    case AppContentRoutes.settingsBusinessFeatures:
+      return 'ميزات المتجر';
     case AppContentRoutes.subscriptionPlans:
       return 'خطط الاشتراك';
     default:
@@ -301,6 +304,8 @@ IconData breadcrumbIconForRouteId(String id) {
       return Icons.dashboard_customize_rounded;
     case AppContentRoutes.settingsSubscriptionAccount:
       return Icons.star_rounded;
+    case AppContentRoutes.settingsBusinessFeatures:
+      return Icons.tune_rounded;
     case AppContentRoutes.subscriptionPlans:
       return Icons.upgrade_rounded;
     default:

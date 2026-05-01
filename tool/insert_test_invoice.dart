@@ -1,10 +1,8 @@
-
 import 'package:flutter/widgets.dart';
+import 'package:naboo/models/invoice.dart';
+import 'package:naboo/services/database_helper.dart';
+import 'package:naboo/services/supabase_config.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-
-import '../lib/models/invoice.dart';
-import '../lib/services/database_helper.dart';
-import '../lib/services/supabase_config.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -38,6 +36,9 @@ Future<void> main() async {
     createdByUserName: 'test_runner',
   );
 
-  final id = await db.insertInvoice(invoice);
+  final id = await db.insertInvoiceWithPolicy(
+    invoice,
+    enforceStockNonZero: false,
+  );
   debugPrint('Inserted test invoice id=$id');
 }

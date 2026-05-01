@@ -238,6 +238,7 @@ extension DbInvoices on DatabaseHelper {
     Transaction txn,
     Invoice invoice,
     LoyaltySettingsData loyaltySettings,
+    {required bool enforceStockNonZero}
   ) async {
     _validateInvoiceForSave(invoice);
     final actor = (invoice.createdByUserName ?? '').trim();
@@ -366,6 +367,27 @@ extension DbInvoices on DatabaseHelper {
 
     if (!invoice.isReturned) {
       if (!serviceReceipt) {
+        if (enforceStockNonZero) {
+          // منع البيع عند مخزون 0 في الوضع المقيّد (طبقة الخدمة).
+          for (final item in invoice.items) {
+            final pid = item.productId;
+            if (pid == null) continue;
+            final rows = await txn.query(
+              'products',
+              columns: ['qty'],
+              where: 'id = ?',
+              whereArgs: [pid],
+              limit: 1,
+            );
+            if (rows.isEmpty) continue;
+            final q = (rows.first['qty'] as num?)?.toDouble() ?? 0.0;
+            if (q <= 1e-12 && item.baseQtyResolved > 1e-12) {
+              throw FormatException(
+                'لا يمكن بيع «${item.productName}» لأن المخزون صفر في الوضع المقيّد.',
+              );
+            }
+          }
+        }
         for (final item in invoice.items) {
           final pid = item.productId;
           if (pid == null) continue;
@@ -493,12 +515,20 @@ extension DbInvoices on DatabaseHelper {
     return id;
   }
 
-  Future<int> insertInvoice(Invoice invoice) async {
+  Future<int> insertInvoiceWithPolicy(
+    Invoice invoice, {
+    required bool enforceStockNonZero,
+  }) async {
     _validateInvoiceForSave(invoice);
     final db = await database;
     final loyaltySettings = await _readLoyaltySettings(db);
     final id = await db.transaction<int>(
-      (txn) => _insertInvoiceInTransaction(txn, invoice, loyaltySettings),
+      (txn) => _insertInvoiceInTransaction(
+        txn,
+        invoice,
+        loyaltySettings,
+        enforceStockNonZero: enforceStockNonZero,
+      ),
     );
     CloudSyncService.instance.scheduleSyncSoon();
     return id;

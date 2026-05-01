@@ -100,6 +100,14 @@ Run the helper SQL in `tool/sync_verification_queries.sql`:
 - [ ] Delete one product and confirm propagation.
 - [ ] Verify no sync crash and no stuck stale state.
 
+## License-Constrained Sync Behavior (Critical)
+
+- [ ] Device B في `Restricted Mode`.
+      Device A يرفع snapshot جديد.
+      Expected:
+      - Device B يستقبل البيانات (Pull يعمل).
+      - Device B لا يرفع أي تغييرات محلية (Push محجوب بسبب Preflight).
+
 ## Failure Log Template
 
 If any check fails, record:

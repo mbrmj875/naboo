@@ -15,6 +15,7 @@ class RestrictedModeBannerController extends StatefulWidget {
 class _RestrictedModeBannerControllerState
     extends State<RestrictedModeBannerController> {
   MaterialBanner? _lastBanner;
+  bool _retrying = false;
 
   @override
   void didChangeDependencies() {
@@ -58,9 +59,21 @@ class _RestrictedModeBannerControllerState
         ),
         actions: [
           TextButton(
-            onPressed: () => LicenseService.instance.checkLicense(
-              forceRemote: true,
-            ),
+            onPressed: _retrying
+                ? null
+                : () async {
+                    _retrying = true;
+                    try {
+                      await LicenseService.instance.checkLicense(
+                        forceRemote: true,
+                      );
+                    } finally {
+                      if (!mounted) return;
+                      setState(() {
+                        _retrying = false;
+                      });
+                    }
+                  },
             child: const Text('إعادة المحاولة'),
           ),
         ],

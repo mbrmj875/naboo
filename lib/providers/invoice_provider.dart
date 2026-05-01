@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../models/invoice.dart';
 import '../services/cloud_sync_service.dart';
 import '../services/database_helper.dart';
+import '../services/license_service.dart';
 
 class InvoiceProvider extends ChangeNotifier {
   static const int _pageSize = 120;
@@ -93,7 +94,12 @@ class InvoiceProvider extends ChangeNotifier {
   }
 
   Future<int> addInvoice(Invoice invoice) async {
-    final id = await _db.insertInvoice(invoice);
+    final isRestricted =
+        LicenseService.instance.state.status == LicenseStatus.restricted;
+    final id = await _db.insertInvoiceWithPolicy(
+      invoice,
+      enforceStockNonZero: isRestricted,
+    );
     // تحديث سريع للقائمة الحالية بدون تحميل كل الفواتير.
     await refresh();
     // لا تربط مسار البيع بالشبكة: جدولة رفع قريب فقط.

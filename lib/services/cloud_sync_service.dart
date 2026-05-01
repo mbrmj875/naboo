@@ -14,6 +14,12 @@ import 'license_service.dart';
 /// نتيجة تسجيل الجهاز: مرفوض = تم فصله من الحساب ولا يُسمح بالدخول حتى يوافق جهاز آخر.
 enum DeviceAccessResult { ok, revoked }
 
+class DeviceLimitReachedException implements Exception {
+  const DeviceLimitReachedException();
+  @override
+  String toString() => 'DEVICE_LIMIT_REACHED';
+}
+
 /// رمز خاص يُعاد لشاشة تسجيل الدخول لعرض واجهة "جهاز مفصول".
 const String kDeviceAccessRevokedCode = 'DEVICE_REVOKED';
 
@@ -91,6 +97,8 @@ class CloudSyncService {
   static const _chunkThresholdChars = 350000; // ~350KB base64 text
   static const _chunkSizeChars = 180000; // ~180KB per row
 
+  static const _prefPendingIdempotencyKeyPrefix = 'sync.pending_idempotency_key.';
+
   final DatabaseHelper _dbHelper = DatabaseHelper();
   final ValueNotifier<DateTime?> lastSyncAt = ValueNotifier<DateTime?>(null);
   final ValueNotifier<String?> lastError = ValueNotifier<String?>(null);
@@ -111,6 +119,8 @@ class CloudSyncService {
   String? _activeUserId;
   bool _syncRunning = false;
   bool _syncQueued = false;
+  bool _preflightInProgress = false;
+  DateTime? _lastSuccessfulPreflightAt;
 
   Future<void> _syncLock = Future<void>.value();
 
@@ -154,7 +164,13 @@ class CloudSyncService {
             })
             .eq('id', user.id);
       }
-      final access = await registerCurrentDevice();
+      final DeviceAccessResult access;
+      try {
+        access = await registerCurrentDevice();
+      } on DeviceLimitReachedException {
+        // لا نكسر تسجيل الدخول هنا؛ سيتم التعامل معها في enforcePlanDeviceLimit بعد قراءة الخطة.
+        return true;
+      }
       if (access == DeviceAccessResult.revoked) {
         return false;
       }
@@ -205,35 +221,100 @@ class CloudSyncService {
   }
 
   Future<String?> enforcePlanDeviceLimit({required int maxDevices}) async {
-    if (maxDevices == 0) return null;
     try {
-      final currentDeviceId = await LicenseService.instance.getDeviceId();
-      final existingDevices = await refreshDevices();
-      final activeDevices = existingDevices.where((d) => !d.isRevoked).toList();
-      final alreadyRegistered = activeDevices.any(
-        (d) => d.deviceId == currentDeviceId,
-      );
-
-      // منع فوري قبل تسجيل الجهاز الجديد إذا امتلأ حد الخطة.
-      if (!alreadyRegistered && activeDevices.length >= maxDevices) {
-        return 'تم الوصول إلى الحد الأقصى للأجهزة في خطتك ($maxDevices/$maxDevices). احذف جهازًا من الحساب أو قم بترقية الخطة.';
+      // مصدر الحقيقة: السيرفر فقط (لا حساب محلي).
+      // maxDevices القادم من الخطة يُستخدم كعرض UI فقط، لا كقرار.
+      try {
+        await _registerCurrentDeviceViaServerLimit();
+      } on DeviceLimitReachedException {
+        return 'تم الوصول إلى الحد الأقصى للأجهزة في خطتك. افصل جهازاً من الحساب أو قم بترقية الخطة.';
       }
 
       final access = await registerCurrentDevice();
       if (access == DeviceAccessResult.revoked) {
         return 'تم إزالة هذا الجهاز من الحساب. اطلب السماح بالعودة من جهاز نشط في الإعدادات.';
       }
-      final allDevices = await refreshDevices();
-      final activeCount = allDevices.where((d) => !d.isRevoked).length;
-      if (activeCount <= maxDevices) return null;
-      return 'عدد الأجهزة على الحساب تجاوز الحد ($activeCount/$maxDevices). احذف جهازًا غير مستخدم أو قم بترقية الخطة.';
+      // Fetch server over-limit status (if RPC exists). If missing, do not block.
+      final status = await _tryFetchDeviceLimitStatusFromServer();
+      if (status == null) return null;
+      if (!status.isOverLimit) return null;
+      final maxLabel = status.maxDevices == 0
+          ? 'غير محدد'
+          : '${status.maxDevices}';
+      return 'عدد الأجهزة النشطة على الحساب تجاوز الحد (${status.activeDevices}/$maxLabel). افصل جهازاً غير مستخدم أو قم بترقية الخطة.';
     } on PostgrestException catch (e) {
       if (_isMissingAccountDevicesTable(e)) {
         // لا نمنع الدخول إذا جدول الأجهزة لم يُنشأ بعد في السحابة.
         return null;
       }
       rethrow;
+    } catch (_) {
+      // أخطاء الشبكة: لا نكسر الدخول هنا؛ سيظهر وضع مقيّد/رسالة حسب كاش السيرفر في LicenseService.
+      return null;
     }
+  }
+
+  Future<void> _registerCurrentDeviceViaServerLimit() async {
+    final client = Supabase.instance.client;
+    final user = client.auth.currentUser;
+    if (user == null) return;
+    final deviceId = await LicenseService.instance.getDeviceId();
+    final deviceName = await LicenseService.instance.getDeviceName();
+    try {
+      await client.rpc(
+        'app_register_device',
+        params: {
+          'p_device_id': deviceId,
+          'p_device_name': deviceName,
+          'p_platform': defaultTargetPlatform.name,
+        },
+      );
+    } on PostgrestException catch (e) {
+      final m = e.message.toUpperCase();
+      if (m.contains('DEVICE_LIMIT_REACHED')) {
+        throw const DeviceLimitReachedException();
+      }
+      // إذا الدالة غير موجودة بعد، لا نكسر الدخول.
+      if (m.contains('APP_REGISTER_DEVICE') &&
+          (m.contains('COULD NOT FIND') || m.contains('FUNCTION'))) {
+        return;
+      }
+      rethrow;
+    }
+  }
+
+  Future<({bool isOverLimit, int activeDevices, int maxDevices})?>
+  _tryFetchDeviceLimitStatusFromServer() async {
+    final client = Supabase.instance.client;
+    final user = client.auth.currentUser;
+    if (user == null) return null;
+    try {
+      final res = await client.rpc('app_device_limit_status');
+      if (res is List && res.isNotEmpty && res.first is Map) {
+        final m = Map<String, dynamic>.from(res.first as Map);
+        final over = m['is_over_limit'] == true;
+        final active = (m['active_devices'] as num?)?.toInt() ?? 0;
+        final max = (m['max_devices'] as num?)?.toInt() ?? 0;
+        return (isOverLimit: over, activeDevices: active, maxDevices: max);
+      }
+      if (res is Map) {
+        final m = Map<String, dynamic>.from(res);
+        final over = m['is_over_limit'] == true;
+        final active = (m['active_devices'] as num?)?.toInt() ?? 0;
+        final max = (m['max_devices'] as num?)?.toInt() ?? 0;
+        return (isOverLimit: over, activeDevices: active, maxDevices: max);
+      }
+    } on PostgrestException catch (e) {
+      final m = e.message.toUpperCase();
+      if (m.contains('APP_DEVICE_LIMIT_STATUS') &&
+          (m.contains('COULD NOT FIND') || m.contains('FUNCTION'))) {
+        return null;
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+    return null;
   }
 
   Future<DeviceAccessResult> registerCurrentDevice() async {
@@ -244,6 +325,47 @@ class CloudSyncService {
     final deviceName = await LicenseService.instance.getDeviceName();
     final now = DateTime.now().toUtc().toIso8601String();
     try {
+      // Prefer server-side enforcement if RPC exists.
+      try {
+        final res = await client.rpc(
+          'app_register_device',
+          params: {
+            'p_device_id': deviceId,
+            'p_device_name': deviceName,
+            'p_platform': defaultTargetPlatform.name,
+          },
+        );
+        // If revoked: treat as revoked.
+        String access = 'active';
+        if (res is List && res.isNotEmpty && res.first is Map) {
+          final m = Map<String, dynamic>.from(res.first as Map);
+          access = (m['access_status'] ?? 'active').toString();
+        } else if (res is Map) {
+          final m = Map<String, dynamic>.from(res);
+          access = (m['access_status'] ?? 'active').toString();
+        }
+        if (access.toLowerCase() == 'revoked') {
+          return DeviceAccessResult.revoked;
+        }
+        return DeviceAccessResult.ok;
+      } on PostgrestException catch (e) {
+        final m = e.message.toUpperCase();
+        if (m.contains('DEVICE_LIMIT_REACHED')) {
+          // لا نسجل الجهاز؛ اعتبره مرفوضاً وسيُعالج عبر enforcePlanDeviceLimit/البانر.
+          throw const DeviceLimitReachedException();
+        }
+        // RPC missing: fallback to legacy upsert below.
+        if (m.contains('APP_REGISTER_DEVICE') &&
+            (m.contains('COULD NOT FIND') || m.contains('FUNCTION'))) {
+          // continue fallback
+        } else {
+          rethrow;
+        }
+      } catch (_) {
+        // أي خطأ غير Postgrest (شبكة/timeout): لا fallback صامت.
+        rethrow;
+      }
+
       Map<String, dynamic>? existing;
       try {
         existing = await client
@@ -393,13 +515,18 @@ class CloudSyncService {
 
   bool _isMissingSyncTables(PostgrestException e) {
     final m = e.message.toLowerCase();
+    // أخطاء عمود/صلاحية تذكر اسم الجدول لكنها ليست «الجدول غير موجود».
+    if (m.contains('permission denied')) return false;
+    if (m.contains('column') && m.contains('does not exist')) return false;
     final missingTable =
         m.contains(_snapshotsTable) ||
         m.contains(_snapshotChunksTable) ||
         m.contains('app_snapshots') ||
         m.contains('app_snapshot_chunks');
     final tableNotReady =
-        m.contains('could not find') || m.contains('relation');
+        m.contains('could not find') ||
+        m.contains('does not exist') ||
+        (m.contains('relation') && m.contains('does not exist'));
     return missingTable && tableNotReady;
   }
 
@@ -419,6 +546,28 @@ class CloudSyncService {
 
       _syncRunning = true;
       try {
+        // Preflight إلزامي قبل أي Pull/Push.
+        // (1) الترخيص/الوقت/حد الأجهزة تُدار في LicenseService.checkLicense.
+        // (2) عند فشل preflight: لا مزامنة.
+        final lastOk = _lastSuccessfulPreflightAt;
+        final okFresh = lastOk != null &&
+            DateTime.now().difference(lastOk) < const Duration(seconds: 60);
+        if (!okFresh && !_preflightInProgress) {
+          _preflightInProgress = true;
+          try {
+            await LicenseService.instance.checkLicense(forceRemote: true);
+            _lastSuccessfulPreflightAt = DateTime.now();
+          } finally {
+            _preflightInProgress = false;
+          }
+        }
+        final lic = LicenseService.instance.state;
+        if (!(lic.status == LicenseStatus.active ||
+            lic.status == LicenseStatus.trial)) {
+          lastError.value = lic.message ?? 'لا يمكن المزامنة بدون ترخيص صالح.';
+          return;
+        }
+
         final remoteCfg = await AppRemoteConfigService.instance.refresh(
           force: true,
         );
@@ -426,7 +575,14 @@ class CloudSyncService {
           lastError.value = remoteCfg.syncPausedMessageAr;
           return;
         }
-        final access = await registerCurrentDevice();
+        DeviceAccessResult access;
+        try {
+          access = await registerCurrentDevice();
+        } on DeviceLimitReachedException {
+          lastError.value =
+              'تم الوصول إلى الحد الأقصى للأجهزة في الحساب. افصل جهازاً أو قم بترقية الخطة.';
+          return;
+        }
         if (access == DeviceAccessResult.revoked) {
           final kick = onRemoteDeviceRevoked;
           if (kick != null) {
@@ -708,16 +864,21 @@ class CloudSyncService {
     final build = await _exportSnapshot(db: db, changedTables: changedTables);
     final nowIso = DateTime.now().toUtc().toIso8601String();
     final encoded = _encodePayload(build.payload);
+    final idemKey = await _getOrCreatePendingIdempotencyKey(
+      prefs: prefs,
+      userId: userId,
+    );
     if (encoded.length <= _chunkThresholdChars) {
       await client.from(_snapshotsTable).upsert({
         'user_id': userId,
         'device_label': defaultTargetPlatform.name,
         'schema_version': _snapshotSchemaVersion,
         'payload': build.payload,
+        'idempotency_key': idemKey,
         'updated_at': nowIso,
       }, onConflict: 'user_id');
     } else {
-      final syncId = '${DateTime.now().millisecondsSinceEpoch}-$userId';
+      final syncId = idemKey;
       final chunks = _splitText(encoded, _chunkSizeChars);
       await client.from(_snapshotChunksTable).delete().eq('user_id', userId);
       for (var i = 0; i < chunks.length; i++) {
@@ -739,11 +900,35 @@ class CloudSyncService {
           'chunk_count': chunks.length,
           'encoding': 'gzip+base64',
         },
+        'idempotency_key': idemKey,
         'updated_at': nowIso,
       }, onConflict: 'user_id');
     }
     await prefs.setString(sigMapKey, jsonEncode(currentSigMap));
+    await _clearPendingIdempotencyKey(prefs: prefs, userId: userId);
     return true;
+  }
+
+  String _prefsKeyPendingIdempotencyKey(String userId) =>
+      '$_prefPendingIdempotencyKeyPrefix$userId';
+
+  Future<String> _getOrCreatePendingIdempotencyKey({
+    required SharedPreferences prefs,
+    required String userId,
+  }) async {
+    final k = _prefsKeyPendingIdempotencyKey(userId);
+    final existing = (prefs.getString(k) ?? '').trim();
+    if (existing.isNotEmpty) return existing;
+    final created = '${DateTime.now().millisecondsSinceEpoch}-$userId';
+    await prefs.setString(k, created);
+    return created;
+  }
+
+  Future<void> _clearPendingIdempotencyKey({
+    required SharedPreferences prefs,
+    required String userId,
+  }) async {
+    await prefs.remove(_prefsKeyPendingIdempotencyKey(userId));
   }
 
   String _encodePayload(Map<String, dynamic> payload) {

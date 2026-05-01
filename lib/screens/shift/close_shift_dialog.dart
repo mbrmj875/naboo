@@ -584,7 +584,6 @@ class _BalanceHero extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     final ac = context.appCorners;
     final ts = MediaQuery.textScalerOf(context);
     final labelSize = ts.scale(12.0);

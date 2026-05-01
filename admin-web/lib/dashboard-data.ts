@@ -7,6 +7,8 @@ export type ProfileRow = {
   id: string;
   email: string | null;
   trial_started_at: string | null;
+  /** v1 = مفتاح قديم؛ v2 = JWT — افتراضي v1 إن لم يُجلب العمود */
+  license_system_version?: string | null;
   custom_message_title_ar?: string | null;
   custom_message_body_ar?: string | null;
   custom_message_active?: boolean | null;
@@ -137,6 +139,8 @@ export type UserRow = {
   custom_message_body_ar: string | null;
   custom_message_active: boolean;
   custom_message_updated_at: string | null;
+  /** نظام الترخيص المفعّل للمستخدم: v1 أو v2 */
+  license_system_version: "v1" | "v2";
 };
 
 /** ملخص للوحة الاشتراكات (من صفوف خام قبل إخفاء المفتاح). */
@@ -264,13 +268,14 @@ export async function loadDashboardData(): Promise<{
     const q1 = await supabase
       .from("profiles")
       .select(
-        "id,email,trial_started_at,custom_message_title_ar,custom_message_body_ar,custom_message_active,custom_message_updated_at,updated_at",
+        "id,email,trial_started_at,license_system_version,custom_message_title_ar,custom_message_body_ar,custom_message_active,custom_message_updated_at,updated_at",
       );
     profiles = q1.data as Record<string, unknown>[] | null;
     pErr = q1.error;
     if (
       pErr?.message?.includes("column") &&
-      pErr.message.includes("custom_message_title_ar")
+      (pErr.message.includes("custom_message_title_ar") ||
+        pErr.message.includes("license_system_version"))
     ) {
       const qFallback = await supabase
         .from("profiles")
@@ -278,7 +283,7 @@ export async function loadDashboardData(): Promise<{
       profiles = qFallback.data as Record<string, unknown>[] | null;
       pErr = qFallback.error;
       errors.push(
-        "لا توجد أعمدة الرسالة المخصصة — نفّذ admin-web/supabase/profiles_custom_message.sql.",
+        "أعمدة ناقصة في profiles — نفّذ profiles_custom_message.sql و/أو profiles_license_system_version.sql.",
       );
     }
   }
@@ -304,6 +309,8 @@ export async function loadDashboardData(): Promise<{
       const ms = end.getTime() - now;
       daysLeft = ms <= 0 ? 0 : Math.ceil(ms / 86400000);
     }
+    const licVerRaw = (p?.license_system_version ?? "v1").toString().trim().toLowerCase();
+    const license_system_version: "v1" | "v2" = licVerRaw === "v2" ? "v2" : "v1";
     return {
       id: u.id,
       email: u.email ?? p?.email ?? null,
@@ -322,6 +329,7 @@ export async function loadDashboardData(): Promise<{
       custom_message_body_ar: p?.custom_message_body_ar ?? null,
       custom_message_active: p?.custom_message_active == true,
       custom_message_updated_at: p?.custom_message_updated_at ?? null,
+      license_system_version,
     };
   });
 

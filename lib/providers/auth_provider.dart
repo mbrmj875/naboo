@@ -83,6 +83,7 @@ class AuthProvider extends ChangeNotifier {
       }
       await CloudSyncService.instance.clearSyncPreferences();
       await _clearAccountUiPreferences(prefs);
+      await LicenseService.instance.resetLicenseStateForDataScopeChange();
     }
     await prefs.setString(_prefActiveDataOwner, newOwnerKey);
     await TenantContextService.instance.load();
@@ -697,6 +698,7 @@ class AuthProvider extends ChangeNotifier {
       await Supabase.instance.client.auth.signOut();
     } catch (_) {}
     await CloudSyncService.instance.stopForSignOut();
+    await LicenseService.instance.resetLicenseStateForDataScopeChange();
     _clear();
     notifyListeners();
   }

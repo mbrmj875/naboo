@@ -7,7 +7,13 @@ import '../../providers/loyalty_settings_provider.dart';
 import 'package:provider/provider.dart';
 
 class BusinessSetupWizardScreen extends StatefulWidget {
-  const BusinessSetupWizardScreen({super.key});
+  const BusinessSetupWizardScreen({
+    super.key,
+    this.openedFromSettings = false,
+  });
+
+  /// عند `true`: يُفتح من الإعدادات — زر رجوع وحفظ ثم [Navigator.pop] بدل الانتقال للوردية.
+  final bool openedFromSettings;
 
   @override
   State<BusinessSetupWizardScreen> createState() =>
@@ -64,6 +70,7 @@ class _BusinessSetupWizardScreenState extends State<BusinessSetupWizardScreen> {
       enableInvoiceDiscount: _enableInvoiceDiscount,
     );
     await d.save(_repo);
+    BusinessFeaturesRevision.bump();
 
     // طبّق إعدادات البيع (خصم/ضريبة) مباشرة.
     try {
@@ -89,7 +96,11 @@ class _BusinessSetupWizardScreenState extends State<BusinessSetupWizardScreen> {
 
     if (!mounted) return;
     setState(() => _saving = false);
-    Navigator.of(context).pushReplacementNamed('/open-shift');
+    if (widget.openedFromSettings) {
+      Navigator.of(context).pop(true);
+    } else {
+      Navigator.of(context).pushReplacementNamed('/open-shift');
+    }
   }
 
   @override
@@ -102,7 +113,16 @@ class _BusinessSetupWizardScreenState extends State<BusinessSetupWizardScreen> {
           backgroundColor: Colors.white,
           foregroundColor: _navy2,
           elevation: 0.5,
-          title: const Text('إعداد سريع للتطبيق'),
+          leading: widget.openedFromSettings
+              ? BackButton(
+                  onPressed: _saving ? null : () => Navigator.of(context).pop(),
+                )
+              : null,
+          title: Text(
+            widget.openedFromSettings
+                ? 'ميزات المتجر'
+                : 'إعداد سريع للتطبيق',
+          ),
         ),
         body: _loading
             ? const Center(child: CircularProgressIndicator())
@@ -191,18 +211,24 @@ class _BusinessSetupWizardScreenState extends State<BusinessSetupWizardScreen> {
                                       color: Colors.white,
                                     ),
                                   )
-                                : const Text('متابعة'),
+                                : Text(
+                                    widget.openedFromSettings
+                                        ? 'حفظ'
+                                        : 'متابعة',
+                                  ),
                           ),
                         ),
-                        const SizedBox(height: 10),
-                        Text(
-                          'يمكنك تغيير هذه الخيارات لاحقاً من الإعدادات.',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Colors.grey.shade600,
+                        if (!widget.openedFromSettings) ...[
+                          const SizedBox(height: 10),
+                          Text(
+                            'يمكنك تغيير هذه الخيارات لاحقاً من الإعدادات ← ميزات المتجر.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey.shade600,
+                            ),
                           ),
-                        ),
+                        ],
                       ],
                     ),
                   ),

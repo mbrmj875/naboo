@@ -902,6 +902,11 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
           previousQty: prevQty,
           wasNewLine: false,
         );
+        if (mounted && type == InvoiceType.cash) {
+          _syncCashAdvanceToTotalIfCash(
+            Provider.of<LoyaltySettingsProvider>(context, listen: false).data,
+          );
+        }
         return;
       }
     }
@@ -954,6 +959,11 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
         SnackBar(
           content: Text(newItemSnackText ?? 'تمت إضافة سطر جديد: $productName'),
         ),
+      );
+    }
+    if (mounted && type == InvoiceType.cash) {
+      _syncCashAdvanceToTotalIfCash(
+        Provider.of<LoyaltySettingsProvider>(context, listen: false).data,
       );
     }
   }
@@ -1064,6 +1074,11 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
             ),
           );
         });
+        if (type == InvoiceType.cash) {
+          _syncCashAdvanceToTotalIfCash(
+            Provider.of<LoyaltySettingsProvider>(context, listen: false).data,
+          );
+        }
         if (pid != null && pid > 0) {
           _touchProductVariants(pid);
         }
@@ -1641,10 +1656,6 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       unitFactor: u.unitFactor,
       addQuantity: addQuantity,
       suppressLineSnacks: true,
-    );
-    if (!mounted || type != InvoiceType.cash) return;
-    _syncCashAdvanceToTotalIfCash(
-      Provider.of<LoyaltySettingsProvider>(context, listen: false).data,
     );
   }
 

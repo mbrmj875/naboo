@@ -521,7 +521,10 @@ class AppSeeder {
         supplierPaymentAffectsCash: true,
       );
 
-      final invId = await _db.insertInvoice(inv);
+      final invId = await _db.insertInvoiceWithPolicy(
+        inv,
+        enforceStockNonZero: false,
+      );
       invoiceIds.add(invId);
 
       // Installment plan row for installment invoices.
@@ -581,7 +584,10 @@ class AppSeeder {
           supplierPaymentAffectsCash: true,
         );
         try {
-          await _db.insertInvoice(ret);
+          await _db.insertInvoiceWithPolicy(
+            ret,
+            enforceStockNonZero: false,
+          );
           if (type == InvoiceType.installment) {
             // best-effort adjustment hook
             await _db.applyInstallmentAdjustmentAfterReturn(

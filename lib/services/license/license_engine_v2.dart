@@ -1,9 +1,13 @@
+import 'dart:io';
+
+import 'package:device_info_plus/device_info_plus.dart';
+import 'package:flutter/foundation.dart';
+
+import 'device_uuid_migrator.dart';
+import 'jwt_rs256_verifier.dart';
 import 'license_engine.dart';
 import 'license_storage.dart';
 import 'license_token.dart';
-import 'jwt_rs256_verifier.dart';
-import 'device_uuid_migrator.dart';
-import 'package:flutter/foundation.dart';
 import 'trusted_time_service.dart';
 
 /// محرك v2: سيتم بناؤه لاحقاً (JWT + TrustedTime + Restricted + ExpiredPendingLock).
@@ -39,17 +43,20 @@ class LicenseEngineV2 implements LicenseEngine {
   }
 
   static const Map<String, String> trustedPublicKeysPemByKid = {
-    // مفتاح تجريبي للتطوير فقط — سيتم استبداله بالمفتاح الحقيقي لاحقاً.
+    // المفتاح العام لزوج التوقيع في لوحة الإدارة (LICENSE_JWT_KID = naboo-dev-001).
+    // عند تدوير المفاتيح: openssl pkey -in license_private.pem -pubout
     'naboo-dev-001': _devPublicKeyPem,
   };
 
   static const String _devPublicKeyPem = '''
 -----BEGIN PUBLIC KEY-----
-MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuWZf9a9t6C9r0n3M0bVw
-uQ6i0cY4S2q5T8yqL6m5m4qg6jzO2a7yX0m3hGQmC2h0u8eTqH5T0G4xO5f3mQhQ
-0B8nT5b0QmQzqk3mQvH7C2m2V9c7Q0m9hH8rP3mQxGQ0B8nT5b0QmQzqk3mQvH7C
-2m2V9c7Q0m9hH8rP3mQxGQ0B8nT5b0QmQzqk3mQvH7C2m2V9c7Q0m9hH8rP3mQx
-GQIDAQAB
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA09n0GOAWJ6fDP3qcY3nU
+Qd1heFO2GQAg/cnpLe2jHOLF1zPmlc8owXtmUtjxKMwMn0/J22nGoFI4oqK1Sdi5
+KZ4ALV52Dwo7URgD4rWnA5RBZKSSGb4hMqZlXi2jrdHiYtYr3UpH8skEy0kYJUn+
+jGJECQ9Un2vVQBCtNHAfbj+RvgSM/8SjHc+ThMuN7+xAEBOv60mSblEw1hEXTw3q
+j1Bgi73XO7tKvQ+UMxSzxgJmVC+WB6LzLg+o1c4P10Eytey2ZXNgUtPj0lqe7gez
+rYKEOLyiS+L91JIFjQJBYN+x6RTMEmnWVZ6zYZ2uPpCyd575OdohlFq5PsSXJThp
+PwIDAQAB
 -----END PUBLIC KEY-----
 ''';
 
@@ -59,7 +66,9 @@ GQIDAQAB
   /// التحقق من JWT (RS256) + kid + ends_at.
   LicenseToken? verifyToken(String jwt) {
     try {
-      final result = _verifier.verify(jwt);
+      final compact = normalizeJwtCompactInput(jwt);
+      if (compact.split('.').length != 3) return null;
+      final result = _verifier.verify(compact);
       final tok = LicenseToken.fromJwt(
         header: result.header,
         claims: result.claims,
@@ -94,13 +103,24 @@ GQIDAQAB
 
   @override
   Future<({bool ok, String message})> activateLicense(String key) {
-    final cleaned = key.trim();
+    final cleaned = normalizeJwtCompactInput(key);
     if (cleaned.isEmpty) {
       return Future.value((ok: false, message: 'أدخل مفتاح الترخيص'));
     }
+    if (cleaned.split('.').length != 3) {
+      return Future.value((
+        ok: false,
+        message:
+            'الصق رمز JWT كاملاً من أول «ey» حتى نهاية الجزء الثالث (بدون أسطر أو مسافات في الوسط).',
+      ));
+    }
     final tok = verifyToken(cleaned);
     if (tok == null) {
-      return Future.value((ok: false, message: 'مفتاح الترخيص غير صالح'));
+      return Future.value((
+        ok: false,
+        message:
+            'مفتاح الترخيص غير صالح. إن كان النص صحيحاً فتأكد من تحديث التطبيق بعد مزامنة المفتاح العام، ومن عدم تغيير حالة الأحرف (مثل eyJ وليس eyj).',
+      ));
     }
     _token = tok;
     return _storage
@@ -137,8 +157,23 @@ GQIDAQAB
   }
 
   @override
-  Future<String> getDeviceName() {
-    throw UnimplementedError('getDeviceName v2 not implemented yet');
+  Future<String> getDeviceName() async {
+    try {
+      final p = DeviceInfoPlugin();
+      if (Platform.isMacOS) {
+        final i = await p.macOsInfo;
+        return '${i.model} (${i.computerName})';
+      } else if (Platform.isAndroid) {
+        final i = await p.androidInfo;
+        return '${i.brand} ${i.model}';
+      } else if (Platform.isIOS) {
+        final i = await p.iosInfo;
+        return '${i.name} (${i.model})';
+      } else if (Platform.isWindows) {
+        return (await p.windowsInfo).computerName;
+      }
+    } catch (_) {}
+    return 'Unknown Device';
   }
 }
 

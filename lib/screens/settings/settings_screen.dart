@@ -17,6 +17,7 @@ import '../../navigation/content_navigation.dart';
 import '../../theme/app_corner_style.dart';
 import '../../utils/screen_layout.dart';
 import '../invoices/sale_pos_settings_screen.dart';
+import '../onboarding/business_setup_wizard_screen.dart';
 import '../printing/printing_screen.dart';
 import 'dashboard_layout_settings_screen.dart';
 import 'market_pos_import_screen.dart';
@@ -118,6 +119,22 @@ class SettingsScreen extends StatelessWidget {
                                   const _InvoiceSettingsScreen(),
                                   routeId: AppContentRoutes.settingsInvoice,
                                   breadcrumbTitle: 'إعدادات الفواتير',
+                                ),
+                              ),
+                              _SettingItem(
+                                icon: Icons.tune_rounded,
+                                iconColor: _kAmber,
+                                title: 'ميزات المتجر',
+                                subtitle:
+                                    'العملاء، الولاء، الضريبة، الخصم، الدين، التقسيط، البيع بالوزن — كما في الإعداد السريع',
+                                onTap: () => _goTo(
+                                  context,
+                                  const BusinessSetupWizardScreen(
+                                    openedFromSettings: true,
+                                  ),
+                                  routeId:
+                                      AppContentRoutes.settingsBusinessFeatures,
+                                  breadcrumbTitle: 'ميزات المتجر',
                                 ),
                               ),
                             ],
@@ -1000,6 +1017,19 @@ class _AccountSubscriptionScreenState
     return '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year} ${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
   }
 
+  /// الحد الفعلي من الترخيص / JWT وليس وصف البطاقة التسويقي للخطة.
+  String _effectiveDeviceCapLabel(LicenseState lic) {
+    switch (lic.status) {
+      case LicenseStatus.none:
+      case LicenseStatus.checking:
+        return '—';
+      default:
+        break;
+    }
+    if (lic.maxDevices == 0) return 'غير محدود';
+    return '${lic.maxDevices} أجهزة';
+  }
+
   @override
   Widget build(BuildContext context) {
     final auth = context.watch<AuthProvider>();
@@ -1012,7 +1042,7 @@ class _AccountSubscriptionScreenState
           listenable: LicenseService.instance,
           builder: (context, _) {
             final lic = LicenseService.instance.state;
-            final displayPlan = lic.plan ?? SubscriptionPlan.basic;
+            final displayPlan = lic.plan;
             final gap = ScreenLayout.of(context).pageHorizontalGap;
             return ListView(
               padding: EdgeInsets.symmetric(horizontal: gap, vertical: 16),
@@ -1031,13 +1061,18 @@ class _AccountSubscriptionScreenState
                   const SizedBox(height: 6),
                   Text('البريد: ${auth.email.isEmpty ? '—' : auth.email}'),
                   const SizedBox(height: 6),
-                  Text('الخطة الحالية: ${displayPlan.nameAr}'),
+                  Text(
+                    'الخطة الحالية: ${displayPlan?.nameAr ?? '—'}',
+                  ),
                   const SizedBox(height: 6),
-                  Text('حد الأجهزة: ${displayPlan.devicesLabel}'),
-                  if (lic.status == LicenseStatus.active) ...[
+                  Text(
+                    'حد الأجهزة: ${_effectiveDeviceCapLabel(lic)}',
+                  ),
+                  if (lic.status == LicenseStatus.active ||
+                      lic.status == LicenseStatus.trial) ...[
                     const SizedBox(height: 6),
                     Text(
-                      lic.devicesInfo,
+                      'الأجهزة المسجّلة: ${lic.devicesInfo}',
                       style: TextStyle(
                         fontSize: 13,
                         color: Colors.grey.shade700,

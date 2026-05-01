@@ -11,7 +11,7 @@ import {
   type ChunkRow,
   type AppRemoteConfigPayload,
 } from "@/lib/dashboard-data";
-import { PLAN_KEYS, planLabelAr } from "@/lib/plan-presets";
+import { maxDevicesForPlan, PLAN_KEYS, planLabelAr, type PlanKey } from "@/lib/plan-presets";
 
 type Tab = "licenses" | "users" | "devices" | "sync" | "settings";
 
@@ -85,6 +85,12 @@ export default function DashboardPage() {
   const [issueMonths, setIssueMonths] = useState("");
   const [issueAsTrial, setIssueAsTrial] = useState(false);
   const [issueAssignedUserId, setIssueAssignedUserId] = useState("");
+  const [issueV2TenantId, setIssueV2TenantId] = useState("");
+  const [issueV2MaxDevices, setIssueV2MaxDevices] = useState("");
+  const [issueV2Starts, setIssueV2Starts] = useState("");
+  const [issueV2Ends, setIssueV2Ends] = useState("");
+  const [issueV2Trial, setIssueV2Trial] = useState(false);
+  const [issuedJwtPreview, setIssuedJwtPreview] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoadErr("");
@@ -373,6 +379,92 @@ export default function DashboardPage() {
     }
   }
 
+  async function issueLicenseV2(): Promise<void> {
+    setFeedback(null);
+    setIssuedJwtPreview(null);
+    setBusy(true);
+    try {
+      const tid = issueV2TenantId.trim();
+      if (!tid) {
+        setFeedback({
+          kind: "err",
+          text: "أدخل tenant_id (غالباً نفس معرّف مستخدم Supabase / المستأجر في التطبيق).",
+        });
+        setBusy(false);
+        return;
+      }
+      const payload: Record<string, unknown> = {
+        tenant_id: tid,
+        plan: issuePlan,
+        is_trial: issueV2Trial,
+        business_name: issueBusiness.trim() || null,
+        assigned_user_id: issueAssignedUserId.trim() === "" ? null : issueAssignedUserId.trim(),
+      };
+      const md = issueV2MaxDevices.trim();
+      if (md !== "") {
+        const n = parseInt(md, 10);
+        if (!Number.isFinite(n) || n < 0) {
+          setFeedback({
+            kind: "err",
+            text: "حد الأجهزة: رقم صحيح ≥ 0 أو اترك الحقل فارغاً لاستخدام حد الخطة الافتراضي.",
+          });
+          setBusy(false);
+          return;
+        }
+        payload.max_devices = n;
+      }
+      if (issueV2Starts.trim() !== "") {
+        const d = new Date(issueV2Starts);
+        if (Number.isNaN(d.getTime())) {
+          setFeedback({ kind: "err", text: "تاريخ البداية غير صالح" });
+          setBusy(false);
+          return;
+        }
+        payload.starts_at = d.toISOString();
+      }
+      if (issueV2Ends.trim() !== "") {
+        const d = new Date(issueV2Ends);
+        if (Number.isNaN(d.getTime())) {
+          setFeedback({ kind: "err", text: "تاريخ النهاية غير صالح" });
+          setBusy(false);
+          return;
+        }
+        payload.ends_at = d.toISOString();
+      }
+
+      const res = await fetch("/api/actions/license-issue", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const json = (await res.json()) as {
+        error?: string;
+        jwt?: string;
+        license_id?: number;
+      };
+      if (!res.ok) {
+        setFeedback({ kind: "err", text: json.error ?? "فشل إصدار JWT" });
+        return;
+      }
+      const jwt = json.jwt ?? "";
+      setIssuedJwtPreview(jwt);
+      setFeedback({
+        kind: "ok",
+        text: `تم إصدار JWT وسجلّ الترخيص #${json.license_id ?? "—"}. جرى نسخ الرمز للحافظة إن أمكن.`,
+      });
+      try {
+        await navigator.clipboard.writeText(jwt);
+      } catch {
+        /* ignore clipboard */
+      }
+      await load();
+    } catch {
+      setFeedback({ kind: "err", text: "خطأ شبكة" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function copyFullLicenseKey(licenseId: number): Promise<void> {
     setFeedback(null);
     setBusy(true);
@@ -384,7 +476,10 @@ export default function DashboardPage() {
       });
       const json = (await res.json()) as { error?: string; license_key?: string };
       if (!res.ok) {
-        setFeedback({ kind: "err", text: json.error ?? "فشل جلب المفتاح" });
+        setFeedback({
+          kind: "err",
+          text: json.error ?? "فشل جلب المفتاح",
+        });
         return;
       }
       const k = json.license_key ?? "";
@@ -544,15 +639,21 @@ export default function DashboardPage() {
       </nav>
 
       {tab === "users" ? (
-        <div className="table-wrap">
-          <table>
+        <div className="tab-users-panel">
+          <p className="meta" style={{ marginBottom: "0.75rem" }}>
+            العمود الأول هو <strong>UUID مستخدم Supabase</strong> — نفس القيمة التي تُدخل كـ{" "}
+            <code className="mono">tenant_id</code> عند إصدار ترخيص v2 في تبويب التراخيص.
+          </p>
+          <div className="table-wrap">
+            <table>
             <thead>
               <tr>
-                <th>المعرّف</th>
+                <th>UUID المستخدم (tenant_id)</th>
                 <th>البريد / الهاتف</th>
                 <th>الاسم</th>
                 <th>المزوّد</th>
                 <th>عدد الأجهزة</th>
+                <th>نظام الترخيص</th>
                 <th>رسالة مخصصة</th>
                 <th>الحظر</th>
                 <th>بداية التجربة</th>
@@ -565,8 +666,31 @@ export default function DashboardPage() {
             <tbody>
               {users.map((u) => (
                 <tr key={u.id}>
-                  <td className="mono" title={u.id}>
-                    {shortId(u.id)}
+                  <td>
+                    <div
+                      className="mono"
+                      style={{
+                        wordBreak: "break-all",
+                        fontSize: "12px",
+                        maxWidth: "min(22rem, 36vw)",
+                        lineHeight: 1.4,
+                      }}
+                      title={u.id}
+                    >
+                      {u.id}
+                    </div>
+                    <button
+                      type="button"
+                      className="btn-sm"
+                      style={{ marginTop: "0.35rem" }}
+                      disabled={busy}
+                      onClick={() => {
+                        void navigator.clipboard.writeText(u.id);
+                        setFeedback({ kind: "ok", text: "تم نسخ UUID المستخدم" });
+                      }}
+                    >
+                      نسخ UUID
+                    </button>
                   </td>
                   <td className="mono">
                     {u.email ?? "—"}
@@ -581,6 +705,41 @@ export default function DashboardPage() {
                   <td>{u.providers}</td>
                   <td title="من جدول account_devices بحسب هذا المستخدم">
                     {u.linked_devices_count.toLocaleString("ar-IQ")}
+                  </td>
+                  <td>
+                    <span className="mono" title="v1 = مفتاح قديم، v2 = JWT موقّع">
+                      {u.license_system_version.toUpperCase()}
+                    </span>
+                    <div style={{ marginTop: 6, display: "flex", flexWrap: "wrap", gap: 6 }}>
+                      <button
+                        type="button"
+                        className="btn-sm"
+                        disabled={busy || u.license_system_version === "v1"}
+                        onClick={() =>
+                          void apiAction(
+                            "/api/actions/profile-license-version",
+                            { userId: u.id, version: "v1" },
+                            "تم ضبط المستخدم على ترخيص v1 (إيقاف طارئ / المفتاح القديم)",
+                          )
+                        }
+                      >
+                        v1
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-sm"
+                        disabled={busy || u.license_system_version === "v2"}
+                        onClick={() =>
+                          void apiAction(
+                            "/api/actions/profile-license-version",
+                            { userId: u.id, version: "v2" },
+                            "تم ضبط المستخدم على ترخيص v2 (JWT)",
+                          )
+                        }
+                      >
+                        v2
+                      </button>
+                    </div>
                   </td>
                   <td>
                     {u.custom_message_active && u.custom_message_body_ar
@@ -782,7 +941,8 @@ export default function DashboardPage() {
                 </tr>
               ))}
             </tbody>
-          </table>
+            </table>
+          </div>
         </div>
       ) : null}
 
@@ -862,7 +1022,8 @@ export default function DashboardPage() {
           <p className="meta" style={{ marginBottom: "0.75rem" }}>
             التحكم الكامل: الخطة، الحالة، الربط بحساب، الانتهاء، الحدّ، مسجّلي الأجهزة في JSON،
             أو حذف الصف نهائياً. عمود <code className="mono">#</code> هو المعرف الأساسي في PostgreSQL؛
-            المفتاح المعروض مقنع — للنسخ الكامل استخدم «نسخ المفتاح الكامل».
+            المفتاح المعروض مقنع — «نسخ المفتاح الكامل» ينسخ JWT لسجلات v2 بعد تنفيذ{" "}
+            <code className="mono">licenses_license_jwt.sql</code> وإصدار ترخيص جديد.
           </p>
 
           <div className="license-summary-cards">
@@ -898,7 +1059,10 @@ export default function DashboardPage() {
                 <select
                   id="issue-plan"
                   value={issuePlan}
-                  onChange={(e) => setIssuePlan(e.target.value)}
+                  onChange={(e) => {
+                    setIssuePlan(e.target.value);
+                    setIssueV2MaxDevices("");
+                  }}
                   disabled={busy}
                 >
                   {PLAN_KEYS.map((pk) => (
@@ -930,7 +1094,7 @@ export default function DashboardPage() {
                   <option value="">— بدون ربط —</option>
                   {(data?.users ?? []).map((u) => (
                     <option key={u.id} value={u.id}>
-                      {u.email ?? u.phone ?? shortId(u.id)}
+                      {(u.email ?? u.phone ?? "—") + ` · ${u.id.slice(0, 8)}…`}
                     </option>
                   ))}
                 </select>
@@ -969,6 +1133,157 @@ export default function DashboardPage() {
                 إنشاء مفتاح ونسخه
               </button>
             </div>
+          </div>
+
+          <div className="license-issue-panel" style={{ marginTop: "1.25rem" }}>
+            <strong style={{ display: "block", marginBottom: "0.5rem" }}>
+              إصدار ترخيص v2 (JWT موقّع — للعملاء على license_system_version = v2)
+            </strong>
+            <p className="meta" style={{ marginBottom: "0.75rem" }}>
+              على الخادم: <code className="mono">LICENSE_JWT_KID</code> وواحد من المفتاح الخاص — إما{" "}
+              <code className="mono">LICENSE_JWT_PRIVATE_KEY_PEM</code> (سطر واحد مع{" "}
+              <code className="mono">\n</code>) أو <code className="mono">LICENSE_JWT_PRIVATE_KEY_PATH</code>{" "}
+              (مسار ملف <code className="mono">.pem</code>، الأسهل محلياً). يجب أن يطابق المفتاح العام في
+              Flutter. يُنشئ صفاً في <code className="mono">licenses</code> ثم يُرجع JWT للنسخ.
+            </p>
+            <div className="rc-form">
+              <label htmlFor="issue-v2-tenant">
+                tenant_id (نفس UUID مستخدم Supabase — ليس البريد)
+                <input
+                  id="issue-v2-tenant"
+                  type="text"
+                  placeholder="الصق UUID هنا"
+                  value={issueV2TenantId}
+                  onChange={(e) => setIssueV2TenantId(e.target.value)}
+                  disabled={busy}
+                  autoComplete="off"
+                />
+              </label>
+              {issueAssignedUserId.trim() !== "" ? (
+                <div
+                  className="mini-card"
+                  style={{ marginTop: "0.5rem", marginBottom: "0.35rem" }}
+                >
+                  <strong style={{ display: "block", marginBottom: "0.35rem" }}>
+                    من «ربط المفتاح بحساب مستخدم» أعلاه
+                  </strong>
+                  <div
+                    className="mono"
+                    style={{ wordBreak: "break-all", fontSize: "12px", lineHeight: 1.45 }}
+                  >
+                    {issueAssignedUserId.trim()}
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "0.5rem" }}>
+                    <button
+                      type="button"
+                      className="btn-sm"
+                      disabled={busy}
+                      onClick={() => {
+                        setIssueV2TenantId(issueAssignedUserId.trim());
+                        setFeedback({
+                          kind: "ok",
+                          text: "تم تعبئة tenant_id من المستخدم المربوط",
+                        });
+                      }}
+                    >
+                      تعبئة tenant_id من هذا المستخدم
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-sm"
+                      disabled={busy}
+                      onClick={() => {
+                        void navigator.clipboard.writeText(issueAssignedUserId.trim());
+                        setFeedback({ kind: "ok", text: "تم نسخ UUID للحافظة" });
+                      }}
+                    >
+                      نسخ UUID فقط
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <p className="meta" style={{ marginTop: "0.35rem", marginBottom: "0.25rem" }}>
+                  لعرض UUID هنا: اختر مستخدماً من «ربط المفتاح بحساب مستخدم» في النموذج أعلاه، أو انسخه
+                  من عمود «UUID المستخدم» في تبويب <strong>المستخدمون</strong>.
+                </p>
+              )}
+              <p className="meta" style={{ margin: "0 0 0.35rem" }}>
+                الخطة المستخدمة: <strong>{issuePlan}</strong> (من حقل «الخطة» في النموذج أعلاه)
+              </p>
+              <label htmlFor="issue-v2-max">
+                حد الأجهزة (اختياري — إن تُرك فارغاً يُستخدم افتراضي الخطة: basic=2، pro=3،
+                unlimited=0)
+                <input
+                  id="issue-v2-max"
+                  type="number"
+                  min={0}
+                  placeholder={`افتراضي الخطة: ${maxDevicesForPlan(issuePlan as PlanKey)}`}
+                  value={issueV2MaxDevices}
+                  onChange={(e) => setIssueV2MaxDevices(e.target.value)}
+                  disabled={busy}
+                />
+              </label>
+              <p className="meta" style={{ margin: "0 0 0.5rem" }}>
+                لتطابق بطاقة «الاحترافية» (3 أجهزة) اترك الحقل فارغاً أو اكتب 3 صراحةً — القيمة 2
+                تُسجَّل في JWT كحدّ فعلي حتى مع خطة pro.
+              </p>
+              <label htmlFor="issue-v2-start">
+                starts_at (اختياري — افتراضي: الآن)
+                <input
+                  id="issue-v2-start"
+                  type="datetime-local"
+                  value={issueV2Starts}
+                  onChange={(e) => setIssueV2Starts(e.target.value)}
+                  disabled={busy}
+                />
+              </label>
+              <label htmlFor="issue-v2-end">
+                ends_at (اختياري — افتراضي: بعد 30 يوماً)
+                <input
+                  id="issue-v2-end"
+                  type="datetime-local"
+                  value={issueV2Ends}
+                  onChange={(e) => setIssueV2Ends(e.target.value)}
+                  disabled={busy}
+                />
+              </label>
+              <div className="rc-row">
+                <input
+                  id="issueV2Trial"
+                  type="checkbox"
+                  checked={issueV2Trial}
+                  onChange={(e) => setIssueV2Trial(e.target.checked)}
+                  disabled={busy}
+                />
+                <label htmlFor="issueV2Trial">is_trial (تجربة في مطالبات JWT + status في الجدول)</label>
+              </div>
+              <p className="meta" style={{ margin: "0.25rem 0 0.5rem" }}>
+                اسم المنشأة والربط بحساب يُستخدمان نفس حقول النموذج أعلاه (إن وُجدت).
+              </p>
+              <button
+                type="button"
+                className="btn-primary"
+                disabled={busy}
+                onClick={() => void issueLicenseV2()}
+              >
+                إصدار JWT وحفظ السجل
+              </button>
+            </div>
+            {issuedJwtPreview ? (
+              <div style={{ marginTop: "0.75rem" }}>
+                <label className="meta" htmlFor="issued-jwt-text">
+                  آخر JWT صدر (انسخه للعميل)
+                </label>
+                <textarea
+                  id="issued-jwt-text"
+                  className="mono"
+                  readOnly
+                  rows={5}
+                  value={issuedJwtPreview}
+                  style={{ width: "100%", marginTop: "0.35rem" }}
+                />
+              </div>
+            ) : null}
           </div>
 
           <div className="table-wrap">

@@ -68,6 +68,16 @@ This plan validates end-to-end sync reliability for:
 4. Expected:
    - login blocked with clear message indicating device limit reached.
 
+## Step 5.1: Plan downgrade impact (previously-registered devices)
+
+1. Ensure you have 3 devices already registered (A/B/C) under a higher plan (or higher `max_devices`).
+2. Downgrade the plan to basic (2 devices) from Admin.
+3. Expected:
+   - No automatic revoke happens.
+   - Devices show Restricted behavior based on server `is_over_limit` until owner manually revokes devices.
+4. Reference:
+   - `docs/preprod_test_matrix.md` scenario 6 and 7.
+
 ## Step 6: Stability under repeated sync
 
 1. On both A/B, trigger sync repeatedly for 5-10 minutes.

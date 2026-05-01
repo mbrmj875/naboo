@@ -63,3 +63,7 @@ admin-web/out/
 
 # Local Firebase Hosting cache
 .firebase/
+
+# عوائد بناء TypeScript / npm خاطئ من جذر المشروع
+*.tsbuildinfo
+/package-lock.json

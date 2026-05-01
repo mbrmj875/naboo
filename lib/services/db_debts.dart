@@ -421,6 +421,7 @@ extension DbDebts on DatabaseHelper {
         txn,
         receiptInv,
         loyaltySettings,
+        enforceStockNonZero: false,
       );
 
       return CustomerDebtPaymentResult(

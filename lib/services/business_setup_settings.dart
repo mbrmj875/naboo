@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 import 'app_settings_repository.dart';
 
 /// إعدادات "التخصص" الأولي للتطبيق — تُحفظ في جدول `app_settings` ضمن نطاق التينانت.
@@ -122,6 +124,16 @@ class BusinessSetupSettingsData {
       enableInvoiceDiscount ? '1' : '0',
       tenantId: tenantId,
     );
+  }
+}
+
+/// يُزاد بعد حفظ [BusinessSetupSettingsData] لتحديث القائمة الجانبية في [HomeScreen].
+class BusinessFeaturesRevision {
+  BusinessFeaturesRevision._();
+  static final ValueNotifier<int> instance = ValueNotifier<int>(0);
+
+  static void bump() {
+    instance.value++;
   }
 }
 

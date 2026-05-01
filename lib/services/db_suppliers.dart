@@ -367,6 +367,7 @@ extension DbSuppliers on DatabaseHelper {
         txn,
         receiptInv,
         loyaltySettings,
+        enforceStockNonZero: false,
       );
       final actor = user.isEmpty ? 'غير معروف' : user;
       await _insertActivityLogInTxn(

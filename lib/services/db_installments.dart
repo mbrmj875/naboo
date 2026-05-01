@@ -541,6 +541,7 @@ WHERE i.type IN ($placeholders)
         txn,
         receiptInv,
         loyaltySettings,
+        enforceStockNonZero: false,
       );
 
       await txn.update(

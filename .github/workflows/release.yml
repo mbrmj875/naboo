@@ -1,11 +1,25 @@
-# ويندوز فقط: عند دفع وسم v* يُبنى naboo-windows-setup.exe + ZIP ويُرفق لنفس الإصدار على GitHub.
-# ملفات Android (naboo.apk) تُرفع يدوياً منك عند الحاجة — لا يُعاد بناؤها هنا.
+# ويندوز فقط: يُبنى naboo-windows-setup.exe + أرشيف portable ويُرفق لإصدار GitHub.
+#
+# ما يُرفَع صراحةً إلى Release (مرفقات فقط):
+#   - naboo-windows-setup.exe  (مثبّت Inno)
+#   - naboo-windows.zip        (مجلد Release المُجمَّع — ثنائيات فقط، ليس مشروع Dart)
+# لا يوجد في هذا الملف أي أمر لرفع lib/** أو ملفات .dart أو .env.
+# ملاحظة: GitHub قد يعرض تلقائياً «Source code (zip)» لكل إصدار — هذا لقطة الوسم في
+# المستودع وليس من سطور workflow؛ إن كان المستودع خاصاً فالوصول محصور بحساباتك.
+#
+# ملفات Android (naboo.apk) تُرفع يدوياً — لا تُبنى هنا.
 name: Release Windows installer
 
 on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "وسم الإصدار الموجود مسبقاً (مثال: v2.0.13)"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -15,6 +29,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag || github.ref }}
 
       - uses: subosito/flutter-action@v2
         with:
@@ -35,7 +51,7 @@ jobs:
           if (-not (Test-Path $src)) { $src = "build\windows\runner\Release" }
           if (-not (Test-Path $src)) { throw "Could not find Flutter Windows build output." }
           Write-Host "Build output: $src"
-          $refName = "${{ github.ref_name }}"
+          $refName = "${{ github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag || github.ref_name }}"
           $version = $refName.TrimStart('v')
           if ([string]::IsNullOrWhiteSpace($version)) { $version = "0.0.0" }
           Write-Host "Version: $version"
@@ -76,7 +92,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -e
-          TAG="${{ github.ref_name }}"
+          TAG="${{ github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag || github.ref_name }}"
           REPO="${{ github.repository }}"
           if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
             gh release create "$TAG" --repo "$REPO" --generate-notes --title "$TAG"

@@ -10,6 +10,7 @@ import '../providers/auth_provider.dart';
 import '../services/app_settings_repository.dart';
 import '../services/business_setup_settings.dart';
 import '../services/license_service.dart';
+import '../services/license/restricted_mode_policy.dart';
 import '../providers/notification_provider.dart';
 import '../providers/shift_provider.dart';
 import '../providers/product_provider.dart';
@@ -126,6 +127,11 @@ class _HomeScreenState extends State<HomeScreen>
 
   List<ModuleItem> get _navForUi =>
       _navFilterApplied ? _visibleNavModules : _orderedModules;
+
+  void _onBusinessFeaturesRevision() {
+    if (!mounted) return;
+    unawaited(_recomputeNavModules());
+  }
 
   void _shiftGateListener() {
     if (!mounted) return;
@@ -693,6 +699,7 @@ class _HomeScreenState extends State<HomeScreen>
       if (!mounted) return;
       _shiftProviderForGateListener = context.read<ShiftProvider>();
       _shiftProviderForGateListener!.addListener(_shiftGateListener);
+      BusinessFeaturesRevision.instance.addListener(_onBusinessFeaturesRevision);
       unawaited(_ensureActiveShiftGate());
       Future<void>.delayed(const Duration(milliseconds: 450), () {
         if (!mounted) return;
@@ -856,6 +863,7 @@ class _HomeScreenState extends State<HomeScreen>
     CloudSyncService.instance.remoteImportGeneration.removeListener(
       _onRemoteSnapshotImported,
     );
+    BusinessFeaturesRevision.instance.removeListener(_onBusinessFeaturesRevision);
     _searchDebounce?.cancel();
     _nameAnimController.dispose();
     _searchController.removeListener(_onSearchControllerChanged);
@@ -2477,16 +2485,7 @@ class _HomeScreenState extends State<HomeScreen>
 
     bool blockedInRestricted(String routeId) {
       if (!isRestricted) return false;
-      if (routeId == AppContentRoutes.invoices ||
-          routeId == AppContentRoutes.addInvoice ||
-          routeId == AppContentRoutes.parkedSales ||
-          routeId.startsWith('app_process_return_') ||
-          routeId == AppContentRoutes.customers ||
-          routeId == AppContentRoutes.customerContacts ||
-          routeId == AppContentRoutes.printing) {
-        return false;
-      }
-      return true;
+      return !RestrictedModePolicy.isRouteAllowed(routeId);
     }
 
     // قائمة العناصر في الشريط الجانبي
