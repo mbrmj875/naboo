@@ -97,7 +97,8 @@ class CloudSyncService {
   static const _chunkThresholdChars = 350000; // ~350KB base64 text
   static const _chunkSizeChars = 180000; // ~180KB per row
 
-  static const _prefPendingIdempotencyKeyPrefix = 'sync.pending_idempotency_key.';
+  static const _prefPendingIdempotencyKeyPrefix =
+      'sync.pending_idempotency_key.';
 
   final DatabaseHelper _dbHelper = DatabaseHelper();
   final ValueNotifier<DateTime?> lastSyncAt = ValueNotifier<DateTime?>(null);
@@ -416,7 +417,118 @@ class CloudSyncService {
     return DeviceAccessResult.ok;
   }
 
-  Future<List<AccountDevice>> refreshDevices() async {
+  String _normDedupeKeyPart(String? raw) {
+    var s = (raw ?? '').trim().toLowerCase();
+    s = s.replaceAll(RegExp(r'\s+'), ' ');
+    return s;
+  }
+
+  String _deviceDedupeKey(AccountDevice d) =>
+      '${_normDedupeKeyPart(d.deviceName)}|${_normDedupeKeyPart(d.platform)}';
+
+  bool _isLikelyUuidV4(String id) {
+    final t = id.trim();
+    return RegExp(
+      r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+      caseSensitive: false,
+    ).hasMatch(t);
+  }
+
+  AccountDevice _newestByLastSeen(List<AccountDevice> g) {
+    return g.reduce((a, b) {
+      final at = a.lastSeenAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+      final bt = b.lastSeenAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+      return bt.isAfter(at) ? b : a;
+    });
+  }
+
+  /// يزيل التكرار الناتج عن legacy_id + uuid لنفس الجهاز (نفس الاسم والمنصة).
+  /// لا يدمج مجموعات «كلها UUID» لأنها قد تمثّل أجهزة مختلفة بنفس الطراز.
+  AccountDevice? _pickDedupeKeeper(List<AccountDevice> g, String currentId) {
+    if (g.length < 2) return null;
+
+    final byCurrent = g.where((d) => d.deviceId == currentId);
+    if (byCurrent.isNotEmpty) return byCurrent.first;
+
+    final uuids = g.where((d) => _isLikelyUuidV4(d.deviceId)).toList();
+    final nonUuids = g.where((d) => !_isLikelyUuidV4(d.deviceId)).toList();
+
+    if (uuids.isNotEmpty && nonUuids.isNotEmpty) {
+      return _newestByLastSeen(uuids);
+    }
+
+    if (uuids.length == g.length) {
+      return null;
+    }
+
+    return _newestByLastSeen(g);
+  }
+
+  Future<void> _revokeDeviceRow(String userId, String deviceId) async {
+    if (deviceId.isEmpty) return;
+    final client = Supabase.instance.client;
+    try {
+      await client
+          .from(_devicesTable)
+          .update({'access_status': 'revoked'})
+          .eq('user_id', userId)
+          .eq('device_id', deviceId);
+    } on PostgrestException catch (e) {
+      if (_isMissingAccountDevicesTable(e)) {
+        rethrow;
+      }
+      if (_isMissingAccessStatusColumn(e)) {
+        await client
+            .from(_devicesTable)
+            .delete()
+            .eq('user_id', userId)
+            .eq('device_id', deviceId);
+      } else {
+        rethrow;
+      }
+    }
+  }
+
+  Future<bool> _dedupeActiveDuplicateDevicesOnServer(
+    String userId,
+    List<AccountDevice> list,
+  ) async {
+    final active = list
+        .where((d) => !d.isRevoked && d.deviceId.trim().isNotEmpty)
+        .toList();
+    if (active.length < 2) return false;
+
+    final currentId = (await LicenseService.instance.getDeviceId()).trim();
+    final byKey = <String, List<AccountDevice>>{};
+    for (final d in active) {
+      final key = _deviceDedupeKey(d);
+      (byKey[key] ??= []).add(d);
+    }
+
+    var anyChange = false;
+    for (final g in byKey.values) {
+      if (g.length < 2) continue;
+      if (g.map((e) => e.deviceId).toSet().length < 2) continue;
+
+      final keeper = _pickDedupeKeeper(g, currentId);
+      if (keeper == null) continue;
+
+      for (final d in g) {
+        if (d.deviceId == keeper.deviceId) continue;
+        try {
+          await _revokeDeviceRow(userId, d.deviceId);
+          anyChange = true;
+        } catch (_) {
+          // لا نكسر تحميل القائمة بسبب تعارض شبكة/سباق؛ المحاولة التالية تكمّل.
+        }
+      }
+    }
+    return anyChange;
+  }
+
+  Future<List<AccountDevice>> refreshDevices({
+    bool applyServerDedupe = true,
+  }) async {
     final client = Supabase.instance.client;
     final user = client.auth.currentUser;
     if (user == null) {
@@ -442,36 +554,38 @@ class CloudSyncService {
         .map(AccountDevice.fromMap)
         .toList();
     devices.value = list;
-    return list;
+
+    if (applyServerDedupe) {
+      try {
+        final changed = await _dedupeActiveDuplicateDevicesOnServer(
+          user.id,
+          list,
+        );
+        if (changed) {
+          return refreshDevices(applyServerDedupe: false);
+        }
+      } catch (_) {
+        // اعرض القائمة كما هي؛ التنظيف ليس حرجاً لعرض البيانات.
+      }
+    }
+
+    return devices.value;
   }
 
   Future<String?> removeDevice(String deviceId) async {
-    final client = Supabase.instance.client;
-    final user = client.auth.currentUser;
+    final user = Supabase.instance.client.auth.currentUser;
     if (user == null) return 'المستخدم غير مسجل دخول.';
     final currentDeviceId = await LicenseService.instance.getDeviceId();
     if (deviceId == currentDeviceId) {
       return 'لا يمكن فصل الجهاز الحالي. سجّل الخروج من هذا الجهاز أولاً.';
     }
     try {
-      await client
-          .from(_devicesTable)
-          .update({'access_status': 'revoked'})
-          .eq('user_id', user.id)
-          .eq('device_id', deviceId);
+      await _revokeDeviceRow(user.id, deviceId);
     } on PostgrestException catch (e) {
       if (_isMissingAccountDevicesTable(e)) {
         return 'جدول الأجهزة غير موجود بعد في Supabase. شغّل SQL أولاً.';
       }
-      if (_isMissingAccessStatusColumn(e)) {
-        await client
-            .from(_devicesTable)
-            .delete()
-            .eq('user_id', user.id)
-            .eq('device_id', deviceId);
-      } else {
-        rethrow;
-      }
+      rethrow;
     }
     await refreshDevices();
     return null;
@@ -550,7 +664,8 @@ class CloudSyncService {
         // (1) الترخيص/الوقت/حد الأجهزة تُدار في LicenseService.checkLicense.
         // (2) عند فشل preflight: لا مزامنة.
         final lastOk = _lastSuccessfulPreflightAt;
-        final okFresh = lastOk != null &&
+        final okFresh =
+            lastOk != null &&
             DateTime.now().difference(lastOk) < const Duration(seconds: 60);
         if (!okFresh && !_preflightInProgress) {
           _preflightInProgress = true;
@@ -836,7 +951,8 @@ class CloudSyncService {
     final sigMapKey = _prefsKeyLastPushedTableSignatures(userId);
     final currentSigMap = await _buildTableSignatures(db, tableNames);
     final previousSigMap = _readSignatureMap(prefs.getString(sigMapKey));
-    if (!forcePush && _tableSignaturesUnchanged(currentSigMap, previousSigMap)) {
+    if (!forcePush &&
+        _tableSignaturesUnchanged(currentSigMap, previousSigMap)) {
       // لا تغيّر في أي جدول -> لا رفع.
       return true;
     }
