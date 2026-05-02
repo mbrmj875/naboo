@@ -4,6 +4,27 @@ import 'package:flutter/services.dart';
 
 import '../widgets/app_brand_mark.dart';
 
+/// نفس [login_screen] — نصوص الحقول الفاتحة لا ترث لون الثيم الداكن للتطبيق.
+ThemeData _authPanelLightThemeSignup(BuildContext context) {
+  const onSurface = Color(0xFF0D1F3C);
+  const onVariant = Color(0xFF5C6570);
+  final base = Theme.of(context);
+  return base.copyWith(
+    colorScheme: base.colorScheme.copyWith(
+      brightness: Brightness.light,
+      surface: const Color(0xFFF7F8FA),
+      onSurface: onSurface,
+      onSurfaceVariant: onVariant,
+      outline: const Color(0xFFC5CAD3),
+      primary: const Color(0xFF1A3A6B),
+    ),
+    textTheme: base.textTheme.apply(
+      bodyColor: onSurface,
+      displayColor: onSurface,
+    ),
+  );
+}
+
 // ── Design tokens (identical to login_screen) ──────────────────────────────
 const Color _navy1 = Color(0xFF050A14);
 const Color _navy2 = Color(0xFF0D1F3C);
@@ -208,15 +229,17 @@ class _SignUpScreenState extends State<SignUpScreen>
 
   // ── Form panel ───────────────────────────────────────────────────────────
   Widget _formPanel({required bool isNarrow}) {
-    return Container(
-      width: double.infinity,
-      decoration: isNarrow
-          ? const BoxDecoration(
-              color: Color(0xFFF7F8FA),
-              borderRadius: BorderRadius.zero,
-            )
-          : const BoxDecoration(color: Color(0xFFF7F8FA)),
-      child: AnimatedBuilder(
+    return Theme(
+      data: _authPanelLightThemeSignup(context),
+      child: Container(
+        width: double.infinity,
+        decoration: isNarrow
+            ? const BoxDecoration(
+                color: Color(0xFFF7F8FA),
+                borderRadius: BorderRadius.zero,
+              )
+            : const BoxDecoration(color: Color(0xFFF7F8FA)),
+        child: AnimatedBuilder(
         animation: _anim,
         builder: (_, child) => Opacity(
           opacity: _fadeAnim.value,
@@ -413,6 +436,7 @@ class _SignUpScreenState extends State<SignUpScreen>
           ),
         ),
       ),
+      ),
     );
   }
 
@@ -490,12 +514,27 @@ class _SignUpScreenState extends State<SignUpScreen>
             controller: _phoneCtrl,
             keyboardType: TextInputType.phone,
             textDirection: TextDirection.ltr,
-            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+            inputFormatters: [
+              FilteringTextInputFormatter.digitsOnly,
+              LengthLimitingTextInputFormatter(
+                _dialCode == '+964' ? 11 : 15,
+              ),
+            ],
             style: const TextStyle(color: _navy2),
-            decoration: _dec(hint: '7700000000', icon: Icons.phone_outlined),
+            decoration: _dec(
+              hint: _dialCode == '+964' ? '07701234567' : 'أدخل الرقم',
+              icon: Icons.phone_outlined,
+            ),
             validator: (v) {
-              if (v == null || v.trim().isEmpty) return 'رقم الجوال مطلوب';
-              if (v.trim().length < 7) return 'رقم غير صحيح';
+              final t = v?.trim() ?? '';
+              if (t.isEmpty) return 'رقم الجوال مطلوب';
+              if (_dialCode == '+964') {
+                if (!RegExp(r'^07\d{9}$').hasMatch(t)) {
+                  return 'رقم عراقي: 11 رقماً يبدأ بـ 07';
+                }
+              } else if (t.length < 7) {
+                return 'رقم غير صحيح';
+              }
               return null;
             },
           ),

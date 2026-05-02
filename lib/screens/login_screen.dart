@@ -10,6 +10,28 @@ import 'auth/forgot_password_email_screen.dart';
 import '../services/app_settings_repository.dart';
 import '../services/business_setup_settings.dart';
 
+/// ثيم فاتح للوحة تسجيل الدخول/إنشاء الحساب — الحقول بيضاء ولا ينبغي أن يرث
+/// [ColorScheme.onSurface] من ثيم التطبيق الداكن (نص فاتح على أبيض).
+ThemeData _authPanelLightTheme(BuildContext context) {
+  const onSurface = Color(0xFF0D1F3C);
+  const onVariant = Color(0xFF5C6570);
+  final base = Theme.of(context);
+  return base.copyWith(
+    colorScheme: base.colorScheme.copyWith(
+      brightness: Brightness.light,
+      surface: const Color(0xFFF7F8FA),
+      onSurface: onSurface,
+      onSurfaceVariant: onVariant,
+      outline: const Color(0xFFC5CAD3),
+      primary: const Color(0xFF1A3A6B),
+    ),
+    textTheme: base.textTheme.apply(
+      bodyColor: onSurface,
+      displayColor: onSurface,
+    ),
+  );
+}
+
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
@@ -107,7 +129,8 @@ class _LoginScreenState extends State<LoginScreen>
     ).hasMatch(t.trim());
   }
 
-  bool _iraqMobileOk(String raw) => RegExp(r'^07\d{8}$').hasMatch(raw.trim());
+  /// جوال عراقي محلي: 11 رقماً يبدأ بـ 07 (بدون +964 في هذا الحقل).
+  bool _iraqMobileOk(String raw) => RegExp(r'^07\d{9}$').hasMatch(raw.trim());
 
   bool get _passwordsMatch =>
       _confirmSignupPasswordController.text.isNotEmpty &&
@@ -428,15 +451,17 @@ class _LoginScreenState extends State<LoginScreen>
   }
 
   Widget _formPanel({required bool isNarrow}) {
-    return Container(
-      width: double.infinity,
-      decoration: isNarrow
-          ? const BoxDecoration(
-              color: Color(0xFFF7F8FA),
-              borderRadius: BorderRadius.zero,
-            )
-          : const BoxDecoration(color: Color(0xFFF7F8FA)),
-      child: AnimatedBuilder(
+    return Theme(
+      data: _authPanelLightTheme(context),
+      child: Container(
+        width: double.infinity,
+        decoration: isNarrow
+            ? const BoxDecoration(
+                color: Color(0xFFF7F8FA),
+                borderRadius: BorderRadius.zero,
+              )
+            : const BoxDecoration(color: Color(0xFFF7F8FA)),
+        child: AnimatedBuilder(
         animation: _animController,
         builder: (_, child) => Opacity(
           opacity: _fadeAnim.value,
@@ -498,6 +523,7 @@ class _LoginScreenState extends State<LoginScreen>
             ),
           ),
         ),
+      ),
       ),
     );
   }
@@ -698,7 +724,9 @@ class _LoginScreenState extends State<LoginScreen>
     String? validateSignupPhone(String? value) {
       final raw = (value ?? '').trim();
       if (!_blurredSignupPhone) return null;
-      if (!_iraqMobileOk(raw)) return 'رقم الجوال غير صحيح';
+      if (!_iraqMobileOk(raw)) {
+        return 'رقم عراقي: 11 رقماً يبدأ بـ 07 (مثال: 07701234567)';
+      }
       return null;
     }
 
@@ -817,7 +845,7 @@ class _LoginScreenState extends State<LoginScreen>
                   child: AppInput(
                     label: ' ',
                     showLabel: false,
-                    hint: '7700000000',
+                    hint: '07701234567',
                     controller: _phoneController,
                     focusNode: _focusSignupPhone,
                     fillColor: Colors.white,
@@ -832,7 +860,7 @@ class _LoginScreenState extends State<LoginScreen>
                     textInputAction: TextInputAction.next,
                     inputFormatters: [
                       FilteringTextInputFormatter.digitsOnly,
-                      LengthLimitingTextInputFormatter(10),
+                      LengthLimitingTextInputFormatter(11),
                     ],
                     overlayShadowOnFocus: false,
                     onChanged: (_) => setState(() {}),

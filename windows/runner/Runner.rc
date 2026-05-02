@@ -89,13 +89,13 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "com.yourdomain" "\0"
-            VALUE "FileDescription", "your_app_name" "\0"
+            VALUE "CompanyName", "naboo" "\0"
+            VALUE "FileDescription", "naboo" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "your_app_name" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 com.yourdomain. All rights reserved." "\0"
-            VALUE "OriginalFilename", "your_app_name.exe" "\0"
-            VALUE "ProductName", "your_app_name" "\0"
+            VALUE "InternalName", "naboo" "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 naboo. All rights reserved." "\0"
+            VALUE "OriginalFilename", "naboo.exe" "\0"
+            VALUE "ProductName", "naboo" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END
