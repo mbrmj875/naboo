@@ -875,33 +875,53 @@ class CloudSyncService {
     bool forceImport = false,
   }) async {
     final client = Supabase.instance.client;
-    final rows = await client
+    // (1) استعلام خفيف — لا ننزّل payload إن لم يكن هناك جديد أو نسخة غير متطابقة.
+    final metaRows = await client
         .from(_snapshotsTable)
-        .select('payload,schema_version,updated_at')
+        .select('updated_at,schema_version')
         .eq('user_id', userId)
         .order('updated_at', ascending: false)
         .limit(1);
 
-    if (rows.isEmpty) {
+    if (metaRows.isEmpty) {
       return _PullOutcome.allowPush;
     }
-    final row = rows.first;
-    final remoteUpdatedAt = (row['updated_at'] ?? '').toString();
-    if (!forceImport && remoteUpdatedAt.isNotEmpty) {
-      final prefs = await SharedPreferences.getInstance();
-      final importedKey = _prefsKeyLastImportedRemoteAt(userId);
-      final prevImported = prefs.getString(importedKey) ?? '';
-      // لا تعيد تنزيل/استيراد نفس النسخة مرة أخرى (إلا عند الطلب اليدوي).
-      if (prevImported == remoteUpdatedAt) {
-        return _PullOutcome.allowPush;
-      }
-    }
-    final schemaVersion = (row['schema_version'] as num?)?.toInt() ?? 1;
+    final meta = metaRows.first;
+    final remoteUpdatedAtMeta = (meta['updated_at'] ?? '').toString();
+    final schemaVersion = (meta['schema_version'] as num?)?.toInt() ?? 1;
     if (schemaVersion != _snapshotSchemaVersion) {
       lastError.value =
           'نسخة لقطة السحابة ($schemaVersion) لا تطابق التطبيق ($_snapshotSchemaVersion). '
           'حدّث التطبيق على هذا الجهاز ثم أعد «مزامنة الآن».';
       return _PullOutcome.blockPush;
+    }
+    if (!forceImport && remoteUpdatedAtMeta.isNotEmpty) {
+      final prefs = await SharedPreferences.getInstance();
+      final importedKey = _prefsKeyLastImportedRemoteAt(userId);
+      final prevImported = prefs.getString(importedKey) ?? '';
+      // لا تعيد تنزيل/استيراد نفس النسخة مرة أخرى (إلا عند الطلب اليدوي).
+      if (prevImported == remoteUpdatedAtMeta) {
+        return _PullOutcome.allowPush;
+      }
+    }
+
+    // (2) جلب payload فقط عند الحاجة — يوفّر نقلاً شبكياً كبيراً عند تطابق النسخة سابقاً.
+    final payloadRows = await client
+        .from(_snapshotsTable)
+        .select('payload,updated_at')
+        .eq('user_id', userId)
+        .order('updated_at', ascending: false)
+        .limit(1);
+
+    if (payloadRows.isEmpty) {
+      lastError.value =
+          'تعذر جلب لقطة السحابة بعد التحقق من البيانات الوصفية. أعد المحاولة.';
+      return _PullOutcome.blockPush;
+    }
+    final row = payloadRows.first;
+    var remoteUpdatedAt = (row['updated_at'] ?? '').toString();
+    if (remoteUpdatedAt.isEmpty) {
+      remoteUpdatedAt = remoteUpdatedAtMeta;
     }
     final payloadRaw = row['payload'];
     if (payloadRaw == null) {
