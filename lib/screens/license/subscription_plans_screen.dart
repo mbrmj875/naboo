@@ -184,41 +184,42 @@ class SubscriptionPlansScreen extends StatelessWidget {
                       ],
                     ),
                   ),
-                  const SizedBox(height: 20),
-                  _ContactRow(
-                    icon: Icons.phone_outlined,
-                    label: 'واتساب / هاتف',
-                    value: '+964 7XX XXX XXXX',
-                  ),
-                  const SizedBox(height: 8),
-                  _ContactRow(
-                    icon: Icons.email_outlined,
-                    label: 'البريد الإلكتروني',
-                    value: 'support@naboo.app',
-                  ),
-                  if (shouldForceContinue) ...[
-                    const SizedBox(height: 24),
-                    SizedBox(
-                      width: double.infinity,
-                      child: FilledButton.icon(
-                        onPressed: () {
-                          Navigator.of(
-                            context,
-                          ).pushReplacementNamed(nextRouteName!);
-                        },
-                        icon: const Icon(Icons.arrow_back_rounded),
-                        label: const Text('متابعة'),
-                      ),
-                    ),
-                  ],
-                ],
+              const SizedBox(height: 20),
+              _ContactRow(
+                icon: Icons.phone_outlined,
+                label: 'واتساب / هاتف',
+                value: '+964 7XX XXX XXXX',
               ),
-            );
-          },
-        ),
-      ),
-    );
+              const SizedBox(height: 8),
+              _ContactRow(
+                icon: Icons.email_outlined,
+                label: 'البريد الإلكتروني',
+                value: 'support@naboo.app',
+              ),
+              if (shouldForceContinue) ...[
+                const SizedBox(height: 24),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: () {
+                      Navigator.of(
+                        context,
+                      ).pushReplacementNamed(nextRouteName!);
+                    },
+                    icon: const Icon(Icons.arrow_back_rounded),
+                    label: const Text('متابعة'),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        );
+      },
+    ),
+  ),
+);
   }
+
 }
 
 class _JwtActivatePanel extends StatefulWidget {
@@ -310,7 +311,10 @@ class _JwtActivatePanelState extends State<_JwtActivatePanel> {
             textDirection: TextDirection.ltr,
             child: TextField(
               controller: _ctrl,
-              style: const TextStyle(color: _SubPlanText.primary, fontSize: 13),
+              style: const TextStyle(
+                color: _SubPlanText.primary,
+                fontSize: 13,
+              ),
               maxLines: 4,
               minLines: 2,
               decoration: InputDecoration(

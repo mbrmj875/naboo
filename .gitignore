@@ -50,6 +50,13 @@ app.*.map.json
 
 # --- NABOO project specific ignores ---
 
+# Secrets & local env (never commit — يظهر «Source code» في كل إصدار GitHub)
+.env
+.env.*
+!.env.example
+*.pem
+secrets/
+
 # Local backup snapshots (do not push to GitHub)
 *.backup
 

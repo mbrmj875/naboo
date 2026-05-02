@@ -129,7 +129,7 @@ class MyApp extends StatelessWidget {
             builder: (context, salePosProv, _) {
               return MaterialApp(
                 navigatorKey: appRootNavigatorKey,
-                title: 'نظام إدارة الأعمال',
+                title: 'naboo',
                 debugShowCheckedModeBanner: false,
                 theme: AppThemeResolver.light(salePosProv.data),
                 darkTheme: AppThemeResolver.dark(salePosProv.data),
