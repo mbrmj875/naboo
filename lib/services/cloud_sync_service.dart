@@ -82,7 +82,7 @@ enum _PullOutcome { allowPush, blockPush }
 /// - سحب آخر snapshot من السحابة (إن وجد).
 /// - رفع snapshot جديد من قاعدة الجهاز.
 ///
-/// - التعديل المحلي يُرفع بعد مهلة قصيرة ([scheduleSyncSoon]).
+/// - التعديل المحلي يُزامَن بعد مهلة قصيرة ([scheduleSyncSoon]): سحب ثم رفع.
 /// - الأجهزة الأخرى تستورد عبر Realtime على `app_snapshots` ثم يزداد [remoteImportGeneration].
 ///
 /// سياسة الدمج المحلي: الأحدث يفوز؛ السحابة تحمل «آخر رفع ناجح».
@@ -756,8 +756,14 @@ class CloudSyncService {
   void scheduleSyncSoon({Duration delay = const Duration(milliseconds: 450)}) {
     _syncDebounce?.cancel();
     _syncDebounce = Timer(delay, () {
-      // تغييرات محلية: رفع بدون سحب أولي؛ الأجهزة الأخرى تستلم عبر Realtime.
-      unawaited(syncNow(forcePull: false));
+      // سحب آخر لقطة أولاً ثم الرفع — يقلّل استبدال سحابة أحدث بلقطة محلية قديمة.
+      unawaited(
+        syncNow(
+          forcePull: true,
+          forceImportOnPull: false,
+          forcePush: false,
+        ),
+      );
     });
   }
 
