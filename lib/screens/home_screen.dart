@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
@@ -25,6 +26,7 @@ import '../widgets/invoice_detail_sheet.dart';
 import '../models/recent_activity_entry.dart';
 import '../widgets/barcode_input_launcher.dart';
 import '../widgets/app_notifications_sheet.dart';
+import '../utils/app_logger.dart';
 import 'invoices/invoices_screen.dart';
 import 'installments/installment_settings_screen.dart';
 import 'installments/installments_screen.dart';
@@ -78,6 +80,7 @@ import '../services/cloud_sync_service.dart';
 import '../services/permission_service.dart';
 import '../providers/global_barcode_route_bridge.dart';
 import '../utils/invoice_barcode.dart';
+import '../utils/invoice_deep_link.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -96,6 +99,12 @@ class _HomeScreenState extends State<HomeScreen>
   String _searchQuery = '';
   Timer? _searchDebounce;
   bool _globalSearchLoading = false;
+
+  /// على الهاتف فقط: شريط البحث يختفي عند دفع المحتوى للأعلى، ويعود عند السحب
+  /// للأسفل، حتى يترك مساحة أكبر للمحتوى بدون فقدان الوصول للبحث.
+  final ValueNotifier<bool> _mobileSearchCollapsed = ValueNotifier<bool>(false);
+  double _mobileSearchHideDrag = 0;
+  double _mobileSearchShowDrag = 0;
   final ProductRepository _productRepo = ProductRepository();
   final DatabaseHelper _dbHelper = DatabaseHelper();
   List<Map<String, dynamic>> _hitProducts = [];
@@ -300,7 +309,7 @@ class _HomeScreenState extends State<HomeScreen>
     } catch (_) {}
     if (!mounted) return;
     if (!context.read<ShiftProvider>().hasOpenShift) {
-      Navigator.of(context).pushReplacementNamed('/open-shift');
+      unawaited(Navigator.of(context).pushReplacementNamed('/open-shift'));
     }
   }
 
@@ -808,7 +817,7 @@ class _HomeScreenState extends State<HomeScreen>
       } catch (_) {}
       if (!mounted) return;
       if (!context.read<ShiftProvider>().hasOpenShift) {
-        Navigator.of(context).pushReplacementNamed('/open-shift');
+        unawaited(Navigator.of(context).pushReplacementNamed('/open-shift'));
         return;
       }
       await _refreshHomeAuxProviders();
@@ -871,11 +880,17 @@ class _HomeScreenState extends State<HomeScreen>
     _searchController.dispose();
     _searchFocusNode.dispose();
     _isDrawerOpen.dispose();
+    _mobileSearchCollapsed.dispose();
     super.dispose();
   }
 
   void _onSearchFocusTick() {
     if (_searchFocusNode.hasFocus) {
+      // عند تركيز البحث على الهاتف نفتح شريط البحث المطوي حتى لا يكتب المستخدم
+      // داخل حقل غير ظاهر.
+      if (_mobileSearchCollapsed.value) {
+        _mobileSearchCollapsed.value = false;
+      }
       VirtualKeyboardController.instance.registerField(
         controller: _searchController,
         focusNode: _searchFocusNode,
@@ -1097,7 +1112,7 @@ class _HomeScreenState extends State<HomeScreen>
     if (ok != true || !mounted) return;
     await auth.logout();
     if (!mounted) return;
-    Navigator.pushReplacementNamed(context, '/login');
+    unawaited(Navigator.pushReplacementNamed(context, '/login'));
   }
 
   void _scheduleGlobalSearch() {
@@ -1168,7 +1183,7 @@ class _HomeScreenState extends State<HomeScreen>
         _globalSearchLoading = false;
       });
     } catch (e, st) {
-      debugPrint('global search: $e\n$st');
+      AppLogger.error('HomeSearch', 'فشل البحث الشامل', e, st);
       if (!mounted) return;
       setState(() => _globalSearchLoading = false);
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1221,6 +1236,16 @@ class _HomeScreenState extends State<HomeScreen>
         ),
       );
       return;
+    }
+    final deepInvUri = Uri.tryParse(raw);
+    if (deepInvUri != null && deepInvUri.hasScheme) {
+      final linkInvId = InvoiceDeepLink.parseInvoiceId(deepInvUri);
+      if (linkInvId != null && linkInvId > 0) {
+        if (!mounted) return;
+        if (!context.read<AuthProvider>().isLoggedIn) return;
+        await showInvoiceDetailSheet(context, _dbHelper, linkInvId);
+        return;
+      }
     }
 
     final productProvider = context.read<ProductProvider>();
@@ -1569,6 +1594,23 @@ class _HomeScreenState extends State<HomeScreen>
             }
 
             // ── NARROW SCREEN: شريط سفلي للوحدات فقط — بدون عمود جانبي (هاتف/نافذة ضيقة) ─
+            final isHandset = ScreenLayout.of(context).isHandsetForLayout;
+
+            final navigatorWidget = Navigator(
+              key: _innerNavKeySmall,
+              restorationScopeId: 'home_inner_nav_small',
+              observers: [_innerNavObserver],
+              onGenerateInitialRoutes: (_, _) => [
+                FastContentPageRoute(
+                  settings: const RouteSettings(
+                    name: AppContentRoutes.home,
+                    arguments: BreadcrumbMeta('الرئيسية'),
+                  ),
+                  builder: (_) => _HomeContentPage(parentState: this),
+                ),
+              ],
+            );
+
             return PopScope(
               canPop: false,
               onPopInvokedWithResult: (didPop, _) {
@@ -1579,33 +1621,26 @@ class _HomeScreenState extends State<HomeScreen>
               child: Scaffold(
                 resizeToAvoidBottomInset: false,
                 backgroundColor: _bgColor,
-                appBar: _buildAppBar(themeProvider),
+                appBar: isHandset
+                    ? _buildMobileTopAppBar(themeProvider)
+                    : _buildAppBar(themeProvider),
                 body: _wrapBodyWithSearchKeyboard(
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      // مسار التنقل يُعرض على الشاشات العريضة فقط (≥800dp)؛ على الهاتف/النافذة الضيقة لا حاجة له.
+                      if (isHandset) _buildMobileSearchSlot(),
                       Expanded(
                         child: Stack(
                           fit: StackFit.expand,
                           clipBehavior: Clip.none,
                           children: [
                             SizedBox.expand(
-                              child: Navigator(
-                                key: _innerNavKeySmall,
-                                restorationScopeId: 'home_inner_nav_small',
-                                observers: [_innerNavObserver],
-                                onGenerateInitialRoutes: (_, _) => [
-                                  FastContentPageRoute(
-                                    settings: const RouteSettings(
-                                      name: AppContentRoutes.home,
-                                      arguments: BreadcrumbMeta('الرئيسية'),
-                                    ),
-                                    builder: (_) =>
-                                        _HomeContentPage(parentState: this),
-                                  ),
-                                ],
-                              ),
+                              child: isHandset
+                                  ? NotificationListener<ScrollNotification>(
+                                      onNotification: _onMobileBodyScroll,
+                                      child: navigatorWidget,
+                                    )
+                                  : navigatorWidget,
                             ),
                             if (_hasActiveSearch) ...[
                               Positioned.fill(
@@ -1927,6 +1962,124 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
+  /// AppBar مبسّط للهاتف فقط — بدون شريط بحث في الأسفل (يعرض شريط البحث
+  /// كجزء من جسم الصفحة بحيث يمكن طيّه عند التمرير).
+  PreferredSizeWidget _buildMobileTopAppBar(ThemeProvider themeProvider) {
+    final auth = Provider.of<AuthProvider>(context, listen: false);
+    final cs = Theme.of(context).colorScheme;
+    return AppBar(
+      backgroundColor: cs.primary,
+      foregroundColor: cs.onPrimary,
+      elevation: 0,
+      surfaceTintColor: Colors.transparent,
+      shadowColor: Colors.transparent,
+      titleSpacing: 0,
+      automaticallyImplyLeading: false,
+      title: _buildZorahTitle(),
+      actions: _buildAppBarActions(themeProvider, auth),
+    );
+  }
+
+  /// شريط البحث المتحرك تحت [_buildMobileTopAppBar].
+  ///
+  /// عند التمرير داخل محتوى الهاتف يختفي بالكامل بحركة ناعمة، وعند السحب
+  /// للأسفل يعود بنفس الإيقاع حتى لا يزاحم محتوى الرئيسية.
+  Widget _buildMobileSearchSlot() {
+    final sl = ScreenLayout.of(context);
+    final cs = Theme.of(context).colorScheme;
+    return ValueListenableBuilder<bool>(
+      valueListenable: _mobileSearchCollapsed,
+      builder: (context, collapsed, _) {
+        return Material(
+          color: cs.primary,
+          elevation: 0,
+          child: AnimatedSize(
+            duration: const Duration(milliseconds: 260),
+            reverseDuration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+            alignment: Alignment.topCenter,
+            child: ClipRect(
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 220),
+                reverseDuration: const Duration(milliseconds: 180),
+                switchInCurve: Curves.easeOutCubic,
+                switchOutCurve: Curves.easeInCubic,
+                transitionBuilder: (child, animation) {
+                  final slide = Tween<Offset>(
+                    begin: const Offset(0, -0.22),
+                    end: Offset.zero,
+                  ).animate(animation);
+                  return FadeTransition(
+                    opacity: animation,
+                    child: SlideTransition(position: slide, child: child),
+                  );
+                },
+                child: collapsed
+                    ? const SizedBox.shrink(key: ValueKey('hidden-search'))
+                    : Padding(
+                        key: const ValueKey('visible-search'),
+                        padding: EdgeInsets.fromLTRB(
+                          sl.pageHorizontalGap,
+                          2,
+                          sl.pageHorizontalGap,
+                          sl.isCompactHeight ? 8 : 10,
+                        ),
+                        child: _buildSearchBar(),
+                      ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// مستمع لتمرير محتوى الهاتف — يخفي البحث بعد تمرير صغير للأعلى، ويعيده
+  /// عند أول سحب للأسفل حتى لو كانت القائمة عند بدايتها.
+  bool _onMobileBodyScroll(ScrollNotification n) {
+    if (_hasActiveSearch) return false;
+    if (_searchFocusNode.hasFocus) return false;
+    if (n.metrics.axis != Axis.vertical) return false;
+
+    if (n is ScrollStartNotification || n is ScrollEndNotification) {
+      _mobileSearchHideDrag = 0;
+      _mobileSearchShowDrag = 0;
+      return false;
+    }
+
+    if (n.metrics.pixels <= 1 && _mobileSearchCollapsed.value) {
+      if (_mobileSearchCollapsed.value) _mobileSearchCollapsed.value = false;
+      return false;
+    }
+
+    double delta = 0;
+    if (n is ScrollUpdateNotification) {
+      delta = n.scrollDelta ?? 0;
+    } else if (n is OverscrollNotification) {
+      delta = n.overscroll;
+    }
+    if (delta == 0) return false;
+
+    if (delta > 0) {
+      // تمرير بسيط للأعلى: أخفِ البحث بسرعة بعد عدة بكسلات فقط.
+      _mobileSearchHideDrag += delta;
+      _mobileSearchShowDrag = 0;
+      if (_mobileSearchHideDrag >= 8 && !_mobileSearchCollapsed.value) {
+        _mobileSearchCollapsed.value = true;
+        _mobileSearchHideDrag = 0;
+      }
+    } else {
+      // سحب للأسفل: أعد البحث بسرعة، ويشمل السحب عند بداية القائمة (overscroll).
+      _mobileSearchShowDrag += -delta;
+      _mobileSearchHideDrag = 0;
+      if (_mobileSearchShowDrag >= 3 && _mobileSearchCollapsed.value) {
+        _mobileSearchCollapsed.value = false;
+        _mobileSearchShowDrag = 0;
+      }
+    }
+    return false;
+  }
+
   Widget _buildZorahTitle() {
     final sl = ScreenLayout.of(context);
     return LayoutBuilder(
@@ -2075,10 +2228,10 @@ class _HomeScreenState extends State<HomeScreen>
               title: Row(
                 textDirection: TextDirection.rtl,
                 children: [
-                  CircleAvatar(
+                  const CircleAvatar(
                     radius: 28,
-                    backgroundColor: const Color(0xFF6366F1),
-                    child: const Icon(
+                    backgroundColor: Color(0xFF6366F1),
+                    child: Icon(
                       Icons.person_rounded,
                       color: Colors.white,
                       size: 30,
@@ -3083,22 +3236,50 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   /// نتائج البحث تظهر تحت شريط البحث مباشرة (فوق المحتوى) بقوائم أفقية لكل قسم.
+  ///
+  /// على الهاتف: لوحة منسدلة مع زوايا سفلية مدوّرة وهامش جانبي خفيف حتى لا
+  /// تبدو ملتصقة بحواف الشاشة، وحدّ علوي خفيف يفصلها عن شريط البحث.
   Widget _buildSearchOverlayDropdown() {
-    final maxH = MediaQuery.sizeOf(context).height * 0.55;
-    return Material(
-      elevation: 12,
-      color: _surfaceColor,
-      shadowColor: Colors.black45,
-      child: ConstrainedBox(
-        constraints: BoxConstraints(maxHeight: maxH),
-        child: Directionality(
-          textDirection: TextDirection.rtl,
-          child: _globalSearchLoading
-              ? const Padding(
-                  padding: EdgeInsets.all(28),
-                  child: Center(child: CircularProgressIndicator()),
-                )
-              : _buildSearchOverlayScrollable(),
+    final mq = MediaQuery.sizeOf(context);
+    final sl = ScreenLayout.of(context);
+    final maxH = mq.height * 0.55;
+    final isHandset = sl.isHandsetForLayout;
+    final cs = Theme.of(context).colorScheme;
+    final radius = BorderRadius.vertical(
+      bottom: Radius.circular(isHandset ? 16 : 8),
+    );
+    return Padding(
+      padding: EdgeInsetsDirectional.only(
+        start: isHandset ? 8 : 0,
+        end: isHandset ? 8 : 0,
+        top: isHandset ? 0 : 0,
+      ),
+      child: Material(
+        elevation: 12,
+        color: _surfaceColor,
+        shadowColor: Colors.black45,
+        borderRadius: radius,
+        child: Container(
+          decoration: BoxDecoration(
+            borderRadius: radius,
+            border: Border.all(
+              color: cs.outlineVariant.withValues(alpha: 0.5),
+              width: 1,
+            ),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: maxH),
+            child: Directionality(
+              textDirection: TextDirection.rtl,
+              child: _globalSearchLoading
+                  ? const Padding(
+                      padding: EdgeInsets.all(28),
+                      child: Center(child: CircularProgressIndicator()),
+                    )
+                  : _buildSearchOverlayScrollable(),
+            ),
+          ),
         ),
       ),
     );
@@ -3628,14 +3809,127 @@ class _HomeScreenState extends State<HomeScreen>
     final sl = ScreenLayout.of(context);
     final cs = Theme.of(context).colorScheme;
     final isDark = _isDarkMode;
+    final isPhoneDock = sl.isHandsetForLayout;
     final barBg = isDark ? cs.surfaceContainerHigh : const Color(0xFFF7F4EF);
     final indicator = isDark
         ? Colors.white.withValues(alpha: 0.14)
         : const Color(0xFFE8E0D6);
     // على بعض أجهزة الهاتف يظهر overflow بسيط (≈5px) بسبب SafeArea + حشوات عناصر الشريط.
     // نعطي ارتفاعاً أعلى قليلاً مع تقليل الحشوات الداخلية.
-    final height = sl.isCompactHeight ? 76.0 : 82.0;
+    final height = sl.isVeryShort
+        ? 66.0
+        : (sl.isCompactHeight ? 70.0 : 78.0);
     final idx = _activeBottomIndex.clamp(0, bottomModules.length - 1);
+
+    Widget reorderableBar({required Color effectiveBarColor}) {
+      return ReorderableListView.builder(
+        scrollDirection: Axis.horizontal,
+        padding: EdgeInsets.symmetric(
+          horizontal: isPhoneDock ? 10 : 8,
+          vertical: isPhoneDock ? (sl.isVeryShort ? 2 : 4) : 4,
+        ),
+        proxyDecorator: (child, index, anim) {
+          return Material(
+            color: Colors.transparent,
+            elevation: isPhoneDock ? 10 : 6,
+            shadowColor: Colors.black.withValues(alpha: isPhoneDock ? 0.24 : 0.18),
+            child: child,
+          );
+        },
+        onReorder: (oldI, newI) =>
+            _reorderBottomModules(bottomModules, oldI, newI),
+        itemCount: bottomModules.length,
+        itemBuilder: (ctx, i) {
+          final m = bottomModules[i];
+          final selected = i == idx;
+          return ReorderableDelayedDragStartListener(
+            key: ValueKey(m.routeId),
+            index: i,
+            child: _BottomNavTile(
+              module: m,
+              selected: selected,
+              barColor: effectiveBarColor,
+              indicatorColor: indicator,
+              useGlassDock: isPhoneDock,
+              onTap: () {
+                HapticFeedback.lightImpact();
+                final hasSubItems =
+                    m.subItems != null && m.subItems!.isNotEmpty;
+                setState(() => _activeBottomIndex = i);
+                if (hasSubItems) {
+                  _showSubItemsSheet(m);
+                } else {
+                  _pushInContentTagged(
+                    m.routeId,
+                    m.breadcrumbTitle,
+                    m.destination,
+                  );
+                }
+              },
+            ),
+          );
+        },
+      );
+    }
+
+    if (isPhoneDock) {
+      final dockBg = isDark
+          ? cs.surfaceContainerHigh.withValues(alpha: 0.58)
+          : cs.surface.withValues(alpha: 0.72);
+      final borderColor = isDark
+          ? Colors.white.withValues(alpha: 0.12)
+          : Colors.black.withValues(alpha: 0.07);
+      final topHighlight = Colors.white.withValues(alpha: isDark ? 0.10 : 0.44);
+      final safeBottom = MediaQuery.paddingOf(context).bottom;
+      final bottomPad = math.max(12.0, safeBottom);
+      return Padding(
+        padding: EdgeInsets.fromLTRB(14, 0, 14, bottomPad),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(26),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: isDark ? 0.34 : 0.10),
+                blurRadius: 26,
+                offset: const Offset(0, 10),
+              ),
+              BoxShadow(
+                color: cs.primary.withValues(alpha: isDark ? 0.14 : 0.08),
+                blurRadius: 18,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(26),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+              child: Container(
+                height: height,
+                decoration: BoxDecoration(
+                  color: dockBg,
+                  borderRadius: BorderRadius.circular(26),
+                  border: Border.all(color: borderColor, width: 1.1),
+                ),
+                foregroundDecoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(26),
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      topHighlight,
+                      topHighlight.withValues(alpha: 0),
+                    ],
+                    stops: const [0, 0.18],
+                  ),
+                ),
+                child: reorderableBar(effectiveBarColor: dockBg),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
 
     return Material(
       color: barBg,
@@ -3646,50 +3940,7 @@ class _HomeScreenState extends State<HomeScreen>
         top: false,
         child: SizedBox(
           height: height,
-          child: ReorderableListView.builder(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            proxyDecorator: (child, index, anim) {
-              return Material(
-                color: Colors.transparent,
-                elevation: 6,
-                shadowColor: Colors.black.withValues(alpha: 0.18),
-                child: child,
-              );
-            },
-            onReorder: (oldI, newI) =>
-                _reorderBottomModules(bottomModules, oldI, newI),
-            itemCount: bottomModules.length,
-            itemBuilder: (ctx, i) {
-              final m = bottomModules[i];
-              final selected = i == idx;
-              return ReorderableDelayedDragStartListener(
-                key: ValueKey(m.routeId),
-                index: i,
-                child: _BottomNavTile(
-                  module: m,
-                  selected: selected,
-                  barColor: barBg,
-                  indicatorColor: indicator,
-                  onTap: () {
-                    HapticFeedback.lightImpact();
-                    final hasSubItems =
-                        m.subItems != null && m.subItems!.isNotEmpty;
-                    setState(() => _activeBottomIndex = i);
-                    if (hasSubItems) {
-                      _showSubItemsSheet(m);
-                    } else {
-                      _pushInContentTagged(
-                        m.routeId,
-                        m.breadcrumbTitle,
-                        m.destination,
-                      );
-                    }
-                  },
-                ),
-              );
-            },
-          ),
+          child: reorderableBar(effectiveBarColor: barBg),
         ),
       ),
     );
@@ -3903,10 +4154,17 @@ class _HomeInnerNavObserver extends NavigatorObserver {
 
 /// أيقونة شريط سفلي M3 — نقطة صغيرة عند وجود قائمة فرعية.
 class _BottomNavIcon extends StatelessWidget {
-  const _BottomNavIcon({required this.module, required this.barColor});
+  const _BottomNavIcon({
+    required this.module,
+    required this.barColor,
+    required this.useGlassDock,
+    this.iconSize = 24,
+  });
 
   final ModuleItem module;
   final Color barColor;
+  final bool useGlassDock;
+  final double iconSize;
 
   @override
   Widget build(BuildContext context) {
@@ -3919,18 +4177,27 @@ class _BottomNavIcon extends StatelessWidget {
         clipBehavior: Clip.none,
         alignment: Alignment.center,
         children: [
-          Icon(module.icon, size: 24, color: iconTheme.color),
+          Icon(module.icon, size: iconSize, color: iconTheme.color),
           if (hasSub)
             PositionedDirectional(
               top: -2,
               end: -3,
               child: Container(
-                width: 7,
-                height: 7,
+                width: useGlassDock ? 7.5 : 7,
+                height: useGlassDock ? 7.5 : 7,
                 decoration: BoxDecoration(
                   color: module.iconColor,
                   shape: BoxShape.circle,
                   border: Border.all(color: barColor, width: 1.4),
+                  boxShadow: useGlassDock
+                      ? [
+                          BoxShadow(
+                            color: module.iconColor.withValues(alpha: 0.62),
+                            blurRadius: 7,
+                            spreadRadius: 1,
+                          ),
+                        ]
+                      : null,
                 ),
               ),
             ),
@@ -3940,12 +4207,13 @@ class _BottomNavIcon extends StatelessWidget {
   }
 }
 
-class _BottomNavTile extends StatelessWidget {
+class _BottomNavTile extends StatefulWidget {
   const _BottomNavTile({
     required this.module,
     required this.selected,
     required this.barColor,
     required this.indicatorColor,
+    required this.useGlassDock,
     required this.onTap,
   });
 
@@ -3953,52 +4221,117 @@ class _BottomNavTile extends StatelessWidget {
   final bool selected;
   final Color barColor;
   final Color indicatorColor;
+  final bool useGlassDock;
   final VoidCallback onTap;
 
   @override
+  State<_BottomNavTile> createState() => _BottomNavTileState();
+}
+
+class _BottomNavTileState extends State<_BottomNavTile> {
+  bool _pressed = false;
+
+  @override
   Widget build(BuildContext context) {
+    final sl = ScreenLayout.of(context);
+    final tiny = sl.isVeryShort;
     final cs = Theme.of(context).colorScheme;
+    final selected = widget.selected;
+    final useGlassDock = widget.useGlassDock;
     final fg = selected ? cs.onSurface : cs.onSurfaceVariant;
+    final indicatorColor = useGlassDock
+        ? Color.lerp(widget.indicatorColor, widget.module.iconColor, 0.18)!
+            .withValues(alpha: Theme.of(context).brightness == Brightness.dark
+                ? 0.22
+                : 0.34)
+        : widget.indicatorColor;
     return SizedBox(
-      width: 78,
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: AppShape.none,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 3),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                AnimatedContainer(
-                  duration: const Duration(milliseconds: 160),
-                  curve: Curves.easeOutCubic,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 8,
-                  ),
-                  decoration: BoxDecoration(
-                    color: selected ? indicatorColor : Colors.transparent,
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                  child: _BottomNavIcon(module: module, barColor: barColor),
+      width: useGlassDock ? 76 : 78,
+      child: Listener(
+        onPointerDown: (_) => setState(() => _pressed = true),
+        onPointerCancel: (_) => setState(() => _pressed = false),
+        onPointerUp: (_) => setState(() => _pressed = false),
+        child: AnimatedScale(
+          scale: _pressed && useGlassDock ? 0.94 : 1,
+          duration: const Duration(milliseconds: 120),
+          curve: Curves.easeOutBack,
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: widget.onTap,
+              borderRadius: AppShape.none,
+              child: Padding(
+                padding: EdgeInsets.symmetric(
+                  horizontal: 2,
+                  vertical: tiny ? 1 : (useGlassDock ? 2 : 3),
                 ),
-                const SizedBox(height: 5),
-                Text(
-                  module.title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 11,
-                    height: 1.15,
-                    letterSpacing: -0.2,
-                    fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
-                    color: fg,
-                  ),
-                  textAlign: TextAlign.center,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    AnimatedContainer(
+                      duration: Duration(milliseconds: useGlassDock ? 230 : 160),
+                      curve: useGlassDock
+                          ? Curves.easeOutBack
+                          : Curves.easeOutCubic,
+                      padding: EdgeInsets.symmetric(
+                        horizontal: useGlassDock ? (tiny ? 11 : 13) : 14,
+                        vertical: useGlassDock ? (tiny ? 5 : 7) : 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: selected ? indicatorColor : Colors.transparent,
+                        borderRadius: BorderRadius.circular(999),
+                        border: selected && useGlassDock
+                            ? Border.all(
+                                color: Colors.white.withValues(alpha: 0.14),
+                              )
+                            : null,
+                        boxShadow: selected && useGlassDock
+                            ? [
+                                BoxShadow(
+                                  color: widget.module.iconColor.withValues(
+                                    alpha: 0.20,
+                                  ),
+                                  blurRadius: 16,
+                                  offset: const Offset(0, 5),
+                                ),
+                              ]
+                            : null,
+                      ),
+                      child: _BottomNavIcon(
+                        module: widget.module,
+                        barColor: widget.barColor,
+                        useGlassDock: useGlassDock,
+                        iconSize: tiny ? 22 : 24,
+                      ),
+                    ),
+                    SizedBox(height: tiny ? 2 : (useGlassDock ? 4 : 5)),
+                    Flexible(
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: AnimatedDefaultTextStyle(
+                          duration: const Duration(milliseconds: 180),
+                          curve: Curves.easeOutCubic,
+                          style: TextStyle(
+                            fontSize: tiny ? 10.2 : (useGlassDock ? 10.8 : 11),
+                            height: 1.12,
+                            letterSpacing: -0.2,
+                            fontWeight:
+                                selected ? FontWeight.w700 : FontWeight.w500,
+                            color: fg,
+                          ),
+                          child: Text(
+                            widget.module.title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-              ],
+              ),
             ),
           ),
         ),

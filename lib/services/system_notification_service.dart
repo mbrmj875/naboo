@@ -1,6 +1,8 @@
 import 'package:flutter/foundation.dart'
-    show TargetPlatform, debugPrint, defaultTargetPlatform, kIsWeb;
+    show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+
+import '../utils/app_logger.dart';
 
 /// إشعارات في **شريط إشعارات النظام** (Android / iOS) — ليست فقط داخل التطبيق.
 class SystemNotificationService {
@@ -66,7 +68,7 @@ class SystemNotificationService {
       }
       _initialized = true;
     } catch (e, st) {
-      debugPrint('SystemNotificationService.initialize: $e\n$st');
+      AppLogger.error('Notify', 'فشل تهيئة خدمة إشعارات النظام', e, st);
     }
   }
 
@@ -121,7 +123,7 @@ class SystemNotificationService {
         );
       }
     } catch (e, st) {
-      debugPrint('SystemNotificationService.show: $e\n$st');
+      AppLogger.error('Notify', 'فشل عرض إشعار النظام', e, st);
     }
   }
 }

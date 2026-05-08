@@ -21,6 +21,7 @@ import '../../services/inventory_policy_settings.dart';
 import '../../services/inventory_product_settings.dart';
 import '../../theme/app_corner_style.dart';
 import '../../widgets/barcode_input_launcher.dart';
+import '../../utils/app_logger.dart';
 import '../../utils/barcode_prefill.dart';
 import '../../utils/iraqi_currency_format.dart';
 import '../../utils/numeric_format.dart';
@@ -382,7 +383,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
         }
       });
     } catch (e, st) {
-      debugPrint('loadAddProductFormData: $e\n$st');
+      AppLogger.error('Product', 'فشل تحميل بيانات نموذج المنتج', e, st);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -833,7 +834,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
           backgroundColor: Colors.red.shade700,
           behavior: SnackBarBehavior.floating,
           margin: const EdgeInsets.all(16),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+          shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
         ),
       );
       return;
@@ -846,8 +847,8 @@ class _AddProductScreenState extends State<AddProductScreen> {
     } else {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('تم حفظ المنتج. يمكنك إدخال منتج جديد.'),
+        const SnackBar(
+          content: Text('تم حفظ المنتج. يمكنك إدخال منتج جديد.'),
           behavior: SnackBarBehavior.floating,
           backgroundColor: _kGreen,
         ),

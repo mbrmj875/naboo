@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../services/database_helper.dart';
 import '../services/system_notification_service.dart';
 import '../services/tenant_context_service.dart';
+import '../utils/app_logger.dart';
 
 /// مفاتيح تفضيلات الإشعارات (تُحفظ في [SharedPreferences]).
 abstract final class NotificationPrefs {
@@ -782,6 +783,9 @@ class NotificationProvider extends ChangeNotifier {
     return fallback;
   }
 
+  // TODO(perf): refresh() runs many SQLite queries on the UI isolate — can jank/freeze
+  // after user actions. Split phases, cache, or offload heavy aggregation (track in a
+  // dedicated issue/PR; do not mix with sync_queue PoC work).
   Future<void> refresh() async {
     _loading = true;
     _lastError = null;
@@ -1178,7 +1182,7 @@ class NotificationProvider extends ChangeNotifier {
 
       _emitNewToAndroidSystemTray(built);
     } catch (e, st) {
-      debugPrint('NotificationProvider.refresh: $e\n$st');
+      AppLogger.error('Notify', 'فشل تحديث قائمة الإشعارات', e, st);
       _lastError = e.toString();
     } finally {
       _loading = false;

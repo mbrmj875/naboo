@@ -28,7 +28,9 @@ import '../../services/cloud_sync_service.dart';
 import '../../services/database_helper.dart';
 import '../../theme/design_tokens.dart';
 import '../../theme/sale_brand.dart';
+import '../../utils/app_logger.dart';
 import '../../utils/invoice_barcode.dart';
+import '../../utils/invoice_validation.dart';
 import '../../utils/iraqi_currency_format.dart';
 import '../../utils/loyalty_math.dart';
 import '../../utils/screen_layout.dart';
@@ -592,7 +594,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _saleQuickRailSearchFocus.requestFocus();
-      _syncCashAdvanceToTotalIfCash(
+      _syncAutoAdvanceToSaleTotal(
         Provider.of<LoyaltySettingsProvider>(context, listen: false).data,
       );
     });
@@ -903,7 +905,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
           wasNewLine: false,
         );
         if (mounted && type == InvoiceType.cash) {
-          _syncCashAdvanceToTotalIfCash(
+          _syncAutoAdvanceToSaleTotal(
             Provider.of<LoyaltySettingsProvider>(context, listen: false).data,
           );
         }
@@ -962,7 +964,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       );
     }
     if (mounted && type == InvoiceType.cash) {
-      _syncCashAdvanceToTotalIfCash(
+      _syncAutoAdvanceToSaleTotal(
         Provider.of<LoyaltySettingsProvider>(context, listen: false).data,
       );
     }
@@ -1075,7 +1077,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
           );
         });
         if (type == InvoiceType.cash) {
-          _syncCashAdvanceToTotalIfCash(
+          _syncAutoAdvanceToSaleTotal(
             Provider.of<LoyaltySettingsProvider>(context, listen: false).data,
           );
         }
@@ -1581,6 +1583,8 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       type = t;
       if (t == InvoiceType.delivery) {
         _advanceController.text = '0';
+      } else if (t == InvoiceType.installment || t == InvoiceType.credit) {
+        _advanceController.clear();
       }
     });
     if (t == InvoiceType.installment && prev != InvoiceType.installment) {
@@ -1589,7 +1593,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     if (t == InvoiceType.cash) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        _syncCashAdvanceToTotalIfCash(
+        _syncAutoAdvanceToSaleTotal(
           context.read<LoyaltySettingsProvider>().data,
         );
       });
@@ -2391,7 +2395,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
                               ),
                               if (_saleScannerOpen) ...[
                                 const SizedBox(width: 8),
-                                Text(
+                                const Text(
                                   'الماسح',
                                   style: TextStyle(
                                     color: Colors.white,
@@ -3499,7 +3503,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     try {
       final map = jsonDecode(row['payload'] as String) as Map<String, dynamic>;
       if ((map['v'] as num?)?.toInt() != 1) {
-        throw FormatException('bad version');
+        throw const FormatException('bad version');
       }
       setState(() {
         _applyParkedPayloadMap(map);
@@ -3620,7 +3624,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
         subtotalBeforeDiscount: subtotalBefore,
       );
     } catch (e, st) {
-      debugPrint('presentReceipt failed: $e\n$st');
+      AppLogger.error('Invoice', 'فشل طباعة إيصال البيع', e, st);
     }
   }
 
@@ -3920,9 +3924,33 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       installmentSuggestedMonthly: instCalc?.monthly ?? 0,
     );
 
+    // Step 14 — فحص توازن الفاتورة قبل أي مكالمة DB.
+    final balance = validateInvoiceBalance(invoice);
+    if (!balance.isValid) {
+      if (mounted) {
+        _showSaleSnackBar(
+          SnackBar(
+            content: Text(
+              'تعذر حفظ الفاتورة — ${balance.errorMessage}. راجع الأصناف '
+              'والإجمالي قبل إعادة المحاولة.',
+            ),
+            duration: const Duration(seconds: 6),
+          ),
+        );
+      }
+      return;
+    }
+
     final int invoiceId;
     try {
       invoiceId = await invoiceProvider.addInvoice(invoice);
+    } on InvoiceValidationException catch (e) {
+      if (mounted) {
+        _showSaleSnackBar(
+          SnackBar(content: Text('عدم توازن الفاتورة: ${e.message}')),
+        );
+      }
+      return;
     } catch (e) {
       if (mounted) {
         _showSaleSnackBar(SnackBar(content: Text('تعذر حفظ الفاتورة: $e')));
@@ -4116,7 +4144,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
           planId: planId,
           installmentCalc: instCalc,
         );
-        nav.pushReplacement(
+        unawaited(nav.pushReplacement(
           MaterialPageRoute<void>(
             builder: (_) => AddInstallmentPlanScreen(
               planId: planId,
@@ -4127,7 +4155,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
               invoiceDate: now,
             ),
           ),
-        );
+        ));
         scheduleReceiptPrint(saleContextDisposedAfter: true);
         scheduleBackgroundRefresh();
         return;
@@ -4541,7 +4569,8 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     _promptEditQuantity(_lines[hi]);
   }
 
-  void _syncCashAdvanceToTotalIfCash(LoyaltySettingsData loyalty) {
+  /// يملأ حقل الدفعة للنقدي فقط تلقائياً بإجمالي الفاتورة. الدين والتقسيط: إدخال يدوي.
+  void _syncAutoAdvanceToSaleTotal(LoyaltySettingsData loyalty) {
     if (type != InvoiceType.cash) return;
     final pay = saleTotal(loyalty);
     final t = pay.round().clamp(0, 2000000000).toString();
