@@ -1238,9 +1238,16 @@ class SaleReceiptPdf {
                 initialPageFormat: settings.pdfPageFormat,
                 canChangePageFormat: true,
                 canChangeOrientation: false,
-                allowPrinting: true,
+                allowPrinting: false,
                 allowSharing: true,
                 canDebug: false,
+                actions: [
+                  printing.PdfPreviewAction(
+                    icon: const Icon(Icons.print_rounded),
+                    tooltip: 'طباعة',
+                    onPressed: (c, b, f) => _safePrintAction(c, b, f),
+                  ),
+                ],
                 pdfFileName:
                     'installment-receipt-${plan.id ?? justPaidInstallmentId}.pdf',
                 onPrintError: (context, error) {
@@ -1501,9 +1508,16 @@ class SaleReceiptPdf {
                 initialPageFormat: settings.pdfPageFormat,
                 canChangePageFormat: true,
                 canChangeOrientation: false,
-                allowPrinting: true,
+                allowPrinting: false,
                 allowSharing: true,
                 canDebug: false,
+                actions: [
+                  printing.PdfPreviewAction(
+                    icon: const Icon(Icons.print_rounded),
+                    tooltip: 'طباعة',
+                    onPressed: (c, b, f) => _safePrintAction(c, b, f),
+                  ),
+                ],
                 pdfFileName:
                     'debt-receipt-$paymentRowId${receiptInvoiceId != null ? '-$receiptInvoiceId' : ''}.pdf',
                 onPrintError: (context, error) {
@@ -1603,9 +1617,16 @@ class SaleReceiptPdf {
                     initialPageFormat: settings.pdfPageFormat,
                     canChangePageFormat: true,
                     canChangeOrientation: false,
-                    allowPrinting: true,
+                    allowPrinting: false,
                     allowSharing: true,
                     canDebug: false,
+                    actions: [
+                      printing.PdfPreviewAction(
+                        icon: const Icon(Icons.print_rounded),
+                        tooltip: 'طباعة',
+                        onPressed: (c, b, f) => _safePrintAction(c, b, f),
+                      ),
+                    ],
                     pdfFileName: 'receipt-${invoice.id ?? "sale"}.pdf',
                     onPrintError: (context, error) {
                       ScaffoldMessenger.of(context).showSnackBar(
@@ -1717,9 +1738,16 @@ class SaleReceiptPdf {
                         initialPageFormat: settings.pdfPageFormat,
                         canChangePageFormat: true,
                         canChangeOrientation: false,
-                        allowPrinting: true,
+                        allowPrinting: false,
                         allowSharing: true,
                         canDebug: false,
+                        actions: [
+                          printing.PdfPreviewAction(
+                            icon: const Icon(Icons.print_rounded),
+                            tooltip: 'طباعة',
+                            onPressed: (c, b, f) => _safePrintAction(c, b, f),
+                          ),
+                        ],
                         pdfFileName: 'receipt-${invoice.id ?? "sale"}.pdf',
                         onPrintError: (context, error) {
                           ScaffoldMessenger.of(context).showSnackBar(
@@ -1940,9 +1968,16 @@ class SaleReceiptPdf {
                 initialPageFormat: settings.pdfPageFormat,
                 canChangePageFormat: true,
                 canChangeOrientation: false,
-                allowPrinting: true,
+                allowPrinting: false,
                 allowSharing: true,
                 canDebug: false,
+                actions: [
+                  printing.PdfPreviewAction(
+                    icon: const Icon(Icons.print_rounded),
+                    tooltip: 'طباعة',
+                    onPressed: (c, b, f) => _safePrintAction(c, b, f),
+                  ),
+                ],
                 pdfFileName:
                     'supplier-payment-$payoutRowId-$receiptInvoiceId.pdf',
                 onPrintError: (context, error) {
@@ -1986,5 +2021,43 @@ class SaleReceiptPdf {
         },
       ),
     );
+  static Future<void> _safePrintAction(
+    BuildContext context,
+    FutureOr<Uint8List> Function(PdfPageFormat) buildPdf,
+    PdfPageFormat pageFormat,
+  ) async {
+    final scaffoldMsg = ScaffoldMessenger.of(context);
+    try {
+      final printers = await printing.Printing.listPrinters();
+      if (printers.isEmpty) {
+        scaffoldMsg.showSnackBar(
+          const SnackBar(
+            content: Text(
+              'لم يتم العثور على أي طابعة متصلة بالجهاز. يرجى توصيل طابعة للمتابعة.',
+              style: TextStyle(fontFamily: 'NotoNaskhArabic'),
+            ),
+            backgroundColor: Colors.redAccent,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+      final bytes = await buildPdf(pageFormat);
+      await printing.Printing.layoutPdf(
+        onLayout: (_) => bytes,
+        format: pageFormat,
+      );
+    } catch (e) {
+      scaffoldMsg.showSnackBar(
+        const SnackBar(
+          content: Text(
+            'تعذر تشغيل الطباعة. يرجى مراجعة إعدادات جهاز الطباعة لديك.',
+            style: TextStyle(fontFamily: 'NotoNaskhArabic'),
+          ),
+          backgroundColor: Colors.redAccent,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 }
