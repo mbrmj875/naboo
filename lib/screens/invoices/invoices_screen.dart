@@ -1,26 +1,76 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 import '../../providers/invoice_provider.dart';
+import '../../providers/product_provider.dart';
 import '../../models/invoice.dart';
 import '../../services/database_helper.dart';
 import '../../utils/sale_receipt_pdf.dart';
 import '../../utils/screen_layout.dart';
+import '../../widgets/adaptive/master_detail_layout.dart';
 import '../../widgets/invoice_detail_sheet.dart';
 import '../../theme/design_tokens.dart';
 import '../shift/work_shifts_calendar_screen.dart';
 import 'add_invoice_screen.dart';
 import 'parked_sales_screen.dart';
+import 'process_return_screen.dart';
+
+// ── Keyboard Shortcut Intents ─────────────────────────────────────────────────
+/// اختصارات لوحة المفاتيح لشاشة الفواتير (الديسكتوب أولاً، تعمل على أي منصة).
+class _NewInvoiceIntent extends Intent {
+  const _NewInvoiceIntent();
+}
+
+class _FocusSearchIntent extends Intent {
+  const _FocusSearchIntent();
+}
+
+class _CloseDetailIntent extends Intent {
+  const _CloseDetailIntent();
+}
+
+/// تحدّد إن كانت الفاتورة قابلة لإنشاء مرتجع.
+///
+/// **لا تُسمح بالإرجاع** في الحالات:
+/// - الفاتورة سبق وأن أُرتجعت ([Invoice.isReturned]).
+/// - الفاتورة أصلاً فاتورة مرتجع لفاتورة أخرى ([Invoice.originalInvoiceId] != null).
+/// - الفاتورة من نوع سند (تحصيل دين، تسديد قسط، دفع مورد).
+/// - الفاتورة **بحتة الخدمات** — كل بنودها منتجات `isService=1`؛ فالخدمة قُدِّمت
+///   بالفعل ولا يمكن إرجاعها مادياً. أمّا الفواتير المختلطة (سلع + خدمات)
+///   فتسمح بالإرجاع لاختيار السلع فقط داخل شاشة الترجيع.
+bool _canReturnInvoice(Invoice inv, Set<int> serviceProductIds) {
+  if (inv.isReturned) return false;
+  if (inv.originalInvoiceId != null) return false;
+  switch (inv.type) {
+    case InvoiceType.cash:
+    case InvoiceType.credit:
+    case InvoiceType.installment:
+    case InvoiceType.delivery:
+      break;
+    case InvoiceType.debtCollection:
+    case InvoiceType.installmentCollection:
+    case InvoiceType.supplierPayment:
+      return false;
+  }
+  if (inv.items.isNotEmpty &&
+      inv.items.every((it) =>
+          it.productId != null &&
+          serviceProductIds.contains(it.productId))) {
+    return false;
+  }
+  return true;
+}
 
 Color _invoiceStatusColor(Invoice invoice, ColorScheme cs) {
   if (invoice.isReturned) return cs.error;
   switch (invoice.type) {
     case InvoiceType.cash:
-      return const Color(0xFF16A34A);
+      return AppSemanticColors.success;
     case InvoiceType.credit:
-      return const Color(0xFFF59E0B);
+      return AppSemanticColors.warning;
     case InvoiceType.installment:
       return cs.primary;
     case InvoiceType.delivery:
@@ -29,7 +79,7 @@ Color _invoiceStatusColor(Invoice invoice, ColorScheme cs) {
     case InvoiceType.installmentCollection:
       return cs.secondary;
     case InvoiceType.supplierPayment:
-      return const Color(0xFFB45309);
+      return AppSemanticColors.supplier;
   }
 }
 
@@ -52,6 +102,7 @@ class _InvoicesScreenState extends State<InvoicesScreen>
     with SingleTickerProviderStateMixin {
   late final TabController _tabs;
   final _search = TextEditingController();
+  final _searchFocus = FocusNode();
   final DatabaseHelper _db = DatabaseHelper();
   String _query = '';
   String _sort  = 'date_desc'; // date_desc | date_asc | amount_desc | amount_asc
@@ -59,6 +110,10 @@ class _InvoicesScreenState extends State<InvoicesScreen>
   bool _groupByShift = true;
   Map<int, Map<String, dynamic>> _shiftById = {};
   String _shiftIdsSig = '';
+
+  /// الفاتورة المحدّدة لعرض تفاصيلها في الـ Detail Panel
+  /// (وضع `MasterDetailLayout` على `tabletLG+` فقط).
+  int? _selectedInvoiceId;
 
   static const _tabLabels = ['الكل', 'مدفوعة', 'غير مدفوعة', 'مرتجع', 'تقسيط'];
 
@@ -90,6 +145,7 @@ class _InvoicesScreenState extends State<InvoicesScreen>
   void dispose() {
     _tabs.dispose();
     _search.dispose();
+    _searchFocus.dispose();
     super.dispose();
   }
 
@@ -117,6 +173,13 @@ class _InvoicesScreenState extends State<InvoicesScreen>
       );
       return;
     }
+    // على الديسكتوب/التابلت الكبير: التفاصيل تظهر إنلاين في `MasterDetailLayout`.
+    // المستخدم يضغط زر "عرض الإيصال" داخل اللوحة للحصول على PDF preview.
+    if (context.screenLayout.isWideVariant) {
+      setState(() => _selectedInvoiceId = id);
+      return;
+    }
+    // الموبايل والتابلت الصغير: التدفّق الكلاسيكي — PDF preview ثم BottomSheet عند الطلب.
     final full = await _db.getInvoiceById(id);
     if (!mounted) return;
     if (full == null) {
@@ -188,120 +251,243 @@ class _InvoicesScreenState extends State<InvoicesScreen>
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
     final isDark = theme.brightness == Brightness.dark;
+    final isWide = context.screenLayout.isWideVariant;
+
+    // مجموعة معرفات المنتجات من نوع خدمة — تُحسب مرة واحدة لكل rebuild
+    // وتُمرر للبطاقات لتقييم زر "ترجيع" بكفاءة O(1) لكل بند.
+    final productProvider = context.watch<ProductProvider>();
+    final serviceProductIds = <int>{
+      for (final p in productProvider.products)
+        if (((p['isService'] as num?)?.toInt() ?? 0) == 1)
+          if (p['id'] is int) p['id'] as int,
+    };
+
+    final listBody = Consumer<InvoiceProvider>(
+      builder: (_, provider, __) {
+        final all = provider.invoices;
+        Future.microtask(() => _ensureShiftMetaLoaded(all));
+        // NestedScrollView: يجعل شريط الإحصاء والبحث يطويان عند التمرير
+        // بينما تبقى التبويبات ثابتة في الأعلى (Sticky). عند العودة للأعلى،
+        // تعود كل الأقسام طبيعياً.
+        return NestedScrollView(
+          headerSliverBuilder: (context, innerBoxIsScrolled) => [
+            SliverToBoxAdapter(
+              child: Column(
+                children: [
+                  _StatsBar(invoices: all, colorScheme: cs),
+                  _SearchSortBar(
+                    controller: _search,
+                    focusNode: _searchFocus,
+                    sort: _sort,
+                    onSort: (v) {
+                      setState(() => _sort = v);
+                      _syncFiltersToProvider();
+                    },
+                    colorScheme: cs,
+                  ),
+                ],
+              ),
+            ),
+            SliverPersistentHeader(
+              pinned: true,
+              delegate: _StickyTabBarDelegate(
+                tabBar: _buildTabBar(cs),
+                backgroundColor: cs.surface,
+              ),
+            ),
+          ],
+          body: TabBarView(
+            controller: _tabs,
+            physics: const NeverScrollableScrollPhysics(),
+            children: List.generate(
+              _tabLabels.length,
+              (_) => _InvoiceList(
+                invoices: all,
+                onAdd: () => _addInvoice(),
+                isDark: isDark,
+                groupByShift: _groupByShift,
+                shiftById: _shiftById,
+                compareShiftKeys: _compareShiftKeys,
+                dateTimeFmt: _dateTimeFmt,
+                onInvoiceTap: _openInvoiceDetails,
+                selectedInvoiceId: _selectedInvoiceId,
+                serviceProductIds: serviceProductIds,
+                onLoadMore: provider.hasMore ? provider.loadMore : null,
+                isLoadingMore: provider.isLoadingMore,
+                isLoading: provider.isLoading,
+              ),
+            ),
+          ),
+        );
+      },
+    );
+
+    final scaffoldBody = isWide
+        ? MasterDetailLayout<int>(
+            masterWidth: 480,
+            selectedItemId: _selectedInvoiceId ?? -1,
+            masterBuilder: (ctx, _) => listBody,
+            detailBuilder: (ctx) => Container(
+              color: theme.scaffoldBackgroundColor,
+              child: InvoiceDetailPanel(
+                invoiceId: _selectedInvoiceId,
+                db: _db,
+                onClose: () => setState(() => _selectedInvoiceId = null),
+              ),
+            ),
+          )
+        : listBody;
 
     return Directionality(
       textDirection: TextDirection.rtl,
-      child: Scaffold(
-        backgroundColor: theme.scaffoldBackgroundColor,
-        appBar: _buildAppBar(cs),
-        body: Consumer<InvoiceProvider>(
-          builder: (_, provider, __) {
-            final all      = provider.invoices;
-            Future.microtask(() => _ensureShiftMetaLoaded(all));
-            // NestedScrollView: يجعل شريط الإحصاء والبحث يطويان عند التمرير
-            // بينما تبقى التبويبات ثابتة في الأعلى (Sticky). عند العودة للأعلى،
-            // تعود كل الأقسام طبيعياً.
-            return NestedScrollView(
-              headerSliverBuilder: (context, innerBoxIsScrolled) => [
-                SliverToBoxAdapter(
-                  child: Column(
-                    children: [
-                      _StatsBar(invoices: all, colorScheme: cs),
-                      _SearchSortBar(
-                        controller: _search,
-                        sort: _sort,
-                        onSort: (v) {
-                          setState(() => _sort = v);
-                          _syncFiltersToProvider();
-                        },
-                        colorScheme: cs,
-                      ),
-                    ],
-                  ),
-                ),
-                SliverPersistentHeader(
-                  pinned: true,
-                  delegate: _StickyTabBarDelegate(
-                    tabBar: _buildTabBar(cs),
-                    backgroundColor: cs.surface,
-                  ),
-                ),
-              ],
-              body: TabBarView(
-                controller: _tabs,
-                physics: const NeverScrollableScrollPhysics(),
-                children: List.generate(
-                  _tabLabels.length,
-                  (_) => _InvoiceList(
-                    invoices: all,
-                    onAdd: () => _addInvoice(),
-                    isDark: isDark,
-                    groupByShift: _groupByShift,
-                    shiftById: _shiftById,
-                    compareShiftKeys: _compareShiftKeys,
-                    dateTimeFmt: _dateTimeFmt,
-                    onInvoiceTap: _openInvoiceDetails,
-                    onLoadMore: provider.hasMore ? provider.loadMore : null,
-                    isLoadingMore: provider.isLoadingMore,
-                    isLoading: provider.isLoading,
-                  ),
-                ),
-              ),
-            );
+      child: Shortcuts(
+        shortcuts: <ShortcutActivator, Intent>{
+          const SingleActivator(LogicalKeyboardKey.keyN, control: true):
+              const _NewInvoiceIntent(),
+          const SingleActivator(LogicalKeyboardKey.keyN, meta: true):
+              const _NewInvoiceIntent(),
+          const SingleActivator(LogicalKeyboardKey.keyF, control: true):
+              const _FocusSearchIntent(),
+          const SingleActivator(LogicalKeyboardKey.keyF, meta: true):
+              const _FocusSearchIntent(),
+          const SingleActivator(LogicalKeyboardKey.escape):
+              const _CloseDetailIntent(),
+        },
+        child: Actions(
+          actions: <Type, Action<Intent>>{
+            _NewInvoiceIntent: CallbackAction<_NewInvoiceIntent>(
+              onInvoke: (_) {
+                _addInvoice();
+                return null;
+              },
+            ),
+            _FocusSearchIntent: CallbackAction<_FocusSearchIntent>(
+              onInvoke: (_) {
+                _searchFocus.requestFocus();
+                return null;
+              },
+            ),
+            _CloseDetailIntent: CallbackAction<_CloseDetailIntent>(
+              onInvoke: (_) {
+                if (_selectedInvoiceId != null) {
+                  setState(() => _selectedInvoiceId = null);
+                }
+                return null;
+              },
+            ),
           },
+          child: Focus(
+            autofocus: true,
+            child: Scaffold(
+              backgroundColor: theme.scaffoldBackgroundColor,
+              appBar: _buildAppBar(cs),
+              body: scaffoldBody,
+              floatingActionButton: _buildFAB(cs),
+            ),
+          ),
         ),
-        floatingActionButton: _buildFAB(cs),
       ),
     );
   }
 
   PreferredSizeWidget _buildAppBar(ColorScheme cs) {
+    final isPhone = context.screenLayout.isPhoneVariant;
+    final toggleGroup = IconButton(
+      icon: Icon(
+        _groupByShift ? Icons.view_agenda_rounded : Icons.view_list_rounded,
+      ),
+      tooltip: _groupByShift
+          ? 'عرض مفرد (بدون تجميع بالوردية)'
+          : 'تجميع حسب الوردية',
+      onPressed: () => setState(() => _groupByShift = !_groupByShift),
+    );
+    final filterBtn = IconButton(
+      icon: const Icon(Icons.filter_list_rounded),
+      tooltip: 'تصفية متقدمة',
+      onPressed: _showFilterSheet,
+    );
+
+    void openCalendar() {
+      Navigator.push<void>(
+        context,
+        MaterialPageRoute<void>(
+          builder: (_) => const WorkShiftsCalendarScreen(),
+        ),
+      );
+    }
+
+    void openParked() {
+      Navigator.push(
+        context,
+        MaterialPageRoute<void>(
+          builder: (_) => const ParkedSalesScreen(),
+        ),
+      );
+    }
+
+    final calendarBtn = IconButton(
+      icon: const Icon(Icons.calendar_month_rounded),
+      tooltip: 'تقويم الورديات',
+      onPressed: openCalendar,
+    );
+    final parkedBtn = IconButton(
+      icon: const Icon(Icons.pause_circle_outline_rounded),
+      tooltip: 'فواتير معلّقة مؤقتاً',
+      onPressed: openParked,
+    );
+
     return AppBar(
       backgroundColor: cs.primary,
       foregroundColor: cs.onPrimary,
       elevation: 0,
       title: const Text('الفواتير',
           style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-      actions: [
-        IconButton(
-          icon: Icon(
-            _groupByShift ? Icons.view_agenda_rounded : Icons.view_list_rounded,
-          ),
-          tooltip: _groupByShift
-              ? 'عرض مفرد (بدون تجميع بالوردية)'
-              : 'تجميع حسب الوردية',
-          onPressed: () => setState(() => _groupByShift = !_groupByShift),
-        ),
-        IconButton(
-          icon: const Icon(Icons.calendar_month_rounded),
-          tooltip: 'تقويم الورديات',
-          onPressed: () {
-            Navigator.push<void>(
-              context,
-              MaterialPageRoute<void>(
-                builder: (_) => const WorkShiftsCalendarScreen(),
+      actions: isPhone
+          ? [
+              // على الهواتف: تجميع + تصفية (الأكثر استخداماً) + قائمة المزيد.
+              toggleGroup,
+              filterBtn,
+              PopupMenuButton<String>(
+                tooltip: 'المزيد',
+                icon: const Icon(Icons.more_vert_rounded),
+                onSelected: (v) {
+                  switch (v) {
+                    case 'calendar':
+                      openCalendar();
+                    case 'parked':
+                      openParked();
+                  }
+                },
+                itemBuilder: (_) => const [
+                  PopupMenuItem(
+                    value: 'calendar',
+                    child: Row(
+                      children: [
+                        Icon(Icons.calendar_month_rounded, size: 20),
+                        SizedBox(width: 10),
+                        Text('تقويم الورديات'),
+                      ],
+                    ),
+                  ),
+                  PopupMenuItem(
+                    value: 'parked',
+                    child: Row(
+                      children: [
+                        Icon(Icons.pause_circle_outline_rounded, size: 20),
+                        SizedBox(width: 10),
+                        Text('فواتير معلّقة'),
+                      ],
+                    ),
+                  ),
+                ],
               ),
-            );
-          },
-        ),
-        IconButton(
-          icon: const Icon(Icons.pause_circle_outline_rounded),
-          tooltip: 'فواتير معلّقة مؤقتاً',
-          onPressed: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute<void>(
-                builder: (_) => const ParkedSalesScreen(),
-              ),
-            );
-          },
-        ),
-        IconButton(
-          icon: const Icon(Icons.filter_list_rounded),
-          tooltip: 'تصفية متقدمة',
-          onPressed: _showFilterSheet,
-        ),
-      ],
+            ]
+          : [
+              toggleGroup,
+              calendarBtn,
+              parkedBtn,
+              filterBtn,
+            ],
     );
   }
 
@@ -327,11 +513,13 @@ class _InvoicesScreenState extends State<InvoicesScreen>
     );
   }
 
-  /// على الهاتف (أضيق بعد < 600dp) لا نعرض زر البيع العائم — يشغل زاوية الشاشة فوق القائمة.
+  /// على الهاتف (phoneXS + phoneSM) لا نعرض زر البيع العائم — يشغل زاوية الشاشة فوق القائمة.
   /// يبقى [FloatingActionButton.extended] على التابلت والشاشات العريضة.
   Widget? _buildFAB(ColorScheme cs) {
-    final layout = ScreenLayout.of(context);
-    if (layout.isHandsetForLayout) {
+    final variant = context.screenLayout.layoutVariant;
+    final isPhone = variant == DeviceVariant.phoneXS ||
+        variant == DeviceVariant.phoneSM;
+    if (isPhone) {
       return null;
     }
     return FloatingActionButton.extended(
@@ -422,13 +610,17 @@ class _StatsBar extends StatelessWidget {
     final returns = invoices.where((i) => i.isReturned).fold(0.0, (s, i) => s + i.total);
 
     final cs = colorScheme;
-    final gap = ScreenLayout.of(context).pageHorizontalGap;
+    final layout = ScreenLayout.of(context);
+    final gap = layout.pageHorizontalGap;
     return Container(
       color: cs.surface,
       padding: EdgeInsets.fromLTRB(gap, 12, gap, 12),
       child: LayoutBuilder(
         builder: (context, c) {
-          if (c.maxWidth < 380) {
+          // ثنائي إذا الجهاز هاتف أو إذا اللوحة المعروضة فيها ضيقة
+          // (master pane في MasterDetail قد يكون <600dp حتى على الديسكتوب).
+          final useTwoByTwo = layout.isPhoneVariant || c.maxWidth < 600;
+          if (useTwoByTwo) {
             return Column(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -447,7 +639,7 @@ class _StatsBar extends StatelessWidget {
                       child: _StatChip(
                         label: 'مدفوعة',
                         value: _numFmt.format(paid),
-                        color: const Color(0xFF16A34A),
+                        color: AppSemanticColors.success,
                         icon: Icons.check_circle_rounded,
                       ),
                     ),
@@ -460,7 +652,7 @@ class _StatsBar extends StatelessWidget {
                       child: _StatChip(
                         label: 'دين',
                         value: _numFmt.format(unpaid),
-                        color: const Color(0xFFF59E0B),
+                        color: AppSemanticColors.warning,
                         icon: Icons.access_time_rounded,
                       ),
                     ),
@@ -493,7 +685,7 @@ class _StatsBar extends StatelessWidget {
                 child: _StatChip(
                   label: 'مدفوعة',
                   value: _numFmt.format(paid),
-                  color: const Color(0xFF16A34A),
+                  color: AppSemanticColors.success,
                   icon: Icons.check_circle_rounded,
                 ),
               ),
@@ -502,7 +694,7 @@ class _StatsBar extends StatelessWidget {
                 child: _StatChip(
                   label: 'دين',
                   value: _numFmt.format(unpaid),
-                  color: const Color(0xFFF59E0B),
+                  color: AppSemanticColors.warning,
                   icon: Icons.access_time_rounded,
                 ),
               ),
@@ -561,11 +753,13 @@ class _StatChip extends StatelessWidget {
 // ── شريط البحث والترتيب ───────────────────────────────────────────────────────
 class _SearchSortBar extends StatelessWidget {
   final TextEditingController controller;
+  final FocusNode focusNode;
   final String sort;
   final ValueChanged<String> onSort;
   final ColorScheme colorScheme;
   const _SearchSortBar({
     required this.controller,
+    required this.focusNode,
     required this.sort,
     required this.onSort,
     required this.colorScheme,
@@ -602,6 +796,7 @@ class _SearchSortBar extends StatelessWidget {
           );
           final searchField = TextField(
               controller: controller,
+              focusNode: focusNode,
               textDirection: TextDirection.rtl,
               decoration: InputDecoration(
                 hintText: 'بحث باسم العميل أو رقم الفاتورة أو هاتف العميل...',
@@ -610,7 +805,7 @@ class _SearchSortBar extends StatelessWidget {
                 contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                 filled: true,
                 fillColor: cs.surfaceContainerHighest.withValues(alpha: 0.65),
-                border: OutlineInputBorder(
+                border: const OutlineInputBorder(
                   borderRadius: AppShape.none,
                   borderSide: BorderSide.none,
                 ),
@@ -658,6 +853,15 @@ class _InvoiceList extends StatelessWidget {
   final int Function(int? a, int? b) compareShiftKeys;
   final DateFormat dateTimeFmt;
   final Future<void> Function(Invoice) onInvoiceTap;
+
+  /// معرّف الفاتورة المحدّدة حالياً (لتمييز البطاقة بصرياً في وضع Master-Detail).
+  /// `null` ⇒ لا توجد فاتورة محدّدة.
+  final int? selectedInvoiceId;
+
+  /// مجموعة `product.id` لكل المنتجات من نوع خدمة (`isService=1`)؛
+  /// تُمرَّر إلى البطاقات لتقييم زر "ترجيع" بكفاءة O(1) لكل بند.
+  final Set<int> serviceProductIds;
+
   final Future<void> Function()? onLoadMore;
   final bool isLoadingMore;
   final bool isLoading;
@@ -671,6 +875,8 @@ class _InvoiceList extends StatelessWidget {
     required this.compareShiftKeys,
     required this.dateTimeFmt,
     required this.onInvoiceTap,
+    required this.selectedInvoiceId,
+    required this.serviceProductIds,
     required this.onLoadMore,
     required this.isLoadingMore,
     required this.isLoading,
@@ -718,6 +924,8 @@ class _InvoiceList extends StatelessWidget {
             invoice: inv,
             isDark: isDark,
             shiftStaffLabel: _labelFor(inv.workShiftId),
+            isSelected: inv.id != null && inv.id == selectedInvoiceId,
+            serviceProductIds: serviceProductIds,
             onTap: () => onInvoiceTap(inv),
           );
         },
@@ -766,6 +974,8 @@ class _InvoiceList extends StatelessWidget {
           invoice: inv,
           isDark: isDark,
           shiftStaffLabel: _labelFor(inv.workShiftId),
+          isSelected: inv.id != null && inv.id == selectedInvoiceId,
+          serviceProductIds: serviceProductIds,
           onTap: () => onInvoiceTap(inv),
         );
       },
@@ -921,11 +1131,20 @@ class _InvoiceCard extends StatelessWidget {
   /// اسم موظف الوردية من جدول الورديات (يُعرض على البطاقة).
   final String? shiftStaffLabel;
   final VoidCallback onTap;
+
+  /// وضع التحديد (لـ Master-Detail على الديسكتوب) — يرسم خطاً جانبياً وتغطية ناعمة.
+  final bool isSelected;
+
+  /// `product.id` لكل المنتجات من نوع خدمة — يُستعمل لتقييم زر "ترجيع".
+  final Set<int> serviceProductIds;
+
   const _InvoiceCard({
     required this.invoice,
     required this.isDark,
     this.shiftStaffLabel,
     required this.onTap,
+    required this.serviceProductIds,
+    this.isSelected = false,
   });
 
   String get _statusLabel {
@@ -966,8 +1185,18 @@ class _InvoiceCard extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
-        color: cs.surface,
+        color: isSelected
+            ? Color.alphaBlend(
+                cs.primary.withValues(alpha: isDark ? 0.18 : 0.10),
+                cs.surface,
+              )
+            : cs.surface,
         borderRadius: AppShape.none,
+        border: isSelected
+            ? Border(
+                right: BorderSide(color: cs.primary, width: 3),
+              )
+            : null,
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: isDark ? 0.25 : 0.05),
@@ -1100,10 +1329,71 @@ class _InvoiceCard extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 8),
+                if (_canReturnInvoice(invoice, serviceProductIds))
+                  _ReturnActionPill(
+                    onPressed: () {
+                      Navigator.push<void>(
+                        context,
+                        MaterialPageRoute<void>(
+                          builder: (_) => ProcessReturnScreen(
+                            originalInvoice: invoice,
+                          ),
+                        ),
+                      );
+                    },
+                  )
+                else
+                  Icon(
+                    Icons.chevron_left_rounded,
+                    color: cs.onSurfaceVariant,
+                    size: 20,
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// زر إجراء "ترجيع" — يظهر داخل بطاقة الفاتورة عند توفر شرط الإرجاع.
+///
+/// تصميم compact على نمط ERP — أيقونة + نص قصير بلون `AppSemanticColors.danger`
+/// ناعم على خلفية لطيفة. يتفاعل بصرياً عبر `InkWell` (ripple خاص بالزر).
+class _ReturnActionPill extends StatelessWidget {
+  const _ReturnActionPill({required this.onPressed});
+
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: 'إنشاء فاتورة ترجيع لهذه الفاتورة',
+      child: Material(
+        color: AppSemanticColors.danger.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.zero,
+        child: InkWell(
+          onTap: onPressed,
+          borderRadius: BorderRadius.zero,
+          child: const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
                 Icon(
-                  Icons.chevron_left_rounded,
-                  color: cs.onSurfaceVariant,
-                  size: 20,
+                  Icons.assignment_return_rounded,
+                  size: 14,
+                  color: AppSemanticColors.danger,
+                ),
+                SizedBox(width: 4),
+                Text(
+                  'ترجيع',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: AppSemanticColors.danger,
+                  ),
                 ),
               ],
             ),

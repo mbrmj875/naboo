@@ -9,7 +9,10 @@ import '../services/cloud_sync_service.dart'
     show CloudSyncService;
 import '../services/license_service.dart';
 import '../services/password_hashing.dart';
+import '../services/tenant_context.dart';
 import '../services/tenant_context_service.dart';
+import '../services/supabase_config.dart';
+import '../services/auth/secure_session_storage.dart';
 
 /// جلسة محلية فقط (SharedPreferences + SQLite). بدون سحابة أو اشتراك.
 class AuthProvider extends ChangeNotifier {
@@ -48,6 +51,18 @@ class AuthProvider extends ChangeNotifier {
     final r = row['role'] as String? ?? 'staff';
     _roleKey = r;
     _role = r == 'admin' ? 'مدير النظام' : 'موظف';
+
+    // اضبط tenant_id بعد كل تسجيل دخول ناجح. للحسابات السحابية نستخدم
+    // Supabase UID؛ للحسابات المحلية فقط نستخدم مفتاحاً مستقرّاً مبنيّاً
+    // على معرّف المستخدم المحلي حتى يُفرض العزل أيضاً في الوضع المحلي.
+    final supabaseUid = (row['supabaseUid'] as String?)?.trim() ?? '';
+    final localId = (row['id'] as int?) ?? 0;
+    final tenantKey = supabaseUid.isNotEmpty
+        ? supabaseUid
+        : 'local-$localId';
+    if (tenantKey.isNotEmpty && tenantKey != 'local-0') {
+      TenantContext.instance.set(tenantKey);
+    }
   }
 
   /// مفتاح يميّز بيانات الجهاز: حساب سحابي `cloud:<supabaseUid>` أو محلي `local:<userId>`.
@@ -89,6 +104,14 @@ class AuthProvider extends ChangeNotifier {
     await TenantContextService.instance.load();
   }
 
+  Future<void> _refreshTenantContextSilently() async {
+    try {
+      await TenantContextService.instance.load();
+    } catch (_) {
+      // المستودعات تستدعي load() عند أول حاجة؛ لا نقطع الجلسة هنا.
+    }
+  }
+
   void _clear() {
     _isLoggedIn = false;
     _userId = null;
@@ -98,6 +121,7 @@ class AuthProvider extends ChangeNotifier {
     _roleKey = 'staff';
     _email = '';
     _phone = '';
+    TenantContext.instance.clear();
   }
 
   /// استعادة الجلسة بعد إعادة تشغيل التطبيق.
@@ -105,33 +129,18 @@ class AuthProvider extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     final id = prefs.getInt(_prefUserId);
 
-    // إذا لم توجد جلسة محلية لكن توجد جلسة Supabase، أعد ربطها تلقائياً.
+    // إذا لم توجد جلسة محلية (المستخدم سجّل خروج) لكن توجد جلسة Supabase
+    // متبقية (ghost session بسبب فشل Keychain)، نُنظّفها بصمت ونتابع لشاشة الدخول.
+    // لا نُعيد ربط الحساب تلقائياً لأن المستخدم قرر الخروج صراحةً.
     if (id == null) {
       try {
         final user = Supabase.instance.client.auth.currentUser;
         if (user != null) {
-          final email = (user.email ?? '').trim();
-          if (email.isNotEmpty) {
-            await _bindAccountDataScope('cloud:${user.id}');
-            final localId = await _db.upsertGoogleUser(
-              supabaseUid: user.id,
-              email: email,
-              displayName:
-                  (user.userMetadata?['full_name'] as String?) ??
-                  (user.userMetadata?['name'] as String?) ??
-                  email.split('@').first,
-            );
-            final row = await _db.getUserById(localId);
-            if (row != null && (row['isActive'] == 1)) {
-              _setFromRow(row);
-              await prefs.setInt(_prefUserId, localId);
-              // لا تحبس شاشة البداية بعمليات سحابية قد تطول (خصوصاً مع بيانات كبيرة).
-              // نُكمل bootstrap + sync في الخلفية.
-              unawaited(_completeCloudBootstrapAfterRestore(localId));
-              notifyListeners();
-              return;
-            }
-          }
+          // تنظيف الجلسة الشبحية بصمت
+          try {
+            await Supabase.instance.client.auth.signOut();
+          } catch (_) {}
+          await _clearSupabaseFallbackSession();
         }
       } catch (_) {}
     }
@@ -152,6 +161,7 @@ class AuthProvider extends ChangeNotifier {
     if (prefs.getString(_prefActiveDataOwner) == null) {
       await prefs.setString(_prefActiveDataOwner, _dataOwnerKeyForRow(row));
     }
+    await _refreshTenantContextSilently();
     notifyListeners();
   }
 
@@ -220,6 +230,7 @@ class AuthProvider extends ChangeNotifier {
       login: login,
       password: password,
     );
+    await _refreshTenantContextSilently();
     notifyListeners();
     return true;
   }
@@ -265,6 +276,7 @@ class AuthProvider extends ChangeNotifier {
       await prefs.setInt(_prefUserId, localId);
       await LicenseService.instance.ensureLocalTrialStarted();
       await _completeCloudBootstrapAfterRestore(localId);
+      await _refreshTenantContextSilently();
       notifyListeners();
       return true;
     } on AuthException {
@@ -380,13 +392,19 @@ class AuthProvider extends ChangeNotifier {
       return null;
     } on AuthException catch (e) {
       final msg = e.message.toLowerCase();
-      if (msg.contains('rate limit') || msg.contains('too many')) {
+      if (msg.contains('rate limit') || msg.contains('too many') || msg.contains('security purposes') || msg.contains('request this after')) {
         return 'تم تجاوز حد الإرسال. انتظر بضع دقائق ثم حاول مجدداً.';
       }
       if (msg.contains('invalid email') || msg.contains('unable to validate')) {
         return 'البريد الإلكتروني غير صالح.';
       }
-      return 'تعذر إرسال رمز التحقق: ${e.message}';
+      if (msg.contains('not found') || msg.contains('no user')) {
+        return 'لا يوجد حساب مرتبط بهذا البريد الإلكتروني.';
+      }
+      if (msg.contains('network') || msg.contains('connection') || msg.contains('timeout')) {
+        return 'تعذر الاتصال بالخادم. تحقق من الإنترنت وحاول مجدداً.';
+      }
+      return 'تعذر إرسال رمز التحقق. حاول مرة أخرى لاحقاً.';
     } catch (e) {
       return 'تعذر إرسال رمز التحقق. تحقق من الاتصال بالإنترنت.';
     }
@@ -508,13 +526,16 @@ class AuthProvider extends ChangeNotifier {
       return null;
     } on AuthException catch (e) {
       final msg = e.message.toLowerCase();
-      if (msg.contains('rate limit') || msg.contains('too many')) {
+      if (msg.contains('rate limit') || msg.contains('too many') || msg.contains('security purposes') || msg.contains('request this after')) {
         return 'تم تجاوز حد الإرسال. انتظر بضع دقائق ثم حاول مجدداً.';
       }
       if (msg.contains('invalid email') || msg.contains('unable to validate')) {
         return 'البريد الإلكتروني غير صالح.';
       }
-      return 'تعذر إرسال رمز التحقق.';
+      if (msg.contains('not found') || msg.contains('no user') || msg.contains('otp_disabled')) {
+        return 'لا يوجد حساب مرتبط بهذا البريد الإلكتروني.';
+      }
+      return 'تعذر إرسال رمز التحقق. حاول مرة أخرى لاحقاً.';
     } catch (_) {
       return 'تعذر إرسال رمز التحقق. تحقق من الاتصال بالإنترنت.';
     }
@@ -682,10 +703,10 @@ class AuthProvider extends ChangeNotifier {
       return null;
     } on TimeoutException {
       return 'انتهت مهلة تسجيل Google. تحقق من صفحة التفويض ثم أعد المحاولة.';
-    } on AuthException catch (e) {
-      return 'فشل تسجيل Google: ${e.message}';
-    } catch (e) {
-      return 'فشل تسجيل Google: $e';
+    } on AuthException catch (_) {
+      return 'فشل تسجيل الدخول عبر Google. حاول مرة أخرى.';
+    } catch (_) {
+      return 'فشل تسجيل الدخول عبر Google. تحقق من الاتصال بالإنترنت.';
     } finally {
       _googleSignInRunning = false;
     }
@@ -697,9 +718,24 @@ class AuthProvider extends ChangeNotifier {
     try {
       await Supabase.instance.client.auth.signOut();
     } catch (_) {}
+    // تنظيف جلسة Supabase من SharedPreferences (fallback) لمنع جلسة شبحية
+    // عند فشل Keychain (خطأ -34018 على macOS sandbox).
+    await _clearSupabaseFallbackSession();
     await CloudSyncService.instance.stopForSignOut();
     await LicenseService.instance.resetLicenseStateForDataScopeChange();
     _clear();
     notifyListeners();
+  }
+
+  /// يمسح رمز جلسة Supabase من SharedPreferences (fallback storage)
+  /// لضمان عدم بقاء جلسة شبحية بعد تسجيل الخروج.
+  Future<void> _clearSupabaseFallbackSession() async {
+    try {
+      final sessionKey = supabasePersistSessionKeyFromUrl(SupabaseConfig.url);
+      final prefs = await SharedPreferences.getInstance();
+      if (prefs.containsKey(sessionKey)) {
+        await prefs.remove(sessionKey);
+      }
+    } catch (_) {}
   }
 }

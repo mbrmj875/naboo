@@ -276,13 +276,13 @@ class _SearchFilterCard extends StatelessWidget {
                     child: TextField(
                       controller: nameController,
                       textAlign: TextAlign.right,
-                      decoration: InputDecoration(
+                      decoration: const InputDecoration(
                         hintText: 'الاسم',
                         filled: true,
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.zero,
                         ),
-                        contentPadding: const EdgeInsets.symmetric(
+                        contentPadding: EdgeInsets.symmetric(
                             horizontal: 12, vertical: 12),
                       ),
                       onSubmitted: (_) => onSearch(),

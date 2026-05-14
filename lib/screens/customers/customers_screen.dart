@@ -13,10 +13,13 @@ import '../../services/database_helper.dart';
 import '../../providers/customers_provider.dart';
 import '../../utils/iraqi_currency_format.dart';
 import '../../utils/screen_layout.dart';
+import '../../widgets/brand/brand.dart';
 import '../../widgets/inputs/app_input.dart';
+import '../../widgets/adaptive/master_detail_layout.dart';
 import 'package:provider/provider.dart';
 import '../debts/customer_debt_detail_screen.dart';
 import '../installments/installments_screen.dart';
+import 'customer_financial_detail_panel.dart';
 import 'customer_financial_detail_screen.dart';
 import 'customer_form_screen.dart';
 
@@ -26,6 +29,23 @@ enum _CustomerSort {
   totalPurchasesDesc,
   balanceDesc,
   dateDesc,
+}
+
+// Intents لاختصارات لوحة المفاتيح — يحاكي نمط `invoices_screen.dart` (Golden).
+class _NewCustomerIntent extends Intent {
+  const _NewCustomerIntent();
+}
+
+class _FocusSearchIntent extends Intent {
+  const _FocusSearchIntent();
+}
+
+class _CloseDetailIntent extends Intent {
+  const _CloseDetailIntent();
+}
+
+class _RefreshCustomersIntent extends Intent {
+  const _RefreshCustomersIntent();
 }
 
 class CustomersScreen extends StatefulWidget {
@@ -53,10 +73,15 @@ class _CustomersScreenState extends State<CustomersScreen> {
   String _filterStatus = 'الكل';
   _CustomerSort _sort = _CustomerSort.nameAsc;
 
+  /// العميل المختار حالياً للعرض في لوحة التفاصيل (MasterDetail).
+  /// تنشط فقط على `isWideVariant`؛ على الموبايل يبقى `null` ويتم النفور
+  /// إلى صفحة كاملة عبر `Navigator.push`.
+  CustomerRecord? _selectedCustomer;
+  int? get _selectedCustomerId => _selectedCustomer?.id;
+
   @override
   void initState() {
     super.initState();
-    HardwareKeyboard.instance.addHandler(_onHardwareKey);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       context.read<CustomersProvider>().refresh();
@@ -79,33 +104,11 @@ class _CustomersScreenState extends State<CustomersScreen> {
 
   @override
   void dispose() {
-    HardwareKeyboard.instance.removeHandler(_onHardwareKey);
     _searchDebounce?.cancel();
+    _searchCtrl.removeListener(() {});
     _searchCtrl.dispose();
     _searchFocus.dispose();
     super.dispose();
-  }
-
-  bool _onHardwareKey(KeyEvent event) {
-    if (event is! KeyDownEvent) return false;
-    final hw = HardwareKeyboard.instance;
-    final k = event.logicalKey;
-    if (k == LogicalKeyboardKey.keyN &&
-        hw.isControlPressed &&
-        !hw.isAltPressed &&
-        !hw.isMetaPressed) {
-      unawaited(_openEditor());
-      return true;
-    }
-    if (k == LogicalKeyboardKey.keyF && hw.isControlPressed) {
-      if (_searchFocus.canRequestFocus) _searchFocus.requestFocus();
-      return true;
-    }
-    if (k == LogicalKeyboardKey.f5) {
-      unawaited(_refreshFromServer());
-      return true;
-    }
-    return false;
   }
 
   String _formatMoney(double v) {
@@ -186,7 +189,9 @@ class _CustomersScreenState extends State<CustomersScreen> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            style: TextButton.styleFrom(
+              foregroundColor: AppSemanticColors.danger,
+            ),
             child: const Text('حذف'),
           ),
         ],
@@ -200,9 +205,7 @@ class _CustomersScreenState extends State<CustomersScreen> {
       context.read<CustomersProvider>().onCustomerChanged();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('تعذر الحذف: $e')));
+        AppMessenger.error(context, message: 'تعذر الحذف: $e');
       }
     }
   }
@@ -221,7 +224,9 @@ class _CustomersScreenState extends State<CustomersScreen> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            style: TextButton.styleFrom(
+              foregroundColor: AppSemanticColors.danger,
+            ),
             child: const Text('حذف'),
           ),
         ],
@@ -234,9 +239,7 @@ class _CustomersScreenState extends State<CustomersScreen> {
       context.read<CustomersProvider>().onCustomerChanged();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('تعذر الحذف: $e')));
+        AppMessenger.error(context, message: 'تعذر الحذف: $e');
       }
     }
   }
@@ -244,11 +247,11 @@ class _CustomersScreenState extends State<CustomersScreen> {
   Color _statusColor(String label) {
     switch (label) {
       case 'مديون':
-        return const Color(0xFFFF9800);
+        return AppSemanticColors.warning;
       case 'دائن':
-        return const Color(0xFF7E57C2);
+        return AppSemanticColors.info;
       default:
-        return const Color(0xFF00897B);
+        return AppSemanticColors.success;
     }
   }
 
@@ -280,7 +283,14 @@ class _CustomersScreenState extends State<CustomersScreen> {
     );
   }
 
+  /// يفتح تفاصيل العميل: على wide variants يظهر داخل لوحة MasterDetail
+  /// (تحديث state)، على الموبايل push كامل.
   void _openCustomerFinancialDetail(CustomerRecord c) {
+    final isWide = context.screenLayout.isWideVariant;
+    if (isWide) {
+      setState(() => _selectedCustomer = c);
+      return;
+    }
     Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
         builder: (_) => CustomerFinancialDetailScreen(customer: c),
@@ -300,12 +310,71 @@ class _CustomersScreenState extends State<CustomersScreen> {
 
         return Directionality(
           textDirection: TextDirection.rtl,
-          child: Scaffold(
-            backgroundColor: _pageBg,
-            appBar: _buildAppBar(prov),
-            body: loading
-                ? const Center(child: CircularProgressIndicator())
-                : NotificationListener<ScrollNotification>(
+          child: Shortcuts(
+            shortcuts: <ShortcutActivator, Intent>{
+              const SingleActivator(LogicalKeyboardKey.keyN, control: true):
+                  const _NewCustomerIntent(),
+              const SingleActivator(LogicalKeyboardKey.keyN, meta: true):
+                  const _NewCustomerIntent(),
+              const SingleActivator(LogicalKeyboardKey.keyF, control: true):
+                  const _FocusSearchIntent(),
+              const SingleActivator(LogicalKeyboardKey.keyF, meta: true):
+                  const _FocusSearchIntent(),
+              const SingleActivator(LogicalKeyboardKey.escape):
+                  const _CloseDetailIntent(),
+              const SingleActivator(LogicalKeyboardKey.f5):
+                  const _RefreshCustomersIntent(),
+            },
+            child: Actions(
+              actions: <Type, Action<Intent>>{
+                _NewCustomerIntent: CallbackAction<_NewCustomerIntent>(
+                  onInvoke: (_) {
+                    unawaited(_openEditor());
+                    return null;
+                  },
+                ),
+                _FocusSearchIntent: CallbackAction<_FocusSearchIntent>(
+                  onInvoke: (_) {
+                    if (_searchFocus.canRequestFocus) {
+                      _searchFocus.requestFocus();
+                    }
+                    return null;
+                  },
+                ),
+                _CloseDetailIntent: CallbackAction<_CloseDetailIntent>(
+                  onInvoke: (_) {
+                    if (_selectedCustomer != null) {
+                      setState(() => _selectedCustomer = null);
+                    }
+                    return null;
+                  },
+                ),
+                _RefreshCustomersIntent:
+                    CallbackAction<_RefreshCustomersIntent>(
+                  onInvoke: (_) {
+                    unawaited(_refreshFromServer());
+                    return null;
+                  },
+                ),
+              },
+              child: Focus(
+                autofocus: true,
+                child: AppInlineToastHost(
+                  child: Scaffold(
+                  backgroundColor: _pageBg,
+                  appBar: _buildAppBar(prov),
+                  // الـ Inline Toast يَلتصق فوق أي محتوى عبر `bottomNavigationBar`
+                  // (Scaffold يَحجز مساحته دون إغلاقها). يَختفي تلقائياً عند
+                  // غياب الـ toast لأن الـ widget يُرجع SizedBox.shrink.
+                  bottomNavigationBar: const SafeArea(
+                    top: false,
+                    child: AppInlineToastBar(),
+                  ),
+                  body: loading
+                      ? const Center(child: CircularProgressIndicator())
+                      : Builder(builder: (innerCtx) {
+                  final isWide = innerCtx.screenLayout.isWideVariant;
+                  final listBody = NotificationListener<ScrollNotification>(
                     onNotification: (n) {
                       if (!prov.hasMore) return false;
                       if (prov.isLoadingMore) return false;
@@ -316,7 +385,19 @@ class _CustomersScreenState extends State<CustomersScreen> {
                     },
                     child: CustomScrollView(
                       slivers: [
-                        // شريط التحديد + العدد + إضافة — يطوى مع التمرير (مثل رأس الفواتير)
+                        // شريط KPIs العام (Golden Pattern §9.2) — يلخّص حالة العملاء
+                        // الكلية بصرف النظر عن الفلتر الحالي.
+                        SliverPadding(
+                          padding: EdgeInsets.fromLTRB(gap, 12, gap, 8),
+                          sliver: SliverToBoxAdapter(
+                            child: _CustomersStatsBar(
+                              totalAll: prov.totalCustomersInDb,
+                              indebted: prov.tabCounts.indebted,
+                              creditor: prov.tabCounts.creditor,
+                              distinguished: prov.tabCounts.distinguished,
+                            ),
+                          ),
+                        ),
                         SliverToBoxAdapter(child: _buildToolbar(prov)),
                         SliverPersistentHeader(
                           pinned: true,
@@ -406,7 +487,32 @@ class _CustomersScreenState extends State<CustomersScreen> {
                           ),
                       ],
                     ),
-                  ),
+                  );
+                  if (isWide) {
+                    return MasterDetailLayout<int>(
+                      masterWidth: 480,
+                      selectedItemId: _selectedCustomerId ?? -1,
+                      masterBuilder: (_, __) => listBody,
+                      detailBuilder: (_) => Container(
+                        color: Theme.of(innerCtx).scaffoldBackgroundColor,
+                        child: CustomerFinancialDetailPanel(
+                          customer: _selectedCustomer,
+                          onClose: () =>
+                              setState(() => _selectedCustomer = null),
+                          onEdit: _selectedCustomer == null
+                              ? null
+                              : () =>
+                                  _openEditor(customer: _selectedCustomer),
+                        ),
+                      ),
+                    );
+                  }
+                  return listBody;
+                }),
+                ),
+                ),
+              ),
+            ),
           ),
         );
       },
@@ -507,14 +613,19 @@ class _CustomersScreenState extends State<CustomersScreen> {
                     IconButton(
                       tooltip: 'حذف المحدد',
                       onPressed: _confirmDeleteSelected,
-                      icon: const Icon(Icons.delete_outline, color: Colors.red),
+                      icon: const Icon(
+                        Icons.delete_outline,
+                        color: AppSemanticColors.danger,
+                      ),
                     )
                   else
                     TextButton.icon(
                       onPressed: _confirmDeleteSelected,
                       icon: const Icon(Icons.delete_outline, size: 20),
                       label: const Text('حذف المحدد'),
-                      style: TextButton.styleFrom(foregroundColor: Colors.red),
+                      style: TextButton.styleFrom(
+                        foregroundColor: AppSemanticColors.danger,
+                      ),
                     ),
                   const SizedBox(width: 4),
                 ],
@@ -872,28 +983,34 @@ class _CustomersScreenState extends State<CustomersScreen> {
           ),
         );
 
-        final financeChips = [
+        // Card Action Pills (Golden §9.2.1) — توفّر اختصارات للديون والتقسيط
+        // مع تمييز بصري دلالي. تستبدل ActionChip القديمة الباهتة.
+        final hasPhone = (c.phone?.trim().isNotEmpty == true) &&
+            (CustomerValidation.normalizePhoneDigits(c.phone)?.length ?? 0) >= 7;
+        final financePills = <Widget>[
           if (fin.creditInvoices > 0)
-            ActionChip(
-              label: Text(
-                'بيع آجل ×${fin.creditInvoices}',
-                style: const TextStyle(fontSize: 11),
-              ),
-              padding: EdgeInsets.zero,
-              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              visualDensity: VisualDensity.compact,
+            _CustomerActionPill(
+              icon: Icons.account_balance_wallet_rounded,
+              label: 'ديون ×${fin.creditInvoices}',
+              color: AppSemanticColors.warning,
+              tooltip: 'فتح ديون الآجل المرتبطة',
               onPressed: () => _openDebtDetail(c),
             ),
           if (fin.installmentPlans > 0)
-            ActionChip(
-              label: Text(
-                'تقسيط ×${fin.installmentPlans}',
-                style: const TextStyle(fontSize: 11),
-              ),
-              padding: EdgeInsets.zero,
-              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              visualDensity: VisualDensity.compact,
+            _CustomerActionPill(
+              icon: Icons.event_repeat_rounded,
+              label: 'تقسيط ×${fin.installmentPlans}',
+              color: AppSemanticColors.info,
+              tooltip: 'فتح خطط التقسيط',
               onPressed: () => _openInstallmentsForCustomer(c),
+            ),
+          if (hasPhone)
+            _CustomerActionPill(
+              icon: Icons.call_rounded,
+              label: 'اتصال',
+              color: Theme.of(context).colorScheme.primary,
+              tooltip: 'اتصال بـ ${c.phone}',
+              onPressed: () => unawaited(_dialCustomer(c.phone)),
             ),
         ];
 
@@ -956,40 +1073,37 @@ class _CustomersScreenState extends State<CustomersScreen> {
                 ],
               ),
             ],
-            if (financeChips.isNotEmpty) ...[
-              const SizedBox(height: 6),
-              Wrap(spacing: 6, runSpacing: 4, children: financeChips),
+            if (financePills.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Wrap(spacing: 6, runSpacing: 6, children: financePills),
             ],
           ],
         );
 
+        // قائمة overflow — تحوي فقط الإجراءات النادرة بعد ترقية المتكرّرة
+        // إلى Card Action Pills (اتصال/ديون/تقسيط ⇐ Pills في البطاقة).
         final popup = SizedBox(
           width: 40,
           height: 36,
           child: PopupMenuButton<String>(
             padding: EdgeInsets.zero,
             icon: Icon(Icons.more_vert, color: _textSecondary, size: 22),
+            tooltip: 'المزيد',
             onSelected: (v) {
               if (v == 'view') _openCustomerFinancialDetail(c);
               if (v == 'edit') _openEditor(customer: c);
-              if (v == 'call') unawaited(_dialCustomer(c.phone));
               if (v == 'delete') _confirmDelete(c);
-              if (v == 'debt') _openDebtDetail(c);
-              if (v == 'inst') _openInstallmentsForCustomer(c);
             },
             itemBuilder: (_) => [
-              const PopupMenuItem(value: 'view', child: Text('عرض')),
+              const PopupMenuItem(value: 'view', child: Text('عرض التفاصيل')),
               const PopupMenuItem(value: 'edit', child: Text('تعديل البيانات')),
-              const PopupMenuItem(value: 'call', child: Text('اتصال')),
-              const PopupMenuItem(
-                value: 'debt',
-                child: Text('ديون الآجل المرتبطة'),
-              ),
-              const PopupMenuItem(value: 'inst', child: Text('خطط التقسيط')),
               const PopupMenuDivider(),
               const PopupMenuItem(
                 value: 'delete',
-                child: Text('حذف', style: TextStyle(color: Colors.red)),
+                child: Text(
+                  'حذف',
+                  style: TextStyle(color: AppSemanticColors.danger),
+                ),
               ),
             ],
           ),
@@ -1012,11 +1126,25 @@ class _CustomersScreenState extends State<CustomersScreen> {
           ),
         );
 
+        // إبراز البطاقة المختارة في وضع MasterDetail (الديسكتوب) — يميّز البطاقة
+        // النشطة في اللوحة اليسرى عن البطاقات الأخرى. يبقى تأثير bulk-select
+        // (selected) منفصلاً، فإذا اجتمع الاثنان نُعطي الأولوية للـ MasterDetail.
+        final isOpenedInPanel =
+            _selectedCustomerId != null && _selectedCustomerId == c.id;
         return Material(
-          color: selected ? _primary.withValues(alpha: 0.08) : _surface,
+          color: isOpenedInPanel
+              ? _primary.withValues(alpha: 0.14)
+              : (selected ? _primary.withValues(alpha: 0.08) : _surface),
           child: InkWell(
             onTap: () => _openCustomerFinancialDetail(c),
-            child: Padding(
+            child: Container(
+              decoration: isOpenedInPanel
+                  ? BoxDecoration(
+                      border: BorderDirectional(
+                        end: BorderSide(color: _primary, width: 3),
+                      ),
+                    )
+                  : null,
               padding: EdgeInsets.symmetric(
                 horizontal: isNarrow ? 6 : 8,
                 vertical: 10,
@@ -1108,10 +1236,10 @@ class _CustomersScreenState extends State<CustomersScreen> {
                               fontSize: 13,
                               fontWeight: FontWeight.w700,
                               color: c.balance.abs() < 0.01
-                                  ? const Color(0xFF2E7D32)
+                                  ? AppSemanticColors.success
                                   : (c.balance > 0.01
-                                        ? Colors.red.shade800
-                                        : const Color(0xFF7E57C2)),
+                                        ? AppSemanticColors.danger
+                                        : AppSemanticColors.info),
                             ),
                             overflow: TextOverflow.ellipsis,
                           ),
@@ -1305,8 +1433,8 @@ class _TabCountBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     var bg = fallback.withValues(alpha: 0.82);
-    if (urgentRed) bg = const Color(0xFFB91C1C);
-    if (goldAccent && !urgentRed) bg = const Color(0xFFC6A032);
+    if (urgentRed) bg = AppSemanticColors.danger;
+    if (goldAccent && !urgentRed) bg = AppColors.accentGold;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
@@ -1320,6 +1448,217 @@ class _TabCountBadge extends StatelessWidget {
           fontWeight: FontWeight.w800,
           color: Colors.white,
         ),
+      ),
+    );
+  }
+}
+
+// ── Card Action Pill ──────────────────────────────────────────────────────────
+/// زر فعل صغير (Pill) يظهر داخل بطاقة العميل بدلاً من سهم التنقل العام.
+///
+/// يلتزم نمط `_ReturnActionPill` في `invoices_screen.dart` (Golden §9.2.1):
+/// - lozenge مدور (أيقونة + نص قصير).
+/// - لون دلالي (`AppSemanticColors.*` أو `cs.primary`).
+/// - يوقف انتشار الحدث حتى لا يُفعّل onTap الأصلي للبطاقة.
+class _CustomerActionPill extends StatelessWidget {
+  const _CustomerActionPill({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.onPressed,
+    this.tooltip,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onPressed;
+  final String? tooltip;
+
+  @override
+  Widget build(BuildContext context) {
+    final pill = Material(
+      color: color.withValues(alpha: 0.12),
+      borderRadius: BorderRadius.circular(999),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: onPressed,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 15, color: color),
+              const SizedBox(width: 5),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w700,
+                  color: color,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    return tooltip == null ? pill : Tooltip(message: tooltip!, child: pill);
+  }
+}
+
+// ── شريط الإحصاءات (KPIs) ─────────────────────────────────────────────────────
+/// شريط إحصاءات قابل للتجاوب مع `DeviceVariant` — يعرض 4 KPIs للعملاء.
+///
+/// يتبع نمط `_StatsBar` في `invoices_screen.dart` (Golden):
+/// - على `phoneVariant` أو `maxWidth < 600`: شبكة 2×2.
+/// - على tabletLG+: صف أفقي بـ 4 chips.
+class _CustomersStatsBar extends StatelessWidget {
+  const _CustomersStatsBar({
+    required this.totalAll,
+    required this.indebted,
+    required this.creditor,
+    required this.distinguished,
+  });
+
+  final int totalAll;
+  final int indebted;
+  final int creditor;
+  final int distinguished;
+
+  @override
+  Widget build(BuildContext context) {
+    final layout = ScreenLayout.of(context);
+    final cs = Theme.of(context).colorScheme;
+    final fmt = NumberFormat.decimalPattern('en');
+
+    final chips = <Widget>[
+      _StatChip(
+        icon: Icons.groups_2_rounded,
+        label: 'إجمالي العملاء',
+        value: fmt.format(totalAll),
+        color: cs.primary,
+      ),
+      _StatChip(
+        icon: Icons.warning_amber_rounded,
+        label: 'مديونون',
+        value: fmt.format(indebted),
+        color: AppSemanticColors.warning,
+      ),
+      _StatChip(
+        icon: Icons.savings_rounded,
+        label: 'دائنون',
+        value: fmt.format(creditor),
+        color: AppSemanticColors.info,
+      ),
+      _StatChip(
+        icon: Icons.workspace_premium_rounded,
+        label: 'مميزون',
+        value: fmt.format(distinguished),
+        color: AppColors.accentGold,
+      ),
+    ];
+
+    return LayoutBuilder(
+      builder: (ctx, c) {
+        final useTwoByTwo = layout.isPhoneVariant || c.maxWidth < 600;
+        if (useTwoByTwo) {
+          return Column(
+            children: [
+              Row(
+                children: [
+                  Expanded(child: chips[0]),
+                  const SizedBox(width: 8),
+                  Expanded(child: chips[1]),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(child: chips[2]),
+                  const SizedBox(width: 8),
+                  Expanded(child: chips[3]),
+                ],
+              ),
+            ],
+          );
+        }
+        return Row(
+          children: [
+            for (int i = 0; i < chips.length; i++) ...[
+              Expanded(child: chips[i]),
+              if (i < chips.length - 1) const SizedBox(width: 10),
+            ],
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _StatChip extends StatelessWidget {
+  const _StatChip({
+    required this.icon,
+    required this.label,
+    required this.value,
+    required this.color,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: cs.surface,
+        borderRadius: AppShape.none,
+        border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.6)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.12),
+              borderRadius: AppShape.none,
+            ),
+            child: Icon(icon, size: 20, color: color),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    color: cs.onSurfaceVariant,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  value,
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                    color: cs.onSurface,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

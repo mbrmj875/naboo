@@ -28,6 +28,9 @@
 	<string>MainMenu</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<!-- Some macOS builds show a blank Flutter layer with merged UI+platform thread; opt out until stable. -->
+	<key>FLTEnableMergedPlatformUIThread</key>
+	<false/>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

@@ -74,7 +74,7 @@ class DeviceKickedOutScreen extends StatelessWidget {
                     style: FilledButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 14),
                     ),
-                    child: Text(kIsWeb ? 'الانتقال لتسجيل الدخول' : 'خروج'),
+                    child: const Text(kIsWeb ? 'الانتقال لتسجيل الدخول' : 'خروج'),
                   ),
                 ),
                 const SizedBox(height: 12),

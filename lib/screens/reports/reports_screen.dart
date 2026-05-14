@@ -1685,12 +1685,12 @@ class _PanelSales extends StatelessWidget {
             },
           ),
           const SizedBox(height: 18),
-          _AnalyticsCard(
+          const _AnalyticsCard(
             title: 'ملاحظات الدقّة',
             subtitle: 'حتى لا تختلط المبيعات مع السندات',
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: const [
+              children: [
                 _BulletLine(
                   'هذا القسم يعرض المبيعات فقط: نقدي/دين/تقسيط/توصيل.',
                 ),
@@ -2787,7 +2787,7 @@ class _PanelAnalytics extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 18),
-          _AnalyticsCard(
+          const _AnalyticsCard(
             title: 'كيف يُحسب الهامش؟',
             subtitle: 'شفافية كاملة — هذه هي القواعد المعتمدة',
             child: Column(
@@ -3814,7 +3814,7 @@ class _ReportsStackedAreaPainter extends CustomPainter {
       Offset(size.width - rightPad, origin.dy),
       axis,
     );
-    canvas.drawLine(Offset(leftPad, topPad), Offset(leftPad, origin.dy), axis);
+    canvas.drawLine(const Offset(leftPad, topPad), Offset(leftPad, origin.dy), axis);
 
     final cumulative = List<double>.filled(n, 0.0);
     for (var s = 0; s < series.length; s++) {

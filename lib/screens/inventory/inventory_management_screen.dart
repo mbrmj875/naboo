@@ -164,17 +164,17 @@ class _InventoryManagementScreenState extends State<InventoryManagementScreen> {
                       filled: true,
                       fillColor: _bg,
                       contentPadding: const EdgeInsets.symmetric(vertical: 10),
-                      border: OutlineInputBorder(
+                      border: const OutlineInputBorder(
                         borderRadius: BorderRadius.zero,
-                        borderSide: const BorderSide(color: _border),
+                        borderSide: BorderSide(color: _border),
                       ),
-                      enabledBorder: OutlineInputBorder(
+                      enabledBorder: const OutlineInputBorder(
                         borderRadius: BorderRadius.zero,
-                        borderSide: const BorderSide(color: _border),
+                        borderSide: BorderSide(color: _border),
                       ),
-                      focusedBorder: OutlineInputBorder(
+                      focusedBorder: const OutlineInputBorder(
                         borderRadius: BorderRadius.zero,
-                        borderSide: const BorderSide(color: _navy, width: 1.5),
+                        borderSide: BorderSide(color: _navy, width: 1.5),
                       ),
                     ),
                   ),

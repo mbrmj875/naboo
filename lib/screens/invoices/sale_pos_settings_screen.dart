@@ -65,13 +65,13 @@ class SalePosSettingsScreen extends StatelessWidget {
       case AppFontFamilies.changa:
         return GoogleFonts.changa(fontSize: size);
       case AppFontFamilies.notoNaskhArabic:
-        return TextStyle(
+        return const TextStyle(
           fontFamily: AppFontFamilies.notoNaskhArabic,
           fontSize: size,
         );
       case AppFontFamilies.tajawal:
       default:
-        return TextStyle(fontFamily: AppFontFamilies.tajawal, fontSize: size);
+        return const TextStyle(fontFamily: AppFontFamilies.tajawal, fontSize: size);
     }
   }
 
@@ -115,8 +115,9 @@ class SalePosSettingsScreen extends StatelessWidget {
     final d = prov.data;
     final scheme = Theme.of(context).colorScheme;
     final gap = ScreenLayout.of(context).pageHorizontalGap;
-    final showWideSaleLayoutControls =
-        !ScreenLayout.of(context).isHandsetForLayout;
+    final variant = context.screenLayout.layoutVariant;
+    final showWideSaleLayoutControls = variant != DeviceVariant.phoneXS &&
+        variant != DeviceVariant.phoneSM;
 
     return Directionality(
       textDirection: TextDirection.rtl,

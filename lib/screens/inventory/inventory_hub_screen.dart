@@ -1,3 +1,5 @@
+import 'dart:async' show unawaited;
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -406,7 +408,7 @@ class _InventoryHubScreenState extends State<InventoryHubScreen> {
                                     MaterialPageRoute(builder: m.builder),
                                   );
                                   // أعد التحميل عند العودة (قد تغيرت الإعدادات)
-                                  _load();
+                                  unawaited(_load());
                                 },
                               );
                             },

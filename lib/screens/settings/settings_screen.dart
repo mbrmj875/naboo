@@ -16,6 +16,7 @@ import '../../widgets/mac_style_settings_panel.dart';
 import '../../navigation/content_navigation.dart';
 import '../../theme/app_corner_style.dart';
 import '../../utils/screen_layout.dart';
+import '../../widgets/secure_screen.dart';
 import '../invoices/sale_pos_settings_screen.dart';
 import '../onboarding/business_setup_wizard_screen.dart';
 import '../printing/printing_screen.dart';
@@ -65,7 +66,8 @@ class SettingsScreen extends StatelessWidget {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final cs = Theme.of(context).colorScheme;
 
-    return Directionality(
+    return SecureScreen(
+      child: Directionality(
       textDirection: TextDirection.rtl,
       child: Scaffold(
         backgroundColor: cs.surface,
@@ -89,7 +91,7 @@ class SettingsScreen extends StatelessWidget {
                       child: Column(
                         children: [
                           // ── بطاقة الشركة ─────────────────────────────────────────────
-                          _CompanyCard(),
+                          const _CompanyCard(),
                           const SizedBox(height: 16),
                           // ── المجموعات ────────────────────────────────────────────────
                           _SettingsGroup(
@@ -126,7 +128,7 @@ class SettingsScreen extends StatelessWidget {
                                 iconColor: _kAmber,
                                 title: 'ميزات المتجر',
                                 subtitle:
-                                    'العملاء، الولاء، الضريبة، الخصم، الدين، التقسيط، البيع بالوزن — كما في الإعداد السريع',
+                                    'العملاء، الولاء، الضريبة، الخصم، الديون، التقسيط، الوزن، الملابس، والخدمات',
                                 onTap: () => _goTo(
                                   context,
                                   const BusinessSetupWizardScreen(
@@ -169,14 +171,14 @@ class SettingsScreen extends StatelessWidget {
                                   const SalePosSettingsScreen(
                                     appearanceOnly: true,
                                   ),
-                                  routeId:
-                                      AppContentRoutes.settingsSalePosAppearance,
+                                  routeId: AppContentRoutes
+                                      .settingsSalePosAppearance,
                                   breadcrumbTitle: 'ألوان وهوية التطبيق',
                                 ),
                               ),
                               _CompactSnackNotificationsTile(isDark: isDark),
                               _ThemeToggleTile(isDark: isDark),
-                              if (!context.screenLayout.isHandsetForLayout)
+                              if (!context.screenLayout.isPhoneVariant)
                                 _MacStyleSettingsPanelTile(isDark: isDark),
                               _IdleTimeoutTile(isDark: isDark),
                               _SettingItem(
@@ -251,7 +253,8 @@ class SettingsScreen extends StatelessWidget {
                                 title: 'خطة الاشتراك',
                                 subtitle:
                                     'الحساب، الأجهزة، والمزامنة التلقائية',
-                                trailing: const _SubscriptionPlanTrailingBadge(),
+                                trailing:
+                                    const _SubscriptionPlanTrailingBadge(),
                                 onTap: () => _goTo(
                                   context,
                                   const _AccountSubscriptionScreen(),
@@ -286,6 +289,7 @@ class SettingsScreen extends StatelessWidget {
             );
           },
         ),
+      ),
       ),
     );
   }
@@ -353,87 +357,83 @@ class _CompanyCard extends StatelessWidget {
       child: Container(
         padding: EdgeInsets.symmetric(horizontal: gap, vertical: 16),
         decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [
-            cs.primary,
-            Color.lerp(cs.primary, cs.surface, 0.12) ?? cs.primary,
-          ],
-          begin: Alignment.topRight,
-          end: Alignment.bottomLeft,
-        ),
-        borderRadius: ac.lg,
-        boxShadow: [
-          BoxShadow(
-            color: cs.primary.withValues(alpha: 0.18),
-            blurRadius: ac.isRounded ? 14 : 0,
-            offset: const Offset(0, 4),
+          gradient: LinearGradient(
+            colors: [
+              cs.primary,
+              Color.lerp(cs.primary, cs.surface, 0.12) ?? cs.primary,
+            ],
+            begin: Alignment.topRight,
+            end: Alignment.bottomLeft,
           ),
-        ],
+          borderRadius: ac.lg,
+          boxShadow: [
+            BoxShadow(
+              color: cs.primary.withValues(alpha: 0.18),
+              blurRadius: ac.isRounded ? 14 : 0,
+              offset: const Offset(0, 4),
+            ),
+          ],
         ),
         child: Row(
           children: [
-          // الشعار
-          Container(
-            width: 60,
-            height: 60,
-            decoration: BoxDecoration(
-              color: cs.onPrimary.withValues(alpha: 0.18),
-              borderRadius: ac.md,
+            // الشعار
+            Container(
+              width: 60,
+              height: 60,
+              decoration: BoxDecoration(
+                color: cs.onPrimary.withValues(alpha: 0.18),
+                borderRadius: ac.md,
+              ),
+              child: Icon(Icons.store_rounded, color: cs.onPrimary, size: 30),
             ),
-            child: Icon(
-              Icons.store_rounded,
-              color: cs.onPrimary,
-              size: 30,
-            ),
-          ),
-          const SizedBox(width: 14),
-          // بيانات الشركة
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'متجر البصرة',
-                  style: TextStyle(
-                    color: cs.onPrimary,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 17,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'البصرة، العراق',
-                  style: TextStyle(
-                    color: cs.onPrimary.withValues(alpha: 0.82),
-                    fontSize: 13,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: cs.onPrimary.withValues(alpha: 0.18),
-                    borderRadius: ac.sm,
-                  ),
-                  child: Text(
-                    'نسخة تجريبية',
+            const SizedBox(width: 14),
+            // بيانات الشركة
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'متجر البصرة',
                     style: TextStyle(
                       color: cs.onPrimary,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 17,
                     ),
                   ),
-                ),
-              ],
+                  const SizedBox(height: 4),
+                  Text(
+                    'البصرة، العراق',
+                    style: TextStyle(
+                      color: cs.onPrimary.withValues(alpha: 0.82),
+                      fontSize: 13,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: cs.onPrimary.withValues(alpha: 0.18),
+                      borderRadius: ac.sm,
+                    ),
+                    child: Text(
+                      'نسخة تجريبية',
+                      style: TextStyle(
+                        color: cs.onPrimary,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-          IconButton(
-            icon: Icon(Icons.edit_rounded, color: cs.onPrimary),
-            onPressed: () {},
-          ),
+            IconButton(
+              icon: Icon(Icons.edit_rounded, color: cs.onPrimary),
+              onPressed: () {},
+            ),
           ],
         ),
       ),
@@ -552,10 +552,7 @@ class _SubscriptionPlanTrailingBadge extends StatelessWidget {
         }
         return Container(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-          decoration: BoxDecoration(
-            color: bg,
-            borderRadius: ac.sm,
-          ),
+          decoration: BoxDecoration(color: bg, borderRadius: ac.sm),
           child: Text(
             label,
             style: TextStyle(
@@ -617,8 +614,11 @@ class _SettingItem extends StatelessWidget {
       ),
       trailing:
           trailing ??
-          Icon(Icons.chevron_left_rounded,
-              color: cs.onSurfaceVariant, size: 20),
+          Icon(
+            Icons.chevron_left_rounded,
+            color: cs.onSurfaceVariant,
+            size: 20,
+          ),
       onTap: onTap,
     );
   }
@@ -719,7 +719,7 @@ class _CompactSnackNotificationsTile extends StatelessWidget {
               color: _kTeal.withValues(alpha: 0.12),
               borderRadius: BorderRadius.zero,
             ),
-            child: Icon(Icons.view_sidebar_outlined, color: _kTeal, size: 20),
+            child: const Icon(Icons.view_sidebar_outlined, color: _kTeal, size: 20),
           ),
           title: const Text(
             'شكل تنبيهات الصفحات (كل التطبيق)',
@@ -973,10 +973,7 @@ class _AccountSubscriptionScreenState
                 Text(
                   'سيتم إنهاء الجلسة على ذلك الجهاز فورًا (إن كان متصلاً)، ولن يستطيع '
                   'تسجيل الدخول حتى تضغط «السماح بالعودة» من هنا.',
-                  style: TextStyle(
-                    color: Colors.grey.shade800,
-                    height: 1.45,
-                  ),
+                  style: TextStyle(color: Colors.grey.shade800, height: 1.45),
                 ),
               ],
             ),
@@ -988,9 +985,7 @@ class _AccountSubscriptionScreenState
             ),
             FilledButton(
               onPressed: () => Navigator.pop(ctx, true),
-              style: FilledButton.styleFrom(
-                backgroundColor: _kRed,
-              ),
+              style: FilledButton.styleFrom(backgroundColor: _kRed),
               child: const Text('فصل الآن'),
             ),
           ],
@@ -1047,192 +1042,192 @@ class _AccountSubscriptionScreenState
             return ListView(
               padding: EdgeInsets.symmetric(horizontal: gap, vertical: 16),
               children: [
-            _SectionCard(
-              isDark: Theme.of(context).brightness == Brightness.dark,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'بيانات الحساب',
-                    style: TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 10),
-                  Text('المستخدم: ${auth.displayName}'),
-                  const SizedBox(height: 6),
-                  Text('البريد: ${auth.email.isEmpty ? '—' : auth.email}'),
-                  const SizedBox(height: 6),
-                  Text(
-                    'الخطة الحالية: ${displayPlan?.nameAr ?? '—'}',
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'حد الأجهزة: ${_effectiveDeviceCapLabel(lic)}',
-                  ),
-                  if (lic.status == LicenseStatus.active ||
-                      lic.status == LicenseStatus.trial) ...[
-                    const SizedBox(height: 6),
-                    Text(
-                      'الأجهزة المسجّلة: ${lic.devicesInfo}',
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: Colors.grey.shade700,
+                _SectionCard(
+                  isDark: Theme.of(context).brightness == Brightness.dark,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'بيانات الحساب',
+                        style: TextStyle(fontWeight: FontWeight.bold),
                       ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-            if (lic.status == LicenseStatus.trial &&
-                lic.trialEndsAt != null) ...[
-              const SizedBox(height: 12),
-              _SectionCard(
-                isDark: Theme.of(context).brightness == Brightness.dark,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'التجربة المجانية',
-                      style: TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'الأيام المتبقية: ${lic.daysLeft ?? 0} من 15',
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      'تنتهي في: ${_fmtDate(lic.trialEndsAt)}',
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: Colors.grey.shade700,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-            if (lic.status == LicenseStatus.active) ...[
-              const SizedBox(height: 12),
-              _SectionCard(
-                isDark: Theme.of(context).brightness == Brightness.dark,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'الاشتراك',
-                      style: TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(height: 8),
-                    if (lic.expiresAt != null) ...[
-                      Text(
-                        'ينتهي الاشتراك في: ${_fmtDate(lic.expiresAt)}',
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      if (lic.daysLeft != null) ...[
+                      const SizedBox(height: 10),
+                      Text('المستخدم: ${auth.displayName}'),
+                      const SizedBox(height: 6),
+                      Text('البريد: ${auth.email.isEmpty ? '—' : auth.email}'),
+                      const SizedBox(height: 6),
+                      Text('الخطة الحالية: ${displayPlan?.nameAr ?? '—'}'),
+                      const SizedBox(height: 6),
+                      Text('حد الأجهزة: ${_effectiveDeviceCapLabel(lic)}'),
+                      if (lic.status == LicenseStatus.active ||
+                          lic.status == LicenseStatus.trial) ...[
                         const SizedBox(height: 6),
                         Text(
-                          'متبقٍ تقريباً: ${lic.daysLeft} يوماً',
+                          'الأجهزة المسجّلة: ${lic.devicesInfo}',
                           style: TextStyle(
                             fontSize: 13,
                             color: Colors.grey.shade700,
                           ),
                         ),
                       ],
-                    ] else
-                      const Text(
-                        'اشتراك مفعّل بلا تاريخ انتهاء محدد في السحابة.',
-                        style: TextStyle(fontSize: 14),
-                      ),
-                  ],
-                ),
-              ),
-            ],
-            const SizedBox(height: 12),
-            _SectionCard(
-              isDark: Theme.of(context).brightness == Brightness.dark,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      const Text(
-                        'الأجهزة المرتبطة بالحساب',
-                        style: TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                      const Spacer(),
-                      IconButton(
-                        onPressed: _busy ? null : _refresh,
-                        icon: const Icon(Icons.refresh),
-                        tooltip: 'تحديث',
-                      ),
                     ],
                   ),
-                  const SizedBox(height: 8),
-                  ValueListenableBuilder<List<AccountDevice>>(
-                    valueListenable: CloudSyncService.instance.devices,
-                    builder: (context, list, _) {
-                      if (_busy && list.isEmpty) {
-                        return const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 16),
-                          child: Center(child: CircularProgressIndicator()),
-                        );
-                      }
-                      if (list.isEmpty) {
-                        return const Text('لا توجد أجهزة مسجّلة بعد.');
-                      }
-                      return Column(
-                        children: list.map((d) {
-                          final isCurrent = d.deviceId == _currentDeviceId;
-                          return ListTile(
-                            contentPadding: EdgeInsets.zero,
-                            leading: const Icon(Icons.devices_other_outlined),
-                            title: Text(d.deviceName),
-                            subtitle: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  '${d.platform} • آخر نشاط: ${_fmtDate(d.lastSeenAt)}',
-                                ),
-                                if (d.isRevoked)
-                                  Padding(
-                                    padding: const EdgeInsets.only(top: 4),
-                                    child: Text(
-                                      'مفصول — لا يمكنه الدخول حتى الموافقة',
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        color: _kRed.withValues(alpha: 0.9),
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                  ),
-                              ],
+                ),
+                if (lic.status == LicenseStatus.trial &&
+                    lic.trialEndsAt != null) ...[
+                  const SizedBox(height: 12),
+                  _SectionCard(
+                    isDark: Theme.of(context).brightness == Brightness.dark,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'التجربة المجانية',
+                          style: TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'الأيام المتبقية: ${lic.daysLeft ?? 0} من 15',
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          'تنتهي في: ${_fmtDate(lic.trialEndsAt)}',
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: Colors.grey.shade700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+                if (lic.status == LicenseStatus.active) ...[
+                  const SizedBox(height: 12),
+                  _SectionCard(
+                    isDark: Theme.of(context).brightness == Brightness.dark,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'الاشتراك',
+                          style: TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(height: 8),
+                        if (lic.expiresAt != null) ...[
+                          Text(
+                            'ينتهي الاشتراك في: ${_fmtDate(lic.expiresAt)}',
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
                             ),
-                            trailing: isCurrent
-                                ? Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 8,
-                                      vertical: 4,
+                          ),
+                          if (lic.daysLeft != null) ...[
+                            const SizedBox(height: 6),
+                            Text(
+                              'متبقٍ تقريباً: ${lic.daysLeft} يوماً',
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: Colors.grey.shade700,
+                              ),
+                            ),
+                          ],
+                        ] else
+                          const Text(
+                            'اشتراك مفعّل بلا تاريخ انتهاء محدد في السحابة.',
+                            style: TextStyle(fontSize: 14),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 12),
+                _SectionCard(
+                  isDark: Theme.of(context).brightness == Brightness.dark,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Text(
+                            'الأجهزة المرتبطة بالحساب',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          const Spacer(),
+                          IconButton(
+                            onPressed: _busy ? null : _refresh,
+                            icon: const Icon(Icons.refresh),
+                            tooltip: 'تحديث',
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      ValueListenableBuilder<List<AccountDevice>>(
+                        valueListenable: CloudSyncService.instance.devices,
+                        builder: (context, list, _) {
+                          if (_busy && list.isEmpty) {
+                            return const Padding(
+                              padding: EdgeInsets.symmetric(vertical: 16),
+                              child: Center(child: CircularProgressIndicator()),
+                            );
+                          }
+                          if (list.isEmpty) {
+                            return const Text('لا توجد أجهزة مسجّلة بعد.');
+                          }
+                          return Column(
+                            children: list.map((d) {
+                              final isCurrent = d.deviceId == _currentDeviceId;
+                              return ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                leading: const Icon(
+                                  Icons.devices_other_outlined,
+                                ),
+                                title: Text(d.deviceName),
+                                subtitle: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      '${d.platform} • آخر نشاط: ${_fmtDate(d.lastSeenAt)}',
                                     ),
-                                    decoration: BoxDecoration(
-                                      color: _kTeal.withValues(alpha: 0.12),
-                                      borderRadius: BorderRadius.circular(8),
-                                    ),
-                                    child: const Text(
-                                      'هذا الجهاز',
-                                      style: TextStyle(
-                                        color: _kTeal,
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.w700,
+                                    if (d.isRevoked)
+                                      Padding(
+                                        padding: const EdgeInsets.only(top: 4),
+                                        child: Text(
+                                          'مفصول — لا يمكنه الدخول حتى الموافقة',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: _kRed.withValues(alpha: 0.9),
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
                                       ),
-                                    ),
-                                  )
-                                : d.isRevoked
+                                  ],
+                                ),
+                                trailing: isCurrent
+                                    ? Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 8,
+                                          vertical: 4,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: _kTeal.withValues(alpha: 0.12),
+                                          borderRadius: BorderRadius.circular(
+                                            8,
+                                          ),
+                                        ),
+                                        child: const Text(
+                                          'هذا الجهاز',
+                                          style: TextStyle(
+                                            color: _kTeal,
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                        ),
+                                      )
+                                    : d.isRevoked
                                     ? TextButton(
                                         onPressed: _busy
                                             ? null
@@ -1249,112 +1244,116 @@ class _AccountSubscriptionScreenState
                                           color: _kRed,
                                         ),
                                       ),
+                              );
+                            }).toList(),
                           );
-                        }).toList(),
-                      );
-                    },
+                        },
+                      ),
+                    ],
                   ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 12),
-            _SectionCard(
-              isDark: Theme.of(context).brightness == Brightness.dark,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'المزامنة التلقائية',
-                    style: TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'تُرفع من كل جهاز نسخة كاملة من قاعدة البيانات؛ الأحدث في السحابة هي التي تُستورد على الجهاز الآخر بعد «مزامنة الآن» أو خلال نحو دقيقة. ليست لحظية لكل إدخال. يجب تنفيذ ملف SQL للمزامنة في Supabase، والإنترنت مفعّل.',
-                    style: TextStyle(
-                      fontSize: 12,
-                      height: 1.35,
-                      color: Colors.grey.shade700,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  ValueListenableBuilder<String?>(
-                    valueListenable: CloudSyncService.instance.lastError,
-                    builder: (context, err, _) {
-                      if (err == null || err.isEmpty) {
-                        return const SizedBox.shrink();
-                      }
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 10),
-                        child: Text(
-                          err,
+                ),
+                const SizedBox(height: 12),
+                _SectionCard(
+                  isDark: Theme.of(context).brightness == Brightness.dark,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'المزامنة التلقائية',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'تُرفع من كل جهاز نسخة كاملة من قاعدة البيانات؛ الأحدث في السحابة هي التي تُستورد على الجهاز الآخر بعد «مزامنة الآن» أو خلال نحو دقيقة. ليست لحظية لكل إدخال. يجب تنفيذ ملف SQL للمزامنة في Supabase، والإنترنت مفعّل.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          height: 1.35,
+                          color: Colors.grey.shade700,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      ValueListenableBuilder<String?>(
+                        valueListenable: CloudSyncService.instance.lastError,
+                        builder: (context, err, _) {
+                          if (err == null || err.isEmpty) {
+                            return const SizedBox.shrink();
+                          }
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 10),
+                            child: Text(
+                              err,
+                              style: const TextStyle(
+                                fontSize: 12,
+                                height: 1.35,
+                                color: _kRed,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          onPressed: _busy ? null : _syncNow,
+                          icon: const Icon(Icons.sync),
+                          label: const Text('مزامنة الآن'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Theme.of(
+                              context,
+                            ).colorScheme.primary,
+                            foregroundColor: Theme.of(
+                              context,
+                            ).colorScheme.onPrimary,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'آخر مزامنة: ${_fmtDate(CloudSyncService.instance.lastSyncAt.value)}',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey,
+                        ),
+                      ),
+                      if (_message != null) ...[
+                        const SizedBox(height: 6),
+                        Text(
+                          _message!,
                           style: TextStyle(
                             fontSize: 12,
-                            height: 1.35,
-                            color: _kRed,
-                            fontWeight: FontWeight.w600,
+                            color: _message == 'تمت المزامنة بنجاح'
+                                ? Colors.green
+                                : _kRed,
                           ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () {
+                      Navigator.push<void>(
+                        context,
+                        FastContentPageRoute(
+                          settings: const RouteSettings(
+                            name: AppContentRoutes.subscriptionPlans,
+                            arguments: BreadcrumbMeta('خطط الاشتراك'),
+                          ),
+                          builder: (_) =>
+                              SubscriptionPlansScreen(currentPlan: displayPlan),
                         ),
                       );
                     },
+                    icon: const Icon(Icons.upgrade_outlined),
+                    label: const Text('عرض خطط الاشتراك'),
                   ),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton.icon(
-                      onPressed: _busy ? null : _syncNow,
-                      icon: const Icon(Icons.sync),
-                      label: const Text('مزامنة الآن'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor:
-                            Theme.of(context).colorScheme.primary,
-                        foregroundColor:
-                            Theme.of(context).colorScheme.onPrimary,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'آخر مزامنة: ${_fmtDate(CloudSyncService.instance.lastSyncAt.value)}',
-                    style: const TextStyle(fontSize: 12, color: Colors.grey),
-                  ),
-                  if (_message != null) ...[
-                    const SizedBox(height: 6),
-                    Text(
-                      _message!,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: _message == 'تمت المزامنة بنجاح'
-                            ? Colors.green
-                            : _kRed,
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: () {
-                  Navigator.push<void>(
-                    context,
-                    FastContentPageRoute(
-                      settings: const RouteSettings(
-                        name: AppContentRoutes.subscriptionPlans,
-                        arguments: BreadcrumbMeta('خطط الاشتراك'),
-                      ),
-                      builder: (_) => SubscriptionPlansScreen(
-                            currentPlan: displayPlan,
-                          ),
-                    ),
-                  );
-                },
-                icon: const Icon(Icons.upgrade_outlined),
-                label: const Text('عرض خطط الاشتراك'),
-              ),
-            ),
-          ],
+                ),
+              ],
             );
           },
         ),
@@ -1563,8 +1562,7 @@ class _InvoiceSettingsScreenState extends State<_InvoiceSettingsScreen> {
                     SliderTheme(
                       data: SliderTheme.of(context).copyWith(
                         activeTrackColor: cs.primary,
-                        inactiveTrackColor:
-                            cs.surfaceContainerHighest,
+                        inactiveTrackColor: cs.surfaceContainerHighest,
                         thumbColor: cs.primary,
                         overlayColor: cs.primary.withValues(alpha: 0.12),
                       ),
@@ -1640,8 +1638,8 @@ class _NotificationsScreenState extends State<_NotificationsScreen> {
   Future<void> _loadPrefs() async {
     final p = await SharedPreferences.getInstance();
     if (!mounted) return;
-    final defDays =
-        (p.getInt(NotificationPrefs.defaultExpiryAlertDays) ?? 14).clamp(1, 365);
+    final defDays = (p.getInt(NotificationPrefs.defaultExpiryAlertDays) ?? 14)
+        .clamp(1, 365);
     _expiryDefaultDaysCtrl.text = '$defDays';
     setState(() {
       _lowStock = p.getBool(NotificationPrefs.lowStock) ?? true;
@@ -1767,10 +1765,10 @@ class _NotificationsScreenState extends State<_NotificationsScreen> {
                         keyboardType: TextInputType.number,
                         textAlign: TextAlign.right,
                         textDirection: TextDirection.rtl,
-                        decoration: InputDecoration(
+                        decoration: const InputDecoration(
                           labelText: 'أيام التنبيه الافتراضية',
                           hintText: 'مثال: 14',
-                          border: const OutlineInputBorder(),
+                          border: OutlineInputBorder(),
                           isDense: true,
                         ),
                         onSubmitted: (_) => _saveExpiryDefaultDays(),
@@ -1908,9 +1906,7 @@ class _SwitchTile extends StatelessWidget {
       decoration: BoxDecoration(
         color: cs.surfaceContainerHighest,
         borderRadius: ac.md,
-        border: Border.all(
-          color: cs.outlineVariant.withValues(alpha: 0.4),
-        ),
+        border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.4)),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: isDark ? 0.18 : 0.05),
@@ -1958,9 +1954,7 @@ class _SectionCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: cs.surfaceContainerHighest,
         borderRadius: ac.md,
-        border: Border.all(
-          color: cs.outlineVariant.withValues(alpha: 0.45),
-        ),
+        border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.45)),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: isDark ? 0.16 : 0.05),

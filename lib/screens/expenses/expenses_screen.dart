@@ -12,8 +12,10 @@ import '../../services/cloud_sync_service.dart';
 import '../../services/database_helper.dart';
 import '../../services/expense_attachment_store.dart';
 import '../../theme/app_corner_style.dart';
+import '../../theme/design_tokens.dart';
 import '../../utils/iraqi_currency_format.dart';
 import '../../utils/numeric_format.dart';
+import '../../utils/screen_layout.dart';
 import '../../widgets/inputs/app_input.dart';
 import '../../widgets/inputs/app_price_input.dart';
 import 'expense_receipt_printer.dart';
@@ -33,6 +35,10 @@ class _ExpenseShortcutSearch extends Intent {
 
 class _ExpenseShortcutRefresh extends Intent {
   const _ExpenseShortcutRefresh();
+}
+
+class _ExpenseShortcutClose extends Intent {
+  const _ExpenseShortcutClose();
 }
 
 class ExpensesScreen extends StatefulWidget {
@@ -334,6 +340,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
         'من: ${_dateDispFmt.format(_from)}   إلى: ${_dateDispFmt.format(_to)}';
     final breakdown = _breakdownLine();
 
+    final layout = ScreenLayout.of(context);
+    final isPhone = layout.isPhoneVariant;
     return Shortcuts(
       shortcuts: <ShortcutActivator, Intent>{
         const SingleActivator(LogicalKeyboardKey.keyN, control: true):
@@ -346,6 +354,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
             const _ExpenseShortcutSearch(),
         const SingleActivator(LogicalKeyboardKey.f5):
             const _ExpenseShortcutRefresh(),
+        const SingleActivator(LogicalKeyboardKey.escape):
+            const _ExpenseShortcutClose(),
       },
       child: Actions(
         actions: <Type, Action<Intent>>{
@@ -367,58 +377,102 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
               return null;
             },
           ),
+          _ExpenseShortcutClose: CallbackAction<_ExpenseShortcutClose>(
+            onInvoke: (_) {
+              if (_searchCtrl.text.isNotEmpty) {
+                _searchCtrl.clear();
+                setState(() {});
+              } else if (_highlightExpenseId != null) {
+                setState(() => _highlightExpenseId = null);
+              }
+              return null;
+            },
+          ),
         },
-        child: Directionality(
-          textDirection: TextDirection.rtl,
-          child: DefaultTabController(
-            length: 2,
-            child: Scaffold(
-              backgroundColor: cs.surfaceContainerLowest,
-              appBar: AppBar(
-                title: const Text('المصروفات'),
-                actions: [
-                  IconButton(
-                    tooltip: 'تحديث',
-                    onPressed: _loading ? null : _refreshFromServer,
-                    icon: const Icon(Icons.refresh_rounded),
+        child: Focus(
+          autofocus: true,
+          child: Directionality(
+            textDirection: TextDirection.rtl,
+            child: DefaultTabController(
+              length: 2,
+              child: Scaffold(
+                backgroundColor: cs.surfaceContainerLowest,
+                appBar: AppBar(
+                  title: const Text('المصروفات'),
+                  // AppBar Consolidation (Golden §9.7):
+                  // - على الموبايل: refresh + overflow menu (export + print).
+                  // - على tablet/desktop: refresh + export + print كأيقونات منفصلة.
+                  actions: isPhone
+                      ? [
+                          IconButton(
+                            tooltip: 'تحديث (F5)',
+                            onPressed: _loading ? null : _refreshFromServer,
+                            icon: const Icon(Icons.refresh_rounded),
+                          ),
+                          PopupMenuButton<String>(
+                            tooltip: 'المزيد',
+                            icon: const Icon(Icons.more_vert_rounded),
+                            onSelected: (v) {
+                              if (v == 'export' && !_loading) {
+                                unawaited(_exportExpensesToClipboard());
+                              } else if (v == 'print') {
+                                _openReportDialog();
+                              }
+                            },
+                            itemBuilder: (_) => const [
+                              PopupMenuItem(
+                                value: 'export',
+                                child: ListTile(
+                                  leading: Icon(Icons.table_chart_outlined),
+                                  title: Text('تصدير (نسخ Excel)'),
+                                  contentPadding: EdgeInsets.zero,
+                                  dense: true,
+                                ),
+                              ),
+                              PopupMenuItem(
+                                value: 'print',
+                                child: ListTile(
+                                  leading: Icon(Icons.print_outlined),
+                                  title: Text('طباعة تقرير فترة'),
+                                  contentPadding: EdgeInsets.zero,
+                                  dense: true,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ]
+                      : [
+                          IconButton(
+                            tooltip: 'تصدير (نسخ لـ Excel)',
+                            onPressed:
+                                _loading ? null : _exportExpensesToClipboard,
+                            icon: const Icon(Icons.table_chart_outlined),
+                          ),
+                          IconButton(
+                            tooltip: 'طباعة تقرير فترة',
+                            onPressed: _openReportDialog,
+                            icon: const Icon(Icons.print_outlined),
+                          ),
+                          IconButton(
+                            tooltip: 'تحديث (F5)',
+                            onPressed: _loading ? null : _refreshFromServer,
+                            icon: const Icon(Icons.refresh_rounded),
+                          ),
+                        ],
+                  bottom: const TabBar(
+                    tabs: [
+                      Tab(text: 'السجل'),
+                      Tab(text: 'تحليلات'),
+                    ],
                   ),
-                ],
-                bottom: const TabBar(
-                  tabs: [
-                    Tab(text: 'السجل'),
-                    Tab(text: 'تحليلات'),
-                  ],
                 ),
-              ),
-              floatingActionButton: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  FloatingActionButton.small(
-                    heroTag: 'exp_export_btn',
-                    tooltip: 'تصدير (نسخ لـ Excel)',
-                    onPressed: _loading ? null : _exportExpensesToClipboard,
-                    backgroundColor: cs.secondaryContainer,
-                    foregroundColor: cs.onSecondaryContainer,
-                    child: const Icon(Icons.table_chart_outlined),
-                  ),
-                  const SizedBox(width: 10),
-                  FloatingActionButton.small(
-                    heroTag: 'exp_print_btn',
-                    tooltip: 'طباعة تقرير فترة',
-                    onPressed: _openReportDialog,
-                    backgroundColor: cs.secondaryContainer,
-                    foregroundColor: cs.onSecondaryContainer,
-                    child: const Icon(Icons.print_outlined),
-                  ),
-                  const SizedBox(width: 10),
-                  FloatingActionButton.extended(
-                    heroTag: 'exp_add_btn',
-                    onPressed: () => unawaited(_openEditor()),
-                    icon: const Icon(Icons.add_rounded),
-                    label: const Text('إضافة مصروف'),
-                  ),
-                ],
-              ),
+                // FAB واحد فقط بعد الـ Consolidation (export + print انتقلتا للـ AppBar).
+                floatingActionButton: FloatingActionButton.extended(
+                  heroTag: 'exp_add_btn',
+                  onPressed: () => unawaited(_openEditor()),
+                  icon: const Icon(Icons.add_rounded),
+                  label: const Text('إضافة مصروف'),
+                ),
               body: TabBarView(
                 children: [
                   _ExpensesLedgerTab(
@@ -460,6 +514,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
               ),
             ),
           ),
+        ),
         ),
       ),
     );
@@ -536,9 +591,21 @@ class _ExpensesLedgerTab extends StatelessWidget {
 
     return ListView.builder(
       padding: const EdgeInsets.only(bottom: 24),
-      itemCount: 1 + contentCount,
+      itemCount: 2 + contentCount,
       itemBuilder: (context, index) {
+        // Stats Bar (Golden §9.2) — أعلى التبويب لإعطاء نظرة سريعة على الحالة
+        // الكلية للمصروفات قبل الفلاتر التفصيلية.
         if (index == 0) {
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+            child: _ExpensesStatsBar(
+              items: items,
+              byCategory: const [],
+              totalAll: total,
+            ),
+          );
+        }
+        if (index == 1) {
           return Padding(
             padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
             child: Material(
@@ -746,12 +813,12 @@ class _ExpensesLedgerTab extends StatelessWidget {
                             borderRadius: ac.md,
                             hint: const Text('الفئة'),
                             items: [
-                              DropdownMenuItem<int?>(
+                              const DropdownMenuItem<int?>(
                                 value: null,
                                 child: Row(
                                   children: [
-                                    const Text('🔵 '),
-                                    const Expanded(child: Text('كل الفئات')),
+                                    Text('🔵 '),
+                                    Expanded(child: Text('كل الفئات')),
                                   ],
                                 ),
                               ),
@@ -881,7 +948,7 @@ class _ExpensesLedgerTab extends StatelessWidget {
           );
         }
 
-        final i = index - 1;
+        final i = index - 2;
         final e = items[i];
         final color = expenseCategoryColor(e.categoryName, cs);
         final icon = expenseCategoryIcon(e.categoryName);
@@ -952,9 +1019,8 @@ class _ExpensesLedgerTab extends StatelessWidget {
                                     vertical: 4,
                                   ),
                                   decoration: BoxDecoration(
-                                    color: const Color(
-                                      0xFFFBBF24,
-                                    ).withValues(alpha: 0.22),
+                                    color: AppSemanticColors.warning
+                                        .withValues(alpha: 0.22),
                                     borderRadius: BorderRadius.circular(999),
                                   ),
                                   child: const Text(
@@ -962,7 +1028,7 @@ class _ExpensesLedgerTab extends StatelessWidget {
                                     style: TextStyle(
                                       fontWeight: FontWeight.w800,
                                       fontSize: 10.5,
-                                      color: Color(0xFFB45309),
+                                      color: AppSemanticColors.supplier,
                                     ),
                                   ),
                                 ),
@@ -975,12 +1041,10 @@ class _ExpensesLedgerTab extends StatelessWidget {
                                 ),
                                 decoration: BoxDecoration(
                                   color: pending
-                                      ? const Color(
-                                          0xFFF59E0B,
-                                        ).withValues(alpha: 0.18)
-                                      : const Color(
-                                          0xFF16A34A,
-                                        ).withValues(alpha: 0.14),
+                                      ? AppSemanticColors.warning
+                                          .withValues(alpha: 0.18)
+                                      : AppSemanticColors.success
+                                          .withValues(alpha: 0.14),
                                   borderRadius: BorderRadius.circular(999),
                                 ),
                                 child: Text(
@@ -989,8 +1053,8 @@ class _ExpensesLedgerTab extends StatelessWidget {
                                     fontWeight: FontWeight.w800,
                                     fontSize: 10.5,
                                     color: pending
-                                        ? const Color(0xFFB45309)
-                                        : const Color(0xFF15803D),
+                                        ? AppSemanticColors.supplier
+                                        : AppSemanticColors.success,
                                   ),
                                 ),
                               ),
@@ -1846,7 +1910,7 @@ class _StackedAreaPainter extends CustomPainter {
       Offset(size.width - rightPad, origin.dy),
       axis,
     );
-    canvas.drawLine(Offset(leftPad, topPad), Offset(leftPad, origin.dy), axis);
+    canvas.drawLine(const Offset(leftPad, topPad), Offset(leftPad, origin.dy), axis);
 
     // Build stacked values
     final cumulative = List<double>.filled(n, 0.0);
@@ -2849,13 +2913,13 @@ class _ExpenseEditorSheetState extends State<_ExpenseEditorSheet> {
                         ),
                       ),
                       if (warnFuturePaid)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 6),
+                        const Padding(
+                          padding: EdgeInsets.only(top: 6),
                           child: Text(
                             'هل المصروف مدفوع مسبقاً؟',
                             style: TextStyle(
                               fontSize: 11.5,
-                              color: const Color(0xFFF59E0B),
+                              color: AppSemanticColors.warning,
                               fontWeight: FontWeight.w600,
                             ),
                           ),
@@ -2918,7 +2982,7 @@ class _ExpenseEditorSheetState extends State<_ExpenseEditorSheet> {
                 if (s.length <= 200) return;
                 _descCtrl.value = TextEditingValue(
                   text: s.substring(0, 200),
-                  selection: TextSelection.collapsed(offset: 200),
+                  selection: const TextSelection.collapsed(offset: 200),
                 );
               },
             ),
@@ -3311,6 +3375,188 @@ class _EmployeePickerDialogState extends State<_EmployeePickerDialog> {
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
             child: const Text('إلغاء'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── شريط الإحصاءات (KPIs) للمصروفات ───────────────────────────────────────────
+/// 4 KPIs قابلة للتجاوب — يلتزم نمط `_StatsBar` في `invoices_screen.dart`
+/// (Golden §9.2): على phone variants شبكة 2×2، على tablet+ صف أفقي.
+class _ExpensesStatsBar extends StatelessWidget {
+  const _ExpensesStatsBar({
+    required this.items,
+    required this.byCategory,
+    required this.totalAll,
+  });
+
+  final List<ExpenseEntry> items;
+  final List<Map<String, dynamic>> byCategory;
+  final double totalAll;
+
+  @override
+  Widget build(BuildContext context) {
+    final layout = ScreenLayout.of(context);
+    final cs = Theme.of(context).colorScheme;
+    final now = DateTime.now();
+    final todayKey = DateTime(now.year, now.month, now.day);
+
+    var todayTotal = 0.0;
+    var monthTotal = 0.0;
+    for (final e in items) {
+      final d = e.occurredAt;
+      final dKey = DateTime(d.year, d.month, d.day);
+      if (dKey == todayKey) todayTotal += e.amount;
+      if (d.year == now.year && d.month == now.month) monthTotal += e.amount;
+    }
+
+    String topCatName = '—';
+    double topCatTotal = 0.0;
+    if (byCategory.isNotEmpty) {
+      topCatName = (byCategory.first['categoryName'] as String?) ?? '—';
+      topCatTotal =
+          ((byCategory.first['total'] as num?)?.toDouble()) ?? 0.0;
+    } else if (items.isNotEmpty) {
+      // مصدر بديل عند غياب byCategory: نُجمّع من items مباشرة.
+      final agg = <String, double>{};
+      for (final e in items) {
+        agg[e.categoryName] = (agg[e.categoryName] ?? 0) + e.amount;
+      }
+      final sorted = agg.entries.toList()
+        ..sort((a, b) => b.value.compareTo(a.value));
+      if (sorted.isNotEmpty) {
+        topCatName = sorted.first.key;
+        topCatTotal = sorted.first.value;
+      }
+    }
+
+    final chips = <Widget>[
+      _ExpenseStatChip(
+        icon: Icons.today_rounded,
+        label: 'مصروف اليوم',
+        value: IraqiCurrencyFormat.formatIqd(todayTotal),
+        color: cs.primary,
+      ),
+      _ExpenseStatChip(
+        icon: Icons.calendar_view_month_rounded,
+        label: 'هذا الشهر',
+        value: IraqiCurrencyFormat.formatIqd(monthTotal),
+        color: AppSemanticColors.info,
+      ),
+      _ExpenseStatChip(
+        icon: Icons.category_rounded,
+        label: 'أعلى فئة: $topCatName',
+        value: IraqiCurrencyFormat.formatIqd(topCatTotal),
+        color: AppSemanticColors.warning,
+      ),
+      _ExpenseStatChip(
+        icon: Icons.receipt_long_rounded,
+        label: 'عدد المصروفات',
+        value: NumberFormat.decimalPattern('en').format(items.length),
+        color: AppSemanticColors.supplier,
+      ),
+    ];
+
+    return LayoutBuilder(
+      builder: (ctx, c) {
+        final useTwoByTwo = layout.isPhoneVariant || c.maxWidth < 600;
+        if (useTwoByTwo) {
+          return Column(
+            children: [
+              Row(
+                children: [
+                  Expanded(child: chips[0]),
+                  const SizedBox(width: 8),
+                  Expanded(child: chips[1]),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(child: chips[2]),
+                  const SizedBox(width: 8),
+                  Expanded(child: chips[3]),
+                ],
+              ),
+            ],
+          );
+        }
+        return Row(
+          children: [
+            for (int i = 0; i < chips.length; i++) ...[
+              Expanded(child: chips[i]),
+              if (i < chips.length - 1) const SizedBox(width: 10),
+            ],
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _ExpenseStatChip extends StatelessWidget {
+  const _ExpenseStatChip({
+    required this.icon,
+    required this.label,
+    required this.value,
+    required this.color,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: cs.surface,
+        borderRadius: AppShape.none,
+        border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.6)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.12),
+              borderRadius: AppShape.none,
+            ),
+            child: Icon(icon, size: 20, color: color),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    color: cs.onSurfaceVariant,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  value,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                    color: cs.onSurface,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
           ),
         ],
       ),

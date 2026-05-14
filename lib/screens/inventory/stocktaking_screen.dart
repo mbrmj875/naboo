@@ -521,24 +521,24 @@ class _NewSessionSheetState extends State<_NewSessionSheet> {
             const SizedBox(height: 20),
             TextFormField(
               controller: _titleCtrl,
-              decoration: InputDecoration(
+              decoration: const InputDecoration(
                 labelText: 'عنوان الجلسة *',
                 hintText: 'مثال: جرد شهر يوليو 2025',
-                prefixIcon: const Icon(
+                prefixIcon: Icon(
                   Icons.title_rounded,
                   size: 20,
                   color: _t2,
                 ),
                 filled: true,
-                fillColor: const Color(0xFFF8FAFC),
+                fillColor: Color(0xFFF8FAFC),
                 border: OutlineInputBorder(borderRadius: BorderRadius.zero),
                 enabledBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.zero,
-                  borderSide: const BorderSide(color: _border),
+                  borderSide: BorderSide(color: _border),
                 ),
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.zero,
-                  borderSide: const BorderSide(color: _navy, width: 1.5),
+                  borderSide: BorderSide(color: _navy, width: 1.5),
                 ),
               ),
               validator: (v) =>
@@ -547,23 +547,23 @@ class _NewSessionSheetState extends State<_NewSessionSheet> {
             const SizedBox(height: 12),
             DropdownButtonFormField<int>(
               value: _warehouseId,
-              decoration: InputDecoration(
+              decoration: const InputDecoration(
                 labelText: 'المستودع',
-                prefixIcon: const Icon(
+                prefixIcon: Icon(
                   Icons.warehouse_outlined,
                   size: 20,
                   color: _t2,
                 ),
                 filled: true,
-                fillColor: const Color(0xFFF8FAFC),
+                fillColor: Color(0xFFF8FAFC),
                 border: OutlineInputBorder(borderRadius: BorderRadius.zero),
                 enabledBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.zero,
-                  borderSide: const BorderSide(color: _border),
+                  borderSide: BorderSide(color: _border),
                 ),
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.zero,
-                  borderSide: const BorderSide(color: _navy, width: 1.5),
+                  borderSide: BorderSide(color: _navy, width: 1.5),
                 ),
               ),
               items: _warehouses
@@ -598,7 +598,7 @@ class _NewSessionSheetState extends State<_NewSessionSheet> {
               style: ElevatedButton.styleFrom(
                 backgroundColor: _orange,
                 padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+                shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
               ),
             ),
           ],
@@ -720,17 +720,17 @@ class _CountingScreenState extends State<_CountingScreen> {
                 filled: true,
                 fillColor: _card,
                 contentPadding: const EdgeInsets.symmetric(vertical: 12),
-                border: OutlineInputBorder(
+                border: const OutlineInputBorder(
                   borderRadius: BorderRadius.zero,
-                  borderSide: const BorderSide(color: _border),
+                  borderSide: BorderSide(color: _border),
                 ),
-                enabledBorder: OutlineInputBorder(
+                enabledBorder: const OutlineInputBorder(
                   borderRadius: BorderRadius.zero,
-                  borderSide: const BorderSide(color: _border),
+                  borderSide: BorderSide(color: _border),
                 ),
-                focusedBorder: OutlineInputBorder(
+                focusedBorder: const OutlineInputBorder(
                   borderRadius: BorderRadius.zero,
-                  borderSide: const BorderSide(color: _orange, width: 1.5),
+                  borderSide: BorderSide(color: _orange, width: 1.5),
                 ),
               ),
             ),
@@ -904,17 +904,17 @@ class _CountItemState extends State<_CountItem> {
                   vertical: 10,
                   horizontal: 8,
                 ),
-                border: OutlineInputBorder(
+                border: const OutlineInputBorder(
                   borderRadius: BorderRadius.zero,
-                  borderSide: const BorderSide(color: _border),
+                  borderSide: BorderSide(color: _border),
                 ),
-                enabledBorder: OutlineInputBorder(
+                enabledBorder: const OutlineInputBorder(
                   borderRadius: BorderRadius.zero,
-                  borderSide: const BorderSide(color: _border),
+                  borderSide: BorderSide(color: _border),
                 ),
-                focusedBorder: OutlineInputBorder(
+                focusedBorder: const OutlineInputBorder(
                   borderRadius: BorderRadius.zero,
-                  borderSide: const BorderSide(color: _orange, width: 1.5),
+                  borderSide: BorderSide(color: _orange, width: 1.5),
                 ),
               ),
               onChanged: (v) {

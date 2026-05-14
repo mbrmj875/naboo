@@ -3,13 +3,17 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:archive/archive.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../utils/app_logger.dart';
 import 'app_remote_config_service.dart';
 import 'database_helper.dart';
 import 'license_service.dart';
+import 'realtime_watchdog.dart';
+import 'connectivity_resume_sync.dart';
 
 /// نتيجة تسجيل الجهاز: مرفوض = تم فصله من الحساب ولا يُسمح بالدخول حتى يوافق جهاز آخر.
 enum DeviceAccessResult { ok, revoked }
@@ -112,18 +116,101 @@ class CloudSyncService {
   /// يُعرَّف من [main] لتجنّب استيراد دائري مع [AuthProvider].
   Future<void> Function()? onRemoteDeviceRevoked;
 
+  /// Step 22: يُستدعى عندما يحدّث الخادم صفّ tenant_access لهذا الـ tenant
+  /// إلى حالة موقفة (kill_switch=true / revoked / suspended). يُعدّ من main
+  /// لتنفيذ logout + شاشة "تم إيقاف الحساب" بدون استيراد دائري مع AuthProvider.
+  Future<void> Function()? onTenantRevoked;
+
   Timer? _syncTimer;
   Timer? _syncDebounce;
   Timer? _realtimePullDebounce;
+  Timer? _deltaDebounceTimer;
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
+  ConnectivityResumeScheduler? _connectivityResumeScheduler;
   RealtimeChannel? _snapshotChannel;
   RealtimeChannel? _devicesAccessChannel;
-  String? _activeUserId;
+  RealtimeChannel? _syncNotificationsChannel;
+  RealtimeChannel? _tenantAccessChannel;
+  final List<Map<String, dynamic>> _pendingDeltas = [];
+  String? _activeSnapshotUserId;
+  String? _activeDeltaUserId;
+  String? _activeTenantAccessUserId;
+
   bool _syncRunning = false;
   bool _syncQueued = false;
   bool _preflightInProgress = false;
   DateTime? _lastSuccessfulPreflightAt;
+  final Map<String, String> _lastRealtimeStatusLog = {};
+  final Map<String, DateTime> _lastRealtimeErrorLogAt = {};
+
+  // أسماء قنوات Realtime — تُستخدم لتمييز كل قناة في AppLogger وفي watchdog.
+  static const String _kSnapshotsLabel = 'Realtime Snapshots';
+  static const String _kSyncNotificationsLabel = 'Realtime Sync Notifications';
+  static const String _kDeviceAccessLabel = 'Realtime Device Access';
+  static const String _kTenantAccessLabel = 'Realtime Tenant Access';
+
+  /// حارس قنوات Realtime: يفحص صحة كل قناة كل 20 ثانية ويُعيد الاتصال
+  /// بـ exponential backoff (5s → 10s → 20s → 40s → 60s cap).
+  /// مكشوف للاختبار حتى يمكن استبداله بنسخة بـ clock/timer مزيّفَين.
+  @visibleForTesting
+  RealtimeWatchdog realtimeWatchdog = RealtimeWatchdog();
+
+  /// للاختبارات فقط — يستبدل [Connectivity().onConnectivityChanged].
+  @visibleForTesting
+  Stream<List<ConnectivityResult>>? connectivityStreamOverrideForTesting;
 
   Future<void> _syncLock = Future<void>.value();
+
+  void _logRealtimeStatus(String label, Object status, [Object? error]) {
+    if (!kDebugMode) return;
+    final statusText = status.toString();
+    if (_lastRealtimeStatusLog[label] != statusText) {
+      _lastRealtimeStatusLog[label] = statusText;
+      AppLogger.info('CloudSync', '[$label] الحالة: $statusText');
+    }
+    if (error == null) return;
+
+    final now = DateTime.now();
+    final last = _lastRealtimeErrorLogAt[label];
+    if (last != null && now.difference(last) < const Duration(seconds: 30)) {
+      return;
+    }
+    _lastRealtimeErrorLogAt[label] = now;
+    AppLogger.warn(
+      'CloudSync',
+      '[$label] انقطاع Realtime مؤقت، وسيعيد Supabase الاشتراك: $error',
+    );
+  }
+
+  void _logRealtimeEvent(String label, String event, {String? detail}) {
+    // كل حدث Realtime يُعتبر دليلاً على أن القناة حيّة → نُحدّث watchdog حتى
+    // في الإصدار النهائي (بدون لوغ).
+    realtimeWatchdog.markEvent(label);
+    if (!kDebugMode) return;
+    final suffix = detail == null || detail.isEmpty ? '' : ' — $detail';
+    AppLogger.info('CloudSync', '[$label] $event$suffix');
+  }
+
+  /// يدمج لوغ الحالة مع watchdog: SUBSCRIBED ⇒ markHealthy، channelError /
+  /// closed / timedOut ⇒ markError. هذا هو نقطة الدخول الوحيدة لحالات
+  /// subscribe من قنوات Realtime.
+  void _handleRealtimeStatus(
+    String label,
+    RealtimeSubscribeStatus status, [
+    Object? error,
+  ]) {
+    _logRealtimeStatus(label, status, error);
+    switch (status) {
+      case RealtimeSubscribeStatus.subscribed:
+        realtimeWatchdog.markHealthy(label);
+        break;
+      case RealtimeSubscribeStatus.channelError:
+      case RealtimeSubscribeStatus.closed:
+      case RealtimeSubscribeStatus.timedOut:
+        realtimeWatchdog.markError(label);
+        break;
+    }
+  }
 
   Future<T> _runSyncExclusive<T>(Future<T> Function() op) {
     final next = Completer<T>();
@@ -178,6 +265,10 @@ class CloudSyncService {
       await refreshDevices();
       await _attachSnapshotRealtime();
       await _attachDeviceAccessRealtime();
+      await _attachTenantAccessRealtime();
+      await _attachSyncNotificationsRealtime();
+      realtimeWatchdog.start();
+      _startConnectivityListener();
       _startAutoSyncTimer();
       lastError.value = null;
       lastSyncAt.value = DateTime.now();
@@ -203,8 +294,24 @@ class CloudSyncService {
     _syncTimer = null;
     _syncDebounce?.cancel();
     _syncDebounce = null;
+    _deltaDebounceTimer?.cancel();
+    _deltaDebounceTimer = null;
+    _pendingDeltas.clear();
     devices.value = const [];
-    _activeUserId = null;
+
+    _stopConnectivityListener();
+
+    // أوقف watchdog أولاً لمنع جدولة إعادة اتصال على قنوات بصدد الإغلاق.
+    realtimeWatchdog.stop();
+    realtimeWatchdog.unregister(_kSnapshotsLabel);
+    realtimeWatchdog.unregister(_kDeviceAccessLabel);
+    realtimeWatchdog.unregister(_kTenantAccessLabel);
+    realtimeWatchdog.unregister(_kSyncNotificationsLabel);
+
+    _activeSnapshotUserId = null;
+    _activeDeltaUserId = null;
+    _activeTenantAccessUserId = null;
+    
     final channel = _snapshotChannel;
     _snapshotChannel = null;
     if (channel != null) {
@@ -212,11 +319,28 @@ class CloudSyncService {
         await Supabase.instance.client.removeChannel(channel);
       } catch (_) {}
     }
+    
     final devCh = _devicesAccessChannel;
     _devicesAccessChannel = null;
     if (devCh != null) {
       try {
         await Supabase.instance.client.removeChannel(devCh);
+      } catch (_) {}
+    }
+
+    final syncNotifCh = _syncNotificationsChannel;
+    _syncNotificationsChannel = null;
+    if (syncNotifCh != null) {
+      try {
+        await Supabase.instance.client.removeChannel(syncNotifCh);
+      } catch (_) {}
+    }
+
+    final tenantCh = _tenantAccessChannel;
+    _tenantAccessChannel = null;
+    if (tenantCh != null) {
+      try {
+        await Supabase.instance.client.removeChannel(tenantCh);
       } catch (_) {}
     }
   }
@@ -775,11 +899,46 @@ class CloudSyncService {
     });
   }
 
+  /// يستمع لتغيّر الشبكة؛ عند العودة من وضع غير متصل إلى متصل يُجدول
+  /// [syncNow(forcePull: true)] بعد ثانية واحدة (debounce).
+  void _startConnectivityListener() {
+    _stopConnectivityListener();
+    _connectivityResumeScheduler = ConnectivityResumeScheduler(
+      debounce: const Duration(seconds: 1),
+      onOfflineToOnlineDebounced: () {
+        if (kDebugMode) {
+          AppLogger.info(
+            'CloudSync',
+            'عودة الشبكة بعد انقطاع — تشغيل syncNow(forcePull: true)',
+          );
+        }
+        unawaited(syncNow(forcePull: true));
+      },
+    );
+    final stream =
+        connectivityStreamOverrideForTesting ??
+            Connectivity().onConnectivityChanged;
+    _connectivitySubscription = stream.listen((results) {
+      if (kDebugMode) {
+        AppLogger.info('CloudSync', 'Connectivity: $results');
+      }
+      _connectivityResumeScheduler?.handle(results);
+    });
+  }
+
+  void _stopConnectivityListener() {
+    _connectivitySubscription?.cancel();
+    _connectivitySubscription = null;
+    _connectivityResumeScheduler?.dispose();
+    _connectivityResumeScheduler = null;
+  }
+
   Future<void> _attachSnapshotRealtime() async {
     final client = Supabase.instance.client;
     final user = client.auth.currentUser;
     if (user == null) return;
-    if (_activeUserId == user.id && _snapshotChannel != null) return;
+    if (_activeSnapshotUserId == user.id && _snapshotChannel != null) return;
+
 
     final old = _snapshotChannel;
     _snapshotChannel = null;
@@ -789,24 +948,38 @@ class CloudSyncService {
       } catch (_) {}
     }
 
-    _activeUserId = user.id;
+    _activeSnapshotUserId = user.id;
     final channel = client.channel('sync-snapshots-${user.id}');
+
     try {
       channel
           .onPostgresChanges(
             event: PostgresChangeEvent.insert,
             schema: 'public',
             table: _snapshotsTable,
-            callback: (_) => _debouncedRealtimePull(user.id),
+            callback: (payload) {
+              _logRealtimeEvent('Realtime Snapshots', 'استلام لقطة جديدة');
+              _debouncedRealtimePull(user.id);
+            },
           )
           .onPostgresChanges(
             event: PostgresChangeEvent.update,
             schema: 'public',
             table: _snapshotsTable,
-            callback: (_) => _debouncedRealtimePull(user.id),
+            callback: (payload) {
+              _logRealtimeEvent('Realtime Snapshots', 'تحديث لقطة');
+              _debouncedRealtimePull(user.id);
+            },
           )
-          .subscribe();
+          .subscribe((status, [error]) {
+            _handleRealtimeStatus(_kSnapshotsLabel, status, error);
+          });
       _snapshotChannel = channel;
+      // سجّل في watchdog: لو ساءت صحة القناة سيُعاد استدعاء _attachSnapshotRealtime.
+      realtimeWatchdog.register(
+        _kSnapshotsLabel,
+        reconnect: _attachSnapshotRealtime,
+      );
     } on PostgrestException catch (e) {
       if (_isMissingSyncTables(e)) {
         lastError.value =
@@ -815,6 +988,199 @@ class CloudSyncService {
         return;
       }
       rethrow;
+    }
+  }
+
+  static const Map<String, String> _entityToTableMap = {
+    'expense': 'expenses',
+    'expense_category': 'expense_categories',
+    'work_shift': 'work_shifts',
+    'cash_ledger': 'cash_ledger',
+    'product': 'products',
+    'category': 'categories',
+    'brand': 'brands',
+    'customer': 'customers',
+    'supplier': 'suppliers',
+    'supplier_bill': 'supplier_bills',
+    'supplier_payout': 'supplier_payouts',
+    'customer_debt_payment': 'customer_debt_payments',
+    'installment_plan': 'installment_plans',
+    'installment': 'installments',
+  };
+
+  Future<void> _attachSyncNotificationsRealtime() async {
+    final client = Supabase.instance.client;
+    final user = client.auth.currentUser;
+    if (user == null) return;
+    if (_activeDeltaUserId == user.id && _syncNotificationsChannel != null) return;
+
+
+    final old = _syncNotificationsChannel;
+    _syncNotificationsChannel = null;
+    if (old != null) {
+      try {
+        await client.removeChannel(old);
+      } catch (_) {}
+    }
+
+    _activeDeltaUserId = user.id;
+    final deviceId = await LicenseService.instance.getDeviceId();
+
+    final channel = client.channel('sync-notifications-${user.id}');
+    try {
+      channel.onPostgresChanges(
+        event: PostgresChangeEvent.insert,
+        schema: 'public',
+        table: 'sync_notifications',
+        callback: (payload) {
+          final newRow = payload.newRecord;
+          final senderId = newRow['sender_device_id']?.toString();
+          _logRealtimeEvent(
+            'Realtime Sync Notifications',
+            'استلام إشعار مزامنة',
+            detail: senderId == deviceId ? 'من هذا الجهاز' : 'من جهاز آخر',
+          );
+          // Self-filtering: Ignore notifications from this device
+          if (senderId == null || senderId == deviceId) {
+            _logRealtimeEvent(
+              'Realtime Sync Notifications',
+              'تجاهل إشعار لا يحتاج معالجة',
+            );
+            return;
+          }
+
+          _pendingDeltas.add(newRow);
+          _debouncedDeltaFetch();
+        },
+      ).subscribe((status, [error]) {
+        _handleRealtimeStatus(_kSyncNotificationsLabel, status, error);
+      });
+      _syncNotificationsChannel = channel;
+      realtimeWatchdog.register(
+        _kSyncNotificationsLabel,
+        reconnect: _attachSyncNotificationsRealtime,
+      );
+    } catch (e) {
+      if (kDebugMode) {
+        AppLogger.error(
+          'CloudSync',
+          'Error attaching sync_notifications listener',
+          e,
+        );
+      }
+    }
+  }
+
+  void _debouncedDeltaFetch() {
+    _deltaDebounceTimer?.cancel();
+    _deltaDebounceTimer = Timer(const Duration(milliseconds: 300), () {
+      if (_pendingDeltas.isEmpty) return;
+      final deltasToProcess = List<Map<String, dynamic>>.from(_pendingDeltas);
+      _pendingDeltas.clear();
+      unawaited(_runSyncExclusive(() => _processDeltas(deltasToProcess)));
+    });
+  }
+
+  Future<void> _processDeltas(List<Map<String, dynamic>> deltas) async {
+    final client = Supabase.instance.client;
+    final db = await DatabaseHelper().database;
+    bool uiNeedsRefresh = false;
+
+    // 1. Sort by id to ensure UPSERT/DELETE order is correct (replaces sequence_number)
+    deltas.sort((a, b) => (a['id'] as int? ?? 0).compareTo(b['id'] as int? ?? 0));
+
+    final deletes = deltas.where((d) => d['operation'] == 'DELETE').toList();
+    final upserts = deltas.where((d) => d['operation'] != 'DELETE').toList();
+
+    // 2. Fetch all UPSERT operations FIRST (Outside of transaction)
+    final upsertsByType = <String, Set<String>>{};
+    for (final u in upserts) {
+      final entityType = u['entity_type']?.toString();
+      final globalId = u['global_id']?.toString();
+      if (entityType != null && globalId != null) {
+        upsertsByType.putIfAbsent(entityType, () => {}).add(globalId);
+      }
+    }
+
+    final fetchedData = <String, List<Map<String, dynamic>>>{};
+    final failedDeltas = <Map<String, dynamic>>[];
+
+    for (final entry in upsertsByType.entries) {
+      final entityType = entry.key;
+      final globalIds = entry.value.toList();
+      final tableName = _entityToTableMap[entityType];
+      
+      if (tableName == null) continue;
+      fetchedData[tableName] = [];
+
+      // Fetch in chunks of 100 to avoid long query strings
+      for (int i = 0; i < globalIds.length; i += 100) {
+        final batchIds = globalIds.skip(i).take(100).toList();
+        try {
+          final remoteRows = await client
+              .from(tableName)
+              .select()
+              .inFilter('global_id', batchIds);
+
+          if (remoteRows.isNotEmpty) {
+            fetchedData[tableName]!.addAll(remoteRows.cast<Map<String, dynamic>>());
+          }
+        } catch (e) {
+          if (kDebugMode) {
+            AppLogger.error(
+              'CloudSync',
+              'Error fetching delta for $tableName',
+              e,
+            );
+          }
+          // Basic Retry Logic: Re-add to pending to retry on next tick
+          failedDeltas.addAll(upserts.where((d) => d['entity_type'] == entityType && batchIds.contains(d['global_id'])));
+        }
+      }
+    }
+
+    // Restore failed fetches for retry
+    if (failedDeltas.isNotEmpty) {
+      _pendingDeltas.addAll(failedDeltas);
+    }
+
+    // 3. Apply changes inside a safe transaction
+    try {
+      await db.transaction((txn) async {
+        // Handle DELETE operations
+        for (final d in deletes) {
+          final entityType = d['entity_type']?.toString();
+          final globalId = d['global_id']?.toString();
+          if (entityType == null || globalId == null) continue;
+          final tableName = _entityToTableMap[entityType];
+          if (tableName != null) {
+            await txn.delete(tableName, where: 'global_id = ?', whereArgs: [globalId]);
+            uiNeedsRefresh = true;
+          }
+        }
+
+        // Apply fetched UPSERTS
+        for (final entry in fetchedData.entries) {
+          final tableName = entry.key;
+          final remoteRows = entry.value;
+          if (remoteRows.isNotEmpty) {
+            await _mergeTableRows(txn, tableName, remoteRows);
+            uiNeedsRefresh = true;
+          }
+        }
+      });
+    } catch (e) {
+      if (kDebugMode) {
+        AppLogger.error(
+          'CloudSync',
+          'Error in _processDeltas transaction',
+          e,
+        );
+      }
+    }
+
+    if (uiNeedsRefresh) {
+      remoteImportGeneration.value++;
     }
   }
 
@@ -851,6 +1217,7 @@ class CloudSyncService {
             table: _devicesTable,
             callback: (payload) {
               final map = payload.newRecord;
+              _logRealtimeEvent('Realtime Device Access', 'تحديث حالة جهاز');
               if (map.isEmpty) return;
               if (map['user_id']?.toString() != user.id) return;
               if (map['device_id']?.toString() != deviceId) return;
@@ -863,10 +1230,167 @@ class CloudSyncService {
               }
             },
           )
-          .subscribe();
+          .subscribe((status, [error]) {
+            _handleRealtimeStatus(_kDeviceAccessLabel, status, error);
+          });
       _devicesAccessChannel = channel;
+      realtimeWatchdog.register(
+        _kDeviceAccessLabel,
+        reconnect: _attachDeviceAccessRealtime,
+      );
     } catch (e) {
       lastError.value = e.toString();
+    }
+  }
+
+  // ── Step 22: Realtime Kill Switch (tenant_access) ───────────────────────
+
+  /// متاح للاختبار: يُستبدل استدعاء [LicenseService.checkLicense] الحقيقي
+  /// (الذي يحتاج Supabase مُهيَّأة) بدالّة تُعيد [LicenseStatus] محاكية.
+  /// تُستعمل في اختبارات Step 22 لأن استدعاء [LicenseService.checkLicense]
+  /// المباشر سيرمي على [Supabase.instance] غير المُهيَّأة في unit test.
+  @visibleForTesting
+  Future<LicenseStatus> Function()? checkLicenseOverrideForTesting;
+
+  /// متاح للاختبار: يُشغّل المعالج الداخلي لـ tenant_access UPDATE مباشرة
+  /// دون الحاجة إلى قناة Supabase حقيقية.
+  @visibleForTesting
+  Future<void> handleTenantAccessUpdateForTesting(
+    Map<String, dynamic> newRecord,
+    String currentUserId,
+  ) =>
+      _handleTenantAccessUpdate(newRecord, currentUserId);
+
+  /// المنطق الفعلي لمعالجة UPDATE على `tenant_access`. مُستخرَج كي يكون
+  /// قابلاً للاختبار بمعزل عن Supabase Realtime.
+  ///
+  /// 1) يتجاهل الأحداث لأي tenant آخر (دفاع متعدّد الطبقات: حتى لو فشل
+  ///    server-side filter لأي سبب، client يفلتر مرّة ثانية).
+  /// 2) يستدعي [LicenseService.checkLicense] (forceRemote: true) كي
+  ///    يتشاور مع `app_tenant_access_status` ويُحدّد القرار النهائي
+  ///    (يحترم مصفوفة Step 21: kill_switch / revoked / suspended ⇒
+  ///    LicenseStatus.suspended).
+  /// 3) إن أصبحت الحالة [LicenseStatus.suspended] ⇒ يُطلق [onTenantRevoked]
+  ///    (logout + شاشة "تم إيقاف الحساب").
+  Future<void> _handleTenantAccessUpdate(
+    Map<String, dynamic> newRecord,
+    String currentUserId,
+  ) async {
+    final tenantOnRecord = newRecord['tenant_id']?.toString();
+    if (tenantOnRecord == null || tenantOnRecord.isEmpty) {
+      return;
+    }
+    if (tenantOnRecord != currentUserId) {
+      // حدث خاطئ (لا يطابق tenant الحالي) — تجاهله بصمت.
+      return;
+    }
+
+    if (kDebugMode) {
+      AppLogger.info(
+        'CloudSync',
+        '[$_kTenantAccessLabel] تحديث صلاحيات الحساب — إعادة تحقّق من الترخيص',
+      );
+    }
+
+    LicenseStatus newStatus;
+    try {
+      final override = checkLicenseOverrideForTesting;
+      if (override != null) {
+        newStatus = await override();
+      } else {
+        await LicenseService.instance.checkLicense(forceRemote: true);
+        newStatus = LicenseService.instance.state.status;
+      }
+    } catch (e) {
+      // فشل الفحص — لا نُطلق onTenantRevoked على فشل شبكي عابر؛ Step 21
+      // overlay سيستعمل الكاش لاحقاً إن لزم الأمر.
+      if (kDebugMode) {
+        AppLogger.warn(
+          'CloudSync',
+          '[$_kTenantAccessLabel] checkLicense فشل: $e',
+        );
+      }
+      return;
+    }
+
+    if (newStatus == LicenseStatus.suspended) {
+      if (kDebugMode) {
+        AppLogger.warn(
+          'CloudSync',
+          '[$_kTenantAccessLabel] الحالة بعد الفحص = suspended ⇒ إطلاق onTenantRevoked',
+        );
+      }
+      final cb = onTenantRevoked;
+      if (cb != null) {
+        unawaited(cb());
+      }
+    }
+  }
+
+  /// قناة Realtime على `tenant_access` لاستلام أحداث Kill Switch فورياً.
+  /// عند أيّ UPDATE على صفّ هذا الـ tenant ⇒ نعيد تقييم الترخيص؛ لو أصبحت
+  /// الحالة suspended ⇒ logout + شاشة "تم إيقاف الحساب" (انظر [onTenantRevoked]).
+  ///
+  /// يحترم نفس عقد القنوات الأخرى: filter على tenant_id من الجلسة، تسجيل في
+  /// [realtimeWatchdog] مع callback إعادة الاتصال = نفس هذه الدالّة.
+  Future<void> _attachTenantAccessRealtime() async {
+    final client = Supabase.instance.client;
+    final user = client.auth.currentUser;
+    if (user == null) return;
+    if (_activeTenantAccessUserId == user.id && _tenantAccessChannel != null) {
+      return;
+    }
+
+    final old = _tenantAccessChannel;
+    _tenantAccessChannel = null;
+    if (old != null) {
+      try {
+        await client.removeChannel(old);
+      } catch (_) {}
+    }
+
+    _activeTenantAccessUserId = user.id;
+    final channel = client.channel('tenant-access-${user.id}');
+
+    try {
+      channel
+          .onPostgresChanges(
+            event: PostgresChangeEvent.update,
+            schema: 'public',
+            table: 'tenant_access',
+            // server-side filter — RLS يضمن أن لن نستقبل سوى صفّنا، لكن
+            // نُضيف filter صريحاً كطبقة دفاع إضافية.
+            filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'tenant_id',
+              value: user.id,
+            ),
+            callback: (payload) {
+              _logRealtimeEvent(
+                _kTenantAccessLabel,
+                'تحديث tenant_access',
+              );
+              final map = payload.newRecord;
+              if (map.isEmpty) return;
+              unawaited(_handleTenantAccessUpdate(map, user.id));
+            },
+          )
+          .subscribe((status, [error]) {
+            _handleRealtimeStatus(_kTenantAccessLabel, status, error);
+          });
+      _tenantAccessChannel = channel;
+      realtimeWatchdog.register(
+        _kTenantAccessLabel,
+        reconnect: _attachTenantAccessRealtime,
+      );
+    } catch (e) {
+      lastError.value = e.toString();
+      if (kDebugMode) {
+        AppLogger.warn(
+          'CloudSync',
+          '[$_kTenantAccessLabel] فشل الاشتراك: $e',
+        );
+      }
     }
   }
 
@@ -1075,7 +1599,7 @@ class CloudSyncService {
 
   String _encodePayload(Map<String, dynamic> payload) {
     final raw = utf8.encode(jsonEncode(payload));
-    return base64Encode(GZipEncoder().encodeBytes(raw));
+    return base64Encode(const GZipEncoder().encodeBytes(raw));
   }
 
   Future<Map<String, dynamic>?> _fetchChunkedPayload({
@@ -1097,7 +1621,7 @@ class CloudSyncService {
     final text = b.toString();
     if (text.isEmpty) return null;
     final gz = base64Decode(text);
-    final decodedBytes = GZipDecoder().decodeBytes(gz);
+    final decodedBytes = const GZipDecoder().decodeBytes(gz);
     final decoded = utf8.decode(decodedBytes);
     final data = jsonDecode(decoded);
     if (data is! Map<String, dynamic>) return null;
@@ -1195,6 +1719,314 @@ class CloudSyncService {
     }
   }
 
+  /// يربط [expenses.cashLedgerId] بقيد الصندوق المستورد عبر [global_id] (`{expense}_cash`).
+  Future<void> _syncExpenseCashLedgerForeignKey(
+    Transaction txn,
+    Map<String, dynamic> expenseRow,
+    Set<String> localCols,
+  ) async {
+    if (!localCols.contains('cashLedgerId') ||
+        !localCols.contains('global_id')) {
+      return;
+    }
+    final egid = (expenseRow['global_id'] ?? '').toString().trim();
+    if (egid.isEmpty) return;
+    final status = (expenseRow['status'] ?? '').toString();
+    final affects = (expenseRow['affectsCash'] as num?)?.toInt() ?? 1;
+
+    if (status != 'paid' || affects == 0) {
+      await txn.update(
+        'expenses',
+        {'cashLedgerId': null},
+        where: 'global_id = ?',
+        whereArgs: [egid],
+      );
+      return;
+    }
+
+    final ledgerGid = '${egid}_cash';
+    final led = await txn.query(
+      'cash_ledger',
+      columns: ['id'],
+      where: 'global_id = ?',
+      whereArgs: [ledgerGid],
+      limit: 1,
+    );
+    if (led.isEmpty) return;
+    final lid = led.first['id'] as int;
+    await txn.update(
+      'expenses',
+      {'cashLedgerId': lid},
+      where: 'global_id = ?',
+      whereArgs: [egid],
+    );
+  }
+
+  /// دمج [cash_ledger] عبر [global_id] (مزامنة لقطة + طابور).
+  Future<bool> _mergeCashLedgerByGlobalId({
+    required Transaction txn,
+    required Map<String, dynamic> incomingRaw,
+    required Map<String, dynamic> incoming,
+    required Set<String> localCols,
+    required DateTime? deletedAt,
+    required List<String> pkCols,
+  }) async {
+    const table = 'cash_ledger';
+    final gid = (incoming['global_id'] ?? '').toString().trim();
+    if (gid.isEmpty) return false;
+
+    final localMatches = await txn.query(
+      table,
+      where: 'global_id = ?',
+      whereArgs: [gid],
+      limit: 1,
+    );
+
+    if (deletedAt != null) {
+      await txn.delete(table, where: 'global_id = ?', whereArgs: [gid]);
+      return true;
+    }
+
+    if (localMatches.isEmpty) {
+      final toInsert = Map<String, dynamic>.from(incoming)..remove('id');
+      if (localCols.contains('workShiftId')) {
+        final wsg = (incomingRaw['work_shift_global_id'] ?? incoming['work_shift_global_id'] ?? '').toString().trim();
+        if (wsg.isNotEmpty) {
+          final ws = await txn.query(
+            'work_shifts',
+            columns: ['id'],
+            where: 'global_id = ?',
+            whereArgs: [wsg],
+            limit: 1,
+          );
+          if (ws.isNotEmpty) {
+            toInsert['workShiftId'] = ws.first['id'];
+          }
+        }
+      }
+      await txn.insert(
+        table,
+        toInsert,
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+      return true;
+    }
+
+    final current = localMatches.first;
+    if (!_incomingWins(current, incomingRaw)) {
+      return true;
+    }
+
+    final merged = Map<String, dynamic>.from(incoming);
+    for (final c in pkCols) {
+      merged[c] = current[c];
+    }
+    if (localCols.contains('workShiftId')) {
+      final wsg = (incomingRaw['work_shift_global_id'] ?? incoming['work_shift_global_id'] ?? '').toString().trim();
+      if (wsg.isNotEmpty) {
+        final ws = await txn.query(
+          'work_shifts',
+          columns: ['id'],
+          where: 'global_id = ?',
+          whereArgs: [wsg],
+          limit: 1,
+        );
+        if (ws.isNotEmpty) {
+          merged['workShiftId'] = ws.first['id'];
+        }
+      } else if (current['workShiftId'] != null) {
+          merged['workShiftId'] = current['workShiftId'];
+      }
+    }
+    await txn.insert(
+      table,
+      merged,
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    return true;
+  }
+
+  /// دمج جداول Master بسيطة عبر [global_id] + LWW على الطوابع الزمنية.
+  Future<bool> _mergeSimpleTableByGlobalId({
+    required Transaction txn,
+    required String table,
+    required Map<String, dynamic> incomingRaw,
+    required Map<String, dynamic> incoming,
+    required Set<String> localCols,
+    required DateTime? deletedAt,
+    required List<String> pkCols,
+  }) async {
+    final gid = (incoming['global_id'] ?? '').toString().trim();
+    if (gid.isEmpty) return false;
+
+    final localMatches = await txn.query(
+      table,
+      where: 'global_id = ?',
+      whereArgs: [gid],
+      limit: 1,
+    );
+
+    if (deletedAt != null) {
+      await txn.delete(table, where: 'global_id = ?', whereArgs: [gid]);
+      return true;
+    }
+
+    if (localMatches.isEmpty) {
+      final toInsert = Map<String, dynamic>.from(incoming)..remove('id');
+      await txn.insert(
+        table,
+        toInsert,
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+      return true;
+    }
+
+    final current = localMatches.first;
+    if (!_incomingWins(current, incomingRaw)) {
+      return true;
+    }
+
+    final merged = Map<String, dynamic>.from(incoming);
+    for (final c in pkCols) {
+      merged[c] = current[c];
+    }
+    await txn.insert(
+      table,
+      merged,
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    return true;
+  }
+
+  Future<bool> _mergeWorkShiftsByGlobalId({
+    required Transaction txn,
+    required Map<String, dynamic> incomingRaw,
+    required Map<String, dynamic> incoming,
+    required Set<String> localCols,
+    required DateTime? deletedAt,
+    required List<String> pkCols,
+  }) async {
+    return _mergeSimpleTableByGlobalId(
+      txn: txn,
+      table: 'work_shifts',
+      incomingRaw: incomingRaw,
+      incoming: incoming,
+      localCols: localCols,
+      deletedAt: deletedAt,
+      pkCols: pkCols,
+    );
+  }
+
+  /// دمج مصروف/تصنيف عبر [global_id] لتفادي تكرار الصف بعد مزامنة الطابور ثم لقطة لاحقة.
+  Future<bool> _mergeExpenseEntityByGlobalId({
+    required Transaction txn,
+    required String table,
+    required Map<String, dynamic> incomingRaw,
+    required Map<String, dynamic> incoming,
+    required Set<String> localCols,
+    required DateTime? deletedAt,
+    required List<String> pkCols,
+  }) async {
+    final gid = (incoming['global_id'] ?? '').toString().trim();
+    if (gid.isEmpty) return false;
+
+    final localMatches = await txn.query(
+      table,
+      where: 'global_id = ?',
+      whereArgs: [gid],
+      limit: 1,
+    );
+
+    if (deletedAt != null) {
+      if (table == 'expenses') {
+        await txn.delete(
+          'cash_ledger',
+          where: 'global_id = ?',
+          whereArgs: ['${gid}_cash'],
+        );
+      }
+      await txn.delete(table, where: 'global_id = ?', whereArgs: [gid]);
+      return true;
+    }
+
+    if (localMatches.isEmpty) {
+      final toInsert = Map<String, dynamic>.from(incoming);
+      toInsert.remove('id');
+      if (table == 'expenses') {
+        if (localCols.contains('cashLedgerId')) {
+          toInsert['cashLedgerId'] = null;
+        }
+        final cg = (incomingRaw['category_global_id'] ??
+                incoming['category_global_id'] ??
+                '')
+            .toString()
+            .trim();
+        if (cg.isNotEmpty && localCols.contains('categoryId')) {
+          final cats = await txn.query(
+            'expense_categories',
+            columns: ['id'],
+            where: 'global_id = ?',
+            whereArgs: [cg],
+            limit: 1,
+          );
+          if (cats.isNotEmpty) {
+            toInsert['categoryId'] = cats.first['id'];
+          }
+        }
+      }
+      await txn.insert(
+        table,
+        toInsert,
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+      if (table == 'expenses') {
+        await _syncExpenseCashLedgerForeignKey(txn, toInsert, localCols);
+      }
+      return true;
+    }
+
+    final current = localMatches.first;
+    if (!_incomingWins(current, incomingRaw)) {
+      return true;
+    }
+
+    final merged = Map<String, dynamic>.from(incoming);
+    for (final c in pkCols) {
+      merged[c] = current[c];
+    }
+    if (table == 'expenses') {
+      if (localCols.contains('cashLedgerId')) {
+        merged['cashLedgerId'] = current['cashLedgerId'];
+      }
+      final cg = (incomingRaw['category_global_id'] ??
+              incoming['category_global_id'] ??
+              '')
+          .toString()
+          .trim();
+      if (cg.isNotEmpty && localCols.contains('categoryId')) {
+        final cats = await txn.query(
+          'expense_categories',
+          columns: ['id'],
+          where: 'global_id = ?',
+          whereArgs: [cg],
+          limit: 1,
+        );
+        if (cats.isNotEmpty) {
+          merged['categoryId'] = cats.first['id'];
+        }
+      }
+    }
+    await txn.insert(
+      table,
+      merged,
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    if (table == 'expenses') {
+      await _syncExpenseCashLedgerForeignKey(txn, merged, localCols);
+    }
+    return true;
+  }
+
   Future<void> _mergeTableRows(
     Transaction txn,
     String table,
@@ -1221,7 +2053,158 @@ class CloudSyncService {
           _rowDate(incomingRaw['deletedAt']) ??
           _rowDate(incomingRaw['deleted_at']);
 
+      if (table == 'cash_ledger' && localCols.contains('global_id')) {
+        final handled = await _mergeCashLedgerByGlobalId(
+          txn: txn,
+          incomingRaw: incomingRaw,
+          incoming: incoming,
+          localCols: localCols,
+          deletedAt: deletedAt,
+          pkCols: pkCols,
+        );
+        if (handled) continue;
+      }
+
+      if (table == 'work_shifts' && localCols.contains('global_id')) {
+        final handled = await _mergeWorkShiftsByGlobalId(
+          txn: txn,
+          incomingRaw: incomingRaw,
+          incoming: incoming,
+          localCols: localCols,
+          deletedAt: deletedAt,
+          pkCols: pkCols,
+        );
+        if (handled) continue;
+      }
+
+      if ((table == 'customers' || table == 'suppliers') &&
+          localCols.contains('global_id')) {
+        final handled = await _mergeSimpleTableByGlobalId(
+          txn: txn,
+          table: table,
+          incomingRaw: incomingRaw,
+          incoming: incoming,
+          localCols: localCols,
+          deletedAt: deletedAt,
+          pkCols: pkCols,
+        );
+        if (handled) continue;
+      }
+
+      if ((table == 'expenses' || table == 'expense_categories') &&
+          localCols.contains('global_id')) {
+        final handled = await _mergeExpenseEntityByGlobalId(
+          txn: txn,
+          table: table,
+          incomingRaw: incomingRaw,
+          incoming: incoming,
+          localCols: localCols,
+          deletedAt: deletedAt,
+          pkCols: pkCols,
+        );
+        if (handled) continue;
+      }
+
+            if (table == 'installment_plans' && localCols.contains('global_id')) {
+        final handled = await _mergeInstallmentPlansByGlobalId(
+          txn: txn,
+          incomingRaw: incomingRaw,
+          incoming: incoming,
+          localCols: localCols,
+          deletedAt: deletedAt,
+          pkCols: pkCols,
+        );
+        if (handled) continue;
+      }
+
+      if (table == 'installments' && localCols.contains('global_id')) {
+        final handled = await _mergeInstallmentsByGlobalId(
+          txn: txn,
+          incomingRaw: incomingRaw,
+          incoming: incoming,
+          localCols: localCols,
+          deletedAt: deletedAt,
+          pkCols: pkCols,
+        );
+        if (handled) continue;
+      }
+
+      if (table == 'customer_debt_payments' && localCols.contains('global_id')) {
+        final handled = await _mergeCustomerDebtPaymentsByGlobalId(
+          txn: txn,
+          incomingRaw: incomingRaw,
+          incoming: incoming,
+          localCols: localCols,
+          deletedAt: deletedAt,
+          pkCols: pkCols,
+        );
+        if (handled) continue;
+      }
+      
+      if ((table == 'supplier_bills' || table == 'supplier_payouts') && localCols.contains('global_id')) {
+         final handled = await _mergeSupplierFinancialsByGlobalId(
+          txn: txn,
+          table: table,
+          incomingRaw: incomingRaw,
+          incoming: incoming,
+          localCols: localCols,
+          deletedAt: deletedAt,
+          pkCols: pkCols,
+        );
+        if (handled) continue;
+      }
+
+      if (table == 'installment_plans' && localCols.contains('global_id')) {
+        final handled = await _mergeInstallmentPlansByGlobalId(
+          txn: txn,
+          incomingRaw: incomingRaw,
+          incoming: incoming,
+          localCols: localCols,
+          deletedAt: deletedAt,
+          pkCols: pkCols,
+        );
+        if (handled) continue;
+      }
+
+      if (table == 'installments' && localCols.contains('global_id')) {
+        final handled = await _mergeInstallmentsByGlobalId(
+          txn: txn,
+          incomingRaw: incomingRaw,
+          incoming: incoming,
+          localCols: localCols,
+          deletedAt: deletedAt,
+          pkCols: pkCols,
+        );
+        if (handled) continue;
+      }
+
+      if (table == 'customer_debt_payments' && localCols.contains('global_id')) {
+        final handled = await _mergeCustomerDebtPaymentsByGlobalId(
+          txn: txn,
+          incomingRaw: incomingRaw,
+          incoming: incoming,
+          localCols: localCols,
+          deletedAt: deletedAt,
+          pkCols: pkCols,
+        );
+        if (handled) continue;
+      }
+      
+      if ((table == 'supplier_bills' || table == 'supplier_payouts') && localCols.contains('global_id')) {
+         final handled = await _mergeSupplierFinancialsByGlobalId(
+          txn: txn,
+          table: table,
+          incomingRaw: incomingRaw,
+          incoming: incoming,
+          localCols: localCols,
+          deletedAt: deletedAt,
+          pkCols: pkCols,
+        );
+        if (handled) continue;
+      }
+
       // إذا لا يوجد مفتاح أساسي عملي، fallback على replace.
+
       if (pkCols.isEmpty || pkCols.any((c) => !incoming.containsKey(c))) {
         if (deletedAt == null) {
           await txn.insert(
@@ -1275,7 +2258,144 @@ class CloudSyncService {
     }
   }
 
+  Future<bool> _mergeInstallmentPlansByGlobalId({
+    required Transaction txn,
+    required Map<String, dynamic> incomingRaw,
+    required Map<String, dynamic> incoming,
+    required Set<String> localCols,
+    required DateTime? deletedAt,
+    required List<String> pkCols,
+  }) async {
+    final gid = (incomingRaw['global_id'] ?? incoming['global_id'] ?? '').toString().trim();
+    if (gid.isEmpty) return false;
+
+    if (localCols.contains('customer_global_id')) {
+      final cgid = (incomingRaw['customer_global_id'] ?? incoming['customer_global_id'] ?? '').toString().trim();
+      if (cgid.isNotEmpty) {
+        final c = await txn.query('customers', columns: ['id'], where: 'global_id = ?', whereArgs: [cgid], limit: 1);
+        if (c.isNotEmpty) {
+          incoming['customerId'] = c.first['id'];
+        }
+      }
+    }
+
+    if (localCols.contains('invoice_global_id')) {
+      final igid = (incomingRaw['invoice_global_id'] ?? incoming['invoice_global_id'] ?? '').toString().trim();
+      if (igid.isNotEmpty) {
+        final i = await txn.query('invoices', columns: ['id'], where: 'global_id = ?', whereArgs: [igid], limit: 1);
+        if (i.isNotEmpty) {
+          incoming['invoiceId'] = i.first['id'];
+        }
+      }
+    }
+
+    await _doMergeWithGlobalId(txn: txn, table: 'installment_plans', gid: gid, incomingRaw: incomingRaw, incoming: incoming, deletedAt: deletedAt);
+    return true;
+  }
+
+  Future<bool> _mergeInstallmentsByGlobalId({
+    required Transaction txn,
+    required Map<String, dynamic> incomingRaw,
+    required Map<String, dynamic> incoming,
+    required Set<String> localCols,
+    required DateTime? deletedAt,
+    required List<String> pkCols,
+  }) async {
+    final gid = (incomingRaw['global_id'] ?? incoming['global_id'] ?? '').toString().trim();
+    if (gid.isEmpty) return false;
+
+    if (localCols.contains('plan_global_id')) {
+      final pgid = (incomingRaw['plan_global_id'] ?? incoming['plan_global_id'] ?? '').toString().trim();
+      if (pgid.isNotEmpty) {
+        final p = await txn.query('installment_plans', columns: ['id'], where: 'global_id = ?', whereArgs: [pgid], limit: 1);
+        if (p.isNotEmpty) {
+          incoming['planId'] = p.first['id'];
+        }
+      }
+    }
+
+    await _doMergeWithGlobalId(txn: txn, table: 'installments', gid: gid, incomingRaw: incomingRaw, incoming: incoming, deletedAt: deletedAt);
+    return true;
+  }
+
+  Future<bool> _mergeCustomerDebtPaymentsByGlobalId({
+    required Transaction txn,
+    required Map<String, dynamic> incomingRaw,
+    required Map<String, dynamic> incoming,
+    required Set<String> localCols,
+    required DateTime? deletedAt,
+    required List<String> pkCols,
+  }) async {
+    final gid = (incomingRaw['global_id'] ?? incoming['global_id'] ?? '').toString().trim();
+    if (gid.isEmpty) return false;
+
+    if (localCols.contains('customer_global_id')) {
+      final cgid = (incomingRaw['customer_global_id'] ?? incoming['customer_global_id'] ?? '').toString().trim();
+      if (cgid.isNotEmpty) {
+        final c = await txn.query('customers', columns: ['id'], where: 'global_id = ?', whereArgs: [cgid], limit: 1);
+        if (c.isNotEmpty) {
+          incoming['customerId'] = c.first['id'];
+        }
+      }
+    }
+
+    await _doMergeWithGlobalId(txn: txn, table: 'customer_debt_payments', gid: gid, incomingRaw: incomingRaw, incoming: incoming, deletedAt: deletedAt);
+    return true;
+  }
+  
+  Future<bool> _mergeSupplierFinancialsByGlobalId({
+    required Transaction txn,
+    required String table,
+    required Map<String, dynamic> incomingRaw,
+    required Map<String, dynamic> incoming,
+    required Set<String> localCols,
+    required DateTime? deletedAt,
+    required List<String> pkCols,
+  }) async {
+    final gid = (incomingRaw['global_id'] ?? incoming['global_id'] ?? '').toString().trim();
+    if (gid.isEmpty) return false;
+
+    if (localCols.contains('supplier_global_id')) {
+      final sgid = (incomingRaw['supplier_global_id'] ?? incoming['supplier_global_id'] ?? '').toString().trim();
+      if (sgid.isNotEmpty) {
+        final s = await txn.query('suppliers', columns: ['id'], where: 'global_id = ?', whereArgs: [sgid], limit: 1);
+        if (s.isNotEmpty) {
+          incoming['supplierId'] = s.first['id'];
+        }
+      }
+    }
+
+    await _doMergeWithGlobalId(txn: txn, table: table, gid: gid, incomingRaw: incomingRaw, incoming: incoming, deletedAt: deletedAt);
+    return true;
+  }
+
+  Future<void> _doMergeWithGlobalId({
+    required Transaction txn,
+    required String table,
+    required String gid,
+    required Map<String, dynamic> incomingRaw,
+    required Map<String, dynamic> incoming,
+    required DateTime? deletedAt,
+  }) async {
+    final existing = await txn.query(table, where: 'global_id = ?', whereArgs: [gid], limit: 1);
+    if (deletedAt != null) {
+      await txn.delete(table, where: 'global_id = ?', whereArgs: [gid]);
+      return;
+    }
+    if (existing.isEmpty) {
+      incoming.remove('id');
+      await txn.insert(table, incoming, conflictAlgorithm: ConflictAlgorithm.replace);
+    } else {
+      final current = existing.first;
+      if (_incomingWins(current, incomingRaw)) {
+        incoming['id'] = current['id'];
+        await txn.insert(table, incoming, conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+    }
+  }
+
   Future<List<String>> _primaryKeyColumns(
+
     DatabaseExecutor ex,
     String table,
   ) async {
@@ -1501,6 +2621,8 @@ class CloudSyncService {
       'android_metadata',
       'sqlite_sequence',
       'users', // لا نرفع passwordHash/passwordSalt إلى السحابة
+      'sync_queue', // طابور المزامنة محلي لكل جهاز — لا يُرفع في اللقطة
+      'product_warehouse_stock',
     };
     return !excluded.contains(tableName);
   }

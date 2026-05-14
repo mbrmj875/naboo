@@ -173,7 +173,7 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
           context,
           MaterialPageRoute(builder: (_) => const AddPurchaseOrderScreen()),
         );
-        if (result == true) _load();
+        if (result == true) unawaited(_load());
       }
 
       return Directionality(
@@ -421,7 +421,7 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                                         ),
                                       ),
                                     );
-                                    if (result == true) _load();
+                                    if (result == true) unawaited(_load());
                                   },
                                   onEdit: () async {
                                     final result = await Navigator.push<bool>(
@@ -432,7 +432,7 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                                         ),
                                       ),
                                     );
-                                    if (result == true) _load();
+                                    if (result == true) unawaited(_load());
                                   },
                                   onCopy: () async {
                                     final result = await Navigator.push<bool>(
@@ -443,7 +443,7 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                                         ),
                                       ),
                                     );
-                                    if (result == true) _load();
+                                    if (result == true) unawaited(_load());
                                   },
                                   onCancel: () async {
                                     final ok = await showDialog<bool>(
@@ -477,7 +477,7 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                                       where: 'id = ? AND tenantId = ?',
                                       whereArgs: [po['id'], _tenant.activeTenantId],
                                     );
-                                    _load();
+                                    unawaited(_load());
                                   },
                                 );
                               },

@@ -20,26 +20,45 @@ alwaysApply: false
 
 ## أدوات التخطيط الموجودة (لا تُعد كتابتها)
 
-**`lib/utils/screen_layout.dart`** — الموسوم الفعلي للمشروع. استخدم:
+**`lib/utils/screen_layout.dart`** — المرجع المعماري الوحيد للتخطيط. استخدمه حصراً:
 
 ```dart
 import '../../utils/screen_layout.dart';
 
 final layout = context.screenLayout;
-layout.isHandsetForLayout      // shortestSide < 600
-layout.useWideSaleTwoColumnLayout // !handset && width >= 700
+
+// 1. للقرارات التخطيطية (عدد الأعمدة، نوع الـ Nav، إظهار الـ Sidebar):
+// تقرأ هذه الدوال (size.width) وتُقسّم الشاشات لـ 6 فئات:
+layout.isPhoneXS      // width < 360 || height < 600
+layout.isPhoneSM      // 360 - 599
+layout.isTabletSM     // 600 - 839
+layout.isTabletLG     // 840 - 1023
+layout.isDesktopSM    // 1024 - 1439
+layout.isDesktopLG    // >= 1440
+
+// 2. لقرارات الحجم المادي (Touch Targets، فتح الكاميرا، الاهتزاز):
+layout.isHandsetForLayout // shortestSide < 600
+
+// 3. ثوابت أخرى:
 layout.pageHorizontalGap       // 10/12/16 حسب العرض
 layout.sheetInitialFraction    // للـ DraggableScrollableSheet
 ```
 
-للتقسيم الثلاثي (موبايل/تابلت/ديسكتوب) على مستوى الشاشة:
+⚠️ **قاعدة صارمة:** لا تخلط بين القرارات المادية والتخطيطية. شاشة نافذة صغيرة على جهاز كمبيوتر قد تكون `isPhoneSM` تخطيطياً (عمود واحد)، لكنها ليست `isHandsetForLayout` مادياً (مؤشر فأرة، لا حاجة لأزرار لمس عملاقة).
+
+للتقسيم (موبايل/تابلت/ديسكتوب) على مستوى الشاشة:
 
 ```dart
 @override
 Widget build(BuildContext context) {
-  final w = MediaQuery.sizeOf(context).width;
-  if (w < 640)  return _MobileLayout(data: data);
-  if (w < 1024) return _TabletLayout(data: data);
+  final layout = context.screenLayout;
+  
+  if (layout.isPhoneXS || layout.isPhoneSM) {
+    return _MobileLayout(data: data);
+  }
+  if (layout.isTabletSM || layout.isTabletLG) {
+    return _TabletLayout(data: data);
+  }
   return _DesktopLayout(data: data);
 }
 ```

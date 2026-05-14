@@ -592,11 +592,11 @@ class _QuickProductUpdateScreenState extends State<QuickProductUpdateScreen> {
                     child: ConstrainedBox(
                       constraints: const BoxConstraints(maxHeight: 220),
                       child: _rows.isEmpty
-                          ? Padding(
-                              padding: const EdgeInsets.all(14),
+                          ? const Padding(
+                              padding: EdgeInsets.all(14),
                               child: Align(
                                 alignment: AlignmentDirectional.centerStart,
-                                child: const Text('لا توجد نتائج'),
+                                child: Text('لا توجد نتائج'),
                               ),
                             )
                           : ListView.separated(

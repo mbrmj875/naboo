@@ -154,17 +154,10 @@ class _StockVoucherScreenState extends State<StockVoucherScreen> {
       return;
     }
 
-    var supplierId = await _db.findActiveSupplierIdByName(
-      cleanSupplier,
-      tenantId: tenantId,
-    );
-    supplierId ??= await _db.insertSupplier(
-      name: cleanSupplier,
-      tenantId: tenantId,
-    );
+    var supplierId = await _db.findActiveSupplierIdByName(cleanSupplier);
+    supplierId ??= await _db.insertSupplier(name: cleanSupplier);
 
     final billId = await _db.insertSupplierBill(
-      tenantId: tenantId,
       supplierId: supplierId,
       theirReference: referenceNo?.trim().isNotEmpty == true
           ? referenceNo!.trim()
@@ -202,14 +195,8 @@ class _StockVoucherScreenState extends State<StockVoucherScreen> {
       return;
     }
 
-    var supplierId = await _db.findActiveSupplierIdByName(
-      cleanSupplier,
-      tenantId: tenantId,
-    );
-    supplierId ??= await _db.insertSupplier(
-      name: cleanSupplier,
-      tenantId: tenantId,
-    );
+    var supplierId = await _db.findActiveSupplierIdByName(cleanSupplier);
+    supplierId ??= await _db.insertSupplier(name: cleanSupplier);
     await _db.recordSupplierPayout(
       supplierId: supplierId,
       amount: amount,
@@ -542,7 +529,7 @@ class _StockVoucherScreenState extends State<StockVoucherScreen> {
               backgroundColor: _kGreen,
               foregroundColor: Colors.white,
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+              shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
               elevation: 0,
             ),
           ),
@@ -555,7 +542,7 @@ class _StockVoucherScreenState extends State<StockVoucherScreen> {
               foregroundColor: Colors.grey.shade700,
               side: BorderSide(color: Colors.grey.shade300),
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+              shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
             ),
           ),
         ],
@@ -1018,7 +1005,7 @@ class _StockVoucherScreenState extends State<StockVoucherScreen> {
                     horizontal: 12,
                     vertical: 6,
                   ),
-                  shape: RoundedRectangleBorder(
+                  shape: const RoundedRectangleBorder(
                     borderRadius: BorderRadius.zero,
                   ),
                 ),

@@ -4,6 +4,9 @@ import 'package:flutter/services.dart';
 import '../../services/license/license_token.dart';
 import '../../services/license_service.dart';
 import '../../theme/design_tokens.dart';
+import '../../widgets/glass/glass_background.dart';
+import '../../widgets/glass/glass_surface.dart';
+import '../../widgets/secure_screen.dart';
 
 const Color _kAccent = Color(0xFF1E3A5F);
 const Color _kGold = Color(0xFFB8860B);
@@ -26,6 +29,21 @@ Color _priceHighlightOnDark(Color accent) {
   return _SubPlanText.primary;
 }
 
+/// عرض للواجهة — نسخ الرقم للواتساب/الاتصال.
+const String _kSupportPhoneDisplay = '0780 428 9711';
+const String _kSupportPhoneCopy = '07884289711';
+const String _kSupportEmail = 'mbrmjbaqer@gmail.com';
+
+String _formatPriceIQD(int price) {
+  final s = price.toString();
+  final buf = StringBuffer();
+  for (var i = 0; i < s.length; i++) {
+    if (i > 0 && (s.length - i) % 3 == 0) buf.write(',');
+    buf.write(s[i]);
+  }
+  return buf.toString();
+}
+
 class SubscriptionPlansScreen extends StatelessWidget {
   const SubscriptionPlansScreen({
     super.key,
@@ -41,10 +59,11 @@ class SubscriptionPlansScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final shouldForceContinue = nextRouteName != null;
-    return PopScope(
-      canPop: !shouldForceContinue,
-      child: Scaffold(
-        backgroundColor: AppColors.surfaceDark,
+    return SecureScreen(
+      child: PopScope(
+        canPop: !shouldForceContinue,
+        child: Scaffold(
+        backgroundColor: Colors.transparent,
         appBar: AppBar(
           backgroundColor: Colors.transparent,
           elevation: 0,
@@ -66,160 +85,178 @@ class SubscriptionPlansScreen extends StatelessWidget {
             ),
           ),
         ),
-        body: ListenableBuilder(
-          listenable: LicenseService.instance,
-          builder: (context, _) {
-            final jwtMode = LicenseService.instance.usesSignedLicenseJwt;
-            return SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(20, 8, 20, 40),
-              child: Column(
-                children: [
-                  const Text(
-                    'اختر الخطة المناسبة لنشاطك',
-                    style: TextStyle(
-                      color: _SubPlanText.primary,
-                      fontSize: 22,
-                      fontWeight: FontWeight.bold,
-                    ),
-                    textAlign: TextAlign.center,
+        body: GlassBackground(
+          backgroundImage: const AssetImage('assets/images/splash_bg.png'),
+          child: ListenableBuilder(
+            listenable: LicenseService.instance,
+            builder: (context, _) {
+              final jwtMode = LicenseService.instance.usesSignedLicenseJwt;
+              return SafeArea(
+                child: SingleChildScrollView(
+                  padding: EdgeInsets.fromLTRB(
+                    20,
+                    8,
+                    20,
+                    40 + MediaQuery.viewInsetsOf(context).bottom,
                   ),
-                  const SizedBox(height: 6),
-                  Text(
-                    jwtMode
-                        ? 'البطاقات للمقارنة والأسعار فقط. بعد الدفع تستلم رمزاً موقّعاً (JWT): الصقه في المربع أدناه — الخطة وحد الأجهزة يقرآن من الرمز وليس من شكل البطاقة.'
-                        : 'البطاقة الأولى: تجربة تلقائية 15 يوماً (جهازان على نفس الحساب). البطاقات التالية خطط مدفوعة (مفتاح من الإدارة).',
-                    style: const TextStyle(
-                      color: _SubPlanText.secondary,
-                      fontSize: 13,
-                      height: 1.45,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                  if (jwtMode) ...[
-                    const SizedBox(height: 20),
-                    const _JwtActivatePanel(),
-                  ],
-                  const SizedBox(height: 28),
-                  _PlanCard(
-                    plan: SubscriptionPlan.trial,
-                    isPopular: false,
-                    isCurrent: currentPlan?.key == 'trial',
-                    accentColor: _kTrialTeal,
-                    icon: Icons.timer_outlined,
-                    allowLicenseKeyEntry: false,
-                  ),
-                  const SizedBox(height: 16),
-                  _PlanCard(
-                    plan: SubscriptionPlan.basic,
-                    isPopular: false,
-                    isCurrent: currentPlan?.key == 'basic',
-                    accentColor: _kSilver,
-                    icon: Icons.store_outlined,
-                    allowLicenseKeyEntry: !jwtMode,
-                  ),
-                  const SizedBox(height: 16),
-                  _PlanCard(
-                    plan: SubscriptionPlan.pro,
-                    isPopular: true,
-                    isCurrent: currentPlan?.key == 'pro',
-                    accentColor: _kAccent,
-                    icon: Icons.business_outlined,
-                    allowLicenseKeyEntry: !jwtMode,
-                  ),
-                  const SizedBox(height: 16),
-                  _PlanCard(
-                    plan: SubscriptionPlan.unlimited,
-                    isPopular: false,
-                    isCurrent: currentPlan?.key == 'unlimited',
-                    accentColor: _kGold,
-                    icon: Icons.all_inclusive_outlined,
-                    allowLicenseKeyEntry: !jwtMode,
-                  ),
-                  const SizedBox(height: 32),
-                  Container(
-                    padding: const EdgeInsets.all(20),
-                    decoration: BoxDecoration(
-                      color: AppColors.cardDark,
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: AppColors.borderDark),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Icon(
-                              Icons.info_outline,
-                              color: AppColors.accent,
-                              size: 20,
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 560),
+                      child: Column(
+                        children: [
+                          const Text(
+                            'اختر الخطة المناسبة لنشاطك',
+                            style: TextStyle(
+                              color: _SubPlanText.primary,
+                              fontSize: 22,
+                              fontWeight: FontWeight.bold,
                             ),
-                            const SizedBox(width: 8),
-                            Text(
-                              'كيفية الاشتراك',
-                              style: TextStyle(
-                                color: _SubPlanText.primary,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 15,
+                            textAlign: TextAlign.center,
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            jwtMode
+                                ? 'البطاقات أدناه للمقارنة والأسعار فقط. بعد الدفع تستلم رمزاً موقّعاً (JWT) — الصقه في حقل التفعيل أسفل البطاقات مباشرة.'
+                                : 'البطاقة الأولى: تجربة تلقائية 15 يوماً (جهازان). البطاقات التالية خطط مدفوعة — بعد الدفع تُدخل المفتاح في الحقل الموحّد أسفل الصفحة.',
+                            style: const TextStyle(
+                              color: _SubPlanText.secondary,
+                              fontSize: 13,
+                              height: 1.45,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                          const SizedBox(height: 24),
+                          _PlanCard(
+                            plan: SubscriptionPlan.trial,
+                            isPopular: false,
+                            isCurrent: currentPlan?.key == 'trial',
+                            accentColor: _kTrialTeal,
+                            icon: Icons.timer_outlined,
+                            jwtMode: jwtMode,
+                          ),
+                          const SizedBox(height: 14),
+                          _PlanCard(
+                            plan: SubscriptionPlan.basic,
+                            isPopular: false,
+                            isCurrent: currentPlan?.key == 'basic',
+                            accentColor: _kSilver,
+                            icon: Icons.store_outlined,
+                            jwtMode: jwtMode,
+                          ),
+                          const SizedBox(height: 14),
+                          _PlanCard(
+                            plan: SubscriptionPlan.pro,
+                            isPopular: true,
+                            isCurrent: currentPlan?.key == 'pro',
+                            accentColor: _kAccent,
+                            icon: Icons.business_outlined,
+                            jwtMode: jwtMode,
+                          ),
+                          const SizedBox(height: 14),
+                          _PlanCard(
+                            plan: SubscriptionPlan.unlimited,
+                            isPopular: false,
+                            isCurrent: currentPlan?.key == 'unlimited',
+                            accentColor: _kGold,
+                            icon: Icons.all_inclusive_outlined,
+                            jwtMode: jwtMode,
+                          ),
+                          const SizedBox(height: 24),
+                          if (jwtMode)
+                            const _JwtActivatePanel()
+                          else
+                            const _LegacyLicenseKeyPanel(),
+                          const SizedBox(height: 24),
+                          GlassSurface(
+                            borderRadius:
+                                const BorderRadius.all(Radius.circular(16)),
+                            tintColor: AppGlass.surfaceTint,
+                            strokeColor: AppGlass.stroke,
+                            blurSigma: 12,
+                            padding: const EdgeInsets.all(18),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Row(
+                                  children: [
+                                    Icon(
+                                      Icons.info_outline,
+                                      color: AppColors.accentGold,
+                                      size: 20,
+                                    ),
+                                    SizedBox(width: 8),
+                                    Text(
+                                      'كيفية الاشتراك',
+                                      style: TextStyle(
+                                        color: _SubPlanText.primary,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 15,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 12),
+                                Text(
+                                  jwtMode
+                                      ? '١. تواصل مع فريق NaBoo عبر الطرق أدناه\n'
+                                            '٢. أكمل الدفع للخطة التي تريدها\n'
+                                            '٣. استلم رمز التفعيل الكامل (JWT) من الإدارة\n'
+                                            '٤. الصق الرمز في الحقل الموحّد أسفل بطاقات الخطط — الخطة وحد الأجهزة يُستنتجان من الرمز'
+                                      : '١. تواصل مع فريق NaBoo عبر الطرق أدناه\n'
+                                            '٢. أخبرنا بالخطة التي تريدها وأكمل الدفع\n'
+                                            '٣. استلم مفتاح الترخيص من الإدارة\n'
+                                            '٤. الصق المفتاح في الحقل الموحّد أسفل بطاقات الخطط ثم اضغط «تفعيل المفتاح»',
+                                  style: const TextStyle(
+                                    color: _SubPlanText.body,
+                                    fontSize: 13,
+                                    height: 1.8,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          const _ContactRow(
+                            icon: Icons.phone_outlined,
+                            label: 'واتساب / هاتف',
+                            value: _kSupportPhoneDisplay,
+                            copyValue: _kSupportPhoneCopy,
+                          ),
+                          const SizedBox(height: 10),
+                          const _ContactRow(
+                            icon: Icons.email_outlined,
+                            label: 'البريد الإلكتروني',
+                            value: _kSupportEmail,
+                            copyValue: _kSupportEmail,
+                          ),
+                          if (shouldForceContinue) ...[
+                            const SizedBox(height: 24),
+                            SizedBox(
+                              width: double.infinity,
+                              child: FilledButton.icon(
+                                onPressed: () {
+                                  Navigator.of(context).pushReplacementNamed(
+                                    nextRouteName!,
+                                  );
+                                },
+                                icon: const Icon(Icons.arrow_back_rounded),
+                                label: const Text('متابعة'),
                               ),
                             ),
                           ],
-                        ),
-                        const SizedBox(height: 12),
-                        Text(
-                          jwtMode
-                              ? '١. تواصل مع فريق NaBoo عبر الطرق أدناه\n'
-                                    '٢. أكمل الدفع للخطة التي تريدها\n'
-                                    '٣. استلم رمز التفعيل الكامل (JWT) من الإدارة\n'
-                                    '٤. الصق الرمز في مربع «تفعيل رمز الترخيص» في أعلى الصفحة — لا حاجة للضغط على بطاقة معيّنة'
-                              : '١. تواصل مع فريق NaBoo عبر الطرق أدناه\n'
-                                    '٢. أخبرنا بالخطة التي تريدها وأكمل الدفع\n'
-                                    '٣. استلم مفتاح الترخيص أو رمز التفعيل من الإدارة\n'
-                                    '٤. للخطط المدفوعة: اضغط البطاقة ثم الصق المفتاح واضغط «تفعيل المفتاح»',
-                          style: const TextStyle(
-                            color: _SubPlanText.body,
-                            fontSize: 13,
-                            height: 1.8,
-                          ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
-              const SizedBox(height: 20),
-              _ContactRow(
-                icon: Icons.phone_outlined,
-                label: 'واتساب / هاتف',
-                value: '+964 7XX XXX XXXX',
-              ),
-              const SizedBox(height: 8),
-              _ContactRow(
-                icon: Icons.email_outlined,
-                label: 'البريد الإلكتروني',
-                value: 'support@naboo.app',
-              ),
-              if (shouldForceContinue) ...[
-                const SizedBox(height: 24),
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton.icon(
-                    onPressed: () {
-                      Navigator.of(
-                        context,
-                      ).pushReplacementNamed(nextRouteName!);
-                    },
-                    icon: const Icon(Icons.arrow_back_rounded),
-                    label: const Text('متابعة'),
-                  ),
                 ),
-              ],
-            ],
+              );
+            },
           ),
-        );
-      },
-    ),
-  ),
-);
+        ),
+      ),
+      ),
+    );
   }
-
 }
 
 class _JwtActivatePanel extends StatefulWidget {
@@ -270,22 +307,20 @@ class _JwtActivatePanelState extends State<_JwtActivatePanel> {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
+    return GlassSurface(
+      borderRadius: const BorderRadius.all(Radius.circular(16)),
+      tintColor: AppGlass.surfaceTint,
+      strokeColor: AppColors.accent.withOpacity(0.45),
+      blurSigma: 12,
       padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: AppColors.cardDark,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.accent.withOpacity(0.45)),
-      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
+          const Row(
             children: [
-              Icon(Icons.vpn_key_rounded, color: AppColors.accent, size: 22),
-              const SizedBox(width: 10),
-              const Expanded(
+              Icon(Icons.vpn_key_rounded, color: AppColors.accentGold, size: 22),
+              SizedBox(width: 10),
+              Expanded(
                 child: Text(
                   'تفعيل رمز الترخيص',
                   style: TextStyle(
@@ -319,7 +354,7 @@ class _JwtActivatePanelState extends State<_JwtActivatePanel> {
               minLines: 2,
               decoration: InputDecoration(
                 filled: true,
-                fillColor: AppColors.surfaceDark,
+                fillColor: AppColors.surfaceDark.withOpacity(0.65),
                 hintText: 'الصق رمز التفعيل هنا',
                 hintStyle: TextStyle(
                   color: _SubPlanText.tertiary.withOpacity(0.85),
@@ -337,7 +372,7 @@ class _JwtActivatePanelState extends State<_JwtActivatePanel> {
                 ),
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(10),
-                  borderSide: BorderSide(color: AppColors.accent, width: 1.5),
+                  borderSide: const BorderSide(color: AppColors.accent, width: 1.5),
                 ),
               ),
             ),
@@ -378,49 +413,32 @@ class _JwtActivatePanelState extends State<_JwtActivatePanel> {
   }
 }
 
-class _PlanCard extends StatefulWidget {
-  const _PlanCard({
-    required this.plan,
-    required this.isPopular,
-    required this.isCurrent,
-    required this.accentColor,
-    required this.icon,
-    this.allowLicenseKeyEntry = true,
-  });
-
-  final SubscriptionPlan plan;
-  final bool isPopular;
-  final bool isCurrent;
-  final Color accentColor;
-  final IconData icon;
-
-  /// التجربة المجانية لا تُفعَّل بمفتاح — المفتاح للخطط المدفوعة فقط.
-  final bool allowLicenseKeyEntry;
+class _LegacyLicenseKeyPanel extends StatefulWidget {
+  const _LegacyLicenseKeyPanel();
 
   @override
-  State<_PlanCard> createState() => _PlanCardState();
+  State<_LegacyLicenseKeyPanel> createState() => _LegacyLicenseKeyPanelState();
 }
 
-class _PlanCardState extends State<_PlanCard> {
-  bool _showKeyField = false;
-  final _keyCtrl = TextEditingController();
-  bool _activating = false;
+class _LegacyLicenseKeyPanelState extends State<_LegacyLicenseKeyPanel> {
+  final _ctrl = TextEditingController();
+  bool _busy = false;
   String? _error;
 
   @override
   void dispose() {
-    _keyCtrl.dispose();
+    _ctrl.dispose();
     super.dispose();
   }
 
   Future<void> _activate() async {
-    final key = normalizeJwtCompactInput(_keyCtrl.text);
+    final key = normalizeJwtCompactInput(_ctrl.text);
     if (key.isEmpty) {
       setState(() => _error = 'الصق مفتاح الترخيص أو رمز التفعيل أولاً');
       return;
     }
     setState(() {
-      _activating = true;
+      _busy = true;
       _error = null;
     });
     final isJwt = key.split('.').length == 3;
@@ -428,7 +446,7 @@ class _PlanCardState extends State<_PlanCard> {
         ? await LicenseService.instance.activateSignedToken(key)
         : await LicenseService.instance.activateLicense(key);
     if (!mounted) return;
-    setState(() => _activating = false);
+    setState(() => _busy = false);
     if (!result.ok) {
       setState(() => _error = result.message);
       return;
@@ -441,68 +459,168 @@ class _PlanCardState extends State<_PlanCard> {
         behavior: SnackBarBehavior.floating,
       ),
     );
-    setState(() {
-      _showKeyField = false;
-      _keyCtrl.clear();
-    });
-  }
-
-  String _formatPrice(int price) {
-    final s = price.toString();
-    final buf = StringBuffer();
-    for (var i = 0; i < s.length; i++) {
-      if (i > 0 && (s.length - i) % 3 == 0) buf.write(',');
-      buf.write(s[i]);
-    }
-    return buf.toString();
+    setState(() => _ctrl.clear());
   }
 
   @override
   Widget build(BuildContext context) {
-    final plan = widget.plan;
-    final accentColor = widget.accentColor;
-    final isCurrent = widget.isCurrent;
-    final isPopular = widget.isPopular;
-    final allowKey = widget.allowLicenseKeyEntry;
-    final tapForKey = allowKey && !isCurrent;
-
-    final cardFill = isCurrent
-        ? Color.alphaBlend(accentColor.withOpacity(0.12), AppColors.cardDark)
-        : AppColors.cardDark;
-    final priceColor = _priceHighlightOnDark(accentColor);
-
-    final inner = Ink(
-      width: double.infinity,
-      decoration: BoxDecoration(
-        color: cardFill,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: isCurrent
-              ? accentColor.withOpacity(0.85)
-              : isPopular
-              ? accentColor.withOpacity(0.65)
-              : AppColors.borderDark,
-          width: isCurrent
-              ? 2
-              : isPopular
-              ? 1.5
-              : 1,
-        ),
+    return GlassSurface(
+      borderRadius: const BorderRadius.all(Radius.circular(16)),
+      tintColor: AppGlass.surfaceTint,
+      strokeColor: AppColors.borderDark,
+      blurSigma: 12,
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.key_rounded, color: AppColors.accentGold, size: 22),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'تفعيل المفتاح',
+                  style: TextStyle(
+                    color: _SubPlanText.primary,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'الصق مفتاح الترخيص الذي استلمته بعد الدفع، أو رمز JWT إن وُجد. الخطط أعلاه للعرض والمقارنة فقط.',
+            style: TextStyle(
+              color: _SubPlanText.secondary,
+              fontSize: 12.5,
+              height: 1.45,
+            ),
+          ),
+          const SizedBox(height: 14),
+          Directionality(
+            textDirection: TextDirection.ltr,
+            child: TextField(
+              controller: _ctrl,
+              style: const TextStyle(
+                color: _SubPlanText.primary,
+                fontSize: 13,
+              ),
+              maxLines: 4,
+              minLines: 2,
+              decoration: InputDecoration(
+                filled: true,
+                fillColor: AppColors.surfaceDark.withOpacity(0.65),
+                hintText: 'الصق مفتاح الترخيص أو رمز التفعيل',
+                hintStyle: TextStyle(
+                  color: _SubPlanText.tertiary.withOpacity(0.85),
+                ),
+                contentPadding: const EdgeInsetsDirectional.all(12),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: BorderSide(
+                    color: AppColors.accent.withOpacity(0.45),
+                  ),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: const BorderSide(color: AppColors.borderDark),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: const BorderSide(color: AppColors.accent, width: 1.5),
+                ),
+              ),
+            ),
+          ),
+          if (_error != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              _error!,
+              style: const TextStyle(
+                color: Color(0xFFFFB4AB),
+                fontSize: 12,
+                height: 1.35,
+              ),
+            ),
+          ],
+          const SizedBox(height: 12),
+          FilledButton(
+            onPressed: _busy ? null : _activate,
+            style: FilledButton.styleFrom(
+              backgroundColor: AppColors.accent,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: 12),
+            ),
+            child: _busy
+                ? const SizedBox(
+                    width: 22,
+                    height: 22,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
+                  )
+                : const Text('تفعيل المفتاح'),
+          ),
+        ],
       ),
+    );
+  }
+}
+
+/// بطاقة خطة للعرض والمقارنة فقط — التفعيل يتم من الحقل الموحّد أسفل القائمة.
+class _PlanCard extends StatelessWidget {
+  const _PlanCard({
+    required this.plan,
+    required this.isPopular,
+    required this.isCurrent,
+    required this.accentColor,
+    required this.icon,
+    required this.jwtMode,
+  });
+
+  final SubscriptionPlan plan;
+  final bool isPopular;
+  final bool isCurrent;
+  final Color accentColor;
+  final IconData icon;
+  final bool jwtMode;
+
+  @override
+  Widget build(BuildContext context) {
+    final priceColor = _priceHighlightOnDark(accentColor);
+    final strokeColor = isCurrent
+        ? accentColor.withOpacity(0.85)
+        : isPopular
+            ? accentColor.withOpacity(0.55)
+            : AppGlass.stroke;
+
+    final inner = GlassSurface(
+      borderRadius: const BorderRadius.all(Radius.circular(20)),
+      tintColor: Color.alphaBlend(
+        accentColor.withOpacity(isCurrent ? 0.14 : 0.07),
+        AppGlass.surfaceTint,
+      ),
+      strokeColor: strokeColor,
+      strokeWidth: isCurrent ? 2 : 1,
+      blurSigma: 14,
       padding: const EdgeInsets.all(22),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Container(
                 width: 44,
                 height: 44,
                 decoration: BoxDecoration(
-                  color: accentColor.withOpacity(0.2),
+                  color: accentColor.withOpacity(0.22),
                   borderRadius: BorderRadius.circular(12),
                 ),
-                child: Icon(widget.icon, color: accentColor, size: 24),
+                child: Icon(icon, color: accentColor, size: 24),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -539,9 +657,9 @@ class _PlanCardState extends State<_PlanCard> {
                         fontWeight: FontWeight.bold,
                       ),
                     ),
-                    Text(
+                    const Text(
                       '15 يوماً',
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: _SubPlanText.tertiary,
                         fontSize: 11,
                       ),
@@ -557,7 +675,7 @@ class _PlanCardState extends State<_PlanCard> {
                       textBaseline: TextBaseline.alphabetic,
                       children: [
                         Text(
-                          _formatPrice(plan.priceIQD),
+                          _formatPriceIQD(plan.priceIQD),
                           style: TextStyle(
                             color: priceColor,
                             fontSize: 22,
@@ -586,17 +704,21 @@ class _PlanCardState extends State<_PlanCard> {
             ],
           ),
           const SizedBox(height: 16),
-          Divider(color: AppColors.borderDark.withOpacity(0.7)),
+          Divider(color: AppColors.borderDark.withOpacity(0.65)),
           const SizedBox(height: 12),
           ...plan.features.map(
             (f) => Padding(
               padding: const EdgeInsetsDirectional.only(bottom: 8),
               child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(
-                    Icons.check_circle_outline,
-                    size: 16,
-                    color: accentColor,
+                  Padding(
+                    padding: const EdgeInsetsDirectional.only(top: 2),
+                    child: Icon(
+                      Icons.check_circle_outline,
+                      size: 16,
+                      color: accentColor,
+                    ),
                   ),
                   const SizedBox(width: 10),
                   Expanded(
@@ -613,15 +735,15 @@ class _PlanCardState extends State<_PlanCard> {
               ),
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 14),
           if (isCurrent)
             Container(
               width: double.infinity,
               padding: const EdgeInsets.symmetric(vertical: 10),
               decoration: BoxDecoration(
                 color: Color.alphaBlend(
-                  accentColor.withOpacity(0.35),
-                  AppColors.cardDark,
+                  accentColor.withOpacity(0.32),
+                  Colors.transparent,
                 ),
                 borderRadius: BorderRadius.circular(10),
                 border: Border.all(color: accentColor.withOpacity(0.55)),
@@ -646,123 +768,20 @@ class _PlanCardState extends State<_PlanCard> {
                 ],
               ),
             )
-          else if (!allowKey) ...[
-            Padding(
-              padding: const EdgeInsetsDirectional.only(top: 4),
-              child: Text(
-                plan.isIntroTrialTier
-                    ? 'لا يوجد مفتاح للتجربة — تبدأ تلقائياً. عند شراء خطة ستستلم رمز التفعيل وتلصقه في مربع «تفعيل رمز الترخيص» أعلى الصفحة.'
-                    : LicenseService.instance.usesSignedLicenseJwt
-                    ? 'لتفعيل خطة مدفوعة استخدم المربع أعلاه فقط. هذه البطاقة للمقارنة؛ الخطة وحد الأجهزة يحددهما الرمز وليس مكان لصقه.'
-                    : 'للتفعيل تواصل مع الدعم لاستلام المفتاح المناسب لخطتك.',
-                style: const TextStyle(
-                  color: _SubPlanText.secondary,
-                  fontSize: 12,
-                  height: 1.45,
-                ),
-                textAlign: TextAlign.center,
+          else
+            Text(
+              plan.isIntroTrialTier
+                  ? 'التجربة تبدأ تلقائياً — لا مفتاح. عند الترقية استلم الرمز من الإدارة والصقه في الحقل الموحّد أسفل البطاقات.'
+                  : jwtMode
+                      ? 'هذه البطاقة للعرض والمقارنة فقط. بعد الدفع الصق رمز التفعيل (JWT) في الحقل الموحّد أسفل البطاقات مباشرة.'
+                      : 'هذه البطاقة للعرض والمقارنة فقط. بعد الدفع الصق مفتاح الترخيص في الحقل الموحّد أسفل البطاقات.',
+              style: const TextStyle(
+                color: _SubPlanText.secondary,
+                fontSize: 12,
+                height: 1.45,
               ),
+              textAlign: TextAlign.center,
             ),
-          ] else ...[
-            if (!_showKeyField)
-              Padding(
-                padding: const EdgeInsetsDirectional.only(bottom: 4),
-                child: Text(
-                  'اضغط على البطاقة لإظهار حقل المفتاح',
-                  style: const TextStyle(
-                    color: _SubPlanText.tertiary,
-                    fontSize: 11,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            if (_showKeyField) ...[
-              Directionality(
-                textDirection: TextDirection.ltr,
-                child: TextField(
-                  controller: _keyCtrl,
-                  style: const TextStyle(
-                    color: _SubPlanText.primary,
-                    fontSize: 14,
-                  ),
-                  textAlign: TextAlign.start,
-                  maxLines: 3,
-                  minLines: 1,
-                  decoration: InputDecoration(
-                    filled: true,
-                    fillColor: AppColors.surfaceDark,
-                    hintText: 'الصق مفتاح الترخيص أو رمز التفعيل',
-                    hintStyle: TextStyle(
-                      color: _SubPlanText.tertiary.withOpacity(0.85),
-                    ),
-                    contentPadding: const EdgeInsetsDirectional.all(12),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
-                      borderSide: BorderSide(
-                        color: accentColor.withOpacity(0.5),
-                      ),
-                    ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
-                      borderSide: const BorderSide(color: AppColors.borderDark),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
-                      borderSide: BorderSide(color: accentColor, width: 1.5),
-                    ),
-                  ),
-                ),
-              ),
-              if (_error != null) ...[
-                const SizedBox(height: 8),
-                Text(
-                  _error!,
-                  style: const TextStyle(
-                    color: Color(0xFFFFB4AB),
-                    fontSize: 12,
-                    height: 1.35,
-                  ),
-                  textAlign: TextAlign.start,
-                ),
-              ],
-              const SizedBox(height: 10),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton(
-                  onPressed: _activating ? null : _activate,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: accentColor,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                  ),
-                  child: _activating
-                      ? const SizedBox(
-                          width: 22,
-                          height: 22,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                      : const Text('تفعيل المفتاح'),
-                ),
-              ),
-              const SizedBox(height: 6),
-              Align(
-                alignment: AlignmentDirectional.centerStart,
-                child: TextButton(
-                  onPressed: () => _showContactDialog(context, plan),
-                  child: Text(
-                    'ليس لدي مفتاح — تواصل للدفع',
-                    style: TextStyle(
-                      color: accentColor.withOpacity(0.95),
-                      fontSize: 12,
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ],
         ],
       ),
     );
@@ -770,21 +789,7 @@ class _PlanCardState extends State<_PlanCard> {
     return Stack(
       clipBehavior: Clip.none,
       children: [
-        Material(
-          color: Colors.transparent,
-          child: tapForKey
-              ? InkWell(
-                  onTap: () {
-                    setState(() {
-                      _showKeyField = !_showKeyField;
-                      _error = null;
-                    });
-                  },
-                  borderRadius: BorderRadius.circular(20),
-                  child: inner,
-                )
-              : inner,
-        ),
+        inner,
         if (isPopular)
           PositionedDirectional(
             top: -12,
@@ -799,6 +804,13 @@ class _PlanCardState extends State<_PlanCard> {
                 decoration: BoxDecoration(
                   color: accentColor,
                   borderRadius: BorderRadius.circular(20),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.25),
+                      blurRadius: 8,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
                 ),
                 child: const Text(
                   'الأكثر طلباً',
@@ -814,77 +826,6 @@ class _PlanCardState extends State<_PlanCard> {
       ],
     );
   }
-
-  void _showContactDialog(BuildContext context, SubscriptionPlan plan) {
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => Directionality(
-        textDirection: TextDirection.rtl,
-        child: AlertDialog(
-          title: Text('الاشتراك في خطة ${plan.nameAr}'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'السعر: ${plan.priceLabel}',
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 15,
-                ),
-              ),
-              Text(
-                'الأجهزة: ${plan.devicesLabel}',
-                style: const TextStyle(color: Colors.grey),
-              ),
-              const SizedBox(height: 16),
-              const Text('للاشتراك، تواصل معنا:'),
-              const SizedBox(height: 12),
-              _ContactTile(
-                icon: Icons.phone_outlined,
-                text: '+964 7XX XXX XXXX',
-                onCopy: () {
-                  Clipboard.setData(
-                    const ClipboardData(text: '+964 7XX XXX XXXX'),
-                  );
-                  Navigator.pop(ctx);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('تم نسخ الرقم'),
-                      behavior: SnackBarBehavior.floating,
-                    ),
-                  );
-                },
-              ),
-              const SizedBox(height: 8),
-              _ContactTile(
-                icon: Icons.email_outlined,
-                text: 'support@naboo.app',
-                onCopy: () {
-                  Clipboard.setData(
-                    const ClipboardData(text: 'support@naboo.app'),
-                  );
-                  Navigator.pop(ctx);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('تم نسخ الإيميل'),
-                      behavior: SnackBarBehavior.floating,
-                    ),
-                  );
-                },
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('إغلاق'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 }
 
 class _ContactRow extends StatelessWidget {
@@ -892,93 +833,75 @@ class _ContactRow extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.value,
+    this.copyValue,
   });
   final IconData icon;
   final String label;
   final String value;
+  final String? copyValue;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        color: AppColors.cardDark,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.borderDark),
-      ),
+    return GlassSurface(
+      borderRadius: const BorderRadius.all(Radius.circular(12)),
+      tintColor: AppGlass.surfaceTint,
+      strokeColor: AppGlass.stroke,
+      blurSigma: 10,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       child: Row(
         children: [
           Icon(icon, color: _SubPlanText.secondary, size: 20),
           const SizedBox(width: 12),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                label,
-                style: const TextStyle(
-                  color: _SubPlanText.tertiary,
-                  fontSize: 11,
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: const TextStyle(
+                    color: _SubPlanText.tertiary,
+                    fontSize: 11,
+                  ),
                 ),
-              ),
-              Text(
-                value,
-                style: const TextStyle(
-                  color: _SubPlanText.primary,
-                  fontWeight: FontWeight.w600,
+                Align(
+                  alignment: AlignmentDirectional.centerStart,
+                  child: Directionality(
+                    textDirection: TextDirection.ltr,
+                    child: Text(
+                      value,
+                      style: const TextStyle(
+                        color: _SubPlanText.primary,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-          const Spacer(),
           IconButton(
             icon: const Icon(
               Icons.copy_outlined,
               color: _SubPlanText.secondary,
               size: 18,
             ),
-            onPressed: () => Clipboard.setData(ClipboardData(text: value)),
+            onPressed: () {
+              final text = copyValue ?? value;
+              Clipboard.setData(ClipboardData(text: text));
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    label.contains('هاتف') || label.contains('واتساب')
+                        ? 'تم نسخ الرقم'
+                        : 'تم نسخ البريد',
+                  ),
+                  behavior: SnackBarBehavior.floating,
+                ),
+              );
+            },
             tooltip: 'نسخ',
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _ContactTile extends StatelessWidget {
-  const _ContactTile({
-    required this.icon,
-    required this.text,
-    required this.onCopy,
-  });
-  final IconData icon;
-  final String text;
-  final VoidCallback onCopy;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onCopy,
-      borderRadius: BorderRadius.circular(8),
-      child: Container(
-        padding: const EdgeInsets.all(10),
-        decoration: BoxDecoration(
-          color: Colors.grey.shade100,
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Row(
-          children: [
-            Icon(icon, size: 18, color: _kAccent),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                text,
-                style: const TextStyle(fontWeight: FontWeight.w600),
-              ),
-            ),
-            const Icon(Icons.copy_outlined, size: 16, color: Colors.grey),
-          ],
-        ),
       ),
     );
   }

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../services/license_service.dart';
+import '../../widgets/secure_screen.dart';
 
 class ActivateLicenseScreen extends StatefulWidget {
   const ActivateLicenseScreen({super.key, this.showBackButton = false});
@@ -50,8 +51,9 @@ class _ActivateLicenseScreenState extends State<ActivateLicenseScreen> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    return Scaffold(
-      backgroundColor: cs.primary,
+    return SecureScreen(
+      child: Scaffold(
+        backgroundColor: cs.primary,
       body: Center(
         child: SingleChildScrollView(
           padding: const EdgeInsetsDirectional.all(24),
@@ -69,7 +71,10 @@ class _ActivateLicenseScreenState extends State<ActivateLicenseScreen> {
               ),
               Text(
                 'نظام إدارة المتاجر',
-                style: TextStyle(color: cs.onPrimary.withOpacity(0.75), fontSize: 14),
+                style: TextStyle(
+                  color: cs.onPrimary.withOpacity(0.75),
+                  fontSize: 14,
+                ),
               ),
               const SizedBox(height: 40),
 
@@ -82,7 +87,11 @@ class _ActivateLicenseScreenState extends State<ActivateLicenseScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        Icon(Icons.lock_open_outlined, size: 48, color: cs.primary),
+                        Icon(
+                          Icons.lock_open_outlined,
+                          size: 48,
+                          color: cs.primary,
+                        ),
                         const SizedBox(height: 12),
                         Text(
                           'تفعيل الترخيص',
@@ -163,7 +172,11 @@ class _ActivateLicenseScreenState extends State<ActivateLicenseScreen> {
 
                         Row(
                           children: [
-                            Icon(Icons.info_outline, size: 16, color: cs.onSurfaceVariant),
+                            Icon(
+                              Icons.info_outline,
+                              size: 16,
+                              color: cs.onSurfaceVariant,
+                            ),
                             const SizedBox(width: 8),
                             Expanded(
                               child: Text(
@@ -193,6 +206,7 @@ class _ActivateLicenseScreenState extends State<ActivateLicenseScreen> {
             ],
           ),
         ),
+      ),
       ),
     );
   }

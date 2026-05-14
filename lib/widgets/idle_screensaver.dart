@@ -161,7 +161,7 @@ class _IdleScreensaverState extends State<IdleScreensaver> {
                         Container(
                           width: 48,
                           height: 3,
-                          decoration: BoxDecoration(
+                          decoration: const BoxDecoration(
                             gradient: LinearGradient(
                               colors: [
                                 AppColors.accent,

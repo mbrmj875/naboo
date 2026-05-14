@@ -660,7 +660,7 @@ class _BarcodeLabelsScreenState extends State<BarcodeLabelsScreen> {
     final q = (r['qty'] as num?)?.toDouble() ?? 0;
     if (isWeight) return '${q.toStringAsFixed(2)} كغم';
     final w = q == q.roundToDouble();
-    return w ? '${q.round()}' : '${q.toStringAsFixed(2)}';
+    return w ? '${q.round()}' : q.toStringAsFixed(2);
   }
 
   String _agoAr(DateTime t) {
@@ -809,8 +809,8 @@ class _BarcodeLabelsScreenState extends State<BarcodeLabelsScreen> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       if (_searchBusy)
-                        Padding(
-                          padding: const EdgeInsetsDirectional.only(start: 6),
+                        const Padding(
+                          padding: EdgeInsetsDirectional.only(start: 6),
                           child: SizedBox(
                             width: 22,
                             height: 22,
@@ -858,7 +858,7 @@ class _BarcodeLabelsScreenState extends State<BarcodeLabelsScreen> {
                             itemCount: showDd ? _searchHits.length : 0,
                             itemBuilder: (context, i) {
                               final r = _searchHits[i];
-                              final nm = '${r['name'] ?? ''}';
+                              final nm = (r['name'] ?? '').toString();
                               final bc = '${r['barcode'] ?? ''}'.trim();
                               final sk = '${r['productCode'] ?? ''}'.trim();
                               final qStock = _qtyLine(r);
@@ -875,9 +875,9 @@ class _BarcodeLabelsScreenState extends State<BarcodeLabelsScreen> {
                                 ),
                                 title: Text(nm, overflow: TextOverflow.ellipsis),
                                 subtitle: Text(
-                                  (bc.isNotEmpty ? 'باركود: $bc' : 'بدون باركود') +
-                                      ' — مخزون: $qStock' +
-                                      (sk.isNotEmpty ? '\nرمز صنف: $sk' : ''),
+                                  '${bc.isNotEmpty ? 'باركود: $bc' : 'بدون باركود'}'
+                                  ' — مخزون: $qStock'
+                                  '${sk.isNotEmpty ? '\nرمز صنف: $sk' : ''}',
                                   style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
                                 ),
                                 onTap: () {
@@ -1002,7 +1002,7 @@ class _BarcodeLabelsScreenState extends State<BarcodeLabelsScreen> {
                         : () => unawaited(_makeAllCopiesOne()),
                     child: Text(_totalProducts <= 1
                         ? 'اجعل الكل (1)'
-                        : 'اجعل الكل (1) (${_totalProducts})'),
+                        : 'اجعل الكل (1) ($_totalProducts)'),
                   ),
                 ),
               ],
@@ -1188,7 +1188,7 @@ class _BarcodeLabelsScreenState extends State<BarcodeLabelsScreen> {
                         focusNode: fn,
                         textAlign: TextAlign.center,
                         keyboardType:
-                            TextInputType.numberWithOptions(signed: false),
+                            const TextInputType.numberWithOptions(signed: false),
                         decoration: const InputDecoration(
                           isDense: true,
                           contentPadding:

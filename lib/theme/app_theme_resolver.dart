@@ -282,7 +282,12 @@ abstract final class AppThemeResolver {
       appBarTheme: themedBase.appBarTheme.copyWith(
         backgroundColor: palette.navy,
         foregroundColor: Colors.white,
+        // أيقونة `leading` (رجوع/Drawer) تبقى بيضاء — لأنها navigation أساسية.
         iconTheme: const IconThemeData(color: Colors.white, size: 22),
+        // أيقونات `actions` ذهبية — تَتطابق مع DNA شاشة البيع وتُكوِّن
+        // تباينا بصرياً واضحاً يَلفت الانتباه للأفعال السريعة في كل الشاشات.
+        // الشاشات التي تَفرض لوناً صريحاً على IconButton (`color: ...`) ستَتجاوز هذا.
+        actionsIconTheme: IconThemeData(color: palette.gold, size: 22),
         titleTextStyle: themedBase.appBarTheme.titleTextStyle?.copyWith(
           color: Colors.white,
         ),

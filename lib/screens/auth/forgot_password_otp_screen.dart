@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../providers/auth_provider.dart';
+import '../../widgets/secure_screen.dart';
 import 'reset_password_screen.dart';
 
 class ForgotPasswordOtpScreen extends StatefulWidget {
@@ -13,7 +14,8 @@ class ForgotPasswordOtpScreen extends StatefulWidget {
   final String email;
 
   @override
-  State<ForgotPasswordOtpScreen> createState() => _ForgotPasswordOtpScreenState();
+  State<ForgotPasswordOtpScreen> createState() =>
+      _ForgotPasswordOtpScreenState();
 }
 
 class _ForgotPasswordOtpScreenState extends State<ForgotPasswordOtpScreen> {
@@ -86,7 +88,9 @@ class _ForgotPasswordOtpScreenState extends State<ForgotPasswordOtpScreen> {
   Future<void> _verify() async {
     final otp = _otp.trim();
     if (otp.length < _digits) {
-      setState(() => _error = 'أدخل الرمز كاملاً ($_digits أرقام كما في البريد)');
+      setState(
+        () => _error = 'أدخل الرمز كاملاً ($_digits أرقام كما في البريد)',
+      );
       return;
     }
     setState(() {
@@ -141,7 +145,8 @@ class _ForgotPasswordOtpScreenState extends State<ForgotPasswordOtpScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Directionality(
+    return SecureScreen(
+      child: Directionality(
       textDirection: TextDirection.rtl,
       child: Scaffold(
         backgroundColor: const Color(0xFFF7F8FA),
@@ -201,8 +206,11 @@ class _ForgotPasswordOtpScreenState extends State<ForgotPasswordOtpScreen> {
                       ),
                       child: Row(
                         children: [
-                          Icon(Icons.error_outline,
-                              size: 18, color: Colors.red.shade700),
+                          Icon(
+                            Icons.error_outline,
+                            size: 18,
+                            color: Colors.red.shade700,
+                          ),
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text(
@@ -262,8 +270,11 @@ class _ForgotPasswordOtpScreenState extends State<ForgotPasswordOtpScreen> {
                   const SizedBox(height: 10),
                   TextButton.icon(
                     onPressed: () => Navigator.of(context).pop(),
-                    icon: const Icon(Icons.arrow_forward_rounded,
-                        size: 16, color: _navy3),
+                    icon: const Icon(
+                      Icons.arrow_forward_rounded,
+                      size: 16,
+                      color: _navy3,
+                    ),
                     label: const Text(
                       'تعديل البريد',
                       style: TextStyle(color: _navy3),
@@ -274,6 +285,7 @@ class _ForgotPasswordOtpScreenState extends State<ForgotPasswordOtpScreen> {
             ),
           ),
         ),
+      ),
       ),
     );
   }
@@ -311,9 +323,7 @@ class _ForgotPasswordOtpScreenState extends State<ForgotPasswordOtpScreen> {
           ),
           decoration: InputDecoration(
             filled: true,
-            fillColor: hasFill
-                ? _navy2.withValues(alpha: 0.06)
-                : Colors.white,
+            fillColor: hasFill ? _navy2.withValues(alpha: 0.06) : Colors.white,
             contentPadding: EdgeInsets.zero,
             border: OutlineInputBorder(
               borderRadius: BorderRadius.zero,
@@ -339,4 +349,3 @@ class _ForgotPasswordOtpScreenState extends State<ForgotPasswordOtpScreen> {
     );
   }
 }
-

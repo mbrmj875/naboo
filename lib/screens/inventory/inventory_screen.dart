@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../widgets/app_notifications_sheet.dart';
+import '../../utils/screen_layout.dart';
 import 'inventory_products_screen.dart';
 import 'stock_voucher_screen.dart';
 import 'warehouses_screen.dart';
@@ -20,6 +21,21 @@ const _green  = Color(0xFF10B981);
 const _orange = Color(0xFFF97316);
 const _blue   = Color(0xFF3B82F6);
 const _purple = Color(0xFF8B5CF6);
+
+// ── Adaptive helpers ───────────────────────────────────────────────────────────
+/// عدد أعمدة شبكة البطاقات حسب الفئة (Phase 3-ج: Dashboard Pattern §9.1).
+/// المُستهلكون: `_StatsBar` و `_ModulesGrid`.
+int _gridColumnsFor(BuildContext context) {
+  final variant = context.screenLayout.layoutVariant;
+  return switch (variant) {
+    DeviceVariant.phoneXS => 1,
+    DeviceVariant.phoneSM => 2,
+    DeviceVariant.tabletSM => 3,
+    DeviceVariant.tabletLG => 3,
+    DeviceVariant.desktopSM => 4,
+    DeviceVariant.desktopLG => 4,
+  };
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 class InventoryScreen extends StatelessWidget {
@@ -88,7 +104,7 @@ class _StatsBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return GridView.count(
-      crossAxisCount: 2,
+      crossAxisCount: _gridColumnsFor(context),
       crossAxisSpacing: 10,
       mainAxisSpacing: 10,
       childAspectRatio: 2.1,
@@ -382,7 +398,7 @@ class _ModulesGrid extends StatelessWidget {
     ];
 
     return GridView.count(
-      crossAxisCount: 2,
+      crossAxisCount: _gridColumnsFor(context),
       crossAxisSpacing: 12,
       mainAxisSpacing: 12,
       childAspectRatio: 1.5,

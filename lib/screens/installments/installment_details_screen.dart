@@ -322,7 +322,7 @@ class _CustomerPanel extends StatelessWidget {
         children: [
           Row(
             children: [
-              Icon(Icons.person_rounded, color: AppColors.accent, size: 26),
+              const Icon(Icons.person_rounded, color: AppColors.accent, size: 26),
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
@@ -428,11 +428,11 @@ class _ItemsPanel extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
+          const Row(
             children: [
               Icon(Icons.inventory_2_outlined, size: 20, color: AppColors.accent),
-              const SizedBox(width: 8),
-              const Text('البضاعة المسحوبة من المخزون', style: TextStyle(fontWeight: FontWeight.bold)),
+              SizedBox(width: 8),
+              Text('البضاعة المسحوبة من المخزون', style: TextStyle(fontWeight: FontWeight.bold)),
             ],
           ),
           const SizedBox(height: 4),
@@ -529,7 +529,7 @@ class _SaleFinanceSnapshotPanel extends StatelessWidget {
             Text(
               'القسط الشهري المقترح: ${_numFmt.format(plan.suggestedMonthly)} د.ع',
             ),
-          SizedBox(height: 8),
+          const SizedBox(height: 8),
           Text(
             'تنبيه: الأرقام أعلاه تقدير عند البيع. جدول الأقساط الفعلي يُوزَّع على «إجمالي الفاتورة − المقدّم» وقد يختلف عن القسط المقترح بالفلس.',
             style: TextStyle(

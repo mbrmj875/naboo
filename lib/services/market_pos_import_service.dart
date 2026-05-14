@@ -44,7 +44,7 @@ class MarketPosImportService {
       bytesData.offsetInBytes,
       bytesData.lengthInBytes,
     );
-    final dbBytes = GZipDecoder().decodeBytes(gzipBytes);
+    final dbBytes = const GZipDecoder().decodeBytes(gzipBytes);
 
     // نكتب الملف داخل مسار قواعد البيانات الذي يستخدمه sqflite —
     // هذا يضمن نجاح الفتح على macOS وكل المنصات حتى مع وجود sandbox.

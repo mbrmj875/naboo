@@ -6,6 +6,7 @@ import '../../utils/screen_layout.dart';
 import '../../services/database_helper.dart';
 import '../../theme/design_tokens.dart';
 import '../../utils/customer_validation.dart';
+import '../../widgets/adaptive/adaptive_form_container.dart';
 
 /// صفحة إضافة أو تعديل عميل — بدون نافذة منبثقة؛ مرتبطة بجدول [customers] وباقي التطبيق.
 ///
@@ -186,7 +187,8 @@ class _CustomerFormScreenState extends State<CustomerFormScreen> {
             onPressed: _saving ? null : () => Navigator.pop(context),
           ),
         ),
-        body: Column(
+        body: AdaptiveFormContainer(
+          child: Column(
           children: [
             Expanded(
               child: SingleChildScrollView(
@@ -377,6 +379,7 @@ class _CustomerFormScreenState extends State<CustomerFormScreen> {
               ),
             ),
           ],
+          ),
         ),
       ),
     );

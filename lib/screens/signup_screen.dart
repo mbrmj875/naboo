@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../widgets/app_brand_mark.dart';
+import '../utils/screen_layout.dart';
 
 /// نفس [login_screen] — نصوص الحقول الفاتحة لا ترث لون الثيم الداكن للتطبيق.
 ThemeData _authPanelLightThemeSignup(BuildContext context) {
@@ -140,7 +141,7 @@ class _SignUpScreenState extends State<SignUpScreen>
       content: Text(msg, textAlign: TextAlign.center),
       backgroundColor: bg,
       behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
       margin: const EdgeInsets.all(20),
     ));
   }
@@ -148,7 +149,12 @@ class _SignUpScreenState extends State<SignUpScreen>
   // ══════════════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
-    final isWide = MediaQuery.of(context).size.width >= 800;
+    // 2026-05 (Phase 2): قرار التخطيط أصبح يعتمد على DeviceVariant
+    // (Single Source of Truth) بدل breakpoint رقمي 800. الـ side-by-side
+    // (Brand | Form) يظهر في tabletLG+ (≥840dp). أصغر ⇒ Brand مضغوط
+    // فوق الفورم.
+    final variant = context.screenLayout.layoutVariant;
+    final isWide = variant.index >= DeviceVariant.tabletLG.index;
     return Directionality(
       textDirection: TextDirection.rtl,
       child: Scaffold(
@@ -394,7 +400,7 @@ class _SignUpScreenState extends State<SignUpScreen>
                         style: ElevatedButton.styleFrom(
                           backgroundColor: _navy2,
                           foregroundColor: Colors.white,
-                          shape: RoundedRectangleBorder(
+                          shape: const RoundedRectangleBorder(
                               borderRadius: BorderRadius.zero),
                           elevation: 0,
                         ),
@@ -447,7 +453,7 @@ class _SignUpScreenState extends State<SignUpScreen>
       style: OutlinedButton.styleFrom(
         padding: const EdgeInsets.symmetric(vertical: 14),
         side: BorderSide(color: Colors.grey.shade300, width: 1.5),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
         backgroundColor: Colors.white,
         foregroundColor: _navy2,
       ),
@@ -495,7 +501,7 @@ class _SignUpScreenState extends State<SignUpScreen>
           child: DropdownButtonHideUnderline(
             child: DropdownButton<String>(
               value: _dialCode,
-              icon: Icon(Icons.arrow_drop_down, color: _navy3, size: 20),
+              icon: const Icon(Icons.arrow_drop_down, color: _navy3, size: 20),
               style: const TextStyle(color: _navy2, fontSize: 13),
               items: _countryCodes
                   .map((c) => DropdownMenuItem<String>(
@@ -640,7 +646,7 @@ class _SignUpScreenState extends State<SignUpScreen>
             value: _acceptTerms,
             onChanged: (v) => setState(() => _acceptTerms = v ?? false),
             activeColor: _navy2,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+            shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
           ),
         ),
         const SizedBox(width: 8),
@@ -706,15 +712,15 @@ class _SignUpScreenState extends State<SignUpScreen>
       enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.zero,
           borderSide: BorderSide(color: Colors.grey.shade200)),
-      focusedBorder: OutlineInputBorder(
+      focusedBorder: const OutlineInputBorder(
           borderRadius: BorderRadius.zero,
-          borderSide: const BorderSide(color: _navy3, width: 1.5)),
-      errorBorder: OutlineInputBorder(
+          borderSide: BorderSide(color: _navy3, width: 1.5)),
+      errorBorder: const OutlineInputBorder(
           borderRadius: BorderRadius.zero,
-          borderSide: const BorderSide(color: Colors.red, width: 1)),
-      focusedErrorBorder: OutlineInputBorder(
+          borderSide: BorderSide(color: Colors.red, width: 1)),
+      focusedErrorBorder: const OutlineInputBorder(
           borderRadius: BorderRadius.zero,
-          borderSide: const BorderSide(color: Colors.red, width: 1.5)),
+          borderSide: BorderSide(color: Colors.red, width: 1.5)),
     );
   }
 }

@@ -3,9 +3,46 @@ part of 'database_helper.dart';
 // ── خطط التقسيط والأقساط ─────────────────────────────────────────────────
 
 extension DbInstallments on DatabaseHelper {
+  Future<int> _activeTenantIdForInstallments(Database db) async {
+    // gate: يتطلب جلسة مسجّلة قبل قراءة/كتابة التقسيط.
+    TenantContext.instance.requireTenantId();
+    return _resolveActiveTenantIdForLocalDb(db);
+  }
+
   Future<int> insertInstallmentPlan(InstallmentPlan plan) async {
     final db = await database;
+    final tid = await _activeTenantIdForInstallments(db);
+    final nowIso = DateTime.now().toUtc().toIso8601String();
+    final planGlobalId = const Uuid().v4();
+
+    // Fetch related global IDs
+    String? invoiceGlobalId;
+    if (plan.invoiceId > 0) {
+      final r = await db.query('invoices',
+          columns: ['global_id'],
+          where: 'id = ?',
+          whereArgs: [plan.invoiceId],
+          limit: 1);
+      if (r.isNotEmpty) invoiceGlobalId = r.first['global_id'] as String?;
+    }
+
+    String? customerGlobalId;
+    final customerId = plan.customerId;
+    if (customerId != null && customerId > 0) {
+      final r = await db.query('customers',
+          columns: ['global_id'],
+          where: 'id = ?',
+          whereArgs: [customerId],
+          limit: 1);
+      if (r.isNotEmpty) customerGlobalId = r.first['global_id'] as String?;
+    }
+
     final planId = await db.insert('installment_plans', {
+      'tenantId': tid,
+      'global_id': planGlobalId,
+      'invoice_global_id': invoiceGlobalId,
+      'customer_global_id': customerGlobalId,
+      'updatedAt': nowIso,
       'invoiceId': plan.invoiceId,
       'customerName': plan.customerName,
       'customerId': plan.customerId,
@@ -22,6 +59,9 @@ extension DbInstallments on DatabaseHelper {
     for (var inst in plan.installments) {
       inst.planId = planId;
       await db.insert('installments', {
+        'global_id': const Uuid().v4(),
+        'plan_global_id': planGlobalId,
+        'updatedAt': nowIso,
         'planId': inst.planId,
         'dueDate': inst.dueDate.toIso8601String(),
         'amount': inst.amount,
@@ -34,10 +74,11 @@ extension DbInstallments on DatabaseHelper {
 
   Future<InstallmentPlan?> getInstallmentPlanByInvoiceId(int invoiceId) async {
     final db = await database;
+    final tid = await _activeTenantIdForInstallments(db);
     final maps = await db.query(
       'installment_plans',
-      where: 'invoiceId = ?',
-      whereArgs: [invoiceId],
+      where: 'invoiceId = ? AND tenantId = ?',
+      whereArgs: [invoiceId, tid],
       orderBy: 'id DESC',
       limit: 1,
     );
@@ -60,11 +101,12 @@ extension DbInstallments on DatabaseHelper {
     double suggestedMonthly = 0,
   }) async {
     final db = await database;
+    final tid = await _activeTenantIdForInstallments(db);
     final existing = await db.query(
       'installment_plans',
       columns: ['id'],
-      where: 'invoiceId = ?',
-      whereArgs: [invoiceId],
+      where: 'invoiceId = ? AND tenantId = ?',
+      whereArgs: [invoiceId, tid],
       limit: 1,
       orderBy: 'id DESC',
     );
@@ -215,6 +257,7 @@ WHERE i.type IN ($placeholders)
           'customerName': plan.customerName,
           'customerId': plan.customerId,
           'numberOfInstallments': plan.numberOfInstallments,
+          'updatedAt': DateTime.now().toUtc().toIso8601String(),
         },
         where: 'id = ?',
         whereArgs: [id],
@@ -238,11 +281,12 @@ WHERE i.type IN ($placeholders)
     int customerId,
   ) async {
     final db = await database;
+    final tid = await _activeTenantIdForInstallments(db);
     await syncMissingInstallmentPlansFromInvoices(db);
     final maps = await db.query(
       'installment_plans',
-      where: 'customerId = ?',
-      whereArgs: [customerId],
+      where: 'customerId = ? AND tenantId = ?',
+      whereArgs: [customerId, tid],
       orderBy: 'id DESC',
     );
     final plans = <InstallmentPlan>[];
@@ -294,7 +338,12 @@ WHERE i.type IN ($placeholders)
 
   Future<List<InstallmentPlan>> getAllInstallmentPlans() async {
     final db = await database;
-    final maps = await db.query('installment_plans');
+    final tid = await _activeTenantIdForInstallments(db);
+    final maps = await db.query(
+      'installment_plans',
+      where: 'tenantId = ?',
+      whereArgs: [tid],
+    );
     final plans = <InstallmentPlan>[];
     for (final map in maps) {
       final planId = map['id'] as int;
@@ -345,10 +394,11 @@ WHERE i.type IN ($placeholders)
 
   Future<InstallmentPlan?> getInstallmentPlanById(int planId) async {
     final db = await database;
+    final tid = await _activeTenantIdForInstallments(db);
     final maps = await db.query(
       'installment_plans',
-      where: 'id = ?',
-      whereArgs: [planId],
+      where: 'id = ? AND tenantId = ?',
+      whereArgs: [planId, tid],
       limit: 1,
     );
     if (maps.isEmpty) return null;
@@ -397,10 +447,11 @@ WHERE i.type IN ($placeholders)
   }) async {
     if (returnDocumentTotal <= 0) return;
     final db = await database;
+    final tid = await _activeTenantIdForInstallments(db);
     final rows = await db.query(
       'installment_plans',
-      where: 'invoiceId = ?',
-      whereArgs: [originalInvoiceId],
+      where: 'invoiceId = ? AND tenantId = ?',
+      whereArgs: [originalInvoiceId, tid],
       limit: 1,
     );
     if (rows.isEmpty) return;
@@ -414,9 +465,12 @@ WHERE i.type IN ($placeholders)
     await db.transaction((txn) async {
       await txn.update(
         'installment_plans',
-        {'totalAmount': newTotal},
-        where: 'id = ?',
-        whereArgs: [planId],
+        {
+          'totalAmount': newTotal,
+          'updatedAt': DateTime.now().toUtc().toIso8601String(),
+        },
+        where: 'id = ? AND tenantId = ?',
+        whereArgs: [planId, tid],
       );
       await _setPlanPaidAmountCombined(
         txn,
@@ -471,6 +525,7 @@ WHERE i.type IN ($placeholders)
     double paidAmount,
   ) async {
     final db = await database;
+    final tid = await _activeTenantIdForInstallments(db);
     return db.transaction<RecordInstallmentPaymentResult>((txn) async {
       final instRows = await txn.query(
         'installments',
@@ -495,8 +550,8 @@ WHERE i.type IN ($placeholders)
 
       final plans = await txn.query(
         'installment_plans',
-        where: 'id = ?',
-        whereArgs: [planId],
+        where: 'id = ? AND tenantId = ?',
+        whereArgs: [planId, tid],
         limit: 1,
       );
       final customerName = plans.isNotEmpty
@@ -546,7 +601,11 @@ WHERE i.type IN ($placeholders)
 
       await txn.update(
         'installments',
-        {'paid': 1, 'paidDate': DateTime.now().toIso8601String()},
+        {
+          'paid': 1, 
+          'paidDate': DateTime.now().toIso8601String(),
+          'updatedAt': DateTime.now().toUtc().toIso8601String(),
+        },
         where: 'id = ?',
         whereArgs: [installmentId],
       );

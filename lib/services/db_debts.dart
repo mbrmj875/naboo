@@ -1,62 +1,357 @@
 part of 'database_helper.dart';
 
 // ── الديون الآجلة وتسديد العملاء ─────────────────────────────────────────
+//
+// Step 5 (tenant isolation):
+// Every read/write goes through [TenantContext.requireTenantId] before
+// touching SQLite, and every SQL statement carries `tenantId = ?` so the
+// active session can never observe rows belonging to another tenant on the
+// same device. The pure SQL is extracted into [DbDebtsSqlOps] so unit tests
+// can drive it against an in-memory FFI database without instantiating the
+// production [DatabaseHelper] singleton.
 
-extension DbDebts on DatabaseHelper {
-  /// كل فواتير «دين / آجل» غير المرتجعة.
-  Future<List<CreditDebtInvoice>> getAllNonReturnedCreditInvoices() async {
-    final db = await database;
+CreditDebtInvoice _creditDebtInvoiceFromRow(Map<String, dynamic> r) {
+  return CreditDebtInvoice(
+    invoiceId: r['id'] as int,
+    customerName: (r['customerName'] as String?)?.trim() ?? '',
+    customerId: r['customerId'] as int?,
+    date: DateTime.parse(r['date'] as String),
+    total: (r['total'] as num).toDouble(),
+    advancePayment: (r['advancePayment'] as num?)?.toDouble() ?? 0,
+  );
+}
+
+double _openRemainingForCreditDebtRow(Map<String, dynamic> r) {
+  final tot = (r['total'] as num).toDouble();
+  final adv = (r['advancePayment'] as num?)?.toDouble() ?? 0;
+  return max(0.0, tot - adv);
+}
+
+/// Pure SQL operations for the credit-debt domain, parameterised over
+/// `tenantId` so they can be covered by unit tests with the in-memory schema
+/// in `test/helpers/in_memory_db.dart`. Production callers must always go
+/// through the [DbDebts] extension on [DatabaseHelper], which gates each call
+/// on [TenantContext.requireTenantId] before invoking these helpers.
+@visibleForTesting
+class DbDebtsSqlOps {
+  DbDebtsSqlOps._();
+
+  static Future<List<CreditDebtInvoice>> getNonReturnedCreditInvoices(
+    DatabaseExecutor db,
+    int tenantId,
+  ) async {
     final t = InvoiceType.credit.index;
     final rows = await db.rawQuery(
       '''
       SELECT id, customerName, customerId, date, total, advancePayment
       FROM invoices
-      WHERE type = ? AND IFNULL(isReturned, 0) = 0
+      WHERE tenantId = ?
+        AND type = ?
+        AND IFNULL(isReturned, 0) = 0
+        AND deleted_at IS NULL
       ORDER BY date DESC
       ''',
-      [t],
+      [tenantId, t],
     );
+    return rows.map(_creditDebtInvoiceFromRow).toList();
+  }
+
+  static Future<List<CreditDebtInvoice>> getOpenCreditDebtInvoices(
+    DatabaseExecutor db,
+    int tenantId,
+  ) async {
+    final t = InvoiceType.credit.index;
+    final rows = await db.rawQuery(
+      '''
+      SELECT id, customerName, customerId, date, total, advancePayment
+      FROM invoices
+      WHERE tenantId = ?
+        AND type = ?
+        AND IFNULL(isReturned, 0) = 0
+        AND deleted_at IS NULL
+        AND (total - IFNULL(advancePayment, 0)) > 0.009
+      ORDER BY date DESC
+      ''',
+      [tenantId, t],
+    );
+    return rows.map(_creditDebtInvoiceFromRow).toList();
+  }
+
+  static Future<List<CreditDebtInvoice>> getCreditDebtInvoicesForCustomerId(
+    DatabaseExecutor db,
+    int tenantId,
+    int customerId,
+  ) async {
+    final t = InvoiceType.credit.index;
+    final rows = await db.rawQuery(
+      '''
+      SELECT id, customerName, customerId, date, total, advancePayment
+      FROM invoices
+      WHERE tenantId = ?
+        AND type = ?
+        AND IFNULL(isReturned, 0) = 0
+        AND deleted_at IS NULL
+        AND customerId = ?
+      ORDER BY date DESC
+      ''',
+      [tenantId, t, customerId],
+    );
+    return rows.map(_creditDebtInvoiceFromRow).toList();
+  }
+
+  static Future<double> sumOpenCreditDebtForCustomer(
+    DatabaseExecutor db,
+    int tenantId,
+    int customerId,
+  ) async {
+    final t = InvoiceType.credit.index;
+    final rows = await db.rawQuery(
+      '''
+      SELECT COALESCE(SUM(total - IFNULL(advancePayment, 0)), 0) AS s
+      FROM invoices
+      WHERE tenantId = ?
+        AND type = ?
+        AND IFNULL(isReturned, 0) = 0
+        AND deleted_at IS NULL
+        AND customerId = ?
+        AND (total - IFNULL(advancePayment, 0)) > 0.009
+      ''',
+      [tenantId, t, customerId],
+    );
+    return (rows.first['s'] as num?)?.toDouble() ?? 0;
+  }
+
+  static Future<double> sumOpenCreditDebtForUnlinkedCustomerName(
+    DatabaseExecutor db,
+    int tenantId,
+    String rawName,
+  ) async {
+    final n = rawName.trim().toLowerCase();
+    if (n.isEmpty) return 0;
+    final t = InvoiceType.credit.index;
+    final rows = await db.rawQuery(
+      '''
+      SELECT COALESCE(SUM(total - IFNULL(advancePayment, 0)), 0) AS s
+      FROM invoices
+      WHERE tenantId = ?
+        AND type = ?
+        AND IFNULL(isReturned, 0) = 0
+        AND deleted_at IS NULL
+        AND customerId IS NULL
+        AND LOWER(TRIM(customerName)) = ?
+        AND (total - IFNULL(advancePayment, 0)) > 0.009
+      ''',
+      [tenantId, t, n],
+    );
+    return (rows.first['s'] as num?)?.toDouble() ?? 0;
+  }
+
+  static Future<List<Map<String, dynamic>>>
+      queryOpenCreditInvoiceMapsForParty(
+    DatabaseExecutor ex,
+    int tenantId,
+    CustomerDebtParty party,
+  ) async {
+    final t = InvoiceType.credit.index;
+    if (party.customerId != null) {
+      return ex.rawQuery(
+        '''
+        SELECT id, customerName, total, advancePayment, date
+        FROM invoices
+        WHERE tenantId = ?
+          AND type = ?
+          AND IFNULL(isReturned, 0) = 0
+          AND deleted_at IS NULL
+          AND customerId = ?
+          AND (total - IFNULL(advancePayment, 0)) > 0.009
+        ORDER BY date ASC, id ASC
+        ''',
+        [tenantId, t, party.customerId],
+      );
+    }
+    return ex.rawQuery(
+      '''
+      SELECT id, customerName, total, advancePayment, date
+      FROM invoices
+      WHERE tenantId = ?
+        AND type = ?
+        AND IFNULL(isReturned, 0) = 0
+        AND deleted_at IS NULL
+        AND customerId IS NULL
+        AND LOWER(TRIM(customerName)) = ?
+        AND (total - IFNULL(advancePayment, 0)) > 0.009
+      ORDER BY date ASC, id ASC
+      ''',
+      [tenantId, t, party.normalizedName],
+    );
+  }
+
+  static Future<List<CustomerDebtLineItem>> getCustomerDebtLineItems(
+    DatabaseExecutor db,
+    int tenantId,
+    CustomerDebtParty party,
+  ) async {
+    final t = InvoiceType.credit.index;
+    final List<Map<String, dynamic>> rows;
+    if (party.customerId != null) {
+      rows = await db.rawQuery(
+        '''
+        SELECT ii.productName, ii.quantity, ii.price, ii.total AS lineTotal,
+               i.id AS invoiceId, i.date AS invDate, i.createdByUserName
+        FROM invoice_items ii
+        INNER JOIN invoices i ON i.id = ii.invoiceId
+        WHERE i.tenantId = ?
+          AND i.type = ?
+          AND IFNULL(i.isReturned, 0) = 0
+          AND i.deleted_at IS NULL
+          AND ii.deleted_at IS NULL
+          AND i.customerId = ?
+        ORDER BY i.date DESC, ii.id ASC
+        ''',
+        [tenantId, t, party.customerId],
+      );
+    } else {
+      rows = await db.rawQuery(
+        '''
+        SELECT ii.productName, ii.quantity, ii.price, ii.total AS lineTotal,
+               i.id AS invoiceId, i.date AS invDate, i.createdByUserName
+        FROM invoice_items ii
+        INNER JOIN invoices i ON i.id = ii.invoiceId
+        WHERE i.tenantId = ?
+          AND i.type = ?
+          AND IFNULL(i.isReturned, 0) = 0
+          AND i.deleted_at IS NULL
+          AND ii.deleted_at IS NULL
+          AND i.customerId IS NULL
+          AND LOWER(TRIM(i.customerName)) = ?
+        ORDER BY i.date DESC, ii.id ASC
+        ''',
+        [tenantId, t, party.normalizedName],
+      );
+    }
     return rows
         .map(
-          (r) => CreditDebtInvoice(
-            invoiceId: r['id'] as int,
-            customerName: (r['customerName'] as String?)?.trim() ?? '',
-            customerId: r['customerId'] as int?,
-            date: DateTime.parse(r['date'] as String),
-            total: (r['total'] as num).toDouble(),
-            advancePayment: (r['advancePayment'] as num?)?.toDouble() ?? 0,
+          (r) => CustomerDebtLineItem(
+            invoiceId: r['invoiceId'] as int,
+            invoiceDate: DateTime.parse(r['invDate'] as String),
+            productName: (r['productName'] as String?)?.trim() ?? '',
+            quantity: (r['quantity'] as num?)?.toInt() ?? 0,
+            unitPrice: (r['price'] as num?)?.toDouble() ?? 0,
+            lineTotal: (r['lineTotal'] as num?)?.toDouble() ?? 0,
+            sellerName: r['createdByUserName'] as String?,
           ),
         )
         .toList();
   }
 
+  static Future<List<CreditDebtInvoice>> getCreditDebtInvoicesForParty(
+    DatabaseExecutor db,
+    int tenantId,
+    CustomerDebtParty party,
+  ) async {
+    final t = InvoiceType.credit.index;
+    final List<Map<String, dynamic>> rows;
+    if (party.customerId != null) {
+      rows = await db.rawQuery(
+        '''
+        SELECT id, customerName, customerId, date, total, advancePayment
+        FROM invoices
+        WHERE tenantId = ?
+          AND type = ?
+          AND IFNULL(isReturned, 0) = 0
+          AND deleted_at IS NULL
+          AND customerId = ?
+        ORDER BY date DESC
+        ''',
+        [tenantId, t, party.customerId],
+      );
+    } else {
+      rows = await db.rawQuery(
+        '''
+        SELECT id, customerName, customerId, date, total, advancePayment
+        FROM invoices
+        WHERE tenantId = ?
+          AND type = ?
+          AND IFNULL(isReturned, 0) = 0
+          AND deleted_at IS NULL
+          AND customerId IS NULL
+          AND LOWER(TRIM(customerName)) = ?
+        ORDER BY date DESC
+        ''',
+        [tenantId, t, party.normalizedName],
+      );
+    }
+    return rows.map(_creditDebtInvoiceFromRow).toList();
+  }
+
+  /// Applies a payment to a single invoice. The `tenantId = ?` predicate is
+  /// what enforces cross-tenant safety: an attempt to update an invoice that
+  /// belongs to a different tenant returns 0 rows affected. Soft-deleted
+  /// invoices are also blocked — paying onto a tombstoned row would silently
+  /// resurrect it from the user's perspective.
+  static Future<int> applyPaymentToInvoice(
+    DatabaseExecutor txn,
+    int tenantId,
+    int invoiceId,
+    double newAdvancePayment,
+  ) {
+    return txn.update(
+      'invoices',
+      {
+        'advancePayment': newAdvancePayment,
+        'updatedAt': DateTime.now().toUtc().toIso8601String(),
+      },
+      where: 'id = ? AND tenantId = ? AND deleted_at IS NULL',
+      whereArgs: [invoiceId, tenantId],
+    );
+  }
+
+  /// Inserts a debt-payment row, stamping `tenantId` from the active session
+  /// regardless of whatever the caller provided.
+  static Future<int> insertCustomerDebtPayment(
+    DatabaseExecutor txn,
+    int tenantId,
+    Map<String, dynamic> values,
+  ) {
+    final stamped = Map<String, dynamic>.from(values);
+    stamped['tenantId'] = tenantId;
+    return txn.insert('customer_debt_payments', stamped);
+  }
+}
+
+extension DbDebts on DatabaseHelper {
+  Future<int> _activeTenantIdForDebts(Database db, String sessionTenant) async {
+    try {
+      final rows = await db.query(
+        'app_settings',
+        columns: ['value'],
+        where: 'key = ?',
+        whereArgs: ['_system.active_tenant_id'],
+        limit: 1,
+      );
+      final fromSettings = rows.isEmpty
+          ? null
+          : int.tryParse((rows.first['value'] ?? '').toString());
+      if (fromSettings != null && fromSettings > 0) return fromSettings;
+    } catch (_) {}
+    final parsed = _tryParseLocalTenantId(sessionTenant);
+    return parsed != null && parsed > 0 ? parsed : 1;
+  }
+
+  /// كل فواتير «دين / آجل» غير المرتجعة.
+  Future<List<CreditDebtInvoice>> getAllNonReturnedCreditInvoices() async {
+    final db = await database;
+    final sessionTenant = TenantContext.instance.requireTenantId();
+    final tid = await _activeTenantIdForDebts(db, sessionTenant);
+    return DbDebtsSqlOps.getNonReturnedCreditInvoices(db, tid);
+  }
+
   /// فواتير «دين / آجل» ذات متبقٍ > 0 (غير مرتجعة).
   Future<List<CreditDebtInvoice>> getOpenCreditDebtInvoices() async {
     final db = await database;
-    final t = InvoiceType.credit.index;
-    final rows = await db.rawQuery(
-      '''
-      SELECT id, customerName, customerId, date, total, advancePayment
-      FROM invoices
-      WHERE type = ?
-        AND IFNULL(isReturned, 0) = 0
-        AND (total - IFNULL(advancePayment, 0)) > 0.009
-      ORDER BY date DESC
-      ''',
-      [t],
-    );
-    return rows
-        .map(
-          (r) => CreditDebtInvoice(
-            invoiceId: r['id'] as int,
-            customerName: (r['customerName'] as String?)?.trim() ?? '',
-            customerId: r['customerId'] as int?,
-            date: DateTime.parse(r['date'] as String),
-            total: (r['total'] as num).toDouble(),
-            advancePayment: (r['advancePayment'] as num?)?.toDouble() ?? 0,
-          ),
-        )
-        .toList();
+    final sessionTenant = TenantContext.instance.requireTenantId();
+    final tid = await _activeTenantIdForDebts(db, sessionTenant);
+    return DbDebtsSqlOps.getOpenCreditDebtInvoices(db, tid);
   }
 
   /// كل فواتير «آجل» غير المرتجعة لعميل مسجّل (للعرض والربط بإيصال البيع).
@@ -64,69 +359,33 @@ extension DbDebts on DatabaseHelper {
     int customerId,
   ) async {
     final db = await database;
-    final t = InvoiceType.credit.index;
-    final rows = await db.rawQuery(
-      '''
-      SELECT id, customerName, customerId, date, total, advancePayment
-      FROM invoices
-      WHERE type = ?
-        AND IFNULL(isReturned, 0) = 0
-        AND customerId = ?
-      ORDER BY date DESC
-      ''',
-      [t, customerId],
+    final sessionTenant = TenantContext.instance.requireTenantId();
+    final tid = await _activeTenantIdForDebts(db, sessionTenant);
+    return DbDebtsSqlOps.getCreditDebtInvoicesForCustomerId(
+      db,
+      tid,
+      customerId,
     );
-    return rows
-        .map(
-          (r) => CreditDebtInvoice(
-            invoiceId: r['id'] as int,
-            customerName: (r['customerName'] as String?)?.trim() ?? '',
-            customerId: r['customerId'] as int?,
-            date: DateTime.parse(r['date'] as String),
-            total: (r['total'] as num).toDouble(),
-            advancePayment: (r['advancePayment'] as num?)?.toDouble() ?? 0,
-          ),
-        )
-        .toList();
   }
 
   Future<double> sumOpenCreditDebtForCustomer(int customerId) async {
     final db = await database;
-    final t = InvoiceType.credit.index;
-    final rows = await db.rawQuery(
-      '''
-      SELECT COALESCE(SUM(total - IFNULL(advancePayment, 0)), 0) AS s
-      FROM invoices
-      WHERE type = ?
-        AND IFNULL(isReturned, 0) = 0
-        AND customerId = ?
-        AND (total - IFNULL(advancePayment, 0)) > 0.009
-      ''',
-      [t, customerId],
-    );
-    return (rows.first['s'] as num?)?.toDouble() ?? 0;
+    final sessionTenant = TenantContext.instance.requireTenantId();
+    final tid = await _activeTenantIdForDebts(db, sessionTenant);
+    return DbDebtsSqlOps.sumOpenCreditDebtForCustomer(db, tid, customerId);
   }
 
   Future<double> sumOpenCreditDebtForUnlinkedCustomerName(
     String rawName,
   ) async {
-    final n = rawName.trim().toLowerCase();
-    if (n.isEmpty) return 0;
     final db = await database;
-    final t = InvoiceType.credit.index;
-    final rows = await db.rawQuery(
-      '''
-      SELECT COALESCE(SUM(total - IFNULL(advancePayment, 0)), 0) AS s
-      FROM invoices
-      WHERE type = ?
-        AND IFNULL(isReturned, 0) = 0
-        AND customerId IS NULL
-        AND LOWER(TRIM(customerName)) = ?
-        AND (total - IFNULL(advancePayment, 0)) > 0.009
-      ''',
-      [t, n],
+    final sessionTenant = TenantContext.instance.requireTenantId();
+    final tid = await _activeTenantIdForDebts(db, sessionTenant);
+    return DbDebtsSqlOps.sumOpenCreditDebtForUnlinkedCustomerName(
+      db,
+      tid,
+      rawName,
     );
-    return (rows.first['s'] as num?)?.toDouble() ?? 0;
   }
 
   /// تجميع ديون «آجل» حسب العميل (مسجّل أو باسم فقط).
@@ -193,49 +452,18 @@ extension DbDebts on DatabaseHelper {
     return out;
   }
 
-  double _openRemainingForCreditRow(Map<String, dynamic> r) {
-    final tot = (r['total'] as num).toDouble();
-    final adv = (r['advancePayment'] as num?)?.toDouble() ?? 0;
-    return max(0.0, tot - adv);
-  }
-
-  Future<List<Map<String, dynamic>>> _queryOpenCreditInvoiceMapsForParty(
-    DatabaseExecutor ex,
-    CustomerDebtParty party,
-  ) async {
-    final t = InvoiceType.credit.index;
-    if (party.customerId != null) {
-      return ex.rawQuery(
-        '''
-        SELECT id, customerName, total, advancePayment, date
-        FROM invoices
-        WHERE type = ? AND IFNULL(isReturned, 0) = 0 AND customerId = ?
-          AND (total - IFNULL(advancePayment, 0)) > 0.009
-        ORDER BY date ASC, id ASC
-        ''',
-        [t, party.customerId],
-      );
-    }
-    return ex.rawQuery(
-      '''
-      SELECT id, customerName, total, advancePayment, date
-      FROM invoices
-      WHERE type = ? AND IFNULL(isReturned, 0) = 0
-        AND customerId IS NULL
-        AND LOWER(TRIM(customerName)) = ?
-        AND (total - IFNULL(advancePayment, 0)) > 0.009
-      ORDER BY date ASC, id ASC
-      ''',
-      [t, party.normalizedName],
-    );
-  }
-
   Future<double> sumOpenCreditDebtForParty(CustomerDebtParty party) async {
     final db = await database;
-    final rows = await _queryOpenCreditInvoiceMapsForParty(db, party);
+    final sessionTenant = TenantContext.instance.requireTenantId();
+    final tid = await _activeTenantIdForDebts(db, sessionTenant);
+    final rows = await DbDebtsSqlOps.queryOpenCreditInvoiceMapsForParty(
+      db,
+      tid,
+      party,
+    );
     var s = 0.0;
     for (final r in rows) {
-      s += _openRemainingForCreditRow(r);
+      s += _openRemainingForCreditDebtRow(r);
     }
     return s;
   }
@@ -244,91 +472,18 @@ extension DbDebts on DatabaseHelper {
     CustomerDebtParty party,
   ) async {
     final db = await database;
-    final t = InvoiceType.credit.index;
-    final List<Map<String, dynamic>> rows;
-    if (party.customerId != null) {
-      rows = await db.rawQuery(
-        '''
-        SELECT ii.productName, ii.quantity, ii.price, ii.total AS lineTotal,
-               i.id AS invoiceId, i.date AS invDate, i.createdByUserName
-        FROM invoice_items ii
-        INNER JOIN invoices i ON i.id = ii.invoiceId
-        WHERE i.type = ? AND IFNULL(i.isReturned, 0) = 0
-          AND i.customerId = ?
-        ORDER BY i.date DESC, ii.id ASC
-        ''',
-        [t, party.customerId],
-      );
-    } else {
-      rows = await db.rawQuery(
-        '''
-        SELECT ii.productName, ii.quantity, ii.price, ii.total AS lineTotal,
-               i.id AS invoiceId, i.date AS invDate, i.createdByUserName
-        FROM invoice_items ii
-        INNER JOIN invoices i ON i.id = ii.invoiceId
-        WHERE i.type = ? AND IFNULL(i.isReturned, 0) = 0
-          AND i.customerId IS NULL
-          AND LOWER(TRIM(i.customerName)) = ?
-        ORDER BY i.date DESC, ii.id ASC
-        ''',
-        [t, party.normalizedName],
-      );
-    }
-    return rows
-        .map(
-          (r) => CustomerDebtLineItem(
-            invoiceId: r['invoiceId'] as int,
-            invoiceDate: DateTime.parse(r['invDate'] as String),
-            productName: (r['productName'] as String?)?.trim() ?? '',
-            quantity: (r['quantity'] as num?)?.toInt() ?? 0,
-            unitPrice: (r['price'] as num?)?.toDouble() ?? 0,
-            lineTotal: (r['lineTotal'] as num?)?.toDouble() ?? 0,
-            sellerName: r['createdByUserName'] as String?,
-          ),
-        )
-        .toList();
+    final sessionTenant = TenantContext.instance.requireTenantId();
+    final tid = await _activeTenantIdForDebts(db, sessionTenant);
+    return DbDebtsSqlOps.getCustomerDebtLineItems(db, tid, party);
   }
 
   Future<List<CreditDebtInvoice>> getCreditDebtInvoicesForParty(
     CustomerDebtParty party,
   ) async {
     final db = await database;
-    final t = InvoiceType.credit.index;
-    final List<Map<String, dynamic>> rows;
-    if (party.customerId != null) {
-      rows = await db.rawQuery(
-        '''
-        SELECT id, customerName, customerId, date, total, advancePayment
-        FROM invoices
-        WHERE type = ? AND IFNULL(isReturned, 0) = 0 AND customerId = ?
-        ORDER BY date DESC
-        ''',
-        [t, party.customerId],
-      );
-    } else {
-      rows = await db.rawQuery(
-        '''
-        SELECT id, customerName, customerId, date, total, advancePayment
-        FROM invoices
-        WHERE type = ? AND IFNULL(isReturned, 0) = 0
-          AND customerId IS NULL AND LOWER(TRIM(customerName)) = ?
-        ORDER BY date DESC
-        ''',
-        [t, party.normalizedName],
-      );
-    }
-    return rows
-        .map(
-          (r) => CreditDebtInvoice(
-            invoiceId: r['id'] as int,
-            customerName: (r['customerName'] as String?)?.trim() ?? '',
-            customerId: r['customerId'] as int?,
-            date: DateTime.parse(r['date'] as String),
-            total: (r['total'] as num).toDouble(),
-            advancePayment: (r['advancePayment'] as num?)?.toDouble() ?? 0,
-          ),
-        )
-        .toList();
+    final sessionTenant = TenantContext.instance.requireTenantId();
+    final tid = await _activeTenantIdForDebts(db, sessionTenant);
+    return DbDebtsSqlOps.getCreditDebtInvoicesForParty(db, tid, party);
   }
 
   /// تسديد دفعة على ديون آجل: تخصيم FIFO على [advancePayment].
@@ -340,12 +495,18 @@ extension DbDebts on DatabaseHelper {
   }) async {
     if (amount <= 0) return null;
     final db = await database;
+    final sessionTenant = TenantContext.instance.requireTenantId();
+    final tid = await _activeTenantIdForDebts(db, sessionTenant);
     await _ensureCustomerDebtPaymentsTable(db);
     return db.transaction((txn) async {
-      final openMaps = await _queryOpenCreditInvoiceMapsForParty(txn, party);
+      final openMaps = await DbDebtsSqlOps.queryOpenCreditInvoiceMapsForParty(
+        txn,
+        tid,
+        party,
+      );
       var debtBefore = 0.0;
       for (final r in openMaps) {
-        debtBefore += _openRemainingForCreditRow(r);
+        debtBefore += _openRemainingForCreditDebtRow(r);
       }
       if (debtBefore < 0.009) return null;
       final toApply = amount > debtBefore ? debtBefore : amount;
@@ -359,31 +520,48 @@ extension DbDebts on DatabaseHelper {
         if (rem < 1e-9) continue;
         final add = left > rem ? rem : left;
         final newAdv = adv + add;
-        await txn.update(
-          'invoices',
-          {'advancePayment': newAdv},
-          where: 'id = ?',
-          whereArgs: [id],
-        );
+        await DbDebtsSqlOps.applyPaymentToInvoice(txn, tid, id, newAdv);
         left -= add;
       }
       final applied = toApply - max(0.0, left);
       if (applied < 1e-9) return null;
 
       var debtAfter = 0.0;
-      final afterMaps = await _queryOpenCreditInvoiceMapsForParty(txn, party);
+      final afterMaps = await DbDebtsSqlOps.queryOpenCreditInvoiceMapsForParty(
+        txn,
+        tid,
+        party,
+      );
       for (final r in afterMaps) {
-        debtAfter += _openRemainingForCreditRow(r);
+        debtAfter += _openRemainingForCreditDebtRow(r);
       }
 
       final trimmedUser = recordedByUserName.trim();
-      final pid = await txn.insert('customer_debt_payments', {
+      final paymentGlobalId = const Uuid().v4();
+      final nowIso = DateTime.now().toUtc().toIso8601String();
+
+      String? customerGlobalId;
+      if (party.customerId != null) {
+        final r = await txn.query(
+          'customers',
+          columns: ['global_id'],
+          where: 'id = ? AND tenantId = ?',
+          whereArgs: [party.customerId, tid],
+          limit: 1,
+        );
+        if (r.isNotEmpty) customerGlobalId = r.first['global_id'] as String?;
+      }
+
+      final pid = await DbDebtsSqlOps.insertCustomerDebtPayment(txn, tid, {
+        'global_id': paymentGlobalId,
+        'customer_global_id': customerGlobalId,
         'customerId': party.customerId,
         'customerNameSnapshot': party.displayName,
         'amount': applied,
         'debtBefore': debtBefore,
         'debtAfter': debtAfter,
-        'createdAt': DateTime.now().toIso8601String(),
+        'createdAt': nowIso,
+        'updatedAt': nowIso,
         'createdByUserName': trimmedUser.isEmpty ? null : trimmedUser,
         'note': note?.trim().isEmpty == true ? null : note?.trim(),
       });

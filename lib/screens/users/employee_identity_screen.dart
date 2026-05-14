@@ -50,8 +50,14 @@ class _EmployeeIdentityScreenState extends State<EmployeeIdentityScreen> {
             'سيتم إنشاء رمز جديد. يجب طباعة/تحديث بطاقة الهوية وإعادة توزيعها.',
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('تأكيد')),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('إلغاء'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('تأكيد'),
+            ),
           ],
         ),
       ),
@@ -59,9 +65,9 @@ class _EmployeeIdentityScreenState extends State<EmployeeIdentityScreen> {
     if (ok != true || !mounted) return;
     await _db.regenerateUserShiftAccessPin(userId);
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('تم تجديد رمز الوردية.')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('تم تجديد رمز الوردية.')));
     await _load();
     setState(() => _expandedId = userId);
   }
@@ -85,63 +91,71 @@ class _EmployeeIdentityScreenState extends State<EmployeeIdentityScreen> {
         body: _loading
             ? const Center(child: CircularProgressIndicator())
             : _rows.isEmpty
-                ? Center(
-                    child: Text(
-                      'لا يوجد مستخدمون نشطون في قاعدة البيانات.',
-                      style: TextStyle(color: Colors.grey.shade600),
-                    ),
-                  )
-                : RefreshIndicator(
-                    onRefresh: _load,
-                    child: ListView.builder(
-                      padding: const EdgeInsets.all(12),
-                      itemCount: _rows.length,
-                      itemBuilder: (context, i) {
-                        final u = _rows[i];
-                        final id = u['id'] as int;
-                        final name = (u['displayName'] as String?)?.trim().isNotEmpty == true
-                            ? u['displayName'] as String
-                            : (u['username'] as String? ?? '—');
-                        final expanded = _expandedId == id;
-                        return Card(
-                          margin: const EdgeInsets.only(bottom: 10),
-                          child: ExpansionTile(
-                            key: ValueKey('id_$id'),
-                            initiallyExpanded: expanded,
-                            onExpansionChanged: (open) {
-                              setState(() => _expandedId = open ? id : null);
-                            },
-                            title: Text(name, style: const TextStyle(fontWeight: FontWeight.w700)),
-                            subtitle: Text(
-                              u['email']?.toString() ?? '',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            children: [
-                              Padding(
-                                padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                                child: Center(
-                                  child: SingleChildScrollView(
-                                    scrollDirection: Axis.horizontal,
-                                    child: EmployeeIdCard(user: u, width: 320, compact: false),
-                                  ),
+            ? Center(
+                child: Text(
+                  'لا يوجد مستخدمون نشطون في قاعدة البيانات.',
+                  style: TextStyle(color: Colors.grey.shade600),
+                ),
+              )
+            : RefreshIndicator(
+                onRefresh: _load,
+                child: ListView.builder(
+                  padding: const EdgeInsets.all(12),
+                  itemCount: _rows.length,
+                  itemBuilder: (context, i) {
+                    final u = _rows[i];
+                    final id = u['id'] as int;
+                    final name =
+                        (u['displayName'] as String?)?.trim().isNotEmpty == true
+                        ? u['displayName'] as String
+                        : (u['username'] as String? ?? '—');
+                    final expanded = _expandedId == id;
+                    return Card(
+                      margin: const EdgeInsets.only(bottom: 10),
+                      child: ExpansionTile(
+                        key: ValueKey('id_$id'),
+                        initiallyExpanded: expanded,
+                        onExpansionChanged: (open) {
+                          setState(() => _expandedId = open ? id : null);
+                        },
+                        title: Text(
+                          name,
+                          style: const TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        subtitle: Text(
+                          u['email']?.toString() ?? '',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                            child: Center(
+                              child: SingleChildScrollView(
+                                scrollDirection: Axis.horizontal,
+                                child: EmployeeIdCard(
+                                  user: u,
+                                  width: 320,
+                                  compact: false,
                                 ),
                               ),
-                              if (auth.isAdmin)
-                                Padding(
-                                  padding: const EdgeInsets.only(bottom: 8),
-                                  child: TextButton.icon(
-                                    onPressed: () => _regeneratePin(id),
-                                    icon: const Icon(Icons.refresh),
-                                    label: const Text('تجديد رمز الوردية'),
-                                  ),
-                                ),
-                            ],
+                            ),
                           ),
-                        );
-                      },
-                    ),
-                  ),
+                          if (auth.isAdmin)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 8),
+                              child: TextButton.icon(
+                                onPressed: () => _regeneratePin(id),
+                                icon: const Icon(Icons.refresh),
+                                label: const Text('تجديد رمز الوردية'),
+                              ),
+                            ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
       ),
     );
   }

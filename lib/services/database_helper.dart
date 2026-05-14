@@ -3,7 +3,10 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
+import 'package:uuid/uuid.dart';
 import 'cloud_sync_service.dart';
+import 'sync_queue_service.dart';
+import 'tenant_context.dart';
 import '../models/invoice.dart';
 import '../models/installment.dart';
 import '../models/installment_settings_data.dart';
@@ -13,6 +16,7 @@ import '../models/customer_debt_models.dart';
 import '../models/supplier_ap_models.dart';
 import '../models/loyalty_settings_data.dart';
 import '../models/recent_activity_entry.dart';
+import '../utils/app_logger.dart';
 import '../utils/loyalty_math.dart';
 import '../utils/customer_validation.dart';
 
@@ -31,6 +35,11 @@ part 'db_parked_sales.dart';
 part 'db_notifications.dart';
 part 'db_reports.dart';
 part 'db_expenses.dart';
+part 'db_product_variants.dart';
+part 'db_products_sync.dart';
+part 'db_financial_sync.dart';
+
+
 
 class DatabaseHelper {
   static final DatabaseHelper _instance = DatabaseHelper._internal();
@@ -70,8 +79,19 @@ class DatabaseHelper {
   /// ترحيلات حرجة وقت الإقلاع، تُنفَّذ صراحةً حتى لو لم يُستدعَ onOpen مبكراً.
   Future<void> runStartupCriticalMigrations() async {
     final db = await database;
-    debugPrint('DB PATH: ${db.path}');
+    if (kDebugMode) {
+      AppLogger.info('DatabaseHelper', 'DB PATH: ${db.path}');
+    }
     await _ensureMoneyFilsColumns(db);
+    await ensureCashLedgerGlobalIdSchema(db);
+    await ensureWorkShiftsGlobalIdSchema(db);
+    await ensureCustomersGlobalIdSchema(db);
+    await ensureSuppliersGlobalIdSchema(db);
+    await ensureExpensesSchema(db);
+    await ensureCategoriesBrandsGlobalIdSchema(db);
+    await ensureProductsGlobalIdSchema(db);
+    await ensureInvoicesGlobalIdSchema(db);
+    await ensureFinancialGlobalIdSchema(db);
   }
 
   /// إغلاق ملف SQLite وحذفه — عند تبديل حساب سحابي (يُعاد إنشاء الملف عند أول وصول لاحق).
@@ -104,13 +124,35 @@ class DatabaseHelper {
       });
     } catch (e, st) {
       if (kDebugMode) {
-        debugPrint('[DatabaseHelper.wipeBusinessDataKeepUsers] $e');
-        debugPrint('$st');
+        AppLogger.error(
+          'DatabaseHelper',
+          'wipeBusinessDataKeepUsers failed',
+          e,
+          st,
+        );
       }
       rethrow;
     } finally {
       await db.execute('PRAGMA foreign_keys = ON');
     }
+    // مسح الصفوف يفرّغ `tenants` بينما onOpen لا يُعاد — أعد بذرة المستأجر الافتراضي
+    // حتى لا تفشل TenantContextService وكل القراءات المعزولة.
+    await _ensureTenantsMinimumSeed(db);
+  }
+
+  /// يضمن وجود صف في [tenants] (مثلاً بعد مسح البيانات أو قاعدة تالفة جزئياً).
+  Future<void> ensureDefaultTenantSeedIfNeeded() async {
+    final db = await database;
+    await _ensureTenantsMinimumSeed(db);
+  }
+
+  /// أعمدة وجداول تذاكر الصيانة قبل أي قراءة — يُكمّل ما قد يفوته مسار onOpen.
+  Future<void> ensureServiceOrdersReadRepair() async {
+    final db = await database;
+    await _ensureServiceOrdersSchema(db);
+    await _ensureServiceOrdersCamelDeletedAt(db);
+    await _ensureServiceOrderItemsSchema(db);
+    await _ensureServiceOrderItemsCamelDeletedAt(db);
   }
 
   Future<Database> _initDatabase() async {
@@ -165,13 +207,343 @@ class DatabaseHelper {
     await _ensureInventoryProductExtendedCols(db);
     await _ensureProductBatchesTable(db);
     await _ensurePurchaseOrdersTables(db);
+    await ensureCashLedgerGlobalIdSchema(db);
+    await ensureWorkShiftsGlobalIdSchema(db);
+    await ensureCustomersGlobalIdSchema(db);
+    await ensureSuppliersGlobalIdSchema(db);
     await ensureExpensesSchema(db);
+    await ensureCategoriesBrandsGlobalIdSchema(db);
+    await ensureProductsGlobalIdSchema(db);
+    await ensureInvoicesGlobalIdSchema(db);
     await _ensureInvoiceItemsUnitCost(db);
     await _ensureProductUnitVariantsSchema(db);
     await _ensureInvoiceItemsUnitSnapshots(db);
+    await _ensureInvoiceItemsClothingVariantSnapshots(db);
     await _ensureProductsBaseStockKind(db);
     await _ensureProductPinning(db);
     await _ensureProductsTenantScopedProductCodeUnique(db);
+    await ensureProductColorsAndVariantsSchema(db);
+    await _ensureProductVariantsGlobalIds(db);
+    await _ensureServicesAndJobTicketsSchema(db);
+  }
+
+  Future<void> _ensureServicesAndJobTicketsSchema(Database db) async {
+    await _ensureProductsServiceColumns(db);
+    await _ensureServiceOrdersSchema(db);
+    await _ensureServiceOrdersCamelDeletedAt(db);
+    await _ensureServiceOrdersEtaColumns(db);
+    await _ensureServiceOrdersWorkStartedAtColumn(db);
+    await _ensureServiceOrderItemsSchema(db);
+    await _ensureServiceOrderItemsCamelDeletedAt(db);
+  }
+
+  /// إصدارات قديمة قد تكون أنشأت الجدول بدون عمود الحذف الناعم (camelCase).
+  Future<void> _ensureServiceOrdersCamelDeletedAt(Database db) async {
+    try {
+      if (await _tableExists(db, 'service_orders') &&
+          !await _tableHasColumn(db, 'service_orders', 'deletedAt')) {
+        await db.execute(
+          'ALTER TABLE service_orders ADD COLUMN deletedAt TEXT',
+        );
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _ensureServiceOrderItemsCamelDeletedAt(Database db) async {
+    try {
+      if (await _tableExists(db, 'service_order_items') &&
+          !await _tableHasColumn(db, 'service_order_items', 'deletedAt')) {
+        await db.execute(
+          'ALTER TABLE service_order_items ADD COLUMN deletedAt TEXT',
+        );
+      }
+    } catch (_) {}
+  }
+
+  /// بعد مسح بيانات العمل: يضمن وجود صف مستأجر نشط واحد على الأقل.
+  ///
+  /// **سبب شائع لفشل شاشة التذاكر:** صف `id=1` موجود لكن `isActive=0`؛ عندها
+  /// `INSERT OR IGNORE` لا يُحدّث الصف وتبقى `TenantContextService` بلا مستأجر نشط.
+  Future<void> _ensureTenantsMinimumSeed(Database db) async {
+    final nowIso = DateTime.now().toIso8601String();
+    try {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS tenants (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          code TEXT NOT NULL UNIQUE,
+          name TEXT NOT NULL,
+          isActive INTEGER NOT NULL DEFAULT 1,
+          createdAt TEXT NOT NULL
+        )
+      ''');
+      await db.insert('tenants', {
+        'id': 1,
+        'code': 'default',
+        'name': 'Default Tenant',
+        'isActive': 1,
+        'createdAt': nowIso,
+      }, conflictAlgorithm: ConflictAlgorithm.ignore);
+      // تنشيط صريح لـ id=1 إن وُجد معطّلاً سابقاً.
+      await db.update(
+        'tenants',
+        {'isActive': 1},
+        where: 'id = ?',
+        whereArgs: <Object?>[1],
+      );
+
+      final countRows = await db.rawQuery(
+        'SELECT COUNT(*) AS c FROM tenants WHERE isActive = 1',
+      );
+      final activeCount = (countRows.first['c'] as num?)?.toInt() ?? 0;
+      if (activeCount == 0) {
+        final any = await db.query('tenants', orderBy: 'id ASC', limit: 1);
+        if (any.isNotEmpty) {
+          final id = (any.first['id'] as num?)?.toInt();
+          if (id != null && id > 0) {
+            await db.update(
+              'tenants',
+              {'isActive': 1},
+              where: 'id = ?',
+              whereArgs: <Object?>[id],
+            );
+          }
+        } else {
+          await db.insert('tenants', {
+            'code': 'default',
+            'name': 'Default Tenant',
+            'isActive': 1,
+            'createdAt': nowIso,
+          });
+        }
+      }
+    } catch (e, st) {
+      AppLogger.error(
+        'DatabaseHelper',
+        '_ensureTenantsMinimumSeed failed',
+        e,
+        st,
+      );
+    }
+  }
+
+  /// مدة الخدمة المتوقعة وموعد التسليم المقترح — لتذاكر الصيانة.
+  Future<void> _ensureServiceOrdersEtaColumns(Database db) async {
+    try {
+      if (!await _tableHasColumn(db, 'service_orders', 'expectedDurationMinutes')) {
+        await db.execute(
+          'ALTER TABLE service_orders ADD COLUMN expectedDurationMinutes INTEGER',
+        );
+      }
+      if (!await _tableHasColumn(db, 'service_orders', 'promisedDeliveryAt')) {
+        await db.execute(
+          'ALTER TABLE service_orders ADD COLUMN promisedDeliveryAt TEXT',
+        );
+      }
+    } catch (_) {}
+  }
+
+  /// وقت بدء العمل الفعلي — أساس عدّ موعد التسليم بعد زر «بدء العمل».
+  Future<void> _ensureServiceOrdersWorkStartedAtColumn(Database db) async {
+    try {
+      if (!await _tableHasColumn(db, 'service_orders', 'workStartedAt')) {
+        await db.execute(
+          'ALTER TABLE service_orders ADD COLUMN workStartedAt TEXT',
+        );
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _ensureProductsServiceColumns(Database db) async {
+    try {
+      if (!await _tableHasColumn(db, 'products', 'isService')) {
+        await db.execute(
+          'ALTER TABLE products ADD COLUMN isService INTEGER NOT NULL DEFAULT 0',
+        );
+      }
+      if (!await _tableHasColumn(db, 'products', 'serviceKind')) {
+        await db.execute('ALTER TABLE products ADD COLUMN serviceKind TEXT');
+      }
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_products_isService '
+        'ON products(tenantId, isService)',
+      );
+    } catch (_) {}
+  }
+
+  Future<void> _ensureServiceOrdersSchema(Database db) async {
+    try {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS service_orders (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          global_id TEXT UNIQUE,
+          tenantId INTEGER NOT NULL DEFAULT 1,
+          customerId INTEGER,
+          customerNameSnapshot TEXT NOT NULL,
+          deviceName TEXT NOT NULL,
+          deviceSerial TEXT,
+          serviceId INTEGER,
+          estimatedPriceFils INTEGER NOT NULL DEFAULT 0,
+          agreedPriceFils INTEGER,
+          advancePaymentFils INTEGER NOT NULL DEFAULT 0,
+          status TEXT NOT NULL DEFAULT 'pending'
+            CHECK(status IN ('pending', 'in_progress', 'completed', 'delivered', 'cancelled')),
+          technicianId INTEGER,
+          technicianName TEXT,
+          issueDescription TEXT,
+          completionNotes TEXT,
+          invoiceId INTEGER,
+          createdAt TEXT NOT NULL,
+          updatedAt TEXT NOT NULL,
+          deletedAt TEXT,
+          FOREIGN KEY(customerId) REFERENCES customers(id) ON DELETE SET NULL,
+          FOREIGN KEY(serviceId) REFERENCES products(id) ON DELETE SET NULL,
+          FOREIGN KEY(invoiceId) REFERENCES invoices(id) ON DELETE SET NULL
+        )
+      ''');
+    } catch (_) {}
+
+    try {
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_service_orders_lookup '
+        'ON service_orders(tenantId, deletedAt, status)',
+      );
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_service_orders_customer_lookup '
+        'ON service_orders(tenantId, deletedAt, customerId)',
+      );
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_service_orders_invoice_lookup '
+        'ON service_orders(tenantId, invoiceId)',
+      );
+    } catch (_) {}
+  }
+
+  Future<void> _ensureServiceOrderItemsSchema(Database db) async {
+    try {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS service_order_items (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          global_id TEXT UNIQUE,
+          tenantId INTEGER NOT NULL DEFAULT 1,
+          orderGlobalId TEXT NOT NULL,
+          productId INTEGER NOT NULL,
+          productName TEXT NOT NULL,
+          quantity INTEGER NOT NULL DEFAULT 1,
+          priceFils INTEGER NOT NULL,
+          totalFils INTEGER NOT NULL,
+          createdAt TEXT NOT NULL,
+          updatedAt TEXT NOT NULL,
+          deletedAt TEXT,
+          FOREIGN KEY(productId) REFERENCES products(id) ON DELETE RESTRICT
+        )
+      ''');
+    } catch (_) {}
+
+    try {
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_service_order_items_lookup '
+        'ON service_order_items(tenantId, deletedAt, orderGlobalId)',
+      );
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_service_order_items_product_stats '
+        'ON service_order_items(tenantId, deletedAt, productId)',
+      );
+    } catch (_) {}
+  }
+
+  Future<void> _ensureInvoiceItemsClothingVariantSnapshots(Database db) async {
+    try {
+      if (!await _tableHasColumn(db, 'invoice_items', 'productVariantId')) {
+        await db.execute(
+          'ALTER TABLE invoice_items ADD COLUMN productVariantId INTEGER',
+        );
+      }
+      if (!await _tableHasColumn(
+        db,
+        'invoice_items',
+        'variantColorNameSnapshot',
+      )) {
+        await db.execute(
+          'ALTER TABLE invoice_items ADD COLUMN variantColorNameSnapshot TEXT',
+        );
+      }
+      if (!await _tableHasColumn(db, 'invoice_items', 'variantSizeSnapshot')) {
+        await db.execute(
+          'ALTER TABLE invoice_items ADD COLUMN variantSizeSnapshot TEXT',
+        );
+      }
+    } catch (_) {}
+
+    try {
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_invoice_items_productVariantId '
+        'ON invoice_items(productVariantId)',
+      );
+    } catch (_) {}
+  }
+
+  Future<void> _ensureProductVariantsGlobalIds(Database db) async {
+    try {
+      if (!await _tableHasColumn(db, 'product_colors', 'global_id')) {
+        await db.execute('ALTER TABLE product_colors ADD COLUMN global_id TEXT');
+      }
+      if (!await _tableHasColumn(db, 'product_variants', 'global_id')) {
+        await db.execute(
+          'ALTER TABLE product_variants ADD COLUMN global_id TEXT',
+        );
+      }
+    } catch (_) {}
+
+    try {
+      final uuid = const Uuid();
+      final colors = await db.query(
+        'product_colors',
+        columns: ['id'],
+        where: 'global_id IS NULL OR TRIM(global_id) = ""',
+      );
+      for (final r in colors) {
+        final id = (r['id'] as num?)?.toInt();
+        if (id == null || id <= 0) continue;
+        await db.update(
+          'product_colors',
+          {'global_id': uuid.v4()},
+          where: 'id = ?',
+          whereArgs: [id],
+        );
+      }
+    } catch (_) {}
+
+    try {
+      final uuid = const Uuid();
+      final vars = await db.query(
+        'product_variants',
+        columns: ['id'],
+        where: 'global_id IS NULL OR TRIM(global_id) = ""',
+      );
+      for (final r in vars) {
+        final id = (r['id'] as num?)?.toInt();
+        if (id == null || id <= 0) continue;
+        await db.update(
+          'product_variants',
+          {'global_id': uuid.v4()},
+          where: 'id = ?',
+          whereArgs: [id],
+        );
+      }
+    } catch (_) {}
+
+    try {
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_product_colors_global_id '
+        'ON product_colors(global_id)',
+      );
+    } catch (_) {}
+    try {
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_product_variants_global_id '
+        'ON product_variants(global_id)',
+      );
+    } catch (_) {}
   }
 
   Future<void> _ensureMoneyFilsColumns(Database db) async {
@@ -618,10 +990,14 @@ class DatabaseHelper {
     }
     await ex.update(
       'installment_plans',
-      {'paidAmount': combined},
+      {
+        'paidAmount': combined,
+        'updatedAt': DateTime.now().toUtc().toIso8601String(),
+      },
       where: 'id = ?',
       whereArgs: [planId],
     );
+
   }
 
   Future<void> _reconcileInstallmentPlanPaidAmounts(Database db) async {
@@ -723,6 +1099,8 @@ class DatabaseHelper {
     await db.execute('''
       CREATE TABLE cash_ledger(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        global_id TEXT,
+        tenantId INTEGER NOT NULL DEFAULT 1,
         transactionType TEXT NOT NULL,
         amount REAL NOT NULL,
         amountFils INTEGER NOT NULL DEFAULT 0,
@@ -730,6 +1108,7 @@ class DatabaseHelper {
         invoiceId INTEGER,
         workShiftId INTEGER,
         createdAt TEXT NOT NULL,
+        updatedAt TEXT,
         FOREIGN KEY(invoiceId) REFERENCES invoices(id) ON DELETE SET NULL
       )
     ''');
@@ -1462,6 +1841,7 @@ class DatabaseHelper {
       String table, {
       String column = 'tenantId',
     }) async {
+      if (!await _tableExists(db, table)) return;
       if (!await _tableHasColumn(db, table, column)) {
         await db.execute(
           'ALTER TABLE $table ADD COLUMN $column INTEGER NOT NULL DEFAULT 1',
@@ -1489,8 +1869,76 @@ class DatabaseHelper {
     await ensureTenantColumn('customers');
     await ensureTenantColumn('invoices');
     await ensureTenantColumn('invoice_items');
+    await ensureTenantColumn('installment_plans');
     await ensureTenantColumn('cash_ledger');
     await ensureTenantColumn('activity_logs');
+    // Step 5 (tenant isolation in db_debts): customer_debt_payments was the
+    // last financial table without tenantId. Idempotent ALTER + index keep
+    // existing single-tenant installs (DEFAULT 1) safe.
+    await ensureTenantColumn('customer_debt_payments');
+
+    // Step 10 (soft-delete foundation): every read across db_debts, db_cash,
+    // db_shifts, db_suppliers, and reports_repository now filters by
+    // `deleted_at IS NULL`, so the column must exist on the five core
+    // financial tables before any of those reads run. SQLite has no
+    // `ADD COLUMN IF NOT EXISTS`, so we probe with PRAGMA via _tableHasColumn
+    // and ALTER only when missing — this is safe to call on every boot.
+    await _ensureSoftDeleteColumn(db, 'invoices');
+    await _ensureSoftDeleteColumn(db, 'invoice_items');
+    await _ensureSoftDeleteColumn(db, 'cash_ledger');
+    await _ensureSoftDeleteColumn(db, 'work_shifts');
+    // expenses uses its own ensureExpensesSchema migration, so the column
+    // is added there during its first read; we mirror it here too so the
+    // schema is consistent regardless of which call site warms the DB first.
+    if (await _tableExists(db, 'expenses')) {
+      await _ensureSoftDeleteColumn(db, 'expenses');
+    }
+  }
+
+  /// Idempotently adds a `deleted_at TEXT` column to [table] and a partial
+  /// index so soft-delete reads (`WHERE deleted_at IS NULL`) stay cheap.
+  /// Logs and swallows any ALTER error so a constrained schema (e.g. a
+  /// table that doesn't exist on this install) cannot brick startup.
+  Future<void> _ensureSoftDeleteColumn(Database db, String table) async {
+    if (!await _tableHasColumn(db, table, 'deleted_at')) {
+      try {
+        await db.execute(
+          'ALTER TABLE $table ADD COLUMN deleted_at TEXT',
+        );
+      } catch (e, st) {
+        if (kDebugMode) {
+          AppLogger.error(
+            'DatabaseHelper',
+            '_ensureSoftDeleteColumn ALTER $table ADD deleted_at failed',
+            e,
+            st,
+          );
+        }
+        return;
+      }
+    }
+    try {
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_${table}_deleted_at ON $table(deleted_at)',
+      );
+    } catch (e, st) {
+      if (kDebugMode) {
+        AppLogger.error(
+          'DatabaseHelper',
+          '_ensureSoftDeleteColumn CREATE INDEX idx_${table}_deleted_at failed',
+          e,
+          st,
+        );
+      }
+    }
+  }
+
+  Future<bool> _tableExists(Database db, String name) async {
+    final rows = await db.rawQuery(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name = ? LIMIT 1",
+      [name],
+    );
+    return rows.isNotEmpty;
   }
 
   /// تنظيف وربط ذكي بين [invoices] و [installment_plans].
@@ -1657,11 +2105,14 @@ class DatabaseHelper {
     await db.execute('''
       CREATE TABLE IF NOT EXISTS suppliers(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        global_id TEXT,
+        tenantId INTEGER NOT NULL DEFAULT 1,
         name TEXT NOT NULL,
         phone TEXT,
         notes TEXT,
         isActive INTEGER NOT NULL DEFAULT 1,
-        createdAt TEXT NOT NULL
+        createdAt TEXT NOT NULL,
+        updatedAt TEXT
       )
     ''');
     await db.execute('''
@@ -1955,6 +2406,8 @@ class DatabaseHelper {
     await db.execute('''
       CREATE TABLE IF NOT EXISTS customers (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        global_id TEXT,
+        tenantId INTEGER NOT NULL DEFAULT 1,
         name TEXT NOT NULL,
         phone TEXT,
         email TEXT,

@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'dart:ui' show ImageFilter;
 
 import '../../theme/erp_input_constants.dart';
+import '../../theme/design_tokens.dart';
 import '../virtual_keyboard_controller.dart';
 
 /// حقل إدخال موحّد — التسمية فوق الحقل، تحذير (كهرت) أسفل الحقل لا يعتبر خطأ تحقّق [Form].
@@ -41,6 +43,12 @@ class AppInput extends StatefulWidget {
     this.surfaceDecoration,
     this.overlayShadowOnFocus = true,
     this.densePrefixConstraints,
+
+    /// نمط زجاجي — مناسب لنموذج الدخول والشاشات الثابتة.
+    this.useGlass = false,
+    this.glassBlurSigma = AppGlass.blurSigma,
+    this.glassTintColor = AppGlass.surfaceTintStrong,
+    this.glassStrokeColor = AppGlass.stroke,
   });
 
   final String label;
@@ -90,6 +98,12 @@ class AppInput extends StatefulWidget {
 
   /// لحقول بطلبات `prefixIcon` مركبة (صف أزرار).
   final BoxConstraints? densePrefixConstraints;
+
+  /// عند التفعيل، يُلفّ الحقل بسطح زجاجي مع Blur وحد أبيض خفيف.
+  final bool useGlass;
+  final double glassBlurSigma;
+  final Color glassTintColor;
+  final Color glassStrokeColor;
 
   @override
   State<AppInput> createState() => _AppInputState();
@@ -217,12 +231,14 @@ class _AppInputState extends State<AppInput> {
       focusLine = _amber;
     }
 
-    Color fill =
-        widget.fillColor ??
+    Color fill = widget.fillColor ??
         (widget.isReadOnly
             ? cs.surfaceContainerHighest.withValues(alpha: 0.65)
-            : (idt.fillColor ??
-                  cs.surfaceContainerHighest.withValues(alpha: 0.38)));
+            : (idt.fillColor ?? cs.surfaceContainerHighest.withValues(alpha: 0.38)));
+    if (widget.useGlass) {
+      // الخلفية تأتي من GlassSurface.
+      fill = Colors.transparent;
+    }
 
     final hl = Theme.of(context).textTheme.bodySmall?.copyWith(
       color: cs.onSurfaceVariant.withValues(alpha: 0.82),
@@ -236,7 +252,7 @@ class _AppInputState extends State<AppInput> {
       isDense: true,
       constraints: multiline
           ? null
-          : BoxConstraints(minHeight: ErpInputConstants.minHeightSingleLine),
+          : const BoxConstraints(minHeight: ErpInputConstants.minHeightSingleLine),
       contentPadding: ErpInputConstants.contentPadding,
       prefixIconConstraints: widget.densePrefixConstraints,
       filled: true,
@@ -316,7 +332,10 @@ class _AppInputState extends State<AppInput> {
                     !hasWarn
                 ? [
                     BoxShadow(
-                      color: cs.primary.withValues(alpha: 0.15),
+                      color: (widget.useGlass
+                              ? AppColors.accentBlue
+                              : cs.primary)
+                          .withValues(alpha: widget.useGlass ? 0.18 : 0.15),
                       blurRadius: 6,
                       spreadRadius: 3,
                       offset: Offset.zero,
@@ -326,6 +345,17 @@ class _AppInputState extends State<AppInput> {
           ),
       child: inner,
     );
+
+    if (widget.useGlass) {
+      shaded = _GlassInputShell(
+        borderRadius: ErpInputConstants.borderRadius,
+        blurSigma: widget.glassBlurSigma,
+        tintColor: widget.glassTintColor,
+        strokeColor: widget.glassStrokeColor,
+        focused: _focused && widget.enabled && !widget.isReadOnly && !hasWarn,
+        child: shaded,
+      );
+    }
 
     if (!widget.enabled) {
       shaded = IgnorePointer(child: Opacity(opacity: 0.5, child: shaded));
@@ -409,6 +439,58 @@ class _AppInputState extends State<AppInput> {
             ),
           ),
       ],
+    );
+  }
+}
+
+class _GlassInputShell extends StatelessWidget {
+  const _GlassInputShell({
+    required this.child,
+    required this.borderRadius,
+    required this.blurSigma,
+    required this.tintColor,
+    required this.strokeColor,
+    required this.focused,
+  });
+
+  final Widget child;
+  final BorderRadius borderRadius;
+  final double blurSigma;
+  final Color tintColor;
+  final Color strokeColor;
+  final bool focused;
+
+  @override
+  Widget build(BuildContext context) {
+    final glow = focused ? AppGlass.focusGlow : Colors.transparent;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: borderRadius,
+        boxShadow: focused
+            ? [
+                BoxShadow(
+                  color: glow,
+                  blurRadius: 18,
+                  spreadRadius: 2,
+                  offset: Offset.zero,
+                ),
+              ]
+            : const [],
+      ),
+      child: ClipRRect(
+        borderRadius: borderRadius,
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: blurSigma, sigmaY: blurSigma),
+          child: Container(
+            decoration: BoxDecoration(
+              color: tintColor,
+              borderRadius: borderRadius,
+              border: Border.all(color: strokeColor, width: 1),
+            ),
+            child: child,
+          ),
+        ),
+      ),
     );
   }
 }

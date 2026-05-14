@@ -26,6 +26,10 @@ import '../../providers/ui_feedback_settings_provider.dart';
 import '../../providers/sale_draft_provider.dart';
 import '../../services/cloud_sync_service.dart';
 import '../../services/database_helper.dart';
+import '../../services/product_variants_repository.dart';
+import '../../services/service_orders_repository.dart';
+import '../../services/app_settings_repository.dart';
+import '../../services/business_setup_settings.dart';
 import '../../theme/design_tokens.dart';
 import '../../theme/sale_brand.dart';
 import '../../utils/app_logger.dart';
@@ -38,6 +42,7 @@ import '../../utils/sale_receipt_pdf.dart';
 import '../../utils/theme.dart';
 import '../../navigation/content_navigation.dart';
 import '../../widgets/barcode_input_launcher.dart';
+import '../../widgets/app_color_picker_dialog.dart';
 import '../../widgets/mac_style_settings_panel.dart';
 import '../../widgets/wide_home_product_rail.dart';
 import '../installments/add_installment_plan_screen.dart';
@@ -106,7 +111,11 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
   final List<_InvoiceLineState> _lines = [];
   final Map<int, List<Map<String, dynamic>>> _variantsByProductId = {};
   final Set<int> _variantsLoading = {};
+  final Map<int, bool> _hasClothingVariantsByProductId = {};
+  final Set<int> _clothingVariantsLoading = {};
+  final Map<int, List<Map<String, dynamic>>> _clothingVariantsByProductId = {};
   final Set<int> _expandedLineIds = {};
+  bool _enableClothingVariants = false;
   int _lineIdSeq = 0;
 
   /// عند المتابعة من قائمة «معلّقة» أو بعد أول حفظ تعليق في نفس الجلسة.
@@ -127,6 +136,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
 
   /// عميل مرتبط من القائمة — مطلوب لاستخدام نقاط الولاء بدقة.
   int? _linkedCustomerId;
+  int? _linkedServiceOrderId;
   int _customerLoyaltyBalance = 0;
   final _loyaltyRedeemController = TextEditingController(text: '0');
 
@@ -179,6 +189,42 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       _variantsLoading.remove(productId);
     }
   }
+
+  Future<void> _ensureClothingVariantsLoadedForProduct(int productId) async {
+    if (!_enableClothingVariants) return;
+    if (productId <= 0) return;
+    if (_clothingVariantsByProductId.containsKey(productId)) return;
+    if (_clothingVariantsLoading.contains(productId)) return;
+    _clothingVariantsLoading.add(productId);
+    try {
+      final rows = await ProductVariantsRepository.instance.getVariantsForProduct(
+        productId,
+      );
+      if (!mounted) return;
+      setState(() {
+        _clothingVariantsByProductId[productId] = rows;
+        _hasClothingVariantsByProductId[productId] = rows.isNotEmpty;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _clothingVariantsByProductId[productId] = const [];
+        _hasClothingVariantsByProductId[productId] = false;
+      });
+    } finally {
+      _clothingVariantsLoading.remove(productId);
+    }
+  }
+
+  Future<bool> _hasClothingVariants(int productId) async {
+    if (!_enableClothingVariants) return false;
+    final cached = _hasClothingVariantsByProductId[productId];
+    if (cached != null) return cached;
+    await _ensureClothingVariantsLoadedForProduct(productId);
+    return _hasClothingVariantsByProductId[productId] ?? false;
+  }
+
+  // BottomSheet picker was replaced with inline picker inside cart line.
 
   Future<
     ({
@@ -274,6 +320,8 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     if (pid == null || pid <= 0) return;
     if (_variantsByProductId.containsKey(pid)) return;
     unawaited(_ensureVariantsLoadedForProduct(pid));
+    if (_hasClothingVariantsByProductId.containsKey(pid)) return;
+    unawaited(_ensureClothingVariantsLoadedForProduct(pid));
   }
 
   Future<void> _applyLineVariantSelection({
@@ -572,6 +620,9 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       _lines.clear();
       _variantsByProductId.clear();
       _variantsLoading.clear();
+      _clothingVariantsByProductId.clear();
+      _clothingVariantsLoading.clear();
+      _hasClothingVariantsByProductId.clear();
       _expandedLineIds.clear();
       _lineIdSeq = 0;
       _customerController.clear();
@@ -583,6 +634,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       _instInterestPct.text = '0';
       _instMonths.text = '6';
       _linkedCustomerId = null;
+      _linkedServiceOrderId = null;
       _customerLoyaltyBalance = 0;
       _customerHits = [];
       type = InvoiceType.cash;
@@ -745,13 +797,52 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
         .where(
           (x) =>
               x.productId == productId &&
+              x.productVariantId == null &&
               (excludeLineId == null || x.lineId != excludeLineId),
         )
         .fold<double>(0.0, (s, x) => s + _lineBaseForMath(x));
   }
 
+  double _totalQtyForProductVariant(int? productVariantId, {int? excludeLineId}) {
+    if (productVariantId == null) return 0.0;
+    return _lines.fold<double>(0.0, (s, x) {
+      if (excludeLineId != null && x.lineId == excludeLineId) return s;
+      // إذا كان السطر يستخدم التجميع (ملابس)، لا نعدّ productVariantId إطلاقاً لتفادي العدّ المزدوج.
+      if (x.clothingVariantQty.isNotEmpty) {
+        final q2 = x.clothingVariantQty[productVariantId];
+        if (q2 == null || q2 <= 0) return s;
+        return s + q2.toDouble();
+      }
+      if (x.productVariantId == productVariantId) return s + _lineBaseForMath(x);
+      final q = x.clothingVariantQty[productVariantId];
+      if (q == null || q <= 0) return s;
+      return s + q.toDouble();
+    });
+  }
+
   Future<double?> _maxBaseQtyAllowedForLine(_InvoiceLineState line) async {
     if (_lineIgnoresStock(line)) return null;
+    if (line.productVariantId != null) {
+      final pid = line.productId;
+      if (pid == null || pid <= 0) return null;
+      final vars = await ProductVariantsRepository.instance.getVariantsForProduct(pid);
+      if (!mounted) return null;
+      final vid = line.productVariantId!;
+      final row = vars.firstWhere(
+        (r) => (r['id'] as num?)?.toInt() == vid,
+        orElse: () => const <String, dynamic>{},
+      );
+      if (row.isEmpty) return null;
+      final stockInt = (row['quantity'] as num?)?.toInt() ?? 0;
+      final stock = stockInt.toDouble();
+      final other = _totalQtyForProductVariant(
+        vid,
+        excludeLineId: line.lineId,
+      );
+      final raw = stock - other;
+      if (raw < 0) return 0;
+      return raw;
+    }
     final m = await context.read<ProductProvider>().getProductById(
       line.productId!,
     );
@@ -773,17 +864,20 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     if (!newQty.isFinite || newQty <= 0) return false;
     if (_lineIgnoresStock(line)) {
       setState(() => line.quantity = newQty);
+      _syncAdvanceAfterCartChange();
       return true;
     }
     final maxBase = await _maxBaseQtyAllowedForLine(line);
     if (!mounted) return false;
     if (maxBase == null) {
       setState(() => line.quantity = newQty);
+      _syncAdvanceAfterCartChange();
       return true;
     }
     final newBase = newQty * (line.unitFactor <= 0 ? 1.0 : line.unitFactor);
     if (newBase <= maxBase + 1e-9) {
       setState(() => line.quantity = newQty);
+      _syncAdvanceAfterCartChange();
       return true;
     }
     _showSaleSnackBar(
@@ -801,6 +895,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     required bool trackInventory,
     required bool allowNegativeStock,
     required double baseQtyToAdd,
+    int? productVariantId,
     double? knownOnHandQty,
   }) async {
     if (productId == null) return true;
@@ -815,11 +910,24 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     if (knownOnHandQty != null) {
       stock = knownOnHandQty;
     } else {
-      final m = await context.read<ProductProvider>().getProductById(productId);
-      if (!mounted || m == null) return true;
-      stock = (m['qty'] as num?)?.toDouble() ?? 0;
+      if (productVariantId != null) {
+        final vars =
+            await ProductVariantsRepository.instance.getVariantsForProduct(productId);
+        if (!mounted) return true;
+        final row = vars.firstWhere(
+          (r) => (r['id'] as num?)?.toInt() == productVariantId,
+          orElse: () => const <String, dynamic>{},
+        );
+        stock = (row['quantity'] as num?)?.toInt().toDouble() ?? 0.0;
+      } else {
+        final m = await context.read<ProductProvider>().getProductById(productId);
+        if (!mounted || m == null) return true;
+        stock = (m['qty'] as num?)?.toDouble() ?? 0;
+      }
     }
-    final already = _totalQtyForProduct(productId, excludeLineId: null);
+    final already = productVariantId != null
+        ? _totalQtyForProductVariant(productVariantId, excludeLineId: null)
+        : _totalQtyForProduct(productId, excludeLineId: null);
     if (already + baseQtyToAdd <= stock + 1e-9) return true;
     final maxAdd = stock - already;
     _showSaleSnackBar(
@@ -849,10 +957,12 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     double minSell, {
     required int? unitVariantId,
     required double unitFactor,
+    int? productVariantId,
   }) {
     for (final l in _lines) {
       if (l.productId == productId &&
           l.unitVariantId == unitVariantId &&
+          l.productVariantId == productVariantId &&
           (l.unitFactor - unitFactor).abs() < 1e-9 &&
           _sameCatalogLinePrices(l, unitPrice, minSell)) {
         return l;
@@ -869,6 +979,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     required double minSellPrice,
     required bool trackInventory,
     required bool allowNegativeStock,
+    required bool isService,
     String? newItemSnackText,
     double? knownOnHandQty,
     int stockBaseKind = 0,
@@ -877,20 +988,37 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     double unitFactor = 1.0,
     double addQuantity = 1.0,
     bool suppressLineSnacks = false,
+    int? productVariantId,
+    String? variantColorNameSnapshot,
+    String? variantSizeSnapshot,
+    bool clothingPending = false,
+    int? pendingColorId,
   }) async {
     if (!mounted) return;
     final f = unitFactor <= 0 ? 1.0 : unitFactor;
-    final dq = addQuantity.isFinite && addQuantity > 0 ? addQuantity : 1.0;
+    final dq = isService ? 1.0 : (addQuantity.isFinite && addQuantity > 0 ? addQuantity : 1.0);
 
-    if (productId != null) {
+    // الملابس: كل إضافة سطر مستقل (لا دمج)، سواء مكتمل variant أو ما زال pending.
+    if (productVariantId == null && !clothingPending) {
+      if (productId != null) {
       final existing = _findMergeTargetForProduct(
         productId,
         sellPrice,
         minSellPrice,
         unitVariantId: unitVariantId,
         unitFactor: f,
+        productVariantId: productVariantId,
       );
       if (existing != null) {
+        if (isService) {
+          // الخدمة ثابتة بكمية 1 — لا نزيد الكمية ولا ندمج زيادات.
+          if (!suppressLineSnacks) {
+            _showSaleSnackBar(
+              SnackBar(content: Text('الخدمة مضافة بالفعل: $productName')),
+            );
+          }
+          return;
+        }
         final prevQty = existing.quantity;
         final ok = await _trySetLineQuantity(existing, existing.quantity + dq);
         if (!ok || !mounted) return;
@@ -911,6 +1039,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
         }
         return;
       }
+      }
     }
 
     final ok = await _canAppendProductLine(
@@ -918,6 +1047,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       trackInventory: trackInventory,
       allowNegativeStock: allowNegativeStock,
       baseQtyToAdd: f * dq,
+      productVariantId: productVariantId,
       knownOnHandQty: knownOnHandQty,
     );
     if (!ok || !mounted) return;
@@ -930,17 +1060,23 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
         _InvoiceLineState(
           lineId: lid,
           productName: productName,
-          quantity: dq,
+          quantity: clothingPending ? 0.0 : dq,
           unitPrice: sellPrice,
           sellPrice: sellPrice,
           minSellPrice: minSellPrice,
           productId: productId,
           trackInventory: trackInventory,
           allowNegativeStock: allowNegativeStock,
+          isService: isService,
           stockBaseKind: stockBaseKind,
           unitVariantId: unitVariantId,
           unitLabel: unitLabel,
           unitFactor: f,
+          productVariantId: productVariantId,
+          variantColorNameSnapshot: variantColorNameSnapshot,
+          variantSizeSnapshot: variantSizeSnapshot,
+          isClothingPending: clothingPending,
+          pendingColorId: pendingColorId,
         ),
       );
       _saleCartKeyboardIndex = _lines.length - 1;
@@ -1012,6 +1148,10 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
         if (!mounted) return;
         if (_blockSaleDraftUntilResumeApplied) return;
         final d = context.read<SaleDraftProvider>();
+        final meta = d.takePendingSaleMeta();
+        if (meta != null) {
+          _applyPendingSaleMeta(meta);
+        }
         if (d.pendingProductLinesCount == 0) return;
         final pending = d.takePendingProductLines();
         if (pending.isEmpty) return;
@@ -1023,6 +1163,13 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
   void _onSaleDraftChanged() {
     if (!mounted || _saleDraftRef == null) return;
     if (_blockSaleDraftUntilResumeApplied) return;
+    final meta = _saleDraftRef!.takePendingSaleMeta();
+    if (meta != null) {
+      scheduleMicrotask(() {
+        if (!mounted) return;
+        _applyPendingSaleMeta(meta);
+      });
+    }
     final pending = _saleDraftRef!.takePendingProductLines();
     if (pending.isEmpty) return;
     scheduleMicrotask(() {
@@ -1031,9 +1178,59 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     });
   }
 
+  void _applyPendingSaleMeta(Map<String, dynamic> meta) {
+    if (!mounted) return;
+    // لا نغيّر نوع الفاتورة هنا إلا إذا مُرّر صراحةً.
+    final rawType = meta['invoiceTypeIndex'];
+    final rawAdvance = meta['advance'];
+    final rawCustomerName = meta['customerName'];
+    final rawLinkedCustomerId = meta['linkedCustomerId'];
+
+    setState(() {
+      if (rawType is num) {
+        type = invoiceTypeFromDb(rawType);
+      }
+      if (rawAdvance != null) {
+        final s = rawAdvance.toString().trim();
+        if (s.isNotEmpty) {
+          _advanceController.text = s;
+        }
+      }
+      if (rawCustomerName != null) {
+        final s = rawCustomerName.toString();
+        if (s.trim().isNotEmpty) {
+          _customerController.text = s;
+        }
+      }
+      if (rawLinkedCustomerId is num) {
+        _linkedCustomerId = rawLinkedCustomerId.toInt();
+      } else if (rawLinkedCustomerId is int) {
+        _linkedCustomerId = rawLinkedCustomerId;
+      }
+      final rawSoId = meta['linkedServiceOrderId'];
+      if (rawSoId is num) {
+        _linkedServiceOrderId = rawSoId.toInt();
+      } else if (rawSoId is int) {
+        _linkedServiceOrderId = rawSoId;
+      }
+    });
+  }
+
+  Future<void> _loadClothingSetting() async {
+    try {
+      final biz = await BusinessSetupSettingsData.load(AppSettingsRepository.instance);
+      if (mounted) {
+        setState(() {
+          _enableClothingVariants = biz.enableClothingVariants;
+        });
+      }
+    } catch (_) {}
+  }
+
   @override
   void initState() {
     super.initState();
+    _loadClothingSetting();
     _loyaltyRedeemController.addListener(() {
       if (mounted) setState(() {});
     });
@@ -1057,6 +1254,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
         final trackInv = (p['trackInventory'] as bool?) ?? true;
         final allowNeg = (p['allowNegativeStock'] as bool?) ?? false;
         final baseKind = (p['stockBaseKind'] as num?)?.toInt() ?? 0;
+        final isService = ((p['isService'] as num?)?.toInt() ?? 0) == 1;
         setState(() {
           _lines.add(
             _InvoiceLineState(
@@ -1069,6 +1267,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
               productId: (pid != null && pid > 0) ? pid : null,
               trackInventory: trackInv,
               allowNegativeStock: allowNeg,
+              isService: isService,
               stockBaseKind: baseKind,
               unitVariantId: null,
               unitLabel: 'قطعة',
@@ -1150,8 +1349,10 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
 
   bool _canUseEmbeddedScanner(BuildContext context) {
     // الكاميرا للمحمول فقط (Android/iOS) — على سطح المكتب نستخدم قارئ لوحة المفاتيح.
-    return ScreenLayout.of(context).isHandsetForLayout &&
-        BarcodeInputLauncher.useCamera(context);
+    final variant = ScreenLayout.of(context).layoutVariant;
+    final isPhone = variant == DeviceVariant.phoneXS ||
+        variant == DeviceVariant.phoneSM;
+    return isPhone && BarcodeInputLauncher.useCamera(context);
   }
 
   void _toggleSaleScanner() {
@@ -1534,7 +1735,8 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
           },
           child: Form(
             key: _formKey,
-            child: sl.isHandsetForLayout
+            child: (sl.layoutVariant == DeviceVariant.phoneXS ||
+                    sl.layoutVariant == DeviceVariant.phoneSM)
                 ? _buildSaleMainBodyWithOptionalQuickRail(
                     context,
                     sl: sl,
@@ -1621,10 +1823,10 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     sl.showSaleBarcodeShortcut ? 10 : 14,
   );
 
-  static const double _kWideQuickProductRailMinWidth = 800;
-
+  /// شريط المنتجات السريع على اليمين يظهر فقط من `tabletLG` فأكبر
+  /// (≈ width >= 840dp) — يوفر مساحة أفقية كافية للسلّة + الشريط.
   bool _showWideQuickProductRail(ScreenLayout sl) =>
-      !sl.isHandsetForLayout && sl.size.width >= _kWideQuickProductRailMinWidth;
+      sl.layoutVariant.index >= DeviceVariant.tabletLG.index;
 
   Future<void> _onWideSaleRailProductPick(
     Map<String, dynamic> p, {
@@ -1636,6 +1838,33 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     final pid = (p['id'] as num?)?.toInt();
     final display = name.isEmpty ? 'منتج' : name;
     final knownQty = (p['qty'] as num?)?.toDouble();
+    final allowNeg = _anFromProductRow(p);
+    final isService = ((p['isService'] as num?)?.toInt() ?? 0) == 1;
+    if (pid != null && pid > 0) {
+      final hasClothing = await _hasClothingVariants(pid);
+      if (!mounted) return;
+      if (hasClothing) {
+        await _addOrMergeCatalogProductLine(
+          productName: display,
+          productId: pid,
+          sellPrice: baseSell,
+          minSellPrice: baseMin,
+          trackInventory: _tiFromProductRow(p),
+          allowNegativeStock: allowNeg,
+          isService: isService,
+          knownOnHandQty: null,
+          stockBaseKind: 0,
+          unitVariantId: null,
+          unitLabel: 'قطعة',
+          unitFactor: 1.0,
+          addQuantity: addQuantity,
+          suppressLineSnacks: true,
+          clothingPending: true,
+        );
+        unawaited(_ensureClothingVariantsLoadedForProduct(pid));
+        return;
+      }
+    }
     final u = await _unitSelectionForCatalogProduct(p);
     if (!mounted) return;
     // سعر بطاقة المنتج للوحدة الأساسية؛ يُضرب في factor الوحدة الافتراضية المعروضة.
@@ -1652,7 +1881,8 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       sellPrice: pricing.sell,
       minSellPrice: pricing.min,
       trackInventory: _tiFromProductRow(p),
-      allowNegativeStock: _anFromProductRow(p),
+      allowNegativeStock: allowNeg,
+      isService: isService,
       knownOnHandQty: knownQty,
       stockBaseKind: u.stockBaseKind,
       unitVariantId: u.unitVariantId,
@@ -2037,7 +2267,9 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     final useWideTwoColumns =
         sl.useWideSaleTwoColumnLayout && salePos.enableWideSalePartition;
     if (!useWideTwoColumns) {
-      final embedCheckoutInScroll = sl.isHandsetForLayout;
+      final embedCheckoutInScroll =
+          sl.layoutVariant == DeviceVariant.phoneXS ||
+              sl.layoutVariant == DeviceVariant.phoneSM;
       return SingleChildScrollView(
         padding: _saleOuterScrollPadding(sl),
         child: Column(
@@ -3021,6 +3253,9 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
   ) {
     _touchProductVariants(item.productId);
     final expanded = _expandedLineIds.contains(item.lineId);
+    final isClothingProduct = item.productId != null &&
+        _enableClothingVariants &&
+        (_hasClothingVariantsByProductId[item.productId!] ?? false);
     final gross = _lineGross(item);
     final share = _lineBasketDiscountShare(item);
     final net = _lineNetAfterBasketDiscount(item);
@@ -3036,6 +3271,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
               const <Map<String, dynamic>>[]);
     final showVariantChips = item.productId != null && variants.length > 1;
     final qtyStep = _saleQtyStep(item);
+    final lockQty = item.isService;
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
@@ -3051,14 +3287,26 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 8,
-                ),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
+              InkWell(
+                onTap: !isClothingProduct
+                    ? null
+                    : () {
+                        setState(() {
+                          if (expanded) {
+                            _expandedLineIds.remove(item.lineId);
+                          } else {
+                            _expandedLineIds.add(item.lineId);
+                          }
+                        });
+                      },
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 8,
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
                     IconButton(
                       visualDensity: VisualDensity.compact,
                       padding: EdgeInsets.zero,
@@ -3191,7 +3439,9 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
                         IconButton(
                           visualDensity: VisualDensity.compact,
                           icon: const Icon(Icons.remove_circle_outline),
-                          onPressed: () {
+                          onPressed: (item.isClothingPending || lockQty)
+                              ? null
+                              : () {
                             setState(() {
                               final next = item.quantity - qtyStep;
                               final minQ = item.stockBaseKind == 1 ? 1e-6 : 1.0;
@@ -3199,6 +3449,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
                                 item.quantity = next;
                               }
                             });
+                            _syncAdvanceAfterCartChange();
                           },
                         ),
                         Material(
@@ -3207,7 +3458,9 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
                           ),
                           borderRadius: BorderRadius.circular(4),
                           child: InkWell(
-                            onTap: () => _promptEditQuantity(item),
+                            onTap: (item.isClothingPending || lockQty)
+                                ? null
+                                : () => _promptEditQuantity(item),
                             borderRadius: BorderRadius.circular(4),
                             child: Padding(
                               padding: const EdgeInsets.symmetric(
@@ -3227,7 +3480,9 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
                         IconButton(
                           visualDensity: VisualDensity.compact,
                           icon: const Icon(Icons.add_circle_outline),
-                          onPressed: () async {
+                          onPressed: (item.isClothingPending || lockQty)
+                              ? null
+                              : () async {
                             await _trySetLineQuantity(
                               item,
                               item.quantity + qtyStep,
@@ -3240,16 +3495,27 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
                             Icons.delete_outline,
                             color: Colors.red,
                           ),
-                          onPressed: () => setState(() {
-                            _expandedLineIds.remove(item.lineId);
-                            _lines.removeAt(idx);
-                          }),
+                          onPressed: () {
+                            setState(() {
+                              _expandedLineIds.remove(item.lineId);
+                              _lines.removeAt(idx);
+                            });
+                            _syncAdvanceAfterCartChange();
+                          },
                         ),
                       ],
                     ),
                   ],
+                  ),
                 ),
               ),
+              if ((item.isClothingPending || (expanded && isClothingProduct)) &&
+                  item.productId != null)
+                _buildInlineClothingVariantPicker(
+                  context,
+                  line: item,
+                  productId: item.productId!,
+                ),
               if (expanded)
                 Container(
                   width: double.infinity,
@@ -3329,6 +3595,12 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
   }
 
   void _promptEditQuantity(_InvoiceLineState item) {
+    if (item.isService) {
+      _showSaleSnackBar(
+        const SnackBar(content: Text('كمية الخدمة ثابتة ولا يمكن تعديلها.')),
+      );
+      return;
+    }
     final ctrl = TextEditingController(text: _formatSaleQty(item));
     final isWeight = item.stockBaseKind == 1;
     showDialog<void>(
@@ -3422,6 +3694,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
               'productId': l.productId,
               'trackInventory': l.trackInventory,
               'allowNegativeStock': l.allowNegativeStock,
+              'isService': l.isService,
               'stockBaseKind': l.stockBaseKind,
               'unitVariantId': l.unitVariantId,
               'unitLabel': l.unitLabel,
@@ -3432,7 +3705,97 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     };
   }
 
+  /// تحويل آمن لأي قيمة (bool / num / String / null) إلى bool.
+  /// **سبب وجوده**: حقول مثل `isService` و `trackInventory` قد تأتي في الـ
+  /// payload من إصدارات مختلفة كـ `true`/`false` (bool حديث) أو `1`/`0`
+  /// (int من SQLite قديم). الـ cast المباشر `as num?` كان يَنفجر على
+  /// قيم bool — هذا الـ helper يُوحّد كل الحالات.
+  static bool _coerceBool(Object? raw, {bool defaultValue = false}) {
+    if (raw == null) return defaultValue;
+    if (raw is bool) return raw;
+    if (raw is num) return raw.toInt() == 1;
+    if (raw is String) {
+      final s = raw.trim().toLowerCase();
+      if (s == 'true' || s == '1') return true;
+      if (s == 'false' || s == '0' || s.isEmpty) return false;
+    }
+    return defaultValue;
+  }
+
+  /// يَبني قائمة [_InvoiceLineState] من الـ payload **بدون** أن يَلمس الـ state
+  /// الحالي — لو فشل بند، يَستمر بدلاً من إجهاض كل العملية. يُعيد القائمة
+  /// المُجمَّعة وأقصى `lineId` لتحديث الـ sequence.
+  ///
+  /// **مهم**: نَعزل البناء عن التطبيق (Atomic Apply Pattern) ليبقى الـ state
+  /// السابق سليماً لو فشل البارس بالكامل.
+  ({List<_InvoiceLineState> lines, int maxLineId, int parsedCount, int skippedCount})
+      _buildLinesFromPayload(List<dynamic> rawLines) {
+    final out = <_InvoiceLineState>[];
+    var maxLineId = _lineIdSeq;
+    var skipped = 0;
+    for (var i = 0; i < rawLines.length; i++) {
+      final raw = rawLines[i];
+      if (raw is! Map) {
+        skipped++;
+        debugPrint(
+          '[ParkedSale] Skipping non-map line at index $i: ${raw.runtimeType}',
+        );
+        continue;
+      }
+      // jsonDecode قد يُرجع Map<String, dynamic> لكن نَحمي ضد JSON قديم
+      // أو معدَّل خارجياً قد يأتي كـ Map<dynamic, dynamic>.
+      final e = raw.map((k, v) => MapEntry(k.toString(), v));
+      try {
+        final lid = (e['lineId'] as num?)?.toInt() ?? (_lineIdSeq + i + 1);
+        if (lid > maxLineId) maxLineId = lid;
+        out.add(
+          _InvoiceLineState(
+            lineId: lid,
+            productName: e['productName']?.toString() ?? 'صنف',
+            quantity: (e['quantity'] as num?)?.toDouble() ?? 1.0,
+            unitPrice: (e['unitPrice'] as num?)?.toDouble() ?? 0,
+            sellPrice:
+                (e['sellPrice'] as num?)?.toDouble() ??
+                (e['unitPrice'] as num?)?.toDouble() ??
+                0,
+            minSellPrice:
+                (e['minSellPrice'] as num?)?.toDouble() ??
+                (e['unitPrice'] as num?)?.toDouble() ??
+                0,
+            productId: (e['productId'] as num?)?.toInt(),
+            // `trackInventory` افتراضه `true` (تتبع المخزون مفعَّل)؛ فقط القيمة
+            // الصريحة `false`/`0` تُلغي التتبع. هذا يُحافظ على السلوك السابق
+            // مع دعم أنواع قديمة كانت تَحفظ القيمة كـ int.
+            trackInventory: _coerceBool(e['trackInventory'], defaultValue: true),
+            allowNegativeStock: _coerceBool(e['allowNegativeStock']),
+            isService: _coerceBool(e['isService']),
+            stockBaseKind: (e['stockBaseKind'] as num?)?.toInt() ?? 0,
+            unitVariantId: (e['unitVariantId'] as num?)?.toInt(),
+            unitLabel: e['unitLabel']?.toString(),
+            unitFactor: (e['unitFactor'] as num?)?.toDouble() ?? 1.0,
+          ),
+        );
+      } catch (e, st) {
+        skipped++;
+        debugPrint(
+          '[ParkedSale] Failed to parse line $i: $e\n$st',
+        );
+      }
+    }
+    return (
+      lines: out,
+      maxLineId: maxLineId,
+      parsedCount: out.length,
+      skippedCount: skipped,
+    );
+  }
+
   void _applyParkedPayloadMap(Map<String, dynamic> m) {
+    // ── المرحلة 1: بناء البنود في الذاكرة (لا نَلمس state بعد) ────────
+    final rawLines = (m['lines'] as List?)?.cast<dynamic>() ?? const <dynamic>[];
+    final built = _buildLinesFromPayload(rawLines);
+
+    // ── المرحلة 2: تطبيق الـ state دفعةً واحدة (Atomic Commit) ───────
     _customerController.text = m['customer']?.toString() ?? '';
     _linkedCustomerId = (m['linkedCustomerId'] as num?)?.toInt();
     _loyaltyRedeemController.text = m['loyaltyRedeem']?.toString() ?? '0';
@@ -3448,42 +3811,26 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     }
     _variantsByProductId.clear();
     _variantsLoading.clear();
-    _lines.clear();
-    final rawLines = m['lines'] as List<dynamic>? ?? [];
-    var maxLineId = _lineIdSeq;
-    for (final raw in rawLines) {
-      final e = raw as Map<String, dynamic>;
-      final lid = (e['lineId'] as num?)?.toInt() ?? (_lineIdSeq + 1);
-      if (lid > maxLineId) maxLineId = lid;
-      _lines.add(
-        _InvoiceLineState(
-          lineId: lid,
-          productName: e['productName']?.toString() ?? 'صنف',
-          quantity: (e['quantity'] as num?)?.toDouble() ?? 1.0,
-          unitPrice: (e['unitPrice'] as num?)?.toDouble() ?? 0,
-          sellPrice:
-              (e['sellPrice'] as num?)?.toDouble() ??
-              (e['unitPrice'] as num?)?.toDouble() ??
-              0,
-          minSellPrice:
-              (e['minSellPrice'] as num?)?.toDouble() ??
-              (e['unitPrice'] as num?)?.toDouble() ??
-              0,
-          productId: (e['productId'] as num?)?.toInt(),
-          trackInventory: e['trackInventory'] == false ? false : true,
-          allowNegativeStock: e['allowNegativeStock'] == true,
-          stockBaseKind: (e['stockBaseKind'] as num?)?.toInt() ?? 0,
-          unitVariantId: (e['unitVariantId'] as num?)?.toInt(),
-          unitLabel: e['unitLabel']?.toString(),
-          unitFactor: (e['unitFactor'] as num?)?.toDouble() ?? 1.0,
-        ),
-      );
-      final pid = (e['productId'] as num?)?.toInt();
+    _lines
+      ..clear()
+      ..addAll(built.lines);
+    _lineIdSeq = built.maxLineId;
+
+    // ── المرحلة 3: تحميل الـ variants للمنتجات (غير متزامن) ──────────
+    for (final l in _lines) {
+      final pid = l.productId;
       if (pid != null) {
         unawaited(_ensureVariantsLoadedForProduct(pid));
       }
     }
-    _lineIdSeq = maxLineId;
+
+    // ── المرحلة 4: تشخيص لو سَقطت بنود (للـ logs فقط) ────────────────
+    if (built.skippedCount > 0) {
+      debugPrint(
+        '[ParkedSale] Restored ${built.parsedCount} lines, '
+        'skipped ${built.skippedCount} corrupted lines.',
+      );
+    }
   }
 
   Future<void> _loadParkedSale() async {
@@ -3500,13 +3847,51 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       );
       return;
     }
+    // ── الخطوة 1: نَتحقق من قابلية الـ payload للقراءة (parse فقط) ───
+    Map<String, dynamic>? parsedMap;
+    String? failureReason;
     try {
-      final map = jsonDecode(row['payload'] as String) as Map<String, dynamic>;
-      if ((map['v'] as num?)?.toInt() != 1) {
-        throw const FormatException('bad version');
+      final rawPayload = row['payload'];
+      if (rawPayload is! String || rawPayload.isEmpty) {
+        failureReason = 'الحمولة فارغة أو ليست نصاً';
+      } else {
+        final decoded = jsonDecode(rawPayload);
+        if (decoded is! Map) {
+          failureReason = 'الحمولة ليست object JSON صالحاً';
+        } else {
+          parsedMap = decoded.map((k, v) => MapEntry(k.toString(), v));
+          final ver = (parsedMap['v'] as num?)?.toInt();
+          if (ver == null) {
+            failureReason = 'لا يوجد حقل إصدار (v) في الحمولة';
+          } else if (ver != 1) {
+            failureReason = 'إصدار الحمولة $ver غير مدعوم (المتوقع 1)';
+          }
+        }
       }
+    } catch (e, st) {
+      failureReason = 'خطأ في فك التشفير: $e';
+      debugPrint('[ParkedSale] JSON decode failed: $e\n$st');
+    }
+
+    if (parsedMap == null || failureReason != null) {
+      if (!mounted) return;
+      setState(() => _blockSaleDraftUntilResumeApplied = false);
+      debugPrint('[ParkedSale] Cannot load id=$id: $failureReason');
+      _showSaleSnackBar(
+        SnackBar(
+          content: Text(
+            'تعذر فتح الفاتورة المعلّقة: ${failureReason ?? 'سبب غير معروف'}',
+          ),
+          duration: const Duration(seconds: 5),
+        ),
+      );
+      return;
+    }
+
+    // ── الخطوة 2: تطبيق الحمولة (atomic apply) — أي فشل هنا يَطبع ─────
+    try {
       setState(() {
-        _applyParkedPayloadMap(map);
+        _applyParkedPayloadMap(parsedMap!);
         _activeParkedSaleId = id;
         _blockSaleDraftUntilResumeApplied = false;
       });
@@ -3514,12 +3899,14 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
         unawaited(_refreshLoyaltyBalance());
         unawaited(_refreshInstSaleSettingsFromDb());
       });
-    } catch (_) {
+    } catch (e, st) {
       if (!mounted) return;
+      debugPrint('[ParkedSale] Apply failed for id=$id: $e\n$st');
       setState(() => _blockSaleDraftUntilResumeApplied = false);
       _showSaleSnackBar(
-        const SnackBar(
-          content: Text('ملف الفاتورة المعلّقة تالف أو غير متوافق'),
+        SnackBar(
+          content: Text('فشل تطبيق الفاتورة المعلّقة: $e'),
+          duration: const Duration(seconds: 5),
         ),
       );
     }
@@ -3781,22 +4168,65 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       }
       return;
     }
-    final items = _lines.map((l) {
+    final items = <InvoiceItem>[];
+    for (final l in _lines) {
+      // الملابس: سطر واحد في الواجهة، لكن يتحول لأسطر متعددة عند الحفظ.
+      if (l.productId != null && l.clothingVariantQty.isNotEmpty) {
+        final variants =
+            _clothingVariantsByProductId[l.productId!] ?? const <Map<String, dynamic>>[];
+        for (final e in l.clothingVariantQty.entries) {
+          final vId = e.key;
+          final q = e.value;
+          if (q <= 0) continue;
+          final row = variants.firstWhere(
+            (r) => (r['id'] as num?)?.toInt() == vId,
+            orElse: () => const <String, dynamic>{},
+          );
+          final entered = q.toDouble();
+          final base = q.toDouble();
+          final cName = (row['colorName'] ?? '').toString().trim();
+          final sName = (row['size'] ?? '').toString().trim();
+          items.add(
+            InvoiceItem(
+              productName: l.productName,
+              quantity: base,
+              price: l.unitPrice,
+              total: entered * l.unitPrice,
+              productId: l.productId,
+              unitVariantId: l.unitVariantId,
+              unitLabel: l.unitLabel,
+              unitFactor: l.unitFactor <= 0 ? 1.0 : l.unitFactor,
+              enteredQty: entered,
+              baseQty: base,
+              productVariantId: vId,
+              variantColorNameSnapshot: cName.isEmpty ? null : cName,
+              variantSizeSnapshot: sName.isEmpty ? null : sName,
+            ),
+          );
+        }
+        continue;
+      }
+
       final entered = _lineEnteredForMath(l);
       final base = _lineBaseForMath(l);
-      return InvoiceItem(
-        productName: l.productName,
-        quantity: base,
-        price: l.unitPrice,
-        total: entered * l.unitPrice,
-        productId: l.productId,
-        unitVariantId: l.unitVariantId,
-        unitLabel: l.unitLabel,
-        unitFactor: l.unitFactor <= 0 ? 1.0 : l.unitFactor,
-        enteredQty: entered,
-        baseQty: base,
+      items.add(
+        InvoiceItem(
+          productName: l.productName,
+          quantity: base,
+          price: l.unitPrice,
+          total: entered * l.unitPrice,
+          productId: l.productId,
+          unitVariantId: l.unitVariantId,
+          unitLabel: l.unitLabel,
+          unitFactor: l.unitFactor <= 0 ? 1.0 : l.unitFactor,
+          enteredQty: entered,
+          baseQty: base,
+          productVariantId: l.productVariantId,
+          variantColorNameSnapshot: l.variantColorNameSnapshot,
+          variantSizeSnapshot: l.variantSizeSnapshot,
+        ),
       );
-    }).toList();
+    }
     final discount = discountValue;
     final tax = _tax;
     final advancePayment = type == InvoiceType.delivery ? 0.0 : _advancePayment;
@@ -3958,6 +4388,30 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       return;
     }
     if (!mounted || !context.mounted) return;
+
+    // الربط مع تذكرة الصيانة وتحديث حالتها إلى "مسلّمة" إن وجدت
+    final sOrderId = _linkedServiceOrderId;
+    if (sOrderId != null && sOrderId > 0) {
+      try {
+        await ServiceOrdersRepository.instance.updateServiceOrderById(
+          sOrderId,
+          status: 'delivered',
+          invoiceId: invoiceId,
+        );
+      } catch (e, st) {
+        AppLogger.error('Invoice', 'فشل إغلاق تذكرة الصيانة المرتبطة $sOrderId', e, st);
+        if (mounted) {
+          _showSaleSnackBar(
+            const SnackBar(
+              content: Text(
+                'تنبيه: حُفظت الفاتورة ولكن تعذر تلقائياً تحديث حالة تذكرة الصيانة. '
+                'يرجى مراجعتها يدوياً.',
+              ),
+            ),
+          );
+        }
+      }
+    }
 
     if (type == InvoiceType.credit) {
       await _emitFinancedSaleNotif(
@@ -4221,6 +4675,8 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     if (!mounted) return;
     final display = name.isEmpty ? 'منتج' : name;
     final knownQty = (m['qty'] as num?)?.toDouble();
+    final isService = ((m['isService'] as num?)?.toInt() ?? 0) == 1;
+    final addQuantity = (m['addQuantity'] as num?)?.toDouble() ?? 1.0;
     final u = await _unitSelectionForCatalogProduct(m);
     if (!mounted) return;
     // سعر بطاقة المنتج للوحدة الأساسية؛ يُضرب في factor الوحدة الافتراضية المعروضة.
@@ -4238,11 +4694,13 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       minSellPrice: pricing.min,
       trackInventory: ti,
       allowNegativeStock: an,
+      isService: isService,
       knownOnHandQty: knownQty,
       stockBaseKind: u.stockBaseKind,
       unitVariantId: u.unitVariantId,
       unitLabel: u.unitLabel,
       unitFactor: u.unitFactor,
+      addQuantity: addQuantity,
     );
   }
 
@@ -4313,12 +4771,15 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     if (!mounted) return;
     final product = resolved?['product'] as Map<String, dynamic>?;
     final variant = resolved?['variant'] as Map<String, dynamic>?;
+    final clothingVariant =
+        resolved?['clothingVariant'] as Map<String, dynamic>?;
     if (product != null) {
       final name = (product['name']?.toString() ?? '').trim();
       final pid = (product['id'] as num?)?.toInt();
       final ti = _tiFromProductRow(product);
       final an = _anFromProductRow(product);
       final display = name.isEmpty ? 'منتج غير مسمى' : name;
+      final isService = ((product['isService'] as num?)?.toInt() ?? 0) == 1;
 
       final baseSell = (product['sellPrice'] as num?)?.toDouble() ?? 0;
       final baseMin = (product['minSellPrice'] as num?)?.toDouble() ?? baseSell;
@@ -4329,7 +4790,11 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       late final int? unitVariantId;
       late final String unitLabel;
       late final double unitFactor;
-      if (variant != null) {
+      if (clothingVariant != null) {
+        unitVariantId = null;
+        unitFactor = 1.0;
+        unitLabel = 'قطعة';
+      } else if (variant != null) {
         unitVariantId = (variant['id'] as num?)?.toInt();
         unitFactor = (variant['factorToBase'] as num?)?.toDouble() ?? 1.0;
         final un = (variant['unitName'] ?? '').toString().trim();
@@ -4344,6 +4809,60 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
         unitFactor = u.unitFactor;
       }
       if (!mounted) return;
+
+      if (clothingVariant == null && pid != null && pid > 0) {
+        final hasClothing = await _hasClothingVariants(pid);
+        if (!mounted) return;
+        if (hasClothing) {
+          await _addOrMergeCatalogProductLine(
+            productName: display,
+            productId: pid,
+            sellPrice: baseSell,
+            minSellPrice: baseMin,
+            trackInventory: ti,
+            allowNegativeStock: an,
+            isService: isService,
+            knownOnHandQty: null,
+            stockBaseKind: 0,
+            unitVariantId: null,
+            unitLabel: 'قطعة',
+            unitFactor: 1.0,
+            newItemSnackText:
+                'تمت إضافة المنتج: ${name.isEmpty ? barcode : name}',
+            clothingPending: true,
+          );
+          unawaited(_ensureClothingVariantsLoadedForProduct(pid));
+          return;
+        }
+      }
+
+      if (clothingVariant != null) {
+        final vId = (clothingVariant['id'] as num?)?.toInt();
+        final q = (clothingVariant['quantity'] as num?)?.toInt() ?? 0;
+        final colorName =
+            (clothingVariant['colorName'] ?? '').toString().trim();
+        final size = (clothingVariant['size'] ?? '').toString().trim();
+        await _addOrMergeCatalogProductLine(
+          productName: display,
+          productId: pid,
+          sellPrice: baseSell,
+          minSellPrice: baseMin,
+          trackInventory: ti,
+          allowNegativeStock: an,
+          isService: isService,
+          knownOnHandQty: q.toDouble(),
+          stockBaseKind: 0,
+          unitVariantId: null,
+          unitLabel: 'قطعة',
+          unitFactor: 1.0,
+          newItemSnackText:
+              'تمت إضافة المنتج: ${name.isEmpty ? barcode : name}',
+          productVariantId: vId,
+          variantColorNameSnapshot: colorName.isEmpty ? null : colorName,
+          variantSizeSnapshot: size.isEmpty ? null : size,
+        );
+        return;
+      }
 
       // السعر للوحدة المختارة: إذا وُجد variant sellPrice يُستخدم كما هو،
       // وإلا يُضرب سعر بطاقة المنتج (للوحدة الأساسية) في factor.
@@ -4362,6 +4881,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
         minSellPrice: pricing.min,
         trackInventory: ti,
         allowNegativeStock: an,
+        isService: isService,
         stockBaseKind: stockBaseKind,
         unitVariantId: unitVariantId,
         unitLabel: unitLabel,
@@ -4413,6 +4933,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       final pid = (afterAdd['id'] as num?)?.toInt();
       final ti = _tiFromProductRow(afterAdd);
       final an = _anFromProductRow(afterAdd);
+      final isService = ((afterAdd['isService'] as num?)?.toInt() ?? 0) == 1;
       final display = name.isEmpty ? 'منتج جديد' : name;
       final u = await _unitSelectionForCatalogProduct(afterAdd);
       if (!mounted) return;
@@ -4431,6 +4952,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
         minSellPrice: pricing.min,
         trackInventory: ti,
         allowNegativeStock: an,
+        isService: isService,
         stockBaseKind: u.stockBaseKind,
         unitVariantId: u.unitVariantId,
         unitLabel: u.unitLabel,
@@ -4457,10 +4979,511 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       }
       _lastCartAddUndo = null;
     });
+    _syncAdvanceAfterCartChange();
+  }
+
+  Widget _buildInlineClothingVariantPicker(
+    BuildContext context, {
+    required _InvoiceLineState line,
+    required int productId,
+  }) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    // الملابس: لا نسمح بالبيع بالسالب من واجهة البيع.
+    final allowNeg = false;
+    final variants = _clothingVariantsByProductId[productId] ?? const [];
+
+    final colors = <int, Map<String, dynamic>>{};
+    for (final v in variants) {
+      final cid = (v['colorId'] as num?)?.toInt();
+      if (cid == null) continue;
+      colors.putIfAbsent(cid, () => v);
+    }
+
+    int remainingForColor(int cid) {
+      var sum = 0;
+      for (final v in variants) {
+        final vCid = (v['colorId'] as num?)?.toInt();
+        if (vCid != cid) continue;
+        final vId = (v['id'] as num?)?.toInt();
+        final dbQ = (v['quantity'] as num?)?.toInt() ?? 0;
+        final used = vId == null ? 0 : _totalQtyForProductVariant(vId).round();
+        final rem = dbQ - used;
+        sum += rem > 0 ? rem : 0;
+      }
+      return sum;
+    }
+
+    List<Map<String, dynamic>> sizesForColor(int cid) => variants
+        .where((v) => (v['colorId'] as num?)?.toInt() == cid)
+        .toList();
+
+    final selectedColorId = line.pendingColorId;
+    final selectedColorHex = selectedColorId == null
+        ? null
+        : parseFlexibleHexColor(
+            (colors[selectedColorId]?['colorHex'] ?? '').toString(),
+          );
+
+    Color _textOn(Color bg) =>
+        bg.computeLuminance() > 0.55 ? Colors.black : Colors.white;
+
+    void syncLineQtyFromSelections() {
+      final sum = line.clothingVariantQty.values.fold<int>(
+        0,
+        (s, v) => s + (v > 0 ? v : 0),
+      );
+      line.quantity = sum.toDouble();
+      line.isClothingPending = sum <= 0;
+      // في وضع التجميع: لا نستخدم productVariantId نهائياً (السطر يتحول لأسطر عند الحفظ).
+      line.productVariantId = null;
+      if (sum <= 0) {
+        line.variantColorNameSnapshot = null;
+        line.variantSizeSnapshot = null;
+      }
+    }
+
+    Widget chipBox({
+      required String title,
+      required String subtitle,
+      required bool disabled,
+      required bool selected,
+      required VoidCallback? onTap,
+      Color? fillColor,
+      bool showOutOfStockX = false,
+    }) {
+      final bg = fillColor;
+      final onBg = (bg == null) ? cs.onSurface : _textOn(bg);
+      final keepColorBehindX = disabled && showOutOfStockX && bg != null;
+      return InkWell(
+        onTap: disabled ? null : onTap,
+        child: Stack(
+          children: [
+            Opacity(
+              opacity: (disabled && showOutOfStockX) ? 0.45 : 1,
+              child: Container(
+                width: 132,
+                padding: const EdgeInsetsDirectional.fromSTEB(10, 10, 10, 10),
+                decoration: BoxDecoration(
+                  color: keepColorBehindX
+                      ? bg.withValues(alpha: 0.55)
+                      : disabled
+                          ? cs.surfaceContainerHighest.withValues(alpha: 0.35)
+                          : bg != null
+                              ? (selected
+                                  ? bg
+                                  : bg.withValues(alpha: 0.85))
+                              : (selected
+                                  ? cs.primary.withValues(alpha: 0.10)
+                                  : cs.surfaceContainerHighest.withValues(alpha: 0.55)),
+                  border: Border.all(
+                    color: disabled
+                        ? cs.outlineVariant.withValues(alpha: 0.7)
+                        : selected
+                            ? cs.primary
+                            : cs.outlineVariant,
+                    width: selected ? 2 : 1,
+                  ),
+                  borderRadius: BorderRadius.zero,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        color: disabled
+                            ? cs.onSurfaceVariant
+                            : selected
+                                ? cs.primary
+                                : onBg,
+                      ),
+                      textAlign: TextAlign.start,
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        color: disabled
+                            ? cs.onSurfaceVariant
+                            : onBg.withValues(alpha: 0.95),
+                      ),
+                      textAlign: TextAlign.start,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            if (disabled && showOutOfStockX)
+              const Positioned.fill(
+                child: IgnorePointer(
+                  child: Center(
+                    child: Icon(
+                      Icons.close_rounded,
+                      size: 46,
+                      color: Colors.black,
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsetsDirectional.fromSTEB(12, 0, 12, 10),
+      child: Card(
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.zero,
+          side: BorderSide(color: cs.outlineVariant),
+        ),
+        child: Padding(
+          padding: const EdgeInsetsDirectional.fromSTEB(12, 12, 12, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'اختيار اللون والمقاس',
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w900,
+                        color: cs.primary,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    'لا يمكن تغيير الكمية قبل الاختيار',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: cs.onSurfaceVariant,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+
+              if (variants.isEmpty)
+                Text(
+                  'جارٍ تحميل الألوان والمقاسات…',
+                  style: TextStyle(
+                    color: cs.onSurfaceVariant,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  textAlign: TextAlign.start,
+                )
+              else ...[
+                Text(
+                  'الألوان',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    color: cs.onSurfaceVariant,
+                  ),
+                  textAlign: TextAlign.start,
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  alignment: WrapAlignment.end,
+                  children: [
+                    for (final e in colors.entries)
+                      Builder(
+                        builder: (_) {
+                          final rem = remainingForColor(e.key);
+                          final colorDisabled = rem <= 0 && !allowNeg;
+                          return chipBox(
+                        title: (e.value['colorName'] ?? '').toString().trim().isEmpty
+                            ? 'لون'
+                            : (e.value['colorName'] ?? '').toString().trim(),
+                        subtitle: 'المتاح: $rem',
+                        disabled: colorDisabled,
+                        selected: selectedColorId == e.key,
+                        onTap: () {
+                          setState(() => line.pendingColorId = e.key);
+                        },
+                        fillColor: parseFlexibleHexColor(
+                          (e.value['colorHex'] ?? '').toString(),
+                        ),
+                        showOutOfStockX: rem <= 0,
+                          );
+                        },
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                if (selectedColorId != null) ...[
+                  Row(
+                    children: [
+                      TextButton.icon(
+                        onPressed: () => setState(() => line.pendingColorId = null),
+                        icon: const Icon(Icons.arrow_forward, size: 16),
+                        label: const Text('تغيير اللون'),
+                      ),
+                      const Spacer(),
+                      Text(
+                        'المقاسات',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w800,
+                          color: cs.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    alignment: WrapAlignment.end,
+                    children: [
+                      for (final v in sizesForColor(selectedColorId))
+                        Builder(
+                          builder: (ctx) {
+                            final dbQ = (v['quantity'] as num?)?.toInt() ?? 0;
+                            final size =
+                                (v['size'] ?? '').toString().trim().isEmpty
+                                    ? 'مقاس'
+                                    : (v['size'] ?? '').toString().trim();
+                            final vId = (v['id'] as num?)?.toInt();
+                            // إجمالي المأخوذ من هذا الـ variant في السلة (للعرض: المتبقي فعلياً).
+                            final used = vId == null
+                                ? 0
+                                : _totalQtyForProductVariant(vId).round();
+                            // دون سطر الفاتورة الحالي — لحساب السقف الصحيح لزر + (تجنب شرط 2× خاطئ).
+                            final usedElsewhere = vId == null
+                                ? 0
+                                : _totalQtyForProductVariant(
+                                    vId,
+                                    excludeLineId: line.lineId,
+                                  ).round();
+                            final remaining = dbQ - used;
+                            final q = remaining < 0 ? 0 : remaining;
+                            final maxSelectableOnLine =
+                                dbQ - usedElsewhere < 0 ? 0 : dbQ - usedElsewhere;
+                            final disabled = q <= 0 && !allowNeg;
+                            final selectedQty =
+                                (vId == null) ? 0 : (line.clothingVariantQty[vId] ?? 0);
+                            final isSelected = selectedQty > 0;
+                            return Container(
+                              width: 132,
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.zero,
+                                border: Border.all(
+                                  color: disabled
+                                      ? cs.outlineVariant.withValues(alpha: 0.7)
+                                      : isSelected
+                                          ? cs.primary
+                                          : cs.outlineVariant,
+                                  width: isSelected ? 2 : 1,
+                                ),
+                              ),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  chipBox(
+                                    title: size,
+                                    subtitle: 'المتاح: $q',
+                                    disabled: disabled,
+                                    selected: isSelected,
+                                    showOutOfStockX: q <= 0,
+                                    onTap: null,
+                                    fillColor: selectedColorHex,
+                                  ),
+                                  Padding(
+                                    padding: const EdgeInsetsDirectional.fromSTEB(
+                                      8,
+                                      6,
+                                      8,
+                                      8,
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        IconButton(
+                                          visualDensity: VisualDensity.compact,
+                                          padding: EdgeInsets.zero,
+                                          constraints: const BoxConstraints(
+                                            minWidth: 34,
+                                            minHeight: 34,
+                                          ),
+                                          onPressed: selectedQty <= 0
+                                              ? null
+                                              : () {
+                                                  if (vId == null) return;
+                                                  setState(() {
+                                                    final next = selectedQty - 1;
+                                                    if (next <= 0) {
+                                                      line.clothingVariantQty.remove(vId);
+                                                    } else {
+                                                      line.clothingVariantQty[vId] = next;
+                                                    }
+                                                    syncLineQtyFromSelections();
+                                                  });
+                                                },
+                                          icon: Icon(
+                                            Icons.remove_circle_outline,
+                                            color: selectedQty <= 0
+                                                ? cs.onSurfaceVariant
+                                                : cs.primary,
+                                          ),
+                                        ),
+                                        Expanded(
+                                          child: Text(
+                                            '$selectedQty',
+                                            style: const TextStyle(
+                                              fontWeight: FontWeight.w900,
+                                              fontSize: 16,
+                                            ),
+                                            textAlign: TextAlign.center,
+                                            textDirection: TextDirection.ltr,
+                                          ),
+                                        ),
+                                        IconButton(
+                                          visualDensity: VisualDensity.compact,
+                                          padding: EdgeInsets.zero,
+                                          constraints: const BoxConstraints(
+                                            minWidth: 34,
+                                            minHeight: 34,
+                                          ),
+                                          onPressed: disabled
+                                              ? null
+                                              : () {
+                                                  if (vId == null) return;
+                                                  setState(() {
+                                                    final next = selectedQty + 1;
+                                                    // السقف: ما يُسمح به على هذا السطر =
+                                                    // مخزون المتغير − ما استُخدم على أسطر أخرى.
+                                                    // لا نستخدم q هنا (يشمل هذا السطر فيكتسب شرطاً خاطئاً ~½ المخزون).
+                                                    if (!allowNeg && next > maxSelectableOnLine) {
+                                                      return;
+                                                    }
+                                                    line.clothingVariantQty[vId] = next;
+                                                    syncLineQtyFromSelections();
+                                                  });
+                                                },
+                                          icon: Icon(
+                                            Icons.add_circle_outline,
+                                            color: disabled ? cs.onSurfaceVariant : cs.primary,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  if (line.clothingVariantQty.isNotEmpty) ...[
+                    Container(
+                      padding: const EdgeInsetsDirectional.fromSTEB(10, 10, 10, 10),
+                      decoration: BoxDecoration(
+                        color: cs.surfaceContainerHighest.withValues(alpha: 0.35),
+                        border: Border.all(color: cs.outlineVariant),
+                        borderRadius: BorderRadius.zero,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Text(
+                            'المحدد حالياً',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w900,
+                              color: cs.primary,
+                            ),
+                            textAlign: TextAlign.start,
+                          ),
+                          const SizedBox(height: 8),
+                          for (final entry in line.clothingVariantQty.entries)
+                            Builder(
+                              builder: (_) {
+                                final vId = entry.key;
+                                final qty = entry.value;
+                                final row = variants.firstWhere(
+                                  (r) => (r['id'] as num?)?.toInt() == vId,
+                                  orElse: () => const <String, dynamic>{},
+                                );
+                                final cName = (row['colorName'] ?? '').toString().trim();
+                                final sName = (row['size'] ?? '').toString().trim();
+                                final hex = parseFlexibleHexColor(
+                                  (row['colorHex'] ?? '').toString(),
+                                );
+                                final label = [
+                                  if (cName.isNotEmpty) cName,
+                                  if (sName.isNotEmpty) sName,
+                                ].join(' / ');
+                                return Padding(
+                                  padding: const EdgeInsetsDirectional.only(bottom: 6),
+                                  child: Row(
+                                    children: [
+                                      if (hex != null) ...[
+                                        Container(
+                                          width: 14,
+                                          height: 14,
+                                          decoration: BoxDecoration(
+                                            color: hex,
+                                            border: Border.all(color: cs.outlineVariant),
+                                            borderRadius: BorderRadius.zero,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                      ],
+                                      Expanded(
+                                        child: Text(
+                                          label.isEmpty ? 'لون/مقاس' : label,
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.w800,
+                                          ),
+                                          textAlign: TextAlign.start,
+                                        ),
+                                      ),
+                                      Text(
+                                        '× $qty',
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w900,
+                                        ),
+                                        textDirection: TextDirection.ltr,
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              },
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ] else
+                  Text(
+                    'اختر لوناً أولاً لإظهار المقاسات.',
+                    style: TextStyle(
+                      color: cs.onSurfaceVariant,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    textAlign: TextAlign.start,
+                  ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   bool _canCompleteSalePayment(LoyaltySettingsData loyalty) {
     if (_lines.isEmpty) return false;
+    if (_lines.any((l) => l.isClothingPending)) return false;
     final pay = saleTotal(loyalty);
     if (type == InvoiceType.cash) {
       if (_advancePayment + 0.5 < pay) return false;
@@ -4521,6 +5544,12 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     if (!_canCompleteSalePayment(loyaltyCfg)) {
       return;
     }
+    if (_lines.any((l) => l.isClothingPending)) {
+      _showSaleSnackBar(
+        const SnackBar(content: Text('اختر اللون والمقاس لكل الملابس')),
+      );
+      return;
+    }
     await _saveInvoice();
   }
 
@@ -4546,6 +5575,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
         item.quantity = next;
       }
     });
+    _syncAdvanceAfterCartChange();
   }
 
   void _cartKbRemoveHighlighted() {
@@ -4561,6 +5591,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
         _saleCartKeyboardIndex = hi.clamp(0, _lines.length - 1);
       }
     });
+    _syncAdvanceAfterCartChange();
   }
 
   void _cartKbEditQtyKey() {
@@ -4577,6 +5608,21 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     _advanceController.value = TextEditingValue(
       text: t,
       selection: TextSelection.collapsed(offset: t.length),
+    );
+  }
+
+  /// مُلَخِّص آمن من السياق — يُستدعى **بعد كل تعديل على السلة** (إضافة/حذف/
+  /// تغيير كمية أو سعر) لمنع تجمُّد زر الدفع. مرَّ هذا الأمر عبر bug تاريخي:
+  /// كانت أزرار `+/-` في السلة لا تُحدّث حقل "المقدّم"، فيبقى الزر معطّلاً
+  /// لأن `_canCompleteSalePayment` يَشترط `_advancePayment ≥ pay` للنقدي.
+  ///
+  /// نُغلِّف هذا في helper مركزي وحيد ليصبح "Don't Repeat Yourself" — أي
+  /// مسار جديد يُعدّل السلة يَستدعي هذا الـ helper بدلاً من نسخ الـ Provider
+  /// كل مرة. الـ helper آمن لأي نوع فاتورة (يخرج فوراً للدين/التقسيط/التوصيل).
+  void _syncAdvanceAfterCartChange() {
+    if (!mounted || type != InvoiceType.cash) return;
+    _syncAutoAdvanceToSaleTotal(
+      Provider.of<LoyaltySettingsProvider>(context, listen: false).data,
     );
   }
 }
@@ -4842,18 +5888,27 @@ class _InvoiceLineState {
     this.productId,
     this.trackInventory = true,
     this.allowNegativeStock = false,
+    this.isService = false,
     this.stockBaseKind = 0,
     this.unitVariantId,
     String? unitLabel,
     this.unitFactor = 1.0,
+    this.productVariantId,
+    this.variantColorNameSnapshot,
+    this.variantSizeSnapshot,
+    this.isClothingPending = false,
+    this.pendingColorId,
+    Map<int, int>? clothingVariantQty,
   }) : unitLabel = (unitLabel == null || unitLabel.trim().isEmpty)
            ? 'قطعة'
-           : unitLabel.trim();
+           : unitLabel.trim(),
+       clothingVariantQty = clothingVariantQty ?? <int, int>{};
 
   final int lineId;
   final int? productId;
   final bool trackInventory;
   final bool allowNegativeStock;
+  final bool isService;
   final String productName;
   double quantity;
   double unitPrice;
@@ -4866,6 +5921,16 @@ class _InvoiceLineState {
   int? unitVariantId;
   String unitLabel;
   double unitFactor;
+
+  int? productVariantId;
+  String? variantColorNameSnapshot;
+  String? variantSizeSnapshot;
+
+  bool isClothingPending;
+  int? pendingColorId;
+
+  /// تجميع كميات الملابس داخل نفس البطاقة: variantId -> qty (قطع).
+  final Map<int, int> clothingVariantQty;
 }
 
 class _SaleInlineScannerCard extends StatelessWidget {

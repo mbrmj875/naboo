@@ -26,9 +26,9 @@ class PermissionItemUi {
 /// ترتيب المجموعات والعناوين — يتطابق مع [PermissionKeys.allKeys].
 List<PermissionGroupUi> buildPermissionGroupsUi() {
   return [
-    PermissionGroupUi(
+    const PermissionGroupUi(
       title: 'التطبيق والوصول',
-      items: const [
+      items: [
         PermissionItemUi(
           key: PermissionKeys.appDashboard,
           label: 'الرئيسية والتنقّل',
@@ -36,9 +36,9 @@ List<PermissionGroupUi> buildPermissionGroupsUi() {
         ),
       ],
     ),
-    PermissionGroupUi(
+    const PermissionGroupUi(
       title: 'العملاء',
-      items: const [
+      items: [
         PermissionItemUi(
           key: PermissionKeys.customersView,
           label: 'عرض العملاء والبحث',
@@ -53,18 +53,18 @@ List<PermissionGroupUi> buildPermissionGroupsUi() {
         ),
       ],
     ),
-    PermissionGroupUi(
+    const PermissionGroupUi(
       title: 'ولاء العملاء',
-      items: const [
+      items: [
         PermissionItemUi(
           key: PermissionKeys.loyaltyAccess,
           label: 'نقاط الولاء والإعدادات',
         ),
       ],
     ),
-    PermissionGroupUi(
+    const PermissionGroupUi(
       title: 'المبيعات',
-      items: const [
+      items: [
         PermissionItemUi(
           key: PermissionKeys.salesPos,
           label: 'شاشة البيع (نقطة البيع)',
@@ -79,9 +79,9 @@ List<PermissionGroupUi> buildPermissionGroupsUi() {
         ),
       ],
     ),
-    PermissionGroupUi(
+    const PermissionGroupUi(
       title: 'المخزون',
-      items: const [
+      items: [
         PermissionItemUi(
           key: PermissionKeys.inventoryView,
           label: 'عرض المنتجات والمخزون',
@@ -112,9 +112,9 @@ List<PermissionGroupUi> buildPermissionGroupsUi() {
         ),
       ],
     ),
-    PermissionGroupUi(
+    const PermissionGroupUi(
       title: 'الصندوق',
-      items: const [
+      items: [
         PermissionItemUi(
           key: PermissionKeys.cashView,
           label: 'عرض الصندوق والحركات',
@@ -125,9 +125,9 @@ List<PermissionGroupUi> buildPermissionGroupsUi() {
         ),
       ],
     ),
-    PermissionGroupUi(
+    const PermissionGroupUi(
       title: 'الديون (آجل)',
-      items: const [
+      items: [
         PermissionItemUi(
           key: PermissionKeys.debtsPanel,
           label: 'لوحة الديون والمتابعة',
@@ -138,9 +138,9 @@ List<PermissionGroupUi> buildPermissionGroupsUi() {
         ),
       ],
     ),
-    PermissionGroupUi(
+    const PermissionGroupUi(
       title: 'الأقساط',
-      items: const [
+      items: [
         PermissionItemUi(
           key: PermissionKeys.installmentsPlans,
           label: 'خطط التقسيط والجداول',
@@ -151,9 +151,9 @@ List<PermissionGroupUi> buildPermissionGroupsUi() {
         ),
       ],
     ),
-    PermissionGroupUi(
+    const PermissionGroupUi(
       title: 'التقارير والطباعة',
-      items: const [
+      items: [
         PermissionItemUi(
           key: PermissionKeys.reportsAccess,
           label: 'التقارير والدفاتر',
@@ -164,9 +164,9 @@ List<PermissionGroupUi> buildPermissionGroupsUi() {
         ),
       ],
     ),
-    PermissionGroupUi(
+    const PermissionGroupUi(
       title: 'المستخدمون والورديات',
-      items: const [
+      items: [
         PermissionItemUi(
           key: PermissionKeys.usersView,
           label: 'عرض قائمة المستخدمين',
@@ -185,9 +185,9 @@ List<PermissionGroupUi> buildPermissionGroupsUi() {
         ),
       ],
     ),
-    PermissionGroupUi(
+    const PermissionGroupUi(
       title: 'الإعدادات العامة',
-      items: const [
+      items: [
         PermissionItemUi(
           key: PermissionKeys.settingsApp,
           label: 'إعدادات النظام والترخيص',

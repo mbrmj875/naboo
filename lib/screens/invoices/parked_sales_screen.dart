@@ -232,7 +232,7 @@ class _ParkedSalesScreenState extends State<ParkedSalesScreen> {
                               decoration: BoxDecoration(
                                 color: AppColors.accent.withValues(alpha: 0.12),
                               ),
-                              child: Icon(Icons.pause_circle_filled_rounded, color: AppColors.accent, size: 28),
+                              child: const Icon(Icons.pause_circle_filled_rounded, color: AppColors.accent, size: 28),
                             );
                             if (narrow) {
                               return Column(

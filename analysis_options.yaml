@@ -15,6 +15,13 @@ analyzer:
     deprecated_member_use: ignore
     deprecated_member_use_from_same_package: ignore
 
+    # Step 24 — رفع avoid_print إلى error (لا يجب أن يدخل أيّ print() جديد).
+    avoid_print: error
+
+  # ملفات تجريبية/مؤقتة لا تُعامل كجزء من التطبيق.
+  exclude:
+    - scratch_*.dart
+
 linter:
   # The lint rules applied to this project can be customized in the
   # section below to disable rules from the `package:flutter_lints/flutter.yaml`
@@ -27,13 +34,18 @@ linter:
   # `// ignore_for_file: name_of_lint` syntax on the line or in the file
   # producing the lint.
   rules:
-    # avoid_print: false  # Uncomment to disable the `avoid_print` rule
-    # prefer_single_quotes: true  # Uncomment to enable the `prefer_single_quotes` rule
     # Project policy: don't fail builds on legacy-style lints while we modernize.
     unnecessary_underscores: false
     use_build_context_synchronously: false
     curly_braces_in_flow_control_structures: false
     use_null_aware_elements: false
+
+    # Step 24 — قواعد إضافية صارمة لرفع جودة الكود.
+    avoid_print: true
+    prefer_const_constructors: true
+    unawaited_futures: true
+    require_trailing_commas: true
+    avoid_dynamic_calls: true
 
 # Additional information about this file can be found at
 # https://dart.dev/guides/language/analysis-options

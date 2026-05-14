@@ -33,6 +33,22 @@ String _receiptSafe(String? raw) {
   return s;
 }
 
+String _itemNameForReceipt(InvoiceItem e) {
+  final base = _receiptSafe(e.productName);
+  final color = _receiptSafe(e.variantColorNameSnapshot);
+  final size = _receiptSafe(e.variantSizeSnapshot);
+  final isClothing = e.productVariantId != null;
+  if (!isClothing) return base;
+
+  final parts = <String>[
+    if (color.isNotEmpty) color,
+    if (size.isNotEmpty) size,
+  ];
+  if (parts.isEmpty) return base;
+  if (base.isEmpty) return parts.join(' - ');
+  return '$base (${parts.join(' - ')})';
+}
+
 String _opIdText(Invoice invoice) {
   final id = invoice.id;
   if (id == null) return '-';
@@ -105,7 +121,7 @@ String buildReceiptQrPlainText({
   final fullItemLines = invoice.items
       .map(
         (e) =>
-            '• ${_receiptSafe(e.productName)}  |  العدد: ${e.quantity}  |  ${e.total.toStringAsFixed(0)} د.ع',
+            '• ${_itemNameForReceipt(e)}  |  العدد: ${e.quantity}  |  ${e.total.toStringAsFixed(0)} د.ع',
       )
       .toList();
 
@@ -315,8 +331,227 @@ Future<({pw.Font regular, pw.Font bold})> _loadReceiptFonts() async {
   }
 }
 
+/// حمولة QR الثانوي على إيصال البيع: يفتح التطبيق (فاتورة / ديون عميل / خرائط) حسب نوع البيع.
+({String payload, String title, String subtitle}) saleReceiptSecondaryQrForInvoice({
+  required Invoice invoice,
+  required double subtotalBeforeDiscount,
+  required PrintSettingsData printSettings,
+}) {
+  final id = invoice.id;
+  final plain = buildReceiptQrPlainText(
+    invoice: invoice,
+    subtotalBeforeDiscount: subtotalBeforeDiscount,
+    printSettings: printSettings,
+  );
+
+  switch (invoice.type) {
+    case InvoiceType.cash:
+      if (id != null && id > 0) {
+        return (
+          payload: InvoiceDeepLink.uriForInvoiceId(id),
+          title: 'تفاصيل الفاتورة',
+          subtitle: 'امسح لفتح التفاصيل في التطبيق',
+        );
+      }
+      return (
+        payload: plain,
+        title: 'تفاصيل الفاتورة',
+        subtitle: 'ملخص الإيصال كنص',
+      );
+    case InvoiceType.credit:
+      final cid = invoice.customerId;
+      if (cid != null && cid > 0) {
+        return (
+          payload: CustomerDebtDeepLink.uriForCustomerId(cid),
+          title: 'ملف العميل المدين',
+          subtitle: 'تفاصيل الدين',
+        );
+      }
+      if (id != null && id > 0) {
+        return (
+          payload: InvoiceDeepLink.uriForInvoiceId(id),
+          title: 'تفاصيل الفاتورة',
+          subtitle: 'امسح لفتح التفاصيل في التطبيق',
+        );
+      }
+      return (
+        payload: plain,
+        title: 'تفاصيل الفاتورة',
+        subtitle: 'ملخص الإيصال',
+      );
+    case InvoiceType.installment:
+      if (id != null && id > 0) {
+        return (
+          payload: InvoiceDeepLink.uriForInvoiceId(id),
+          title: 'خطة التقسيط',
+          subtitle: 'جدول الأقساط ومواعيد الاستحقاق',
+        );
+      }
+      return (
+        payload: plain,
+        title: 'خطة التقسيط',
+        subtitle: 'ملخص الإيصال',
+      );
+    case InvoiceType.delivery:
+      final maps = googleMapsSearchUrlFromAddress(invoice.deliveryAddress);
+      if (maps.isNotEmpty) {
+        return (
+          payload: maps,
+          title: 'خريطة التوصيل',
+          subtitle: 'فتح في خرائط Google',
+        );
+      }
+      if (id != null && id > 0) {
+        return (
+          payload: InvoiceDeepLink.uriForInvoiceId(id),
+          title: 'تفاصيل الفاتورة',
+          subtitle: 'امسح لفتح التفاصيل في التطبيق',
+        );
+      }
+      return (
+        payload: plain,
+        title: 'تفاصيل',
+        subtitle: 'ملخص الإيصال',
+      );
+    case InvoiceType.debtCollection:
+    case InvoiceType.installmentCollection:
+    case InvoiceType.supplierPayment:
+      if (id != null && id > 0) {
+        return (
+          payload: InvoiceDeepLink.uriForInvoiceId(id),
+          title: 'تفاصيل السند',
+          subtitle: 'امسح لفتح تفاصيل السند في التطبيق',
+        );
+      }
+      return (
+        payload: plain,
+        title: 'تفاصيل السند',
+        subtitle: 'ملخص الإيصال',
+      );
+  }
+}
+
 /// طباعة إيصال بيع: باركود رقمي + QR يحمل نصاً عربياً مرتباً.
 class SaleReceiptPdf {
+  /// صفّ استرجاع (Code128 على `INV-{id}`) + QR — يسار QR، يمين الباركود.
+  /// [barcodeInvoiceId] ≤ 0 يخفي عمود الباركود حتى لو [showBarcode] = true.
+  static List<pw.Widget> _receiptCodesFooterRow({
+    required pw.Font font,
+    required pw.Font fontBold,
+    required String secondaryPayload,
+    required String secondaryTitle,
+    required String secondarySubtitle,
+    required bool showBarcode,
+    required bool showSecondaryQr,
+    required int barcodeInvoiceId,
+  }) {
+    final barcodeOk = showBarcode && barcodeInvoiceId > 0;
+    if (!barcodeOk && !showSecondaryQr) return [];
+
+    pw.Widget barcodeColumn() => pw.Column(
+          children: [
+            pw.Text(
+              'استرجاع المواد',
+              style: pw.TextStyle(font: fontBold, fontSize: 9),
+              textAlign: pw.TextAlign.center,
+              textDirection: pw.TextDirection.rtl,
+            ),
+            pw.SizedBox(height: 4),
+            pw.Center(
+              child: pw.BarcodeWidget(
+                barcode: bc.Barcode.code128(),
+                data: 'INV-$barcodeInvoiceId',
+                width: 168,
+                height: 42,
+                drawText: false,
+              ),
+            ),
+            pw.SizedBox(height: 4),
+            pw.Center(
+              child: pw.Text(
+                'INV-$barcodeInvoiceId',
+                style: pw.TextStyle(font: font, fontSize: 10),
+                textDirection: pw.TextDirection.ltr,
+              ),
+            ),
+          ],
+        );
+
+    pw.Widget qrColumn() => pw.Column(
+          children: [
+            pw.Text(
+              secondaryTitle,
+              style: pw.TextStyle(font: fontBold, fontSize: 9),
+              textAlign: pw.TextAlign.center,
+              textDirection: pw.TextDirection.rtl,
+            ),
+            pw.SizedBox(height: 4),
+            pw.Center(
+              child: pw.BarcodeWidget(
+                barcode: bc.Barcode.qrCode(),
+                data: secondaryPayload,
+                width: 110,
+                height: 110,
+                drawText: false,
+              ),
+            ),
+            pw.SizedBox(height: 4),
+            pw.Text(
+              secondarySubtitle,
+              style: pw.TextStyle(font: font, fontSize: 8),
+              textAlign: pw.TextAlign.center,
+              textDirection: pw.TextDirection.rtl,
+            ),
+          ],
+        );
+
+    if (barcodeOk && showSecondaryQr) {
+      return [
+        pw.SizedBox(height: 16),
+        pw.Row(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            pw.Expanded(child: qrColumn()),
+            pw.SizedBox(width: 12),
+            pw.Expanded(child: barcodeColumn()),
+          ],
+        ),
+      ];
+    }
+    if (barcodeOk) {
+      return [
+        pw.SizedBox(height: 16),
+        pw.Center(child: barcodeColumn()),
+      ];
+    }
+    return [
+      pw.SizedBox(height: 16),
+      pw.Center(child: qrColumn()),
+    ];
+  }
+
+  static List<pw.Widget> _receiptSaleCodesFooter({
+    required Invoice invoice,
+    required pw.Font font,
+    required pw.Font fontBold,
+    required String secondaryPayload,
+    required String secondaryTitle,
+    required String secondarySubtitle,
+    required bool showBarcode,
+    required bool showSecondaryQr,
+  }) {
+    return _receiptCodesFooterRow(
+      font: font,
+      fontBold: fontBold,
+      secondaryPayload: secondaryPayload,
+      secondaryTitle: secondaryTitle,
+      secondarySubtitle: secondarySubtitle,
+      showBarcode: showBarcode,
+      showSecondaryQr: showSecondaryQr,
+      barcodeInvoiceId: invoice.id ?? 0,
+    );
+  }
+
   /// يبني ملف PDF كبايتات (للمعاينة داخل التطبيق أو المشاركة).
   static Future<Uint8List> buildPdfBytes({
     required Invoice invoice,
@@ -330,31 +565,18 @@ class SaleReceiptPdf {
     final fontBold = fonts.bold;
 
     final omitPayPdf = _omitReceiptPaymentLine(invoice, s);
-    final String mainQrPayload;
-    if ((invoice.type == InvoiceType.installment ||
-            invoice.type == InvoiceType.credit ||
-            invoice.type == InvoiceType.debtCollection ||
-            invoice.type == InvoiceType.installmentCollection ||
-            invoice.type == InvoiceType.supplierPayment) &&
-        invoice.id != null &&
-        invoice.id! > 0) {
-      mainQrPayload = InvoiceDeepLink.uriForInvoiceId(invoice.id!);
-    } else {
-      mainQrPayload = buildReceiptQrPlainText(
+    final secondaryQr = saleReceiptSecondaryQrForInvoice(
         invoice: invoice,
         subtotalBeforeDiscount: subtotalBeforeDiscount,
         printSettings: s,
       );
-    }
-    final String mainQrCaption = switch (invoice.type) {
-      InvoiceType.installment || InvoiceType.credit =>
-        'امسح لفتح تفاصيل الفاتورة والأصناف في التطبيق (يتطلب تسجيل الدخول)',
-      InvoiceType.debtCollection ||
-      InvoiceType.installmentCollection ||
-      InvoiceType.supplierPayment =>
-        'امسح لفتح تفاصيل السند في التطبيق (يتطلب تسجيل الدخول)',
-      _ => 'امسح الرمز لمشاهدة ملخص الإيصال كنص مرتب',
-    };
+    final mapsForDelivery =
+        googleMapsSearchUrlFromAddress(invoice.deliveryAddress);
+    final isDeliveryMapsQr = invoice.type == InvoiceType.delivery &&
+        mapsForDelivery.isNotEmpty;
+    final showSecondaryQr = secondaryQr.payload.isNotEmpty &&
+        (s.receiptShowQr ||
+            (isDeliveryMapsQr && s.receiptShowBuyerAddressQr));
 
     InstallmentPlan? saleInstallmentPlan;
     if (invoice.type == InvoiceType.installment && invoice.id != null) {
@@ -376,7 +598,8 @@ class SaleReceiptPdf {
         theme: pw.ThemeData.withFont(base: font, bold: fontBold),
         build: (context) {
           final buyerAddressQrWidgets = <pw.Widget>[];
-          if (s.receiptShowBuyerAddressQr) {
+          if (s.receiptShowBuyerAddressQr &&
+              invoice.type != InvoiceType.delivery) {
             final locUrl =
                 googleMapsSearchUrlFromAddress(invoice.deliveryAddress);
             if (locUrl.isNotEmpty) {
@@ -564,9 +787,9 @@ class SaleReceiptPdf {
                       (e) => pw.TableRow(
                         children: [
                           _cell(
-                            _receiptSafe(e.productName).isEmpty
+                            _itemNameForReceipt(e).isEmpty
                                 ? '-'
-                                : _receiptSafe(e.productName),
+                                : _itemNameForReceipt(e),
                             font,
                             9.5,
                             true,
@@ -640,47 +863,16 @@ class SaleReceiptPdf {
                     textDirection: pw.TextDirection.rtl,
                   ),
                 ],
-                pw.SizedBox(height: 16),
-                if (s.receiptShowBarcode) ...[
-                  pw.Center(
-                    child: pw.BarcodeWidget(
-                      barcode: bc.Barcode.code128(),
-                      data: 'INV-${invoice.id ?? 0}',
-                      width: 200,
-                      height: 44,
-                      drawText: false,
-                    ),
-                  ),
-                  pw.SizedBox(height: 6),
-                  pw.Center(
-                    child: pw.Text(
-                      'INV-${invoice.id ?? 0}',
-                      style: pw.TextStyle(font: font, fontSize: 11),
-                      textDirection: pw.TextDirection.ltr,
-                    ),
-                  ),
-                  pw.SizedBox(height: 12),
-                ],
-                if (s.receiptShowQr) ...[
-                  pw.Center(
-                    child: pw.BarcodeWidget(
-                      barcode: bc.Barcode.qrCode(),
-                      data: mainQrPayload,
-                      width: 120,
-                      height: 120,
-                      drawText: false,
-                    ),
-                  ),
-                  pw.SizedBox(height: 6),
-                  pw.Center(
-                    child: pw.Text(
-                      mainQrCaption,
-                      style: pw.TextStyle(font: font, fontSize: 9),
-                      textAlign: pw.TextAlign.center,
-                      textDirection: pw.TextDirection.rtl,
-                    ),
-                  ),
-                ],
+                ...SaleReceiptPdf._receiptSaleCodesFooter(
+                  invoice: invoice,
+                  font: font,
+                  fontBold: fontBold,
+                  secondaryPayload: secondaryQr.payload,
+                  secondaryTitle: secondaryQr.title,
+                  secondarySubtitle: secondaryQr.subtitle,
+                  showBarcode: s.receiptShowBarcode,
+                  showSecondaryQr: showSecondaryQr,
+                ),
                 ...buyerAddressQrWidgets,
               ],
             ),
@@ -1053,7 +1245,7 @@ class SaleReceiptPdf {
                     'installment-receipt-${plan.id ?? justPaidInstallmentId}.pdf',
                 build: (() {
                   final cache = <String, Future<Uint8List>>{};
-                  return (format) {
+                  return (PdfPageFormat format) {
                     final key =
                         '${plan.id ?? justPaidInstallmentId}|$justPaidInstallmentId|${receiptInvoiceId ?? 0}|${format.width}x${format.height}|${format.marginLeft},${format.marginTop},${format.marginRight},${format.marginBottom}|${settings.hashCode}';
                     return cache.putIfAbsent(
@@ -1102,6 +1294,18 @@ class SaleReceiptPdf {
         : (receiptInvoiceId != null && receiptInvoiceId > 0
             ? InvoiceDeepLink.uriForInvoiceId(receiptInvoiceId)
             : 'تسديد دين آجل — ${_receiptSafe(customerDisplayName)}');
+
+    final qrTitle = customerId != null && customerId > 0
+        ? 'ملف العميل المدين'
+        : 'تفاصيل السند';
+    final qrSubtitle = customerId != null && customerId > 0
+        ? 'تفاصيل الدين والدفعات'
+        : (receiptInvoiceId != null && receiptInvoiceId > 0
+            ? 'امسح لفتح تفاصيل سند التحصيل في التطبيق'
+            : 'مرجع العملية');
+
+    final invForBarcode = receiptInvoiceId ?? 0;
+    final showDebtQr = s.receiptShowQr && qrPayload.isNotEmpty;
 
     final pdf = pw.Document();
     pdf.addPage(
@@ -1214,31 +1418,27 @@ class SaleReceiptPdf {
                     textDirection: pw.TextDirection.rtl,
                   ),
                 ],
-                pw.SizedBox(height: 16),
-                if (s.receiptShowQr) ...[
-                  pw.Center(
-                    child: pw.BarcodeWidget(
-                      barcode: bc.Barcode.qrCode(),
-                      data: qrPayload,
-                      width: 110,
-                      height: 110,
-                      drawText: false,
-                    ),
-                  ),
+                if (_receiptSafe(s.footerExtra).isNotEmpty) ...[
+                  pw.SizedBox(height: 10),
+                  pw.Divider(thickness: 0.5, color: PdfColors.grey500),
                   pw.SizedBox(height: 6),
-                  pw.Center(
-                    child: pw.Text(
-                      customerId != null && customerId > 0
-                          ? 'امسح لفتح شاشة ديون هذا العميل'
-                          : (receiptInvoiceId != null && receiptInvoiceId > 0
-                              ? 'امسح لفتح تفاصيل سند التحصيل في التطبيق'
-                              : 'مرجع العملية'),
+                  pw.Text(
+                    _receiptSafe(s.footerExtra),
                       style: pw.TextStyle(font: font, fontSize: 9),
                       textAlign: pw.TextAlign.center,
                       textDirection: pw.TextDirection.rtl,
                     ),
-                  ),
                 ],
+                ...SaleReceiptPdf._receiptCodesFooterRow(
+                  font: font,
+                  fontBold: fontBold,
+                  secondaryPayload: qrPayload,
+                  secondaryTitle: qrTitle,
+                  secondarySubtitle: qrSubtitle,
+                  showBarcode: s.receiptShowBarcode,
+                  showSecondaryQr: showDebtQr,
+                  barcodeInvoiceId: invForBarcode,
+                ),
               ],
             ),
           );
@@ -1268,14 +1468,24 @@ class SaleReceiptPdf {
       MaterialPageRoute<void>(
         fullscreenDialog: true,
         builder: (ctx) {
+          final w = MediaQuery.sizeOf(ctx).width;
+          final maxPage = math.min(w - 16, 920.0).clamp(200.0, w);
           return Directionality(
             textDirection: ui.TextDirection.rtl,
             child: Scaffold(
               appBar: AppBar(
+                leading: IconButton(
+                  icon: const Icon(Icons.close_rounded),
+                  tooltip: 'إغلاق',
+                  onPressed: () => Navigator.of(ctx).pop(),
+                ),
                 title: const Text('إيصال تسديد دين'),
               ),
-              body: printing.PdfPreview(
-                maxPageWidth: 720,
+              body: ColoredBox(
+                color: Theme.of(ctx).colorScheme.surface,
+                child: printing.PdfPreview(
+                  padding: const EdgeInsets.all(8),
+                  maxPageWidth: maxPage,
                 initialPageFormat: settings.pdfPageFormat,
                 canChangePageFormat: true,
                 canChangeOrientation: false,
@@ -1286,7 +1496,7 @@ class SaleReceiptPdf {
                     'debt-receipt-$paymentRowId${receiptInvoiceId != null ? '-$receiptInvoiceId' : ''}.pdf',
                 build: (() {
                   final cache = <String, Future<Uint8List>>{};
-                  return (format) {
+                  return (PdfPageFormat format) {
                     final key =
                         '$paymentRowId|${receiptInvoiceId ?? 0}|${customerId ?? 0}|${format.width}x${format.height}|${format.marginLeft},${format.marginTop},${format.marginRight},${format.marginBottom}|${settings.hashCode}';
                     return cache.putIfAbsent(
@@ -1306,6 +1516,7 @@ class SaleReceiptPdf {
                     );
                   };
                 })(),
+                ),
               ),
             ),
           );
@@ -1374,7 +1585,7 @@ class SaleReceiptPdf {
                     pdfFileName: 'receipt-${invoice.id ?? "sale"}.pdf',
                     build: (() {
                       final cache = <String, Future<Uint8List>>{};
-                      return (format) {
+                      return (PdfPageFormat format) {
                         final key =
                             '${invoice.id ?? "sale"}|${format.width}x${format.height}|${format.marginLeft},${format.marginTop},${format.marginRight},${format.marginBottom}|${settings.hashCode}';
                         return cache.putIfAbsent(
@@ -1688,7 +1899,7 @@ class SaleReceiptPdf {
                     'supplier-payment-$payoutRowId-$receiptInvoiceId.pdf',
                 build: (() {
                   final cache = <String, Future<Uint8List>>{};
-                  return (format) {
+                  return (PdfPageFormat format) {
                     final key =
                         '$payoutRowId|$receiptInvoiceId|${format.width}x${format.height}|${format.marginLeft},${format.marginTop},${format.marginRight},${format.marginBottom}|${settings.hashCode}';
                     return cache.putIfAbsent(

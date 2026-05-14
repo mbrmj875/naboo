@@ -20,14 +20,14 @@ class BarcodeInputLauncher {
   static Future<String?> captureBarcode(
     BuildContext context, {
     String title = 'التقاط باركود',
-    /// على **Android / iOS** مع [ScreenLayout.isHandsetForLayout]: نافذة صغيرة فوق البيع
+    /// على **Android / iOS** مع `phoneXS`/`phoneSM`: نافذة صغيرة فوق البيع
     /// بدل استبدال الشاشة بالكامل — أسرع ولا يفقد سياق السلة.
     bool preferCompactHandsetOverlay = false,
   }) async {
     if (useCamera(context)) {
       final compact = preferCompactHandsetOverlay &&
           isMobileOsBuild &&
-          ScreenLayout.of(context).isHandsetForLayout;
+          ScreenLayout.of(context).isPhoneVariant;
       if (compact) {
         // لوحة مسح قابلة للرفع/الخفض (مثل الصورة المطلوبة) بدون إغلاق بالسحب/الضغط خارجها.
         return showModalBottomSheet<String>(

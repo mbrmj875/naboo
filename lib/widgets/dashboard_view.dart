@@ -5,6 +5,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, listEquals;
+import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -13,6 +14,7 @@ import '../providers/auth_provider.dart';
 import '../models/recent_activity_entry.dart';
 import '../services/database_helper.dart';
 import '../services/product_repository.dart';
+import '../services/product_variants_repository.dart';
 import '../providers/dashboard_layout_provider.dart';
 import '../utils/iraqi_currency_format.dart';
 import '../utils/screen_layout.dart';
@@ -186,11 +188,23 @@ class _DashHeader extends StatelessWidget {
         final stackActions =
             sl.isHandsetForLayout || c.maxWidth < 520;
         final titleSize = stackActions
-            ? (sl.isNarrowWidth ? 17.0 : 18.5)
-            : (c.maxWidth > 900 ? 24.0 : 22.0);
+            ? (sl.isNarrowWidth ? 18.0 : 20.0)
+            : (c.maxWidth > 900 ? 26.0 : 23.0);
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Decorative gold accent
+            Container(
+              width: 32,
+              height: 3,
+              margin: const EdgeInsets.only(bottom: 14),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(2),
+                gradient: const LinearGradient(
+                  colors: [Color(0xFFB8960C), Color(0xFFF2D36B)],
+                ),
+              ),
+            ),
             Row(
               children: [
                 Expanded(
@@ -204,23 +218,24 @@ class _DashHeader extends StatelessWidget {
                         children: [
                           Text(
                             'مرحبًا بعودتك، $who',
-                            style: TextStyle(
+                            style: GoogleFonts.tajawal(
                               fontSize: titleSize,
-                              fontWeight: FontWeight.bold,
+                              fontWeight: FontWeight.w700,
                               color: text1,
-                              height: 1.15,
+                              height: 1.2,
                             ),
                           ),
-                          Text('👋', style: TextStyle(fontSize: titleSize * 0.9)),
+                          Text('👋', style: TextStyle(fontSize: titleSize * 0.85)),
                         ],
                       ),
-                      const SizedBox(height: 6),
+                      const SizedBox(height: 8),
                       Text(
                         "إليك ملخص أعمال اليوم",
-                        style: TextStyle(
-                          fontSize: stackActions ? 12.5 : 13.5,
+                        style: GoogleFonts.tajawal(
+                          fontSize: stackActions ? 13.0 : 14.0,
                           color: text2,
-                          height: 1.35,
+                          fontWeight: FontWeight.w400,
+                          height: 1.4,
                         ),
                       ),
                     ],
@@ -390,8 +405,12 @@ class _ChartsRowState extends State<_ChartsRow> {
         return LayoutBuilder(
           builder: (context, c) {
             final sl = ScreenLayout.of(context);
+            // 2026-05 (Pilot 1-هـ): قرار اللوحات العائمة (drag/resize) صار يعتمد
+            // على DeviceVariant بدل breakpoint رقمي 800. تظهر اللوحات العائمة
+            // فقط في desktopSM/LG (≥1024dp). في tabletLG وما دون نستخدم تخطيطاً
+            // عمودياً سلساً (fluid) لأنه أنسب للمس وأكثر استقراراً.
             final useFluidLayout =
-                sl.isHandsetForLayout || c.maxWidth < 800;
+                sl.layoutVariant.index < DeviceVariant.desktopSM.index;
             if (useFluidLayout) {
               return _buildFluidDashboardPanels(
                 context,
@@ -1309,7 +1328,7 @@ class _LineChartTooltipLayer extends StatelessWidget {
                 const SizedBox(height: 4),
                 Text(
                   primaryLine,
-                  style: TextStyle(
+                  style: const TextStyle(
                     fontSize: 12,
                     color: _kTeal,
                     fontWeight: FontWeight.w600,
@@ -1559,7 +1578,7 @@ class _BarChartCard extends StatelessWidget {
                     runSpacing: 6,
                     crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
-                      _LegDot(color: _kTeal, label: 'الإيرادات'),
+                      const _LegDot(color: _kTeal, label: 'الإيرادات'),
                       _LegDot(color: expLeg, label: 'المصروفات'),
                     ],
                   ),
@@ -1680,7 +1699,7 @@ class _DropBtn extends StatelessWidget {
         SizedBox(
           width: 22,
           child: selected
-              ? Icon(Icons.check_rounded, size: 18, color: _kTeal)
+              ? const Icon(Icons.check_rounded, size: 18, color: _kTeal)
               : null,
         ),
         Expanded(child: Text(text)),
@@ -1884,6 +1903,35 @@ class _PinnedQuickGroup {
   }
 }
 
+/// شارة «خدمة فنية» لمربّعات المثبّتات — يطابق أسلوب المثبّتات في `WideHomeProductRail`.
+Widget _dashboardTechnicalServiceChip({required bool isDark}) {
+  return Container(
+    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+    decoration: BoxDecoration(
+      color: isDark
+          ? const Color(0xFF0F172A).withValues(alpha: 0.55)
+          : const Color(0xFF2563EB).withValues(alpha: 0.10),
+      borderRadius: BorderRadius.circular(999),
+      border: Border.all(
+        color: isDark
+            ? Colors.white.withValues(alpha: 0.12)
+            : const Color(0xFF2563EB).withValues(alpha: 0.22),
+      ),
+    ),
+    child: Text(
+      'خدمة فنية',
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      textAlign: TextAlign.center,
+      style: TextStyle(
+        fontSize: 9.5,
+        fontWeight: FontWeight.w800,
+        color: isDark ? Colors.white70 : const Color(0xFF1D4ED8),
+      ),
+    ),
+  );
+}
+
 /// منتجات مثبّتة للوصول السريع إلى «بيع جديد» مع السطر الجاهز.
 class _PinnedProductsRail extends StatefulWidget {
   const _PinnedProductsRail({
@@ -1902,6 +1950,8 @@ class _PinnedProductsRailState extends State<_PinnedProductsRail> {
   final ProductRepository _repo = ProductRepository();
   List<Map<String, dynamic>> _items = const [];
   bool _loading = true;
+  final Map<int, int> _variantStockSumByProductId = {};
+  final Set<int> _variantStockLoading = {};
   static const double _minGridHeight = 200;
   static const double _maxGridHeight = 800;
   double _gridHeight = 280;
@@ -2125,6 +2175,43 @@ class _PinnedProductsRailState extends State<_PinnedProductsRail> {
     });
   }
 
+  void _ensureVariantStockSum(int productId) {
+    if (productId <= 0) return;
+    if (_variantStockSumByProductId.containsKey(productId)) return;
+    if (_variantStockLoading.contains(productId)) return;
+    _variantStockLoading.add(productId);
+    unawaited(() async {
+      try {
+        final vars =
+            await ProductVariantsRepository.instance.getVariantsForProduct(productId);
+        final sum = vars.fold<int>(
+          0,
+          (s, r) => s + ((r['quantity'] as num?)?.toInt() ?? 0),
+        );
+        if (!mounted) return;
+        setState(() => _variantStockSumByProductId[productId] = sum);
+      } catch (_) {
+        if (!mounted) return;
+        setState(() => _variantStockSumByProductId[productId] = 0);
+      } finally {
+        _variantStockLoading.remove(productId);
+      }
+    }());
+  }
+
+  double _effectiveQtyForPinned(Map<String, dynamic> p) {
+    final track = (p['trackInventory'] as int?) != 0;
+    if (!track) return 0;
+    final pid = (p['id'] as num?)?.toInt() ?? 0;
+    final rawQty = ((p['qty'] as num?)?.toDouble() ?? 0);
+    if (pid > 0 && rawQty <= 0) {
+      _ensureVariantStockSum(pid);
+      final sum = _variantStockSumByProductId[pid];
+      if (sum != null) return sum.toDouble();
+    }
+    return rawQty;
+  }
+
   Map<String, dynamic> _presetFor(Map<String, dynamic> p) {
     final id = (p['id'] as num?)?.toInt() ?? 0;
     final name = (p['name'] as String?)?.trim() ?? '';
@@ -2133,6 +2220,8 @@ class _PinnedProductsRailState extends State<_PinnedProductsRail> {
     final trackInv = (p['trackInventory'] as num?)?.toInt() == 1;
     final allowNeg = (p['allowNegativeStock'] as num?)?.toInt() == 1;
     final baseKind = (p['stockBaseKind'] as num?)?.toInt() ?? 0;
+    final isService = (p['isService'] as num?)?.toInt() ?? 0;
+    final serviceKind = (p['serviceKind'] as String?)?.trim();
     return {
       'name': name.isEmpty ? 'منتج' : name,
       'sell': sell,
@@ -2141,32 +2230,18 @@ class _PinnedProductsRailState extends State<_PinnedProductsRail> {
       'trackInventory': trackInv,
       'allowNegativeStock': allowNeg,
       'stockBaseKind': baseKind,
+      'isService': isService,
+      if (serviceKind != null && serviceKind.isNotEmpty)
+        'serviceKind': serviceKind,
     };
-  }
-
-  static String _stockLine(Map<String, dynamic> p) {
-    final track = (p['trackInventory'] as int?) != 0;
-    if (!track) return 'غير متتبّع';
-    final q = p['qty'];
-    if (q == null) return 'متبقي: —';
-    final n = (q as num).toDouble();
-    if (n.abs() < 1e-9) return 'متبقي: 0';
-    final s = (n % 1).abs() < 1e-6
-        ? IraqiCurrencyFormat.formatInt(n)
-        : IraqiCurrencyFormat.formatDecimal2(n);
-    return 'متبقي: $s';
   }
 
   static bool _tracksInventory(Map<String, dynamic> p) =>
       (p['trackInventory'] as int?) != 0;
 
-  static num? _qtyNum(Map<String, dynamic> p) => p['qty'] as num?;
-
   Color _stockColor(Map<String, dynamic> p, Color muted) {
     if (!_tracksInventory(p)) return muted;
-    final q = _qtyNum(p);
-    if (q == null) return muted;
-    final n = q.toDouble();
+    final n = _effectiveQtyForPinned(p);
     if (n <= 0) return const Color(0xFFEF4444); // red-500
     if (n < 5) return const Color(0xFFF59E0B); // amber-500
     return muted;
@@ -2370,7 +2445,12 @@ class _PinnedProductsRailState extends State<_PinnedProductsRail> {
                     final p = filtered[i];
                     final name = (p['name'] as String?)?.trim() ?? 'منتج';
                     final sell = (p['sellPrice'] as num?)?.toDouble() ?? 0;
-                    final stock = _stockLine(p);
+                    final isService =
+                        ((p['isService'] as num?)?.toInt() ?? 0) == 1;
+                    final eff = _effectiveQtyForPinned(p);
+                    final stock = _tracksInventory(p)
+                        ? 'متبقي: ${eff.abs() < 1e-9 ? '0' : IraqiCurrencyFormat.formatDecimal2(eff)}'
+                        : 'غير متتبّع';
                     final stockColor = _stockColor(p, text2);
                     return Material(
                       color: Colors.transparent,
@@ -2444,8 +2524,23 @@ class _PinnedProductsRailState extends State<_PinnedProductsRail> {
                                             textAlign: TextAlign.center,
                                             style: priceStyle,
                                           ),
-                                          if (!tight) const Spacer(),
-                                          if (!tight)
+                                          if (isService)
+                                            Padding(
+                                              padding: EdgeInsets.only(
+                                                top: tight ? 2 : 0,
+                                              ),
+                                              child: Align(
+                                                alignment: Alignment.bottomCenter,
+                                                child: FittedBox(
+                                                  child:
+                                                      _dashboardTechnicalServiceChip(
+                                                    isDark: widget.isDark,
+                                                  ),
+                                                ),
+                                              ),
+                                            )
+                                          else if (!tight) ...[
+                                            const Spacer(),
                                             Text(
                                               stock,
                                               maxLines: 1,
@@ -2453,6 +2548,7 @@ class _PinnedProductsRailState extends State<_PinnedProductsRail> {
                                               textAlign: TextAlign.center,
                                               style: stockStyle,
                                             ),
+                                          ],
                                         ],
                                       );
                                     },
@@ -2514,13 +2610,16 @@ BoxDecoration _cardDecor(BuildContext context, bool isDark) {
   final cs = Theme.of(context).colorScheme;
   return BoxDecoration(
     color: cs.surface,
-    borderRadius: BorderRadius.circular(12),
-    border: Border.all(color: cs.outline.withValues(alpha: 0.4)),
+    borderRadius: BorderRadius.circular(14),
+    border: Border.all(
+      color: cs.outlineVariant.withValues(alpha: isDark ? 0.45 : 0.6),
+      width: 1,
+    ),
     boxShadow: [
       BoxShadow(
-        color: Colors.black.withValues(alpha: isDark ? 0.2 : 0.06),
-        blurRadius: 10,
-        offset: const Offset(0, 2),
+        color: Colors.black.withValues(alpha: isDark ? 0.18 : 0.05),
+        blurRadius: isDark ? 12 : 8,
+        offset: const Offset(0, 3),
       ),
     ],
   );

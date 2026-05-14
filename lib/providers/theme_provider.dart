@@ -26,9 +26,9 @@ class ThemeProvider extends ChangeNotifier {
   ThemeData get themeData {
     if (_isDarkMode) {
       return ThemeData.dark().copyWith(
-        colorScheme: ColorScheme.dark(
-          primary: const Color(0xFF6C63FF),
-          secondary: const Color(0xFF3B82F6),
+        colorScheme: const ColorScheme.dark(
+          primary: Color(0xFF6C63FF),
+          secondary: Color(0xFF3B82F6),
         ),
         scaffoldBackgroundColor: const Color(0xFF121212),
         appBarTheme: const AppBarTheme(
@@ -41,9 +41,9 @@ class ThemeProvider extends ChangeNotifier {
       );
     } else {
       return ThemeData.light().copyWith(
-        colorScheme: ColorScheme.light(
-          primary: const Color(0xFF6C63FF),
-          secondary: const Color(0xFF3B82F6),
+        colorScheme: const ColorScheme.light(
+          primary: Color(0xFF6C63FF),
+          secondary: Color(0xFF3B82F6),
         ),
         scaffoldBackgroundColor: Colors.white,
         appBarTheme: const AppBarTheme(

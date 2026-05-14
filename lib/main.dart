@@ -1,12 +1,16 @@
 import 'dart:async' show unawaited;
 
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
+import 'dart:ui' show PlatformDispatcher;
+import 'utils/debug_ndjson_logger.dart';
 import 'storage/sqlite_desktop_init.dart'
     if (dart.library.html) 'storage/sqlite_desktop_init_web.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'services/cloud_sync_service.dart';
+import 'services/sync_queue_service.dart';
 import 'services/database_helper.dart';
 import 'services/system_notification_service.dart';
 import 'services/license_service.dart';
@@ -36,6 +40,7 @@ import 'navigation/app_root_navigator_key.dart';
 import 'services/mac_style_settings_prefs.dart';
 import 'services/tenant_context_service.dart';
 import 'services/supabase_config.dart';
+import 'services/auth/secure_session_storage.dart';
 import 'screens/auth/device_kicked_out_screen.dart';
 import 'screens/splash_screen.dart';
 import 'screens/onboarding/business_setup_wizard_screen.dart';
@@ -74,21 +79,121 @@ void _registerRemoteDeviceRevokeHandler() {
   };
 }
 
+// Step 23: ربط Kill Switch (tenant_access UPDATE من Realtime).
+// نُعيد استعمال DeviceKickedOutScreen كشاشة "تم إيقاف الحساب" — السلوك متطابق
+// (logout + قفل الواجهة). يمكن لاحقاً عرض شاشة مخصّصة لو احتجنا.
+bool _tenantRevokeHandlerRegistered = false;
+bool _tenantRevokeInProgress = false;
+
+void _registerTenantRevokeHandler() {
+  if (_tenantRevokeHandlerRegistered) return;
+  _tenantRevokeHandlerRegistered = true;
+  CloudSyncService.instance.onTenantRevoked = () async {
+    if (_tenantRevokeInProgress) return;
+    _tenantRevokeInProgress = true;
+    try {
+      final nav = appRootNavigatorKey.currentState;
+      final ctx = appRootNavigatorKey.currentContext;
+      if (nav == null || ctx == null || !nav.mounted) return;
+      final auth = Provider.of<AuthProvider>(ctx, listen: false);
+      await auth.logout();
+      if (!nav.mounted) return;
+      await nav.pushAndRemoveUntil(
+        MaterialPageRoute<void>(
+          builder: (_) => const DeviceKickedOutScreen(),
+        ),
+        (_) => false,
+      );
+    } finally {
+      _tenantRevokeInProgress = false;
+    }
+  };
+}
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  if (kDebugMode) {
+    // #region agent log
+    DebugNdjsonLogger.log(
+      runId: 'pre-fix',
+      hypothesisId: 'H0',
+      location: 'main.dart:main',
+      message: 'debug session started',
+      data: const {},
+    );
+    // #endregion
+
+    FlutterError.onError = (FlutterErrorDetails details) {
+      FlutterError.presentError(details);
+      debugPrint('FlutterError: ${details.exceptionAsString()}');
+
+      // #region agent log
+      DebugNdjsonLogger.log(
+        runId: 'pre-fix',
+        hypothesisId: 'H0',
+        location: 'main.dart:FlutterError.onError',
+        message: 'FlutterError captured',
+        data: {
+          'exception': details.exceptionAsString(),
+          'library': details.library,
+          'context': details.context?.toDescription(),
+          'stack': details.stack?.toString(),
+        },
+      );
+      // #endregion
+    };
+
+    // Catch errors that bypass FlutterError (async / platform dispatcher).
+    // #region agent log
+    PlatformDispatcher.instance.onError = (error, stack) {
+      DebugNdjsonLogger.log(
+        runId: 'pre-fix',
+        hypothesisId: 'H0',
+        location: 'main.dart:PlatformDispatcher.onError',
+        message: 'uncaught error captured',
+        data: {'error': error.toString(), 'stack': stack.toString()},
+      );
+      return false;
+    };
+    // #endregion
+  }
   initSqliteForPlatform();
+  // Fail fast if --dart-define values are missing (or assertions stripped in release).
+  SupabaseConfig.assertConfigured();
   await Supabase.initialize(
     url: SupabaseConfig.url,
     anonKey: SupabaseConfig.anonKey,
     // Offline-friendly: prevent noisy infinite refresh retries when DNS/Internet is down.
     // We explicitly trigger sync/bootstrap from our code paths when needed.
-    authOptions: const FlutterAuthClientOptions(
+    // Token persisted in OS-level secure storage (Keychain / EncryptedSharedPreferences / DPAPI)
+    // instead of plain SharedPreferences. Also auto-migrates any legacy token on first run.
+    authOptions: FlutterAuthClientOptions(
       autoRefreshToken: false,
+      localStorage: SecureLocalStorage(
+        persistSessionKey:
+            supabasePersistSessionKeyFromUrl(SupabaseConfig.url),
+      ),
     ),
   );
+  if (kDebugMode) {
+    debugPrint('Before runStartupCriticalMigrations');
+  }
   await DatabaseHelper().runStartupCriticalMigrations();
+  if (kDebugMode) {
+    debugPrint('After runStartupCriticalMigrations / Before LicenseService');
+  }
   await LicenseService.instance.initialize();
+  if (kDebugMode) {
+    debugPrint('After LicenseService / Before SyncQueueService');
+  }
+  SyncQueueService.instance.initialize();
+  if (kDebugMode) {
+    debugPrint('After SyncQueueService / Before SystemNotificationService');
+  }
   await SystemNotificationService.instance.initialize();
+  if (kDebugMode) {
+    debugPrint('After SystemNotificationService / Before runApp');
+  }
   unawaited(MacStyleSettingsPrefs.isMacStylePanelEnabled());
   runApp(const MyApp());
 }
@@ -136,8 +241,11 @@ class MyApp extends StatelessWidget {
                 themeMode: themeProvider.isDarkMode
                     ? ThemeMode.dark
                     : ThemeMode.light,
+                themeAnimationDuration: const Duration(milliseconds: 460),
+                themeAnimationCurve: Curves.easeOutCubic,
                 builder: (context, child) {
                   _registerRemoteDeviceRevokeHandler();
+                  _registerTenantRevokeHandler();
                   LicenseService.instance.attachOpenOpsRegistry(
                     Provider.of<OpenOpsRegistry>(context, listen: false),
                   );
@@ -192,7 +300,7 @@ class MyApp extends StatelessWidget {
                         ? (sz.width - 32).clamp(280.0, 520.0)
                         : null,
                   );
-                  return Theme(
+                  final themedContent = Theme(
                     data: base.copyWith(
                       visualDensity: compactUi
                           ? VisualDensity.compact
@@ -200,6 +308,10 @@ class MyApp extends StatelessWidget {
                       snackBarTheme: snackMerged,
                     ),
                     child: content,
+                  );
+                  return _ThemeModeTransitionShell(
+                    isDarkMode: themeProvider.isDarkMode,
+                    child: themedContent,
                   );
                 },
                 localizationsDelegates: const [
@@ -239,6 +351,75 @@ class MyApp extends StatelessWidget {
           );
         },
       ),
+    );
+  }
+}
+
+class _ThemeModeTransitionShell extends StatefulWidget {
+  const _ThemeModeTransitionShell({
+    required this.isDarkMode,
+    required this.child,
+  });
+
+  final bool isDarkMode;
+  final Widget child;
+
+  @override
+  State<_ThemeModeTransitionShell> createState() =>
+      _ThemeModeTransitionShellState();
+}
+
+class _ThemeModeTransitionShellState extends State<_ThemeModeTransitionShell> {
+  bool _showTransition = false;
+
+  @override
+  void didUpdateWidget(covariant _ThemeModeTransitionShell oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.isDarkMode == widget.isDarkMode) return;
+
+    final disableAnimations =
+        MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    if (disableAnimations) return;
+
+    setState(() => _showTransition = true);
+    unawaited(Future<void>.delayed(const Duration(milliseconds: 520), () {
+      if (!mounted) return;
+      setState(() => _showTransition = false);
+    }));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final overlayColor = widget.isDarkMode
+        ? const Color(0xFF0F172A)
+        : const Color(0xFFFFFBEB);
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        widget.child,
+        IgnorePointer(
+          child: AnimatedOpacity(
+            opacity: _showTransition ? 0.18 : 0,
+            duration: Duration(milliseconds: _showTransition ? 160 : 360),
+            curve: Curves.easeOutCubic,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: RadialGradient(
+                  center: AlignmentDirectional.topEnd,
+                  radius: 1.15,
+                  colors: [
+                    overlayColor.withValues(alpha: 0.95),
+                    overlayColor.withValues(alpha: 0.18),
+                    overlayColor.withValues(alpha: 0),
+                  ],
+                  stops: const [0, 0.45, 1],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

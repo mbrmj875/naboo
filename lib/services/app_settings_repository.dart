@@ -12,8 +12,19 @@ class AppSettingsRepository {
 
   Future<Database> get _db async => _dbHelper.database;
 
+  Future<void> _ensureSettingsTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS app_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT,
+        updatedAt TEXT NOT NULL
+      )
+    ''');
+  }
+
   Future<String?> get(String key) async {
     final db = await _db;
+    await _ensureSettingsTable(db);
     final rows = await db.query(
       'app_settings',
       columns: ['value'],
@@ -31,6 +42,7 @@ class AppSettingsRepository {
 
   Future<void> set(String key, String value) async {
     final db = await _db;
+    await _ensureSettingsTable(db);
     final now = DateTime.now().toIso8601String();
     await db.insert('app_settings', {
       'key': key,
@@ -93,7 +105,7 @@ class BarcodeSettingsData {
   final double weightDivisor;
   final double currencyDivisor;
 
-  static BarcodeSettingsData defaults() => BarcodeSettingsData(
+  static BarcodeSettingsData defaults() => const BarcodeSettingsData(
     standard: 'code128',
     weightEmbedEnabled: false,
     embedPattern: 'XXXXXXXXWWWWWWPPPPN',

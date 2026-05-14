@@ -19,15 +19,24 @@ import '../../providers/notification_provider.dart';
 import '../../services/app_settings_repository.dart';
 import '../../services/inventory_policy_settings.dart';
 import '../../services/inventory_product_settings.dart';
+import '../../services/product_repository.dart';
+import '../../services/product_variants_repository.dart';
+import '../../services/tenant_context_service.dart';
+import '../../services/business_setup_settings.dart';
 import '../../theme/app_corner_style.dart';
+import '../../widgets/app_color_picker_dialog.dart';
 import '../../widgets/barcode_input_launcher.dart';
 import '../../utils/app_logger.dart';
+import '../../utils/debug_ndjson_logger.dart';
 import '../../utils/barcode_prefill.dart';
+import '../../utils/color_name_ar.dart';
 import '../../utils/iraqi_currency_format.dart';
 import '../../utils/numeric_format.dart';
 import '../../utils/screen_layout.dart';
 import '../../widgets/inputs/app_input.dart';
 import '../../widgets/inputs/app_price_input.dart';
+import '../../widgets/variants/variant_size_picker_sheet.dart';
+import '../../navigation/app_route_observer.dart';
 
 const Color _kGreen = Color(0xFF15803D);
 const String _hintIqd = '0 د.ع';
@@ -58,6 +67,50 @@ class _ExtraUnitVariantDraft {
   }
 }
 
+class _VariantSizeDraft {
+  _VariantSizeDraft({
+    String size = '',
+    int qty = 0,
+    String barcode = '',
+  })  : sizeCtrl = TextEditingController(text: size),
+        qtyCtrl = TextEditingController(text: '$qty'),
+        barcodeCtrl = TextEditingController(text: barcode);
+
+  final TextEditingController sizeCtrl;
+  final TextEditingController qtyCtrl;
+  final TextEditingController barcodeCtrl;
+
+  void dispose() {
+    sizeCtrl.dispose();
+    qtyCtrl.dispose();
+    barcodeCtrl.dispose();
+  }
+}
+
+class _VariantColorDraft {
+  _VariantColorDraft({
+    String name = '',
+    String hex = '',
+    List<_VariantSizeDraft>? sizes,
+  })  : nameCtrl = TextEditingController(text: name),
+        hexCtrl = TextEditingController(text: hex),
+        sizes = sizes ?? <_VariantSizeDraft>[];
+
+  final TextEditingController nameCtrl;
+  final TextEditingController hexCtrl;
+  final List<_VariantSizeDraft> sizes;
+
+  bool nameManuallyEdited = false;
+
+  void dispose() {
+    nameCtrl.dispose();
+    hexCtrl.dispose();
+    for (final s in sizes) {
+      s.dispose();
+    }
+  }
+}
+
 /// إضافة منتج جديد — تخطيط احترافي متجاوب، رمز منتج (SKU) تلقائي `N{tenantId}-…`، حقول مرتبطة بقاعدة البيانات.
 class AddProductScreen extends StatefulWidget {
   const AddProductScreen({
@@ -75,8 +128,11 @@ class AddProductScreen extends StatefulWidget {
   State<AddProductScreen> createState() => _AddProductScreenState();
 }
 
-class _AddProductScreenState extends State<AddProductScreen> {
+class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
   final _formKey = GlobalKey<FormState>();
+
+  final ProductRepository _productRepo = ProductRepository();
+  final ProductVariantsRepository _variantsRepo = ProductVariantsRepository.instance;
 
   final _nameCtrl = TextEditingController();
   final _descCtrl = TextEditingController();
@@ -106,10 +162,13 @@ class _AddProductScreenState extends State<AddProductScreen> {
 
   int? _warehouseId;
   int _stockBaseKind = 0; // 0 عدد (قطعة) | 1 وزن (كيلوغرام أساس المخزون)
+  int _stockTypeUi = 0; // 0 عدد | 1 وزن | 2 ملابس (ألوان ومقاسات)
   String _discountType = '%';
   String _taxMode = 'معفى';
 
   bool _trackInventory = true;
+  bool _multiVariantEnabled = false;
+  final List<_VariantColorDraft> _colorDrafts = [];
 
   bool _saving = false;
   bool _loadingRefs = true;
@@ -118,6 +177,8 @@ class _AddProductScreenState extends State<AddProductScreen> {
   List<String> _brandOptions = [];
   List<Map<String, dynamic>> _warehouseRows = [];
   List<String> _supplierOptions = [];
+  bool _enableWeightSales = true;
+  bool _enableClothingVariants = false;
 
   final List<_ExtraUnitVariantDraft> _extraUnitVariants = [];
 
@@ -134,6 +195,112 @@ class _AddProductScreenState extends State<AddProductScreen> {
   final FocusNode _focusDiscount = FocusNode();
   final FocusNode _focusMin = FocusNode();
   final FocusNode _focusQty = FocusNode();
+
+  bool _hasUnsavedChanges() {
+    if (_saving) return false;
+
+    bool dirtyText(TextEditingController c, {String? ignore}) {
+      final t = c.text.trim();
+      if (ignore != null && t == ignore) return false;
+      return t.isNotEmpty;
+    }
+
+    if (dirtyText(_nameCtrl)) return true;
+    if (dirtyText(_descCtrl)) return true;
+    if (dirtyText(_barcodeCtrl)) return true;
+    if (dirtyText(_supplierCodeCtrl)) return true;
+    if (dirtyText(_categoryCtrl)) return true;
+    if (dirtyText(_brandCtrl)) return true;
+    if (dirtyText(_supplierCtrl)) return true;
+    if (dirtyText(_buyPriceCtrl)) return true;
+    if (dirtyText(_sellPriceCtrl)) return true;
+    if (dirtyText(_minSellPriceCtrl)) return true;
+    if (dirtyText(_discountCtrl)) return true;
+    if (dirtyText(_customTaxCtrl)) return true;
+    if (dirtyText(_qtyCtrl)) return true;
+    if (dirtyText(_lowStockCtrl, ignore: '0')) return true;
+    if (dirtyText(_internalNotesCtrl)) return true;
+    if (dirtyText(_tagsCtrl)) return true;
+    if (dirtyText(_netWeightGramsCtrl)) return true;
+    if (dirtyText(_mfgDateCtrl)) return true;
+    if (dirtyText(_expDateCtrl)) return true;
+    if (dirtyText(_expiryAlertDaysCtrl, ignore: '14')) return true;
+
+    if (_grade != null && _grade!.trim().isNotEmpty) return true;
+    if (_warehouseId != null) return true;
+    if (_stockBaseKind != 0) return true;
+    if (_stockTypeUi != 0) return true;
+    if (_discountType != '%') return true;
+    if (_taxMode != 'معفى') return true;
+    if (!_trackInventory) return true;
+    if (_multiVariantEnabled) return true;
+    if (_colorDrafts.isNotEmpty) return true;
+    if (_extraUnitVariants.isNotEmpty) return true;
+
+    return false;
+  }
+
+  Future<void> _handleLeaveAttemptFromRouteChange() async {
+    if (!mounted) return;
+    if (_saving) return;
+    if (!_hasUnsavedChanges()) return;
+
+    // ظهر مسار آخر فوق هذه الشاشة (مثلاً من القائمة الجانبية).
+    // نسأل المستخدم: حفظ/مغادرة/إلغاء. عند الإلغاء نرجع لهذه الشاشة فوراً.
+    final action = await _confirmLeaveIfDirty();
+    if (!mounted) return;
+    if (action == 0) {
+      final myRoute = ModalRoute.of(context);
+      if (myRoute != null) {
+        Navigator.of(context).popUntil((r) => r == myRoute);
+      }
+      return;
+    }
+    if (action == 2) {
+      // حفظ بدون إغلاق (لأننا فعلياً انتقلنا لشاشة أخرى).
+      await _submit(popAfter: false);
+    }
+  }
+
+  Future<int> _confirmLeaveIfDirty() async {
+    // 0 = cancel, 1 = discard, 2 = save
+    if (!_hasUnsavedChanges()) return 1;
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final res = await showDialog<int>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: Row(
+            children: [
+              CircleAvatar(
+                backgroundColor: cs.primary.withValues(alpha: 0.12),
+                child: Icon(Icons.save_outlined, color: cs.primary),
+              ),
+              const SizedBox(width: 10),
+              const Expanded(child: Text('تغييرات غير محفوظة')),
+            ],
+          ),
+          content: const Text('لم تقم بحفظ المنتج. هل تريد الحفظ قبل المغادرة؟'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, 0),
+              child: const Text('إلغاء'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, 1),
+              child: const Text('مغادرة بدون حفظ'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, 2),
+              child: const Text('حفظ المنتج'),
+            ),
+          ],
+        );
+      },
+    );
+    return res ?? 0;
+  }
   final FocusNode _focusLow = FocusNode();
 
   String? _imagePath;
@@ -216,6 +383,166 @@ class _AddProductScreenState extends State<AddProductScreen> {
   double _parseQuantity(String text) {
     final t = text.trim().replaceAll(',', '.');
     return double.tryParse(t) ?? 0;
+  }
+
+  int _parseNonNegativeInt(String raw) {
+    final t = raw.trim();
+    final n = int.tryParse(t);
+    return (n == null || n < 0) ? -1 : n;
+  }
+
+  int _totalQtyAllVariants() {
+    var sum = 0;
+    for (final c in _colorDrafts) {
+      for (final s in c.sizes) {
+        final q = _parseNonNegativeInt(s.qtyCtrl.text);
+        if (q > 0) sum += q;
+      }
+    }
+    return sum;
+  }
+
+  int _totalQtyForColor(_VariantColorDraft c) {
+    var sum = 0;
+    for (final s in c.sizes) {
+      final q = _parseNonNegativeInt(s.qtyCtrl.text);
+      if (q > 0) sum += q;
+    }
+    return sum;
+  }
+
+  String _variantsSummaryLine() {
+    final colors = _colorDrafts.length;
+    var sizes = 0;
+    for (final c in _colorDrafts) {
+      sizes += c.sizes.length;
+    }
+    return 'ألوان: $colors • مقاسات: $sizes • إجمالي: ${_totalQtyAllVariants()}';
+  }
+
+  Future<void> _openVariantsEditor() async {
+    // #region agent log
+    DebugNdjsonLogger.log(
+      runId: 'pre-fix',
+      hypothesisId: 'H3',
+      location: 'add_product_screen.dart:_openVariantsEditor',
+      message: 'opening variants editor bottom sheet',
+      data: {'mounted': mounted},
+    );
+    // #endregion
+
+    await showModalBottomSheet<void>(
+      context: context,
+      useSafeArea: true,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (ctx) {
+        final cs = Theme.of(ctx).colorScheme;
+        return Directionality(
+          textDirection: TextDirection.rtl,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final screenH = MediaQuery.sizeOf(ctx).height;
+              final targetH = (screenH * 0.92).clamp(420.0, 900.0);
+              final maxH = constraints.maxHeight.isFinite
+                  ? constraints.maxHeight
+                  : targetH;
+              final sheetH = targetH > maxH ? maxH : targetH;
+
+              // #region agent log
+              DebugNdjsonLogger.log(
+                runId: 'pre-fix',
+                hypothesisId: 'H2',
+                location:
+                    'add_product_screen.dart:_openVariantsEditor:LayoutBuilder',
+                message: 'variants editor sheet constraints + computed height',
+                data: {
+                  'constraints.maxHeight': constraints.maxHeight,
+                  'constraints.hasBoundedHeight': constraints.hasBoundedHeight,
+                  'screenH': screenH,
+                  'targetH': targetH,
+                  'sheetH': sheetH,
+                },
+              );
+              // #endregion
+
+              return SizedBox(
+                height: sheetH,
+                child: StatefulBuilder(
+                  builder: (context, sheetSetState) {
+                    return Material(
+                      color: cs.surface,
+                      child: Column(
+                        children: [
+                          Padding(
+                            padding: const EdgeInsetsDirectional.fromSTEB(
+                              16,
+                              8,
+                              16,
+                              8,
+                            ),
+                            child: Row(
+                              children: [
+                                const Expanded(
+                                  child: Text(
+                                    'الألوان والمقاسات',
+                                    style:
+                                        TextStyle(fontWeight: FontWeight.w900),
+                                  ),
+                                ),
+                                TextButton(
+                                  onPressed: () => Navigator.pop(ctx),
+                                  child: const Text('إغلاق'),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const Divider(height: 1),
+                          Expanded(
+                            child: SingleChildScrollView(
+                              padding: const EdgeInsetsDirectional.fromSTEB(
+                                16,
+                                12,
+                                16,
+                                24,
+                              ),
+                              child: _buildVariantsSection(
+                                ctx,
+                                setStateOverride: sheetSetState,
+                              ),
+                            ),
+                          ),
+                          SafeArea(
+                            top: false,
+                            child: Padding(
+                              padding: const EdgeInsetsDirectional.fromSTEB(
+                                16,
+                                10,
+                                16,
+                                16,
+                              ),
+                              child: SizedBox(
+                                width: double.infinity,
+                                child: FilledButton(
+                                  onPressed: () => Navigator.pop(ctx),
+                                  child: const Text('تم'),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              );
+            },
+          ),
+        );
+      },
+    );
+    if (!mounted) return;
+    setState(() {}); // تحديث الملخص بعد الإغلاق
   }
 
   double _parseDiscountValue() {
@@ -339,6 +666,9 @@ class _AddProductScreenState extends State<AddProductScreen> {
       final policySettings = await InventoryPolicySettingsData.load(
         AppSettingsRepository.instance,
       );
+      final bizSettings = await BusinessSetupSettingsData.load(
+        AppSettingsRepository.instance,
+      );
       if (!mounted) return;
       setState(() {
         _productCodeHint = data.productCodeHint;
@@ -348,6 +678,8 @@ class _AddProductScreenState extends State<AddProductScreen> {
         _supplierOptions = data.suppliers;
         _uiSettings = uiSettings;
         _policy = policySettings;
+        _enableWeightSales = bizSettings.enableWeightSales;
+        _enableClothingVariants = bizSettings.enableClothingVariants;
         _barcodeStandard = bcSettings.standard;
         _warehouseId = null;
         _trackInventory = uiSettings.addDefaultTrackInventory;
@@ -491,6 +823,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
 
   @override
   void dispose() {
+    homeInnerRouteObserver.unsubscribe(this);
     _buyPriceCtrl.removeListener(_onBuyPriceChangedForCostSuggest);
     _sellPriceCtrl.removeListener(_onSellOrMinManualEdit);
     _minSellPriceCtrl.removeListener(_onSellOrMinManualEdit);
@@ -531,6 +864,9 @@ class _AddProductScreenState extends State<AddProductScreen> {
     _expiryAlertDaysCtrl.dispose();
     for (final v in _extraUnitVariants) {
       v.dispose();
+    }
+    for (final c in _colorDrafts) {
+      c.dispose();
     }
     super.dispose();
     // _grade is a String? — no dispose needed
@@ -746,6 +1082,51 @@ class _AddProductScreenState extends State<AddProductScreen> {
       }
     }
 
+    String? validateVariantDrafts() {
+      if (!_multiVariantEnabled) return null;
+      if (_colorDrafts.isEmpty) {
+        return 'أضف لوناً واحداً على الأقل.';
+      }
+
+      final seenBarcodes = <String>{};
+      for (final c in _colorDrafts) {
+        final colorName = c.nameCtrl.text.trim();
+        if (colorName.isEmpty) return 'اسم اللون مطلوب.';
+        if (c.sizes.isEmpty) return 'أضف مقاساً واحداً على الأقل لكل لون.';
+
+        final seenSizesInColor = <String>{};
+        for (final s in c.sizes) {
+          final size = s.sizeCtrl.text.trim();
+          if (size.isEmpty) return 'حقل المقاس مطلوب.';
+          final key = size.toLowerCase();
+          if (!seenSizesInColor.add(key)) {
+            return 'المقاس "$size" مكرر داخل اللون "$colorName".';
+          }
+
+          final q = _parseNonNegativeInt(s.qtyCtrl.text);
+          if (q < 0) return 'الكمية يجب أن تكون رقماً صحيحاً أكبر أو يساوي 0.';
+
+          final bc = s.barcodeCtrl.text.trim().toUpperCase();
+          if (bc.isNotEmpty) {
+            if (!seenBarcodes.add(bc)) return 'يوجد باركود مكرر داخل المتغيرات.';
+          }
+        }
+      }
+      return null;
+    }
+
+    final variantErr = validateVariantDrafts();
+    if (variantErr != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(variantErr),
+          backgroundColor: Colors.red.shade700,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
     final extraUnits = <NewProductExtraUnit>[];
     for (final row in _extraUnitVariants) {
       final unit = row.unitName.text.trim();
@@ -774,56 +1155,185 @@ class _AddProductScreenState extends State<AddProductScreen> {
     }
 
     setState(() => _saving = true);
-    final err = await context.read<ProductProvider>().addProduct(
-      name: _nameCtrl.text.trim(),
-      barcode: (_uiSettings.addShowBarcodeField && barcode.isNotEmpty)
-          ? barcode
-          : null,
-      categoryName: category.isEmpty ? null : category,
-      brandName: brand.isEmpty ? null : brand,
-      buyPrice: buy,
-      sellPrice: sell,
-      minSellPrice: minSell,
-      qty: qty,
-      lowStockThreshold: low,
-      warehouseId: _warehouseId,
-      description: _descCtrl.text.trim().isEmpty ? null : _descCtrl.text,
-      imagePath: _uiSettings.addShowImageField ? _imagePath : null,
-      internalNotes:
-          _uiSettings.addShowExtraFields &&
-              _internalNotesCtrl.text.trim().isNotEmpty
-          ? _internalNotesCtrl.text
-          : null,
-      tags: _uiSettings.addShowExtraFields && _tagsCtrl.text.trim().isNotEmpty
-          ? _tagsCtrl.text
-          : null,
-      taxPercent:
-          (_uiSettings.addShowAdvancedPricing && _uiSettings.addShowTaxField)
-          ? _effectiveTaxPercent
-          : 0,
-      discountType:
-          (_uiSettings.addShowAdvancedPricing &&
-              _uiSettings.addShowDiscountFields)
-          ? _discountType
-          : '%',
-      discountValue: disc,
-      trackInventory: _trackInventory,
-      supplierItemCode: _supplierCodeCtrl.text.trim().isEmpty
-          ? null
-          : _supplierCodeCtrl.text.trim(),
-      stockBaseKind: _stockBaseKind,
-      supplierName: supplier.isEmpty ? null : supplier,
-      netWeightGrams: _uiSettings.addShowExtraFields ? netWeightGrams : null,
-      manufacturingDate: _uiSettings.addShowExtraFields
-          ? _isoFromDateField(_mfgDateCtrl.text)
-          : null,
-      expiryDate: _uiSettings.addShowExtraFields
-          ? _isoFromDateField(_expDateCtrl.text)
-          : null,
-      grade: _policy.enableProductGrade ? _grade : null,
-      expiryAlertDaysBefore: expiryAlertDaysBefore,
-      extraUnits: extraUnits,
-    );
+    String? err;
+    int? createdProductId;
+    try {
+      if (_multiVariantEnabled) {
+        for (final c in _colorDrafts) {
+          for (final s in c.sizes) {
+            final bc = s.barcodeCtrl.text.trim().toUpperCase();
+            if (bc.isEmpty) continue;
+            if (await _productRepo.isBarcodeTakenAnywhere(bc)) {
+              throw StateError('variant_barcode_taken');
+            }
+            final existing = await _variantsRepo.findVariantByBarcode(bc);
+            if (existing != null) throw StateError('variant_barcode_taken');
+          }
+        }
+
+        int? categoryId;
+        int? brandId;
+        if (category.isNotEmpty) {
+          categoryId = await _productRepo.getOrCreateCategoryId(category);
+        }
+        if (brand.isNotEmpty) {
+          brandId = await _productRepo.getOrCreateBrandId(brand);
+        }
+
+        final ti = _trackInventory ? 1 : 0;
+        createdProductId = await _productRepo.insertProductComplete(
+          name: _nameCtrl.text.trim(),
+          barcode: (_uiSettings.addShowBarcodeField && barcode.isNotEmpty)
+              ? barcode
+              : null,
+          categoryId: categoryId,
+          brandId: brandId,
+          tenantId: TenantContextService.instance.activeTenantId,
+          buyPrice: buy,
+          sellPrice: sell,
+          minSellPrice: minSell,
+          qty: 0.0,
+          lowStockThreshold: 0.0,
+          warehouseId: _warehouseId,
+          description: _descCtrl.text.trim().isEmpty ? null : _descCtrl.text,
+          imagePath: _uiSettings.addShowImageField ? _imagePath : null,
+          internalNotes:
+              _uiSettings.addShowExtraFields &&
+                      _internalNotesCtrl.text.trim().isNotEmpty
+                  ? _internalNotesCtrl.text
+                  : null,
+          tags: _uiSettings.addShowExtraFields && _tagsCtrl.text.trim().isNotEmpty
+              ? _tagsCtrl.text
+              : null,
+          taxPercent:
+              (_uiSettings.addShowAdvancedPricing && _uiSettings.addShowTaxField)
+                  ? _effectiveTaxPercent
+                  : 0,
+          discountPercent: (_uiSettings.addShowAdvancedPricing &&
+                  _uiSettings.addShowDiscountFields &&
+                  _discountType == '%')
+              ? disc
+              : 0,
+          discountAmount: (_uiSettings.addShowAdvancedPricing &&
+                  _uiSettings.addShowDiscountFields &&
+                  _discountType != '%')
+              ? disc
+              : 0,
+          trackInventory: ti,
+          allowNegativeStock: 0,
+          supplierItemCode: _supplierCodeCtrl.text.trim().isEmpty
+              ? null
+              : _supplierCodeCtrl.text.trim(),
+          stockBaseKind: _stockBaseKind,
+          supplierName: supplier.isEmpty ? null : supplier,
+          netWeightGrams: _uiSettings.addShowExtraFields ? netWeightGrams : null,
+          manufacturingDate: _uiSettings.addShowExtraFields
+              ? _isoFromDateField(_mfgDateCtrl.text)
+              : null,
+          expiryDate: _uiSettings.addShowExtraFields
+              ? _isoFromDateField(_expDateCtrl.text)
+              : null,
+          grade: _policy.enableProductGrade ? _grade : null,
+          expiryAlertDaysBefore: expiryAlertDaysBefore,
+          extraUnits: extraUnits,
+        );
+
+        for (var colorIndex = 0; colorIndex < _colorDrafts.length; colorIndex++) {
+          final c = _colorDrafts[colorIndex];
+          final colorId = await _variantsRepo.addColor(
+            productId: createdProductId,
+            name: c.nameCtrl.text.trim(),
+            hexCode: c.hexCtrl.text.trim().isEmpty ? null : c.hexCtrl.text.trim(),
+            sortOrder: colorIndex,
+          );
+          for (final s in c.sizes) {
+            final size = s.sizeCtrl.text.trim();
+            final q = _parseNonNegativeInt(s.qtyCtrl.text);
+            final bc = s.barcodeCtrl.text.trim().toUpperCase();
+            await _variantsRepo.addVariant(
+              productId: createdProductId,
+              colorId: colorId,
+              colorIndex: colorIndex,
+              size: size,
+              quantity: q,
+              barcode: bc.isEmpty ? null : bc,
+              sku: null,
+            );
+          }
+        }
+      } else {
+        err = await context.read<ProductProvider>().addProduct(
+          name: _nameCtrl.text.trim(),
+          barcode: (_uiSettings.addShowBarcodeField && barcode.isNotEmpty)
+              ? barcode
+              : null,
+          categoryName: category.isEmpty ? null : category,
+          brandName: brand.isEmpty ? null : brand,
+          buyPrice: buy,
+          sellPrice: sell,
+          minSellPrice: minSell,
+          qty: qty,
+          lowStockThreshold: low,
+          warehouseId: _warehouseId,
+          description: _descCtrl.text.trim().isEmpty ? null : _descCtrl.text,
+          imagePath: _uiSettings.addShowImageField ? _imagePath : null,
+          internalNotes:
+              _uiSettings.addShowExtraFields &&
+                      _internalNotesCtrl.text.trim().isNotEmpty
+                  ? _internalNotesCtrl.text
+                  : null,
+          tags: _uiSettings.addShowExtraFields && _tagsCtrl.text.trim().isNotEmpty
+              ? _tagsCtrl.text
+              : null,
+          taxPercent:
+              (_uiSettings.addShowAdvancedPricing && _uiSettings.addShowTaxField)
+                  ? _effectiveTaxPercent
+                  : 0,
+          discountType:
+              (_uiSettings.addShowAdvancedPricing &&
+                      _uiSettings.addShowDiscountFields)
+                  ? _discountType
+                  : '%',
+          discountValue: disc,
+          trackInventory: _trackInventory,
+          supplierItemCode: _supplierCodeCtrl.text.trim().isEmpty
+              ? null
+              : _supplierCodeCtrl.text.trim(),
+          stockBaseKind: _stockBaseKind,
+          supplierName: supplier.isEmpty ? null : supplier,
+          netWeightGrams: _uiSettings.addShowExtraFields ? netWeightGrams : null,
+          manufacturingDate: _uiSettings.addShowExtraFields
+              ? _isoFromDateField(_mfgDateCtrl.text)
+              : null,
+          expiryDate: _uiSettings.addShowExtraFields
+              ? _isoFromDateField(_expDateCtrl.text)
+              : null,
+          grade: _policy.enableProductGrade ? _grade : null,
+          expiryAlertDaysBefore: expiryAlertDaysBefore,
+          extraUnits: extraUnits,
+        );
+      }
+    } on StateError catch (e) {
+      if (e.message == 'duplicate_barcode') {
+        err = 'هذا الباركود مستخدم لمنتج آخر.';
+      } else if (e.message == 'variant_barcode_taken') {
+        err = 'باركود المتغير مستخدم مسبقاً.';
+      } else if (e.message == 'color_name_required') {
+        err = 'اسم اللون مطلوب.';
+      } else if (e.message == 'size_required') {
+        err = 'حقل المقاس مطلوب.';
+      } else if (e.message == 'duplicate_size') {
+        err = 'المقاس مكرر داخل نفس اللون.';
+      } else if (e.message == 'bad_quantity') {
+        err = 'الكمية يجب أن تكون أكبر أو تساوي 0.';
+      } else if (e.message == 'duplicate_barcode') {
+        err = 'الباركود مستخدم مسبقاً.';
+      } else {
+        err = e.message;
+      }
+    } catch (e) {
+      err = 'تعذر حفظ المنتج: $e';
+    }
     if (!mounted) return;
     setState(() => _saving = false);
 
@@ -838,6 +1348,10 @@ class _AddProductScreenState extends State<AddProductScreen> {
         ),
       );
       return;
+    }
+
+    if (_multiVariantEnabled) {
+      unawaited(context.read<ProductProvider>().loadProducts());
     }
 
     unawaited(context.read<NotificationProvider>().refresh());
@@ -886,9 +1400,15 @@ class _AddProductScreenState extends State<AddProductScreen> {
     }
     _extraUnitVariants.clear();
     _stockBaseKind = 0;
+    _stockTypeUi = 0;
     _taxMode = 'معفى';
     _discountType = '%';
     _trackInventory = _uiSettings.addDefaultTrackInventory;
+    _multiVariantEnabled = false;
+    for (final c in _colorDrafts) {
+      c.dispose();
+    }
+    _colorDrafts.clear();
     if (_warehouseRows.isNotEmpty) {
       final id = _warehouseRows.first['id'];
       _warehouseId = id is int ? id : (id as num).toInt();
@@ -955,14 +1475,445 @@ class _AddProductScreenState extends State<AddProductScreen> {
     }
   }
 
+  Widget _buildVariantsSection(
+    BuildContext context, {
+    void Function(void Function())? setStateOverride,
+  }) {
+    void ss(void Function() fn) {
+      final s = setStateOverride ?? setState;
+      s(fn);
+    }
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+
+    Future<void> pickColorFor(_VariantColorDraft c) async {
+      final current = parseFlexibleHexColor(c.hexCtrl.text) ?? cs.primary;
+      // #region agent log
+      DebugNdjsonLogger.log(
+        runId: 'pre-fix',
+        hypothesisId: 'H3',
+        location: 'add_product_screen.dart:_buildVariantsSection:pickColorFor',
+        message: 'opening color picker',
+        data: {
+          'hasHex': c.hexCtrl.text.trim().isNotEmpty,
+          'parsedOk': parseFlexibleHexColor(c.hexCtrl.text) != null,
+        },
+      );
+      // #endregion
+      final chosen = await showAppColorPickerDialog(
+        context: context,
+        initialColor: current,
+        title: 'اختيار لون',
+        subtitle: 'اختر لوناً يمثّل هذا الخيار (اختياري).',
+      );
+      if (chosen == null || !mounted) return;
+      final hex =
+          '#${(chosen.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0').toUpperCase()}';
+      ss(() {
+        c.hexCtrl.text = hex;
+        if (!c.nameManuallyEdited) {
+          c.nameCtrl.text = arabicColorNameFor(chosen);
+        }
+      });
+
+      // #region agent log
+      DebugNdjsonLogger.log(
+        runId: 'pre-fix',
+        hypothesisId: 'H3',
+        location: 'add_product_screen.dart:_buildVariantsSection:pickColorFor',
+        message: 'color picker returned and applied',
+        data: {'appliedHex': hex},
+      );
+      // #endregion
+    }
+
+    Future<void> pickSizeFor(_VariantSizeDraft s) async {
+      final chosen = await showVariantSizePickerSheet(
+        context,
+        current: s.sizeCtrl.text.trim(),
+      );
+      if (chosen == null) return;
+      ss(() {
+        s.sizeCtrl.text = chosen;
+      });
+    }
+
+    Future<void> applyUniformQty() async {
+      final ctrl = TextEditingController();
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('تطبيق كمية موحدة'),
+          content: TextField(
+            controller: ctrl,
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(
+              hintText: 'أدخل كمية (0 أو أكثر)',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('إلغاء'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('تطبيق'),
+            ),
+          ],
+        ),
+      );
+      if (ok != true || !mounted) return;
+
+      final q = _parseNonNegativeInt(ctrl.text);
+      if (q < 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text(
+              'الكمية يجب أن تكون رقماً صحيحاً أكبر أو يساوي 0.',
+            ),
+            backgroundColor: Colors.red.shade700,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+
+      ss(() {
+        for (final c in _colorDrafts) {
+          for (final s in c.sizes) {
+            s.qtyCtrl.text = '$q';
+          }
+        }
+      });
+    }
+
+    Widget colorCard(_VariantColorDraft c) {
+      final hexColor = parseFlexibleHexColor(c.hexCtrl.text);
+      final preview = hexColor ?? cs.surfaceContainerHighest;
+
+      Widget sizeRow(_VariantSizeDraft s, int sizeIndex) {
+        return Padding(
+          padding: const EdgeInsetsDirectional.only(bottom: 8),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                flex: 3,
+                child: TextFormField(
+                  controller: s.sizeCtrl,
+                  readOnly: true,
+                  canRequestFocus: false,
+                  onTap: () => pickSizeFor(s),
+                  decoration: InputDecoration(
+                    labelText: 'المقاس',
+                    border: const OutlineInputBorder(),
+                    isDense: true,
+                    suffixIcon: Icon(Icons.expand_more, color: cs.primary),
+                  ),
+                  textAlign: TextAlign.start,
+                  textDirection: TextDirection.ltr,
+                ),
+              ),
+              const SizedBox(width: 6),
+              IconButton(
+                tooltip: 'اختيار مقاس',
+                onPressed: () => pickSizeFor(s),
+                icon: Icon(Icons.view_module_outlined, color: cs.primary),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                flex: 2,
+                child: TextFormField(
+                  controller: s.qtyCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'الكمية',
+                    border: OutlineInputBorder(),
+                    isDense: true,
+                  ),
+                  textDirection: TextDirection.ltr,
+                  textAlign: TextAlign.end,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                flex: 4,
+                child: TextFormField(
+                  controller: s.barcodeCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'الباركود (اختياري)',
+                    border: OutlineInputBorder(),
+                    isDense: true,
+                  ),
+                  textDirection: TextDirection.ltr,
+                  textAlign: TextAlign.start,
+                ),
+              ),
+              const SizedBox(width: 6),
+              IconButton(
+                tooltip: 'حذف',
+                onPressed: () {
+                  ss(() {
+                    final removed = c.sizes.removeAt(sizeIndex);
+                    removed.dispose();
+                  });
+                },
+                icon: const Icon(Icons.delete_outline, color: Colors.red),
+              ),
+            ],
+          ),
+        );
+      }
+
+      return Card(
+        elevation: 0,
+        margin: const EdgeInsetsDirectional.only(bottom: 12),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.zero,
+          side: BorderSide(color: cs.outlineVariant),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: TextFormField(
+                      controller: c.nameCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'اسم اللون',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      onChanged: (_) {
+                        c.nameManuallyEdited = true;
+                        ss(() {});
+                      },
+                      textAlign: TextAlign.start,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Tooltip(
+                    message: 'اختيار لون (HEX)',
+                    child: InkWell(
+                      onTap: () => pickColorFor(c),
+                      child: Container(
+                        width: 42,
+                        height: 42,
+                        decoration: BoxDecoration(
+                          color: preview,
+                          border: Border.all(color: cs.outlineVariant),
+                          borderRadius: BorderRadius.zero,
+                        ),
+                        child: hexColor == null
+                            ? Icon(
+                                Icons.color_lens_outlined,
+                                color: cs.onSurfaceVariant,
+                              )
+                            : null,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    tooltip: 'حذف اللون',
+                    onPressed: () {
+                      ss(() {
+                        final idx = _colorDrafts.indexOf(c);
+                        if (idx >= 0) {
+                          final removed = _colorDrafts.removeAt(idx);
+                          removed.dispose();
+                        }
+                      });
+                    },
+                    icon: const Icon(Icons.delete_outline, color: Colors.red),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: cs.surfaceContainerHighest.withValues(alpha: 0.30),
+                  border: Border.all(color: cs.outlineVariant),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      'المقاسات والكميات',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        color: cs.onSurface,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    if (c.sizes.isEmpty)
+                      Text(
+                        'لا توجد مقاسات بعد. أضف مقاساً واحداً على الأقل.',
+                        style: TextStyle(color: cs.onSurfaceVariant),
+                      )
+                    else
+                      LayoutBuilder(
+                        builder: (ctx, constraints) {
+                          final wide = constraints.maxWidth >= 760;
+                          final list = Column(
+                            children: [
+                              for (var i = 0; i < c.sizes.length; i++)
+                                sizeRow(c.sizes[i], i),
+                            ],
+                          );
+                          if (wide) return list;
+                          return SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            child: SizedBox(width: 760, child: list),
+                          );
+                        },
+                      ),
+                    const SizedBox(height: 8),
+                    Align(
+                      alignment: AlignmentDirectional.centerEnd,
+                      child: OutlinedButton.icon(
+                        onPressed: () {
+                          ss(() => c.sizes.add(_VariantSizeDraft()));
+                        },
+                        icon: const Icon(Icons.add, size: 18),
+                        label: const Text('إضافة مقاس'),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'إجمالي اللون: ${_totalQtyForColor(c)}',
+                      textAlign: TextAlign.end,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        color: cs.primary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.zero,
+        side: BorderSide(color: cs.outlineVariant),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'الألوان والمقاسات',
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w800,
+                      color: cs.primary,
+                    ),
+                  ),
+                ),
+                Text(
+                  'الإجمالي: ${_totalQtyAllVariants()}',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: cs.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              alignment: WrapAlignment.end,
+              children: [
+                FilledButton.icon(
+                onPressed: () => ss(() {
+                    final c = _VariantColorDraft();
+                    c.sizes.add(_VariantSizeDraft());
+                    _colorDrafts.add(c);
+                  }),
+                  icon: const Icon(Icons.add),
+                  label: const Text('إضافة لون جديد'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: _colorDrafts.isEmpty ? null : applyUniformQty,
+                  icon: const Icon(Icons.auto_fix_high_outlined),
+                  label: const Text('تطبيق كمية موحدة على كل المقاسات'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            if (_colorDrafts.isEmpty)
+              Text(
+                'لا توجد ألوان بعد. أضف لوناً للبدء.',
+                style: TextStyle(color: cs.onSurfaceVariant),
+                textAlign: TextAlign.end,
+              )
+            else
+              Column(
+                children: [for (final c in _colorDrafts) colorCard(c)],
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route is PageRoute) {
+      homeInnerRouteObserver.subscribe(this, route);
+    }
+  }
+
+  @override
+  void didPushNext() {
+    // تم فتح شاشة جديدة فوق شاشة إضافة المنتج.
+    // نؤجل الحوار لآخر frame حتى يكون الـ Navigator مستقراً.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_handleLeaveAttemptFromRouteChange());
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final layout = context.screenLayout;
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
 
+    final canPopNow = !_saving && !_hasUnsavedChanges();
     return PopScope(
-      canPop: !_saving,
+      canPop: canPopNow,
+      onPopInvoked: (didPop) async {
+        if (didPop) return;
+        if (_saving) return;
+        final action = await _confirmLeaveIfDirty();
+        if (!mounted) return;
+        if (action == 0) return;
+        if (action == 1) {
+          if (Navigator.canPop(context)) Navigator.pop(context);
+          return;
+        }
+        if (action == 2) {
+          await _submit(popAfter: true);
+        }
+      },
       child: Directionality(
         textDirection: TextDirection.rtl,
         child: Scaffold(
@@ -980,7 +1931,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
             ),
             leading: IconButton(
               icon: const Icon(Icons.arrow_back_ios_new, size: 18),
-              onPressed: _saving ? null : () => Navigator.pop(context),
+              onPressed: _saving ? null : () => Navigator.maybePop(context),
             ),
           ),
           body: _loadingRefs
@@ -1343,18 +2294,84 @@ class _AddProductScreenState extends State<AddProductScreen> {
             context,
             label: 'نوع المخزون الأساسي',
             child: DropdownButtonFormField<int>(
-              value: _stockBaseKind,
+              value: _stockTypeUi,
               isExpanded: true,
               decoration: _inputDecOf(context, hint: ''),
-              items: const [
-                DropdownMenuItem(value: 0, child: Text('عدد (قطعة كأساس)')),
-                DropdownMenuItem(value: 1, child: Text('وزن (كيلوغرام كأساس)')),
+              items: [
+                const DropdownMenuItem(value: 0, child: Text('عدد (قطعة كأساس)')),
+                if (_enableWeightSales)
+                  const DropdownMenuItem(value: 1, child: Text('وزن (كيلوغرام كأساس)')),
+                if (_enableClothingVariants)
+                  const DropdownMenuItem(value: 2, child: Text('ملابس (ألوان ومقاسات)')),
               ],
-              onChanged: (v) => setState(() => _stockBaseKind = v ?? 0),
+              onChanged: (v) {
+                final next = v ?? 0;
+                setState(() {
+                  _stockTypeUi = next;
+                  if (next == 2) {
+                    _multiVariantEnabled = true;
+                    _trackInventory = true;
+                    _stockBaseKind = 0;
+                    if (_colorDrafts.isEmpty) {
+                      final c = _VariantColorDraft();
+                      c.sizes.add(_VariantSizeDraft());
+                      _colorDrafts.add(c);
+                    }
+                  } else {
+                    _multiVariantEnabled = false;
+                    _stockBaseKind = next;
+                  }
+                });
+              },
             ),
           ),
+          if (_stockTypeUi == 2) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Theme.of(context)
+                    .colorScheme
+                    .surfaceContainerHighest
+                    .withValues(alpha: 0.35),
+                border: Border.all(
+                  color: Theme.of(context).colorScheme.outlineVariant,
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    'الألوان والمقاسات',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w900,
+                      color: Theme.of(context).colorScheme.onSurface,
+                    ),
+                    textAlign: TextAlign.start,
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    _variantsSummaryLine(),
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                    textAlign: TextAlign.start,
+                  ),
+                  const SizedBox(height: 10),
+                  Align(
+                    alignment: AlignmentDirectional.centerEnd,
+                    child: OutlinedButton.icon(
+                      onPressed: _openVariantsEditor,
+                      icon: const Icon(Icons.palette_outlined, size: 18),
+                      label: const Text('تعديل الألوان والمقاسات'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: 14),
-          _saleExtraUnitsEditor(context),
+          if (_stockTypeUi != 2) _saleExtraUnitsEditor(context),
           const SizedBox(height: 14),
           Text(
             'معلومات المورد',
@@ -2145,9 +3162,10 @@ class _AddProductScreenState extends State<AddProductScreen> {
             ),
             value: _trackInventory,
             activeThumbColor: cs.primary,
-            onChanged: (v) => setState(() => _trackInventory = v),
+            onChanged:
+                _multiVariantEnabled ? null : (v) => setState(() => _trackInventory = v),
           ),
-          if (_trackInventory) ...[
+          if (_trackInventory && !_multiVariantEnabled) ...[
             const SizedBox(height: 8),
             LayoutBuilder(
               builder: (_, c) {
@@ -2207,6 +3225,14 @@ class _AddProductScreenState extends State<AddProductScreen> {
                 }
                 return Column(children: [q, const SizedBox(height: 12), low]);
               },
+            ),
+          ],
+          if (_trackInventory && _multiVariantEnabled) ...[
+            const SizedBox(height: 8),
+            Text(
+              'المخزون يُدار عبر الألوان والمقاسات. الإجمالي الحالي: ${_totalQtyAllVariants()}',
+              textAlign: TextAlign.end,
+              style: TextStyle(color: cs.onSurfaceVariant),
             ),
           ],
           if (_uiSettings.addShowExtraFields) ...[

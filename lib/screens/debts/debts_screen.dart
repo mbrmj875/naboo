@@ -1,4 +1,7 @@
+import 'dart:async' show unawaited;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 
 import '../../models/credit_debt_invoice.dart';
@@ -18,6 +21,19 @@ final _dateFmt = DateFormat('dd/MM/yyyy', 'en');
 
 enum _DebtFilter { all, open, aged, settled }
 
+// Intents لاختصارات لوحة المفاتيح — يتبع نمط Golden في `invoices_screen.dart`.
+class _FocusSearchIntent extends Intent {
+  const _FocusSearchIntent();
+}
+
+class _RefreshDebtsIntent extends Intent {
+  const _RefreshDebtsIntent();
+}
+
+class _CloseDetailIntent extends Intent {
+  const _CloseDetailIntent();
+}
+
 /// لوحة ديون «آجل» — مرتبطة بفواتير النوع دين، مع تصفية وبحث وملخص.
 class DebtsScreen extends StatefulWidget {
   const DebtsScreen({super.key});
@@ -26,9 +42,12 @@ class DebtsScreen extends StatefulWidget {
   State<DebtsScreen> createState() => _DebtsScreenState();
 }
 
-class _DebtsScreenState extends State<DebtsScreen> {
+class _DebtsScreenState extends State<DebtsScreen>
+    with SingleTickerProviderStateMixin {
   final DatabaseHelper _db = DatabaseHelper();
   final TextEditingController _search = TextEditingController();
+  final FocusNode _searchFocus = FocusNode();
+  late final TabController _tabs;
 
   List<CreditDebtInvoice> _rows = [];
   List<CustomerDebtSummary> _summaries = [];
@@ -36,16 +55,24 @@ class _DebtsScreenState extends State<DebtsScreen> {
   bool _loading = true;
   _DebtFilter _filter = _DebtFilter.all;
 
+  /// رقم الفاتورة المختارة في Tab 1 (لإبراز البطاقة عند فتح التفاصيل).
+  /// ملاحظة: التفاصيل نفسها لا تزال تُعرض كـ BottomSheet للحفاظ على
+  /// التوافق المعماري مع InvoiceDetailSheet المُستخدم عبر التطبيق.
+  int? _selectedInvoiceId;
+
   @override
   void initState() {
     super.initState();
+    _tabs = TabController(length: 3, vsync: this);
     _search.addListener(() => setState(() {}));
     _load();
   }
 
   @override
   void dispose() {
+    _tabs.dispose();
     _search.dispose();
+    _searchFocus.dispose();
     super.dispose();
   }
 
@@ -136,54 +163,95 @@ class _DebtsScreenState extends State<DebtsScreen> {
     final sl = ScreenLayout.of(context);
     final gap = sl.pageHorizontalGap;
 
-    return DefaultTabController(
-      length: 3,
-      child: Directionality(
-        textDirection: TextDirection.rtl,
-        child: Scaffold(
-          backgroundColor: bg,
-          appBar: AppBar(
-            title: const Text('الديون — آجل'),
-            bottom: TabBar(
-              isScrollable: sl.isNarrowWidth,
-              labelStyle: TextStyle(
-                fontSize: sl.isNarrowWidth ? 12 : 14,
-                fontWeight: FontWeight.w600,
-              ),
-              unselectedLabelStyle: TextStyle(
-                fontSize: sl.isNarrowWidth ? 12 : 14,
-              ),
-              tabs: const [
-                Tab(text: 'فواتير'),
-                Tab(text: 'عملاء'),
-                Tab(text: 'موردون'),
-              ],
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: Shortcuts(
+        shortcuts: <ShortcutActivator, Intent>{
+          const SingleActivator(LogicalKeyboardKey.keyF, control: true):
+              const _FocusSearchIntent(),
+          const SingleActivator(LogicalKeyboardKey.keyF, meta: true):
+              const _FocusSearchIntent(),
+          const SingleActivator(LogicalKeyboardKey.f5):
+              const _RefreshDebtsIntent(),
+          const SingleActivator(LogicalKeyboardKey.escape):
+              const _CloseDetailIntent(),
+        },
+        child: Actions(
+          actions: <Type, Action<Intent>>{
+            _FocusSearchIntent: CallbackAction<_FocusSearchIntent>(
+              onInvoke: (_) {
+                if (_searchFocus.canRequestFocus) {
+                  _searchFocus.requestFocus();
+                }
+                return null;
+              },
             ),
-            actions: [
-              IconButton(
-                tooltip: 'إعدادات الدين',
-                onPressed: () async {
-                  await Navigator.push<void>(
-                    context,
-                    MaterialPageRoute<void>(
-                      builder: (_) => const DebtSettingsScreen(),
-                    ),
-                  );
-                  _load();
-                },
-                icon: const Icon(Icons.tune_rounded),
+            _RefreshDebtsIntent: CallbackAction<_RefreshDebtsIntent>(
+              onInvoke: (_) {
+                if (!_loading) unawaited(_refreshFromServer());
+                return null;
+              },
+            ),
+            _CloseDetailIntent: CallbackAction<_CloseDetailIntent>(
+              onInvoke: (_) {
+                if (_search.text.isNotEmpty) {
+                  _search.clear();
+                  setState(() {});
+                } else if (_selectedInvoiceId != null) {
+                  setState(() => _selectedInvoiceId = null);
+                }
+                return null;
+              },
+            ),
+          },
+          child: Focus(
+            autofocus: true,
+            child: Scaffold(
+              backgroundColor: bg,
+              appBar: AppBar(
+                title: const Text('الديون — آجل'),
+                bottom: TabBar(
+                  controller: _tabs,
+                  isScrollable: sl.isNarrowWidth,
+                  labelStyle: TextStyle(
+                    fontSize: sl.isNarrowWidth ? 12 : 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  unselectedLabelStyle: TextStyle(
+                    fontSize: sl.isNarrowWidth ? 12 : 14,
+                  ),
+                  tabs: const [
+                    Tab(text: 'فواتير'),
+                    Tab(text: 'عملاء'),
+                    Tab(text: 'موردون'),
+                  ],
+                ),
+                actions: [
+                  IconButton(
+                    tooltip: 'إعدادات الدين',
+                    onPressed: () async {
+                      await Navigator.push<void>(
+                        context,
+                        MaterialPageRoute<void>(
+                          builder: (_) => const DebtSettingsScreen(),
+                        ),
+                      );
+                      unawaited(_load());
+                    },
+                    icon: const Icon(Icons.tune_rounded),
+                  ),
+                  IconButton(
+                    tooltip: 'تحديث (F5)',
+                    onPressed: _loading ? null : _refreshFromServer,
+                    icon: const Icon(Icons.refresh_rounded),
+                  ),
+                ],
               ),
-              IconButton(
-                tooltip: 'تحديث',
-                onPressed: _loading ? null : _refreshFromServer,
-                icon: const Icon(Icons.refresh_rounded),
-              ),
-            ],
-          ),
-          body: _loading
-              ? const Center(child: CircularProgressIndicator())
-              : TabBarView(
-                  children: [
+              body: _loading
+                  ? const Center(child: CircularProgressIndicator())
+                  : TabBarView(
+                      controller: _tabs,
+                      children: [
                     RefreshIndicator(
                       color: cs.primary,
                       onRefresh: _refreshFromServer,
@@ -239,10 +307,11 @@ class _DebtsScreenState extends State<DebtsScreen> {
                             ),
                             child: TextField(
                               controller: _search,
+                              focusNode: _searchFocus,
                               style: TextStyle(color: cs.onSurface),
                               cursorColor: cs.primary,
                               decoration: InputDecoration(
-                                hintText: 'بحث: عميل، رقم فاتورة، معرّف عميل…',
+                                hintText: 'بحث: عميل، رقم فاتورة، معرّف عميل… (Ctrl+F)',
                                 hintStyle: TextStyle(
                                   color: cs.onSurfaceVariant,
                                 ),
@@ -347,11 +416,21 @@ class _DebtsScreenState extends State<DebtsScreen> {
                                   warnDays: _settings.warnDebtAgeDays,
                                   colorScheme: cs,
                                   isDark: isDark,
-                                  onTap: () => showInvoiceDetailSheet(
-                                    context,
-                                    _db,
-                                    r.invoiceId,
-                                  ),
+                                  isHighlighted:
+                                      _selectedInvoiceId == r.invoiceId,
+                                  onTap: () async {
+                                    setState(() =>
+                                        _selectedInvoiceId = r.invoiceId);
+                                    await showInvoiceDetailSheet(
+                                      context,
+                                      _db,
+                                      r.invoiceId,
+                                    );
+                                    if (mounted) {
+                                      setState(
+                                          () => _selectedInvoiceId = null);
+                                    }
+                                  },
                                 ),
                               ),
                         ],
@@ -498,6 +577,8 @@ class _DebtsScreenState extends State<DebtsScreen> {
                     const SupplierApTab(),
                   ],
                 ),
+            ),
+          ),
         ),
       ),
     );
@@ -519,10 +600,8 @@ class _CustomerDebtSummaryCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final gap = ScreenLayout.of(context).pageHorizontalGap;
     final fill = isDark ? AppColors.cardDark : colorScheme.surface;
-    final titleC = isDark ? const Color(0xFFF8FAFC) : colorScheme.onSurface;
-    final mutedC = isDark
-        ? const Color(0xFF94A3B8)
-        : colorScheme.onSurfaceVariant;
+    final titleC = colorScheme.onSurface;
+    final mutedC = colorScheme.onSurfaceVariant;
     final r = BorderRadius.circular(12);
     return Material(
       elevation: isDark ? 3 : 1,
@@ -599,7 +678,7 @@ class _CustomerDebtSummaryCard extends StatelessWidget {
                       fontFamily: 'Tajawal',
                       fontSize: 20,
                       fontWeight: FontWeight.w800,
-                      color: Color(0xFF38BDF8),
+                      color: AppSemanticColors.info,
                     ),
                   ),
                   Text(
@@ -610,9 +689,69 @@ class _CustomerDebtSummaryCard extends StatelessWidget {
                       color: mutedC,
                     ),
                   ),
-                  const SizedBox(height: 4),
-                  Icon(Icons.chevron_left_rounded, color: mutedC, size: 26),
+                  const SizedBox(height: 6),
+                  // Card Action Pill (Golden §9.2.1) — اختصار لفتح كشف العميل.
+                  _DebtActionPill(
+                    icon: Icons.account_balance_wallet_rounded,
+                    label: 'كشف العميل',
+                    color: colorScheme.primary,
+                    onPressed: () {
+                      Navigator.of(context).push<void>(
+                        MaterialPageRoute<void>(
+                          builder: (_) => CustomerDebtDetailScreen.fromParty(
+                            party: summary.toParty(),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
                 ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Card Action Pill للديون — pill متموضع بدلاً من chevron العام، يلتزم نمط
+/// `_ReturnActionPill` في `invoices_screen.dart` (Golden §9.2.1).
+class _DebtActionPill extends StatelessWidget {
+  const _DebtActionPill({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.onPressed,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: color.withValues(alpha: 0.12),
+      borderRadius: BorderRadius.circular(999),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: onPressed,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 15, color: color),
+              const SizedBox(width: 5),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w700,
+                  color: color,
+                ),
               ),
             ],
           ),
@@ -714,7 +853,7 @@ class _SummaryStrip extends StatelessWidget {
             icon: Icons.schedule_rounded,
             colorScheme: colorScheme,
             isDark: isDark,
-            accent: agedInvoices > 0 ? const Color(0xFFF59E0B) : null,
+            accent: agedInvoices > 0 ? AppSemanticColors.warning : null,
             tooltip: 'تصفية: تحذير عمر',
             onTap: () => onSelectFilter(_DebtFilter.aged),
           ),
@@ -801,6 +940,7 @@ class _DebtCard extends StatelessWidget {
   final ColorScheme colorScheme;
   final bool isDark;
   final VoidCallback onTap;
+  final bool isHighlighted;
 
   const _DebtCard({
     required this.row,
@@ -808,6 +948,7 @@ class _DebtCard extends StatelessWidget {
     required this.colorScheme,
     required this.isDark,
     required this.onTap,
+    this.isHighlighted = false,
   });
 
   @override
@@ -818,13 +959,11 @@ class _DebtCard extends StatelessWidget {
     final aged =
         warnDays > 0 && !settled && row.daysSinceInvoice(now) >= warnDays;
     final statusColor = settled
-        ? const Color(0xFF15803D)
-        : (aged ? const Color(0xFFF59E0B) : const Color(0xFF3B82F6));
+        ? AppSemanticColors.success
+        : (aged ? AppSemanticColors.warning : AppSemanticColors.info);
     final statusLabel = settled ? 'مغلقة' : (aged ? 'تنبيه عمر' : 'مفتوحة');
-    final titleC = isDark ? const Color(0xFFF8FAFC) : colorScheme.onSurface;
-    final mutedC = isDark
-        ? const Color(0xFF94A3B8)
-        : colorScheme.onSurfaceVariant;
+    final titleC = colorScheme.onSurface;
+    final mutedC = colorScheme.onSurfaceVariant;
     final fill = isDark ? AppColors.cardDark : colorScheme.surface;
     final r = BorderRadius.circular(12);
     final rem = row.remaining;
@@ -836,10 +975,17 @@ class _DebtCard extends StatelessWidget {
     return Material(
       elevation: isDark ? 3 : 1,
       shadowColor: Colors.black.withValues(alpha: isDark ? 0.35 : 0.1),
-      color: fill,
+      color: isHighlighted
+          ? colorScheme.primary.withValues(alpha: 0.08)
+          : fill,
       shape: RoundedRectangleBorder(
         borderRadius: r,
-        side: BorderSide(color: colorScheme.outlineVariant),
+        side: BorderSide(
+          color: isHighlighted
+              ? colorScheme.primary
+              : colorScheme.outlineVariant,
+          width: isHighlighted ? 2 : 1,
+        ),
       ),
       clipBehavior: Clip.antiAlias,
       child: Stack(
@@ -887,7 +1033,16 @@ class _DebtCard extends StatelessWidget {
                         ),
                       ),
                       const Spacer(),
-                      Icon(Icons.chevron_left_rounded, color: mutedC, size: 26),
+                      // Card Action Pill (Golden §9.2.1) — يستبدل chevron الباهت
+                      // ويُعطي تأكيداً بصرياً للإجراء الأساسي على البطاقة.
+                      _DebtActionPill(
+                        icon: settled
+                            ? Icons.check_circle_outline_rounded
+                            : Icons.receipt_long_outlined,
+                        label: settled ? 'الإيصال' : 'تفاصيل',
+                        color: settled ? statusColor : colorScheme.primary,
+                        onPressed: onTap,
+                      ),
                     ],
                   ),
                   const SizedBox(height: 10),
@@ -930,11 +1085,9 @@ class _DebtCard extends StatelessWidget {
                     child: LinearProgressIndicator(
                       value: ratioSafe,
                       minHeight: 6,
-                      backgroundColor: isDark
-                          ? const Color(0xFF0F172A)
-                          : colorScheme.surfaceContainerHighest,
+                      backgroundColor: colorScheme.surfaceContainerHighest,
                       color: settled
-                          ? const Color(0xFF22C55E)
+                          ? AppSemanticColors.success
                           : colorScheme.primary,
                     ),
                   ),
@@ -965,10 +1118,10 @@ class _DebtCard extends StatelessWidget {
                       fontSize: 22,
                       fontWeight: FontWeight.w800,
                       color: aged
-                          ? const Color(0xFFFBBF24)
+                          ? AppSemanticColors.warning
                           : (settled
-                                ? const Color(0xFF86EFAC)
-                                : const Color(0xFF38BDF8)),
+                                ? AppSemanticColors.success
+                                : AppSemanticColors.info),
                       height: 1.1,
                     ),
                   ),

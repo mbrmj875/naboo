@@ -1,3 +1,6 @@
+import 'dart:async' show unawaited;
+
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -239,11 +242,20 @@ class _CloseShiftDialogState extends State<_CloseShiftDialog> {
     final detail = detailBuf.toString().trim();
 
     if (mounted) {
-      await context.read<NotificationProvider>().recordShiftLifecycleEvent(
-        isClose: true,
-        shiftId: widget.shiftId,
-        title: 'إغلاق وردية #${widget.shiftId}',
-        body: detail,
+      final notif = context.read<NotificationProvider>();
+      unawaited(
+        notif
+            .recordShiftLifecycleEvent(
+              isClose: true,
+              shiftId: widget.shiftId,
+              title: 'إغلاق وردية #${widget.shiftId}',
+              body: detail,
+            )
+            .catchError((Object e, StackTrace st) {
+              if (kDebugMode) {
+                debugPrint('[ShiftLifecycle] recordShiftLifecycleEvent: $e\n$st');
+              }
+            }),
       );
     }
 
@@ -501,9 +513,9 @@ class _CloseShiftDialogState extends State<_CloseShiftDialog> {
                         color: Colors.white,
                       ),
                     )
-                  : Row(
+                  : const Row(
                       mainAxisSize: MainAxisSize.min,
-                      children: const [
+                      children: [
                         Icon(Icons.check_rounded, size: 22),
                         SizedBox(width: 8),
                         Text('تأكيد وإغلاق الوردية'),

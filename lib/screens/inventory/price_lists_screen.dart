@@ -557,11 +557,11 @@ class _PriceItemsSheet extends StatelessWidget {
               ),
             ),
             const Divider(height: 1, color: _border),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: Row(
                 children: [
-                  const Expanded(
+                  Expanded(
                     flex: 4,
                     child: Text(
                       'المنتج',
@@ -572,7 +572,7 @@ class _PriceItemsSheet extends StatelessWidget {
                       ),
                     ),
                   ),
-                  const Expanded(
+                  Expanded(
                     flex: 3,
                     child: Text(
                       'سعر البيع',
@@ -584,7 +584,7 @@ class _PriceItemsSheet extends StatelessWidget {
                       textAlign: TextAlign.center,
                     ),
                   ),
-                  const Expanded(
+                  Expanded(
                     flex: 3,
                     child: Text(
                       'سعر الشراء',
@@ -596,7 +596,7 @@ class _PriceItemsSheet extends StatelessWidget {
                       textAlign: TextAlign.center,
                     ),
                   ),
-                  const SizedBox(width: 36),
+                  SizedBox(width: 36),
                 ],
               ),
             ),
@@ -747,23 +747,23 @@ class _PriceListFormState extends State<_PriceListForm> {
               const SizedBox(height: 20),
               TextFormField(
                 controller: _name,
-                decoration: InputDecoration(
+                decoration: const InputDecoration(
                   labelText: 'اسم القائمة *',
-                  prefixIcon: const Icon(
+                  prefixIcon: Icon(
                     Icons.label_outline,
                     size: 20,
                     color: _t2,
                   ),
                   filled: true,
-                  fillColor: const Color(0xFFF8FAFC),
+                  fillColor: Color(0xFFF8FAFC),
                   border: OutlineInputBorder(borderRadius: BorderRadius.zero),
                   enabledBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.zero,
-                    borderSide: const BorderSide(color: _border),
+                    borderSide: BorderSide(color: _border),
                   ),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.zero,
-                    borderSide: const BorderSide(color: _navy, width: 1.5),
+                    borderSide: BorderSide(color: _navy, width: 1.5),
                   ),
                 ),
                 validator: (v) =>
@@ -773,23 +773,23 @@ class _PriceListFormState extends State<_PriceListForm> {
               TextFormField(
                 controller: _desc,
                 maxLines: 2,
-                decoration: InputDecoration(
+                decoration: const InputDecoration(
                   labelText: 'الوصف',
-                  prefixIcon: const Icon(
+                  prefixIcon: Icon(
                     Icons.description_outlined,
                     size: 20,
                     color: _t2,
                   ),
                   filled: true,
-                  fillColor: const Color(0xFFF8FAFC),
+                  fillColor: Color(0xFFF8FAFC),
                   border: OutlineInputBorder(borderRadius: BorderRadius.zero),
                   enabledBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.zero,
-                    borderSide: const BorderSide(color: _border),
+                    borderSide: BorderSide(color: _border),
                   ),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.zero,
-                    borderSide: const BorderSide(color: _navy, width: 1.5),
+                    borderSide: BorderSide(color: _navy, width: 1.5),
                   ),
                 ),
               ),
@@ -845,7 +845,7 @@ class _PriceListFormState extends State<_PriceListForm> {
                   backgroundColor: _navy,
                   foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(
+                  shape: const RoundedRectangleBorder(
                     borderRadius: BorderRadius.zero,
                   ),
                 ),

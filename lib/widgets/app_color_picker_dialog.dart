@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../theme/design_tokens.dart';
+import '../utils/debug_ndjson_logger.dart';
 
 /// يفتح حواراً لاختيار لون بطريقة مرئية (HSV + جاهز + HEX).
 Future<Color?> showAppColorPickerDialog({
@@ -10,9 +11,14 @@ Future<Color?> showAppColorPickerDialog({
   required String title,
   String? subtitle,
 }) {
-  return showDialog<Color>(
+  // ملاحظة: استخدام BottomSheet هنا أكثر استقراراً داخل شاشات desktop وداخل BottomSheet أخرى
+  // من AlertDialog (الذي يعتمد على IntrinsicWidth وقد يخفي الأزرار ويبدو وكأنه "معلّق").
+  return showModalBottomSheet<Color>(
     context: context,
-    builder: (ctx) => _AppColorPickerDialog(
+    isScrollControlled: true,
+    useSafeArea: true,
+    showDragHandle: true,
+    builder: (ctx) => _AppColorPickerSheet(
       initialColor: initialColor,
       title: title,
       subtitle: subtitle,
@@ -32,8 +38,8 @@ Color? parseFlexibleHexColor(String input) {
   return Color(v);
 }
 
-class _AppColorPickerDialog extends StatefulWidget {
-  const _AppColorPickerDialog({
+class _AppColorPickerSheet extends StatefulWidget {
+  const _AppColorPickerSheet({
     required this.initialColor,
     required this.title,
     this.subtitle,
@@ -44,10 +50,10 @@ class _AppColorPickerDialog extends StatefulWidget {
   final String? subtitle;
 
   @override
-  State<_AppColorPickerDialog> createState() => _AppColorPickerDialogState();
+  State<_AppColorPickerSheet> createState() => _AppColorPickerSheetState();
 }
 
-class _AppColorPickerDialogState extends State<_AppColorPickerDialog> {
+class _AppColorPickerSheetState extends State<_AppColorPickerSheet> {
   late HSVColor _hsv;
   late TextEditingController _hexCtrl;
   final GlobalKey _svPaintKey = GlobalKey();
@@ -137,316 +143,416 @@ class _AppColorPickerDialogState extends State<_AppColorPickerDialog> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final preview = _hsv.toColor();
-    // لا نستخدم LayoutBuilder هنا: AlertDialog يفرض IntrinsicWidth وLayoutBuilder لا يدعم الأبعاد الجوهرية.
     final screenW = MediaQuery.sizeOf(context).width;
     final svW = (screenW - 120).clamp(200.0, 320.0);
     final svH = svW * 0.62;
 
     return Directionality(
       textDirection: TextDirection.rtl,
-      child: AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              widget.title,
-              style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
-            ),
-            if (widget.subtitle != null) ...[
-              const SizedBox(height: 6),
-              Text(
-                widget.subtitle!,
-                style: TextStyle(
-                  fontSize: 12,
-                  height: 1.35,
-                  color: scheme.onSurfaceVariant,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ],
-          ],
-        ),
-        content: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxWidth: (screenW - 72).clamp(280.0, 440.0),
-          ),
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  children: [
-                    Container(
-                      width: 56,
-                      height: 56,
-                      decoration: BoxDecoration(
-                        color: preview,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: scheme.outlineVariant,
-                          width: 1.5,
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: preview.withValues(alpha: 0.35),
-                            blurRadius: 12,
-                            offset: const Offset(0, 4),
-                          ),
-                        ],
-                      ),
+      child: LayoutBuilder(
+        builder: (ctx, constraints) {
+          final screenH = MediaQuery.sizeOf(context).height;
+          final targetH = (screenH * 0.92).clamp(420.0, 900.0);
+          final maxH =
+              constraints.maxHeight.isFinite ? constraints.maxHeight : targetH;
+          final sheetH = targetH > maxH ? maxH : targetH;
+
+          // #region agent log
+          DebugNdjsonLogger.log(
+            runId: 'pre-fix',
+            hypothesisId: 'H2',
+            location: 'app_color_picker_dialog.dart:_AppColorPickerSheet:build',
+            message: 'color picker constraints + computed height',
+            data: {
+              'constraints.maxHeight': constraints.maxHeight,
+              'constraints.hasBoundedHeight': constraints.hasBoundedHeight,
+              'screenW': screenW,
+              'screenH': screenH,
+              'svW': svW,
+              'svH': svH,
+              'targetH': targetH,
+              'sheetH': sheetH,
+            },
+          );
+          // #endregion
+
+          return SizedBox(
+            height: sheetH,
+            child: Material(
+              color: scheme.surface,
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsetsDirectional.fromSTEB(
+                      16,
+                      8,
+                      16,
+                      8,
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          Text(
-                            'معاينة مباشرة',
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: scheme.onSurfaceVariant,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            _hexFromColor(preview),
-                            style: TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w800,
-                              fontFeatures: const [
-                                FontFeature.tabularFigures(),
-                              ],
-                              color: scheme.onSurface,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  'التشبع والسطوع',
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                // اتجاه LTR ثابت: في RTL يعكس Slider والتدرج بشكل مختلف فيُظهر لوناً غير موافق للمقبض (مثلاً أصفر بصرياً → وردي).
-                Directionality(
-                  textDirection: TextDirection.ltr,
-                  child: Center(
-                    child: GestureDetector(
-                      onPanDown: (d) => _svFromGlobal(d.globalPosition),
-                      onPanUpdate: (d) => _svFromGlobal(d.globalPosition),
-                      onTapDown: (d) => _svFromGlobal(d.globalPosition),
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(10),
-                        child: SizedBox(
-                          key: _svPaintKey,
-                          width: svW,
-                          height: svH,
-                          child: Stack(
-                            clipBehavior: Clip.hardEdge,
-                            fit: StackFit.expand,
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
-                              CustomPaint(
-                                painter: _SvSquarePainter(hue: _hsv.hue),
+                              Text(
+                                widget.title,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w800,
+                                  fontSize: 16,
+                                ),
                               ),
-                              Positioned(
-                                left: _hsv.saturation * svW - 7,
-                                top: (1 - _hsv.value) * svH - 7,
-                                child: IgnorePointer(
-                                  child: Container(
-                                    width: 14,
-                                    height: 14,
-                                    decoration: BoxDecoration(
-                                      shape: BoxShape.circle,
-                                      border: Border.all(
-                                        color: Colors.white,
-                                        width: 2,
+                              if (widget.subtitle != null) ...[
+                                const SizedBox(height: 4),
+                                Text(
+                                  widget.subtitle!,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    height: 1.35,
+                                    color: scheme.onSurfaceVariant,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('إغلاق'),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Divider(height: 1),
+                  Expanded(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsetsDirectional.fromSTEB(
+                        16,
+                        12,
+                        16,
+                        20,
+                      ),
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(
+                          maxWidth: (screenW - 72).clamp(280.0, 440.0),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Row(
+                              children: [
+                                Container(
+                                  width: 56,
+                                  height: 56,
+                                  decoration: BoxDecoration(
+                                    color: preview,
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(
+                                      color: scheme.outlineVariant,
+                                      width: 1.5,
+                                    ),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: preview.withValues(alpha: 0.35),
+                                        blurRadius: 12,
+                                        offset: const Offset(0, 4),
                                       ),
-                                      boxShadow: const [
-                                        BoxShadow(
-                                          color: Colors.black45,
-                                          blurRadius: 3,
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.end,
+                                    children: [
+                                      Text(
+                                        'معاينة مباشرة',
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          color: scheme.onSurfaceVariant,
                                         ),
-                                      ],
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        _hexFromColor(preview),
+                                        style: TextStyle(
+                                          fontSize: 15,
+                                          fontWeight: FontWeight.w800,
+                                          fontFeatures: const [
+                                            FontFeature.tabularFigures(),
+                                          ],
+                                          color: scheme.onSurface,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 16),
+                            Text(
+                              'التشبع والسطوع',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                color: scheme.onSurfaceVariant,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            // اتجاه LTR ثابت: في RTL يعكس Slider والتدرج بشكل مختلف فيُظهر لوناً غير موافق للمقبض.
+                            Directionality(
+                              textDirection: TextDirection.ltr,
+                              child: Center(
+                                child: GestureDetector(
+                                  onPanDown: (d) =>
+                                      _svFromGlobal(d.globalPosition),
+                                  onPanUpdate: (d) =>
+                                      _svFromGlobal(d.globalPosition),
+                                  onTapDown: (d) =>
+                                      _svFromGlobal(d.globalPosition),
+                                  child: ClipRRect(
+                                    borderRadius: BorderRadius.circular(10),
+                                    child: SizedBox(
+                                      key: _svPaintKey,
+                                      width: svW,
+                                      height: svH,
+                                      child: Stack(
+                                        clipBehavior: Clip.hardEdge,
+                                        fit: StackFit.expand,
+                                        children: [
+                                          CustomPaint(
+                                            painter: _SvSquarePainter(
+                                              hue: _hsv.hue,
+                                            ),
+                                          ),
+                                          Positioned(
+                                            left: _hsv.saturation * svW - 7,
+                                            top: (1 - _hsv.value) * svH - 7,
+                                            child: IgnorePointer(
+                                              child: Container(
+                                                width: 14,
+                                                height: 14,
+                                                decoration: BoxDecoration(
+                                                  shape: BoxShape.circle,
+                                                  border: Border.all(
+                                                    color: Colors.white,
+                                                    width: 2,
+                                                  ),
+                                                  boxShadow: const [
+                                                    BoxShadow(
+                                                      color: Colors.black45,
+                                                      blurRadius: 3,
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
                                     ),
                                   ),
                                 ),
                               ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  'اسحب داخل المربع لضبط التشبع (أفقياً) والسطوع (عمودياً)',
-                  textAlign: TextAlign.right,
-                  style: TextStyle(
-                    fontSize: 10.5,
-                    height: 1.3,
-                    color: scheme.onSurfaceVariant.withValues(alpha: 0.9),
-                  ),
-                ),
-                const SizedBox(height: 14),
-                Text(
-                  'درجة اللون (الطيف)',
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Directionality(
-                  textDirection: TextDirection.ltr,
-                  child: Stack(
-                    alignment: Alignment.center,
-                    children: [
-                      Container(
-                        height: 32,
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(8),
-                          gradient: LinearGradient(
-                            begin: Alignment.centerLeft,
-                            end: Alignment.centerRight,
-                            colors: List.generate(
-                              7,
-                              (i) => HSVColor.fromAHSV(
-                                1,
-                                i * 60.0,
-                                1,
-                                1,
-                              ).toColor(),
                             ),
-                          ),
-                          border: Border.all(color: scheme.outlineVariant),
-                        ),
-                      ),
-                      SliderTheme(
-                        data: SliderTheme.of(context).copyWith(
-                          trackHeight: 32,
-                          thumbShape: const RoundSliderThumbShape(
-                            enabledThumbRadius: 10,
-                          ),
-                          overlayShape: const RoundSliderOverlayShape(
-                            overlayRadius: 16,
-                          ),
-                          activeTrackColor: Colors.transparent,
-                          inactiveTrackColor: Colors.transparent,
-                          thumbColor: Colors.white,
-                        ),
-                        child: Slider(
-                          value: _hsv.hue.clamp(0.0, 360.0),
-                          min: 0,
-                          max: 360,
-                          onChanged: (hue) {
-                            _setFromHsv(
-                              HSVColor.fromAHSV(
-                                1,
-                                hue,
-                                _hsv.saturation,
-                                _hsv.value,
-                              ),
-                            );
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  'ألوان جاهزة — اضغط للاختيار',
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  alignment: WrapAlignment.end,
-                  children: [
-                    for (final argb in _presetArgb)
-                      Material(
-                        color: Colors.transparent,
-                        child: InkWell(
-                          onTap: () =>
-                              _setFromHsv(HSVColor.fromColor(Color(argb))),
-                          borderRadius: BorderRadius.circular(8),
-                          child: Container(
-                            width: 32,
-                            height: 32,
-                            decoration: BoxDecoration(
-                              color: Color(argb),
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(
-                                color: preview.toARGB32() == argb
-                                    ? scheme.primary
-                                    : Colors.black26,
-                                width: preview.toARGB32() == argb ? 2 : 1,
+                            const SizedBox(height: 6),
+                            Text(
+                              'اسحب داخل المربع لضبط التشبع (أفقياً) والسطوع (عمودياً)',
+                              textAlign: TextAlign.right,
+                              style: TextStyle(
+                                fontSize: 10.5,
+                                height: 1.3,
+                                color: scheme.onSurfaceVariant
+                                    .withValues(alpha: 0.9),
                               ),
                             ),
-                          ),
+                            const SizedBox(height: 14),
+                            Text(
+                              'درجة اللون (الطيف)',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                color: scheme.onSurfaceVariant,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Directionality(
+                              textDirection: TextDirection.ltr,
+                              child: Stack(
+                                alignment: Alignment.center,
+                                children: [
+                                  Container(
+                                    height: 32,
+                                    decoration: BoxDecoration(
+                                      borderRadius: BorderRadius.circular(8),
+                                      gradient: LinearGradient(
+                                        begin: Alignment.centerLeft,
+                                        end: Alignment.centerRight,
+                                        colors: List.generate(
+                                          7,
+                                          (i) => HSVColor.fromAHSV(
+                                            1,
+                                            i * 60.0,
+                                            1,
+                                            1,
+                                          ).toColor(),
+                                        ),
+                                      ),
+                                      border: Border.all(
+                                        color: scheme.outlineVariant,
+                                      ),
+                                    ),
+                                  ),
+                                  SliderTheme(
+                                    data: SliderTheme.of(context).copyWith(
+                                      trackHeight: 32,
+                                      thumbShape: const RoundSliderThumbShape(
+                                        enabledThumbRadius: 10,
+                                      ),
+                                      overlayShape:
+                                          const RoundSliderOverlayShape(
+                                        overlayRadius: 16,
+                                      ),
+                                      activeTrackColor: Colors.transparent,
+                                      inactiveTrackColor: Colors.transparent,
+                                      thumbColor: Colors.white,
+                                    ),
+                                    child: Slider(
+                                      value: _hsv.hue.clamp(0.0, 360.0),
+                                      min: 0,
+                                      max: 360,
+                                      onChanged: (hue) {
+                                        _setFromHsv(
+                                          HSVColor.fromAHSV(
+                                            1,
+                                            hue,
+                                            _hsv.saturation,
+                                            _hsv.value,
+                                          ),
+                                        );
+                                      },
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            Text(
+                              'ألوان جاهزة — اضغط للاختيار',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                color: scheme.onSurfaceVariant,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              alignment: WrapAlignment.end,
+                              children: [
+                                for (final argb in _presetArgb)
+                                  Material(
+                                    color: Colors.transparent,
+                                    child: InkWell(
+                                      onTap: () => _setFromHsv(
+                                        HSVColor.fromColor(Color(argb)),
+                                      ),
+                                      borderRadius: BorderRadius.circular(8),
+                                      child: Container(
+                                        width: 32,
+                                        height: 32,
+                                        decoration: BoxDecoration(
+                                          color: Color(argb),
+                                          borderRadius:
+                                              BorderRadius.circular(8),
+                                          border: Border.all(
+                                            color: preview.toARGB32() == argb
+                                                ? scheme.primary
+                                                : Colors.black26,
+                                            width: preview.toARGB32() == argb
+                                                ? 2
+                                                : 1,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                            const SizedBox(height: 16),
+                            Text(
+                              'قيمة HEX (للنسخ أو الإدخال الدقيق)',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                color: scheme.onSurfaceVariant,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            TextField(
+                              controller: _hexCtrl,
+                              decoration: InputDecoration(
+                                isDense: true,
+                                hintText: '#152B47',
+                                border: const OutlineInputBorder(
+                                  borderRadius: AppShape.none,
+                                ),
+                                suffixIcon: IconButton(
+                                  tooltip: 'تطبيق النص',
+                                  icon: const Icon(
+                                    Icons.check_rounded,
+                                    size: 20,
+                                  ),
+                                  onPressed: _applyHexFromField,
+                                ),
+                              ),
+                              inputFormatters: [
+                                FilteringTextInputFormatter.allow(
+                                  RegExp(r'[0-9a-fA-F#]'),
+                                ),
+                              ],
+                              onSubmitted: (_) => _applyHexFromField(),
+                            ),
+                          ],
                         ),
                       ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  'قيمة HEX (للنسخ أو الإدخال الدقيق)',
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: _hexCtrl,
-                  decoration: InputDecoration(
-                    isDense: true,
-                    hintText: '#152B47',
-                    border: const OutlineInputBorder(
-                      borderRadius: AppShape.none,
-                    ),
-                    suffixIcon: IconButton(
-                      tooltip: 'تطبيق النص',
-                      icon: const Icon(Icons.check_rounded, size: 20),
-                      onPressed: _applyHexFromField,
                     ),
                   ),
-                  inputFormatters: [
-                    FilteringTextInputFormatter.allow(RegExp(r'[0-9a-fA-F#]')),
-                  ],
-                  onSubmitted: (_) => _applyHexFromField(),
-                ),
-              ],
+                  SafeArea(
+                    top: false,
+                    child: Padding(
+                      padding: const EdgeInsetsDirectional.fromSTEB(
+                        16,
+                        10,
+                        16,
+                        16,
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton(
+                              onPressed: () => Navigator.pop(context),
+                              child: const Text('إلغاء'),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: FilledButton(
+                              onPressed: () => Navigator.pop(context, preview),
+                              child: const Text('تأكيد اللون'),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('إلغاء'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, preview),
-            child: const Text('تأكيد اللون'),
-          ),
-        ],
+          );
+        },
       ),
     );
   }
@@ -473,7 +579,7 @@ class _SvSquarePainter extends CustomPainter {
     canvas.drawRRect(r, hz);
 
     final vz = Paint()
-      ..shader = LinearGradient(
+      ..shader = const LinearGradient(
         colors: [Colors.transparent, Colors.black],
         begin: Alignment.topCenter,
         end: Alignment.bottomCenter,

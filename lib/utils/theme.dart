@@ -117,20 +117,20 @@ class AppTheme {
       dividerColor: outline,
       visualDensity: VisualDensity.standard,
       splashFactory: InkRipple.splashFactory,
-      appBarTheme: AppBarTheme(
+      appBarTheme: const AppBarTheme(
         elevation: 0,
         scrolledUnderElevation: 0,
         centerTitle: false,
         backgroundColor: AppColors.primary,
         foregroundColor: Colors.white,
         surfaceTintColor: Colors.transparent,
-        titleTextStyle: const TextStyle(
+        titleTextStyle: TextStyle(
           fontFamily: 'Tajawal',
           fontSize: 17,
           fontWeight: FontWeight.w700,
           color: Colors.white,
         ),
-        iconTheme: const IconThemeData(color: Colors.white, size: 22),
+        iconTheme: IconThemeData(color: Colors.white, size: 22),
       ),
       cardTheme: CardThemeData(
         color: surface,
@@ -211,11 +211,11 @@ class AppTheme {
           shape: const RoundedRectangleBorder(borderRadius: AppShape.none),
         ),
       ),
-      floatingActionButtonTheme: FloatingActionButtonThemeData(
+      floatingActionButtonTheme: const FloatingActionButtonThemeData(
         backgroundColor: AppColors.primary,
         foregroundColor: Colors.white,
         elevation: 0,
-        shape: const RoundedRectangleBorder(borderRadius: AppShape.none),
+        shape: RoundedRectangleBorder(borderRadius: AppShape.none),
       ),
       chipTheme: ChipThemeData(
         shape: const RoundedRectangleBorder(borderRadius: AppShape.none),

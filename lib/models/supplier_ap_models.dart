@@ -5,20 +5,25 @@
 class Supplier {
   const Supplier({
     required this.id,
+    this.globalId,
     required this.name,
     this.phone,
     this.notes,
     required this.isActive,
     required this.createdAt,
+    this.updatedAt,
   });
 
   final int id;
+  final String? globalId;
   final String name;
   final String? phone;
   final String? notes;
   final bool isActive;
   final DateTime createdAt;
+  final DateTime? updatedAt;
 }
+
 
 /// ملخص رصيد مورد: مجموع وصولاتهم − مجموع ما دفعناه.
 class SupplierApSummary {
@@ -38,6 +43,7 @@ class SupplierApSummary {
 class SupplierBill {
   const SupplierBill({
     required this.id,
+    this.globalId,
     required this.supplierId,
     this.theirReference,
     this.theirBillDate,
@@ -45,12 +51,14 @@ class SupplierBill {
     this.note,
     this.imagePath,
     required this.createdAt,
+    this.updatedAt,
     this.createdByUserName,
     this.linkedStockVoucherId,
     this.linkedVoucherNo,
   });
 
   final int id;
+  final String? globalId;
   final int supplierId;
   final String? theirReference;
   final DateTime? theirBillDate;
@@ -58,7 +66,9 @@ class SupplierBill {
   final String? note;
   final String? imagePath;
   final DateTime createdAt;
+  final DateTime? updatedAt;
   final String? createdByUserName;
+
 
   /// إذن مخزوني وارد مرتبط بهذا الوصل (إن وُجد).
   final int? linkedStockVoucherId;
@@ -68,22 +78,27 @@ class SupplierBill {
 class SupplierPayout {
   const SupplierPayout({
     required this.id,
+    this.globalId,
     required this.supplierId,
     required this.amount,
     this.note,
     required this.createdAt,
+    this.updatedAt,
     this.createdByUserName,
     required this.affectsCash,
     this.receiptInvoiceId,
   });
 
   final int id;
+  final String? globalId;
   final int supplierId;
   final double amount;
   final String? note;
   final DateTime createdAt;
+  final DateTime? updatedAt;
   final String? createdByUserName;
   final bool affectsCash;
+
 
   /// سند الفاتورة المرتبط (قائمة الفواتير) إن وُجد.
   final int? receiptInvoiceId;

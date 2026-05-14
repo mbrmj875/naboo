@@ -53,6 +53,9 @@ import 'reports/reports_screen.dart';
 import 'expenses/expenses_screen.dart';
 import 'invoices/add_invoice_screen.dart';
 import 'invoices/process_return_screen.dart';
+import 'services/add_service_screen.dart';
+import 'services/services_hub_screen.dart';
+import 'services/service_orders_hub_screen.dart';
 import '../utils/iraqi_currency_format.dart';
 import 'invoices/parked_sales_screen.dart';
 import 'invoices/sale_pos_settings_screen.dart';
@@ -69,8 +72,11 @@ import '../widgets/app_brand_mark.dart';
 import 'shift/close_shift_dialog.dart';
 import '../theme/app_corner_style.dart';
 import '../theme/design_tokens.dart';
+import '../widgets/adaptive/shift_permission_banner.dart';
+import '../widgets/adaptive/home_user_menu.dart';
 import '../widgets/app_breadcrumb_strip.dart';
 import '../widgets/sidebar_nav_highlight.dart';
+import '../navigation/app_route_observer.dart';
 import '../navigation/content_navigation.dart';
 import '../utils/screen_layout.dart';
 import '../models/invoice.dart';
@@ -197,6 +203,7 @@ class _HomeScreenState extends State<HomeScreen>
     bool enableInstallments = true;
     bool enableCustomers = true;
     bool enableLoyalty = true;
+    bool enableServices = true;
     try {
       final tenantId = await settingsRepo.getActiveTenantId();
       enableDebts =
@@ -227,6 +234,13 @@ class _HomeScreenState extends State<HomeScreen>
               ) ??
               '1') ==
           '1';
+      enableServices =
+          (await settingsRepo.getForTenant(
+                BusinessSetupKeys.enableServices,
+                tenantId: tenantId,
+              ) ??
+              '1') ==
+          '1';
     } catch (_) {
       // في حال تعذر قراءة الإعدادات: لا نكسر التصفح.
     }
@@ -248,6 +262,9 @@ class _HomeScreenState extends State<HomeScreen>
       }
       if (!enableCustomers && m.routeId == AppContentRoutes.customers) continue;
       if (!enableLoyalty && m.routeId == AppContentRoutes.loyaltySettings) {
+        continue;
+      }
+      if (!enableServices && m.routeId == AppContentRoutes.servicesHub) {
         continue;
       }
       if (m.routeId == AppContentRoutes.users) {
@@ -361,6 +378,16 @@ class _HomeScreenState extends State<HomeScreen>
             name == AppContentRoutes.quickUpdateProducts)) {
       return hubIdx;
     }
+    final servicesIdx = _navForUi.indexWhere(
+      (m) => m.routeId == AppContentRoutes.servicesHub,
+    );
+    if (servicesIdx >= 0 &&
+        (name == AppContentRoutes.servicesAdd ||
+            name == AppContentRoutes.servicesCatalog ||
+            name == AppContentRoutes.serviceOrdersHub ||
+            name == AppContentRoutes.serviceOrdersCreate)) {
+      return servicesIdx;
+    }
     return null;
   }
 
@@ -397,9 +424,13 @@ class _HomeScreenState extends State<HomeScreen>
   // تتبع الوحدات التي فتحت قائمتها الفرعية
   final Set<String> _expandedSubmenus = {};
 
-  // ===== قائمة الاختصارات السريعة الديناميكية =====
-  List<QuickAction> _quickActions = [];
-  bool _isEditMode = false; // وضع التحرير
+  // وضع تحرير الوحدات (إعادة ترتيب). متاح في tabletLG/desktop فقط.
+  // (سابقاً كان يستخدم لـ QuickActions، حُذفت الآن وفق دستور 2026-05.)
+  bool _isEditMode = false;
+
+  // حالة لوحة Mac-Style (تفعيل/تعطيل). تُستخدم في HomeUserMenu على الديسكتوب
+  // فقط. يُهيَّأ من `MacStyleSettingsPrefs.cachedValue` ثم يُحدَّث بعد قراءة I/O.
+  bool _macPanelEnabled = MacStyleSettingsPrefs.cachedValue ?? true;
 
   /// ترتيب الوحدات: مبيعات وعملاء → أقساط ومخزون وصندوق → تقارير وإدارة → أدوات.
   final List<ModuleItem> _originalModules = [
@@ -583,6 +614,30 @@ class _HomeScreenState extends State<HomeScreen>
       ],
     ),
     ModuleItem(
+      icon: Icons.handyman_rounded,
+      title: 'الخدمات والصيانة',
+      iconColor: Colors.blueAccent,
+      routeId: AppContentRoutes.servicesHub,
+      destination: (context) => const ServicesHubScreen(),
+      subItems: [
+        SubMenuItem(
+          title: 'لوحة الخدمات والصيانة',
+          routeId: AppContentRoutes.servicesHub,
+          destination: (context) => const ServicesHubScreen(),
+        ),
+        SubMenuItem(
+          title: 'إضافة خدمة فنية',
+          routeId: AppContentRoutes.servicesAdd,
+          destination: (context) => const AddServiceScreen(),
+        ),
+        SubMenuItem(
+          title: 'طلبات الصيانة وتذاكر العمل',
+          routeId: AppContentRoutes.serviceOrdersHub,
+          destination: (context) => const ServiceOrdersHubScreen(),
+        ),
+      ],
+    ),
+    ModuleItem(
       icon: Icons.account_balance_wallet,
       title: 'الصندوق',
       iconColor: Colors.purple,
@@ -640,45 +695,6 @@ class _HomeScreenState extends State<HomeScreen>
   ];
 
   late List<ModuleItem> _orderedModules;
-
-  // الاختصارات الافتراضية
-  List<QuickAction> get _defaultQuickActions => [
-    QuickAction(
-      icon: Icons.add_circle_outline,
-      label: 'البيع',
-      routeId: AppContentRoutes.addInvoice,
-      breadcrumbTitle: 'بيع جديد',
-      destination: (context) => const AddInvoiceScreen(),
-    ),
-    QuickAction(
-      icon: Icons.receipt_long,
-      label: 'المرتجعات',
-      routeId: AppContentRoutes.invoices,
-      breadcrumbTitle: 'الفواتير',
-      destination: (context) => const InvoicesScreen(),
-    ),
-    QuickAction(
-      icon: Icons.payment,
-      label: 'تسديد قسط',
-      routeId: AppContentRoutes.installments,
-      breadcrumbTitle: 'الأقساط',
-      destination: (context) => const InstallmentsScreen(),
-    ),
-    QuickAction(
-      icon: Icons.search,
-      label: 'بحث',
-      routeId: 'app_quick_search',
-      breadcrumbTitle: 'بحث',
-      destination: (context) => const SizedBox(),
-    ),
-  ];
-
-  // ── Responsive helpers ──────────────────────────────────────────────────────
-  double _quickActionSize(double width) {
-    if (width >= 900) return 90;
-    if (width >= 600) return 80;
-    return 70;
-  }
 
   // ── Colours ──────────────────────────────────────────────────────────────────
   // يجب أن تُؤخذ من [Theme] (بعد دمج إعدادات الهوية ولون النص) وليس ألواناً ثابتة.
@@ -747,53 +763,18 @@ class _HomeScreenState extends State<HomeScreen>
       _orderedModules = List.from(_originalModules);
     }
 
-    final savedLabels = prefs.getStringList('quick_actions_labels');
-    if (savedLabels != null && savedLabels.isNotEmpty) {
-      final List<QuickAction> loaded = [];
-      for (final label in savedLabels) {
-        final module = _originalModules.firstWhere(
-          (m) => m.title == label,
-          orElse: () => ModuleItem(
-            icon: Icons.help,
-            title: label,
-            iconColor: Colors.grey,
-            routeId: 'app_unknown_$label',
-            destination: (context) => const SizedBox(),
-          ),
-        );
-        if (_originalModules.contains(module)) {
-          loaded.add(
-            QuickAction(
-              icon: module.icon,
-              label: module.title,
-              destination: module.destination,
-              routeId: module.routeId,
-              breadcrumbTitle: module.breadcrumbTitle,
-            ),
-          );
-        } else {
-          final def = _defaultQuickActions.firstWhere(
-            (q) => q.label == label,
-            orElse: () => QuickAction(
-              icon: Icons.help,
-              label: label,
-              routeId: 'app_quick_$label',
-              breadcrumbTitle: label,
-              destination: (context) => const SizedBox(),
-            ),
-          );
-          loaded.add(def);
-        }
-      }
-      _quickActions = loaded.isNotEmpty
-          ? loaded
-          : List.from(_defaultQuickActions);
-    } else {
-      _quickActions = List.from(_defaultQuickActions);
-    }
+    // ملاحظة: في 2026-05 حُذفت ميزة QuickActions (شريط الاختصارات الـ4 أيقونات)
+    // كاملةً. لم نعد نقرأ المفتاح 'quick_actions_labels' من SharedPreferences،
+    // ولا نكتبه. عند الحاجة لتنظيف بيانات قديمة من جهاز المستخدم، يمكن إضافة
+    // migration واحدة في FirstRunInit تحذف هذا المفتاح القديم.
+
+    // ترطيب حالة لوحة Mac من SharedPreferences (للديسكتوب فقط — لكنه آمن دائماً).
+    final macEnabled = await MacStyleSettingsPrefs.isMacStylePanelEnabled();
 
     if (!mounted) return;
-    setState(() {});
+    setState(() {
+      _macPanelEnabled = macEnabled;
+    });
     await _recomputeNavModules();
   }
 
@@ -901,133 +882,11 @@ class _HomeScreenState extends State<HomeScreen>
     VirtualKeyboardController.instance.unregisterField(_searchFocusNode);
   }
 
-  Future<void> _saveQuickActions() async {
-    final prefs = await SharedPreferences.getInstance();
-    final labels = _quickActions.map((q) => q.label).toList();
-    await prefs.setStringList('quick_actions_labels', labels);
-  }
-
-  void _addQuickAction(ModuleItem module) {
-    if (_quickActions.any((q) => q.label == module.title)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('${module.title} موجود بالفعل في الاختصارات'),
-          behavior: SnackBarBehavior.floating,
-          backgroundColor: Colors.orange,
-        ),
-      );
-      return;
-    }
-    setState(() {
-      _quickActions.add(
-        QuickAction(
-          icon: module.icon,
-          label: module.title,
-          destination: module.destination,
-          routeId: module.routeId,
-          breadcrumbTitle: module.breadcrumbTitle,
-        ),
-      );
-      _saveQuickActions();
-    });
-  }
-
-  void _removeQuickAction(int index) {
-    setState(() {
-      _quickActions.removeAt(index);
-      _saveQuickActions();
-      if (_quickActions.isEmpty) {
-        _quickActions = List.from(_defaultQuickActions);
-        _saveQuickActions();
-      }
-    });
-  }
-
-  void _showAddQuickActionDialog() {
-    final availableModules = _originalModules
-        .where((module) => !_quickActions.any((q) => q.label == module.title))
-        .toList();
-
-    if (availableModules.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('جميع الوحدات مضافة بالفعل'),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-      return;
-    }
-
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: _surfaceColor,
-        shape: RoundedRectangleBorder(borderRadius: ctx.appCorners.lg),
-        title: Text(
-          'إضافة اختصار سريع',
-          style: TextStyle(color: _textPrimary, fontWeight: FontWeight.bold),
-        ),
-        content: SizedBox(
-          width: double.maxFinite,
-          child: ListView.builder(
-            shrinkWrap: true,
-            itemCount: availableModules.length,
-            itemBuilder: (context, index) {
-              final module = availableModules[index];
-              return ListTile(
-                leading: Icon(module.icon, color: module.iconColor),
-                title: Text(
-                  module.title,
-                  style: TextStyle(color: _textPrimary),
-                ),
-                onTap: () {
-                  _addQuickAction(module);
-                  Navigator.pop(ctx);
-                },
-                shape: RoundedRectangleBorder(borderRadius: ctx.appCorners.md),
-              );
-            },
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text(
-              'إلغاء',
-              style: TextStyle(color: Color(0xFF6C63FF)),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showDeleteConfirmation(int index) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: _surfaceColor,
-        title: Text('حذف الاختصار', style: TextStyle(color: _textPrimary)),
-        content: Text(
-          'هل تريد حذف "${_quickActions[index].label}" من الاختصارات السريعة؟',
-          style: TextStyle(color: _textSecondary),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('إلغاء'),
-          ),
-          TextButton(
-            onPressed: () {
-              _removeQuickAction(index);
-              Navigator.pop(ctx);
-            },
-            child: const Text('حذف', style: TextStyle(color: Colors.red)),
-          ),
-        ],
-      ),
-    );
-  }
+  // ── QuickActions APIs حُذفت في 2026-05 ──────────────────────────────────────
+  // (_saveQuickActions / _addQuickAction / _removeQuickAction /
+  //  _showAddQuickActionDialog / _showDeleteConfirmation)
+  // الميزة كاملةً انتقلت لمسار الـ Dashboard وقائمة الوحدات. لا تستعد هذه
+  // الدوال ولا تتركها كـ stubs.
 
   void _animateCompanyName() {
     _nameAnimController.forward().then((_) => _nameAnimController.reverse());
@@ -1496,9 +1355,13 @@ class _HomeScreenState extends State<HomeScreen>
       builder: (context, themeProvider, _) {
         return LayoutBuilder(
           builder: (outerCtx, outerConstraints) {
-            // ≥800dp: شريط جانبي + محتوى (بدون شريط سفلي). أضيق: شريط سفلي فقط بدون عمود جانبي.
-            const kWideBreakpoint = 800.0;
-            final isLarge = outerConstraints.maxWidth >= kWideBreakpoint;
+            // تصنيف الجهاز يعتمد الآن على DeviceVariant (Single Source of Truth).
+            // tabletLG+ (≥840dp width) ⇒ شريط جانبي ثابت.
+            // أصغر ⇒ شريط سفلي + Navigator داخلي.
+            // ملاحظة: نحتفظ بـ LayoutBuilder لتمرير outerConstraints إلى العناصر
+            // الداخلية، لكن قرار الـ Shell نفسه يأخذ من DeviceVariant.
+            final variant = context.screenLayout.layoutVariant;
+            final isLarge = variant.index >= DeviceVariant.tabletLG.index;
 
             // ── LARGE SCREEN: persistent sidebar + nested Navigator ──────────
             if (isLarge) {
@@ -1545,7 +1408,10 @@ class _HomeScreenState extends State<HomeScreen>
                                         key: _innerNavKey,
                                         restorationScopeId:
                                             'home_inner_nav_main',
-                                        observers: [_innerNavObserver],
+                                        observers: [
+                                          _innerNavObserver,
+                                          homeInnerRouteObserver,
+                                        ],
                                         onGenerateInitialRoutes: (_, _) => [
                                           FastContentPageRoute(
                                             settings: const RouteSettings(
@@ -1599,7 +1465,10 @@ class _HomeScreenState extends State<HomeScreen>
             final navigatorWidget = Navigator(
               key: _innerNavKeySmall,
               restorationScopeId: 'home_inner_nav_small',
-              observers: [_innerNavObserver],
+              observers: [
+                _innerNavObserver,
+                homeInnerRouteObserver,
+              ],
               onGenerateInitialRoutes: (_, _) => [
                 FastContentPageRoute(
                   settings: const RouteSettings(
@@ -1693,19 +1562,6 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  /// فاصل رأسي خفيف بين مجموعات أزرار شريط التطبيق (على الشاشات العريضة).
-  Widget _appBarDivider() {
-    final onPrimary = Theme.of(context).colorScheme.onPrimary;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 10),
-      child: VerticalDivider(
-        width: 1,
-        thickness: 1,
-        color: onPrimary.withValues(alpha: 0.28),
-      ),
-    );
-  }
-
   Widget _appBarShiftButton() {
     return Consumer<ShiftProvider>(
       builder: (context, shift, _) {
@@ -1723,12 +1579,55 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  Widget _appBarUserButton(AuthProvider auth) {
-    return IconButton(
-      style: _homeAppBarActionStyle(),
-      icon: const Icon(Icons.person_outline_rounded, size: 20),
-      onPressed: () => _showUserInfoDialog(auth),
-      tooltip: auth.username.isNotEmpty ? auth.username : 'مستخدم',
+  /// زر التزامن السحابي — يستمع لـ [CloudSyncService.lastError] لإظهار شارة
+  /// تحذير حمراء عند الفشل، والضغط يطلق [syncNow] فوراً.
+  Widget _appBarSyncButton() {
+    return ValueListenableBuilder<String?>(
+      valueListenable: CloudSyncService.instance.lastError,
+      builder: (context, lastError, _) {
+        final hasError = lastError != null && lastError.isNotEmpty;
+        return Stack(
+          clipBehavior: Clip.none,
+          alignment: Alignment.center,
+          children: [
+            IconButton(
+              style: _homeAppBarActionStyle(),
+              icon: Icon(
+                hasError
+                    ? Icons.cloud_off_outlined
+                    : Icons.cloud_sync_outlined,
+                size: 20,
+              ),
+              tooltip: hasError ? 'تزامن — فشل آخر محاولة' : 'تزامن سحابي',
+              onPressed: () async {
+                final messenger = ScaffoldMessenger.of(context);
+                messenger.showSnackBar(
+                  const SnackBar(
+                    content: Text('بدء التزامن…'),
+                    duration: Duration(seconds: 2),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+                await CloudSyncService.instance.syncNow();
+              },
+            ),
+            if (hasError)
+              PositionedDirectional(
+                end: 6,
+                top: 6,
+                child: Container(
+                  width: 9,
+                  height: 9,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFEF4444),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white, width: 1.2),
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
     );
   }
 
@@ -1769,123 +1668,44 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  Widget _appBarCalculatorButton() {
-    return IconButton(
-      style: _homeAppBarActionStyle(),
-      icon: const Icon(Icons.calculate_rounded, size: 20),
-      onPressed: () => showFloatingCalculator(context),
-      tooltip: 'حاسبة',
-    );
-  }
+  /// قائمة المستخدم المنسدلة — تجمع كل الأدوات الثانوية (Theme، الإعدادات،
+  /// الحاسبة، Mac panel، التحرير، الخروج). تُستخدم في كل الفئات.
+  Widget _appBarUserMenu(ThemeProvider themeProvider, AuthProvider auth) {
+    final variant = context.screenLayout.layoutVariant;
+    final isDesktop = variant == DeviceVariant.desktopSM ||
+        variant == DeviceVariant.desktopLG;
+    final showEditMode = variant.index >= DeviceVariant.tabletLG.index;
 
-  Widget _appBarSettingsButton() {
-    return IconButton(
-      style: _homeAppBarActionStyle(),
-      icon: const Icon(Icons.settings_rounded, size: 20),
-      onPressed: () => _pushInContentTagged(
+    return HomeUserMenu(
+      userName: _sidebarUserTitle(auth),
+      userRole: auth.role,
+      isDarkMode: _isDarkMode,
+      isEditMode: _isEditMode,
+      macPanelEnabled: _macPanelEnabled,
+      showEditMode: showEditMode,
+      onShowUserInfo: () => _showUserInfoDialog(auth),
+      onToggleTheme: () {
+        themeProvider.toggleDarkMode();
+        setState(() {});
+      },
+      onOpenSettings: () => _pushInContentTagged(
         AppContentRoutes.settings,
         'الإعدادات',
         (_) => const SettingsScreen(),
         floatingPageBuilder: (_) => const SettingsScreen(showAppBar: false),
       ),
-      tooltip: 'الإعدادات',
-    );
-  }
-
-  Widget _appBarEditButton() {
-    return IconButton(
-      style: _homeAppBarActionStyle(
-        foreground: _isEditMode ? const Color(0xFF86EFAC) : null,
-      ),
-      icon: Icon(_isEditMode ? Icons.check : Icons.edit, size: 18),
-      onPressed: () => setState(() => _isEditMode = !_isEditMode),
-      tooltip: _isEditMode ? 'إنهاء التحرير' : 'تخصيص الاختصارات',
-    );
-  }
-
-  /// على الهاتف والعروض الضيقة: أيقونة «المزيد» بدل صف طويل من الأزرار.
-  Widget _appBarOverflowMenu(ThemeProvider themeProvider) {
-    final cs = Theme.of(context).colorScheme;
-    return PopupMenuButton<String>(
-      style: _homeAppBarActionStyle(),
-      icon: const Icon(Icons.more_horiz_rounded, size: 22),
-      tooltip: 'المزيد',
-      color: cs.surface,
-      surfaceTintColor: Colors.transparent,
-      onSelected: (value) {
-        switch (value) {
-          case 'calc':
-            showFloatingCalculator(context);
-            break;
-          case 'settings':
-            _pushInContentTagged(
-              AppContentRoutes.settings,
-              'الإعدادات',
-              (_) => const SettingsScreen(),
-              floatingPageBuilder: (_) =>
-                  const SettingsScreen(showAppBar: false),
-            );
-            break;
-          case 'edit':
-            setState(() => _isEditMode = !_isEditMode);
-            break;
-          case 'theme':
-            themeProvider.toggleDarkMode();
-            setState(() {});
-            break;
-        }
-      },
-      itemBuilder: (context) => [
-        PopupMenuItem(
-          value: 'calc',
-          child: ListTile(
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            leading: Icon(Icons.calculate_rounded, color: cs.onSurface),
-            title: const Text('حاسبة'),
-          ),
-        ),
-        PopupMenuItem(
-          value: 'settings',
-          child: ListTile(
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            leading: Icon(Icons.settings_rounded, color: cs.onSurface),
-            title: const Text('الإعدادات'),
-          ),
-        ),
-        PopupMenuItem(
-          value: 'edit',
-          child: ListTile(
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            leading: Icon(
-              _isEditMode ? Icons.check_rounded : Icons.edit_rounded,
-              color: cs.onSurface,
-            ),
-            title: Text(
-              _isEditMode ? 'إنهاء تخصيص الاختصارات' : 'تخصيص الاختصارات',
-            ),
-          ),
-        ),
-        const PopupMenuDivider(),
-        PopupMenuItem(
-          value: 'theme',
-          child: ListTile(
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            leading: Icon(
-              themeProvider.isDarkMode
-                  ? Icons.light_mode_outlined
-                  : Icons.dark_mode_outlined,
-              color: cs.onSurface,
-            ),
-            title: Text(
-              themeProvider.isDarkMode ? 'الوضع النهاري' : 'الوضع الليلي',
-            ),
-          ),
-        ),
-      ],
+      onShowCalculator: () => showFloatingCalculator(context),
+      onToggleEditMode: () => setState(() => _isEditMode = !_isEditMode),
+      onLogout: () => unawaited(_confirmAndLogout(auth)),
+      // لوحة Mac على الديسكتوب فقط — تمرير null في الباقي يخفي الخيار تماماً
+      onToggleMacPanel: isDesktop
+          ? () async {
+              final next = !_macPanelEnabled;
+              await MacStyleSettingsPrefs.setMacStylePanelEnabled(next);
+              if (!mounted) return;
+              setState(() => _macPanelEnabled = next);
+            }
+          : null,
     );
   }
 
@@ -1893,34 +1713,14 @@ class _HomeScreenState extends State<HomeScreen>
     ThemeProvider themeProvider,
     AuthProvider auth,
   ) {
-    final sl = ScreenLayout.of(context);
-    final w = MediaQuery.sizeOf(context).width;
-    // على نوافذ ضيقة (حتى مع عرض الجذر ≥800dp) مساحة أزرار AppBar قد لا تكفي —
-    // نستخدم قائمة التجاوز مبكراً لتفادي overflow أفقي.
-    final compact = sl.isHandsetForLayout || w < 960;
-
-    if (compact) {
-      return [
-        _appBarShiftButton(),
-        _appBarNotifButton(),
-        _appBarUserButton(auth),
-        _appBarOverflowMenu(themeProvider),
-      ];
-    }
-
+    // التصميم الجديد (2026-05): نُبقي خارج القائمة المنسدلة 3 أزرار رئيسية
+    // فقط (شرط أن تكون الوردية مفتوحة يظهر الـ shift أيضاً)، وكل ما عداها
+    // يدخل في HomeUserMenu لتقليل العبء الذهني (Cognitive Load).
     return [
       _appBarShiftButton(),
-      _appBarDivider(),
-      _appBarUserButton(auth),
+      _appBarSyncButton(),
       _appBarNotifButton(),
-      _appBarDivider(),
-      _appBarCalculatorButton(),
-      _appBarSettingsButton(),
-      _appBarEditButton(),
-      Padding(
-        padding: const EdgeInsetsDirectional.only(end: 6, start: 2),
-        child: _buildDarkModeToggle(themeProvider),
-      ),
+      _appBarUserMenu(themeProvider, auth),
     ];
   }
 
@@ -2296,71 +2096,10 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  Widget _buildDarkModeToggle(ThemeProvider themeProvider) {
-    final ac = context.appCorners;
-    return GestureDetector(
-      onTap: () {
-        themeProvider.toggleDarkMode();
-        setState(() {});
-      },
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeInOut,
-        width: 48,
-        height: 26,
-        decoration: BoxDecoration(
-          borderRadius: ac.radius(13),
-          border: Border.all(
-            color: Colors.white.withValues(alpha: 0.45),
-            width: 1,
-          ),
-          color: _isDarkMode
-              ? Colors.white.withValues(alpha: 0.18)
-              : Colors.white.withValues(alpha: 0.22),
-        ),
-        child: Stack(
-          alignment: Alignment.center,
-          children: [
-            Positioned(
-              left: 5,
-              child: Icon(
-                Icons.wb_sunny_rounded,
-                size: 13,
-                color: _isDarkMode ? Colors.white54 : Colors.orange,
-              ),
-            ),
-            Positioned(
-              right: 5,
-              child: Icon(
-                Icons.nights_stay_rounded,
-                size: 12,
-                color: _isDarkMode ? Colors.white : Colors.grey.shade500,
-              ),
-            ),
-            AnimatedAlign(
-              duration: const Duration(milliseconds: 300),
-              curve: Curves.easeInOut,
-              alignment: _isDarkMode
-                  ? Alignment.centerRight
-                  : Alignment.centerLeft,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 2),
-                child: Container(
-                  width: 20,
-                  height: 20,
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: ac.radius(10),
-                    border: Border.all(color: Colors.black12),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  // ── _buildDarkModeToggle حُذف في 2026-05 ────────────────────────────────────
+  // كان زراً مخصصاً (Animated toggle 48×26) في الـ AppBar. تبديل المظهر الآن
+  // ينتقل إلى HomeUserMenu (خيار "الوضع الليلي/النهاري") لتقليل عدد عناصر
+  // الـ AppBar من 7 إلى 4.
 
   /// أيقونات حقل البحث (باركود، لوحة مفاتيح، مسح) — نفس منطق الزوايا عند «مستدير».
   ButtonStyle? _searchBarSuffixIconStyle(Color iconColor) {
@@ -3028,6 +2767,8 @@ class _HomeScreenState extends State<HomeScreen>
       'defaultVariantId': p['defaultVariantId'],
       'defaultUnitFactor': p['defaultUnitFactor'],
       'defaultUnitLabel': p['defaultUnitLabel'],
+      'isService': p['isService'],
+      'serviceKind': p['serviceKind'],
     };
     if (!draft.isSaleScreenOpen) {
       _pushInContentTagged(
@@ -3046,10 +2787,8 @@ class _HomeScreenState extends State<HomeScreen>
     }
   }
 
-  // ── Main content (مع شريط الاختصارات القابل للتخصيص) ──────────────────────
+  // ── Main content (Dashboard فقط — QuickActions حُذفت في 2026-05) ──────────
   Widget _buildMainContent(double availableWidth) {
-    final qSize = _quickActionSize(availableWidth);
-
     final dashboard = DashboardView(
       isDark: _isDarkMode,
       onPinnedProductQuickSale: (preset) {
@@ -3195,41 +2934,11 @@ class _HomeScreenState extends State<HomeScreen>
             final raw = row?['shiftStaffUserId'];
             if (raw == null) return const SizedBox.shrink();
             final name = (row!['shiftStaffName'] as String?)?.trim() ?? '';
-            final label = name.isEmpty ? 'موظف الوردية' : name;
-            final gap = ScreenLayout.of(context).pageHorizontalGap;
-            return Material(
-              color: Theme.of(
-                context,
-              ).colorScheme.primaryContainer.withValues(alpha: 0.55),
-              child: Padding(
-                padding: EdgeInsets.symmetric(
-                  horizontal: gap,
-                  vertical: 8,
-                ),
-                child: Row(
-                  textDirection: TextDirection.rtl,
-                  children: [
-                    Icon(
-                      Icons.badge_outlined,
-                      size: 20,
-                      color: Theme.of(context).colorScheme.onPrimaryContainer,
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        'صلاحيات التشغيل مرتبطة بموظف الوردية: $label',
-                        textAlign: TextAlign.right,
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+            return ShiftPermissionBanner(
+              userName: name.isEmpty ? 'موظف الوردية' : name,
             );
           },
         ),
-        _buildQuickActionsBar(qSize),
-        Divider(height: 1, thickness: 1, color: _dividerColor),
         Expanded(child: dashboard),
       ],
     );
@@ -3458,6 +3167,9 @@ class _HomeScreenState extends State<HomeScreen>
 
   /// سطر المخزون تحت السعر في نتائج بحث المنتجات.
   String _productSearchStockLine(Map<String, dynamic> p) {
+    if (((p['isService'] as num?)?.toInt() ?? 0) == 1) {
+      return 'خدمة فنية';
+    }
     final track = (p['trackInventory'] as int?) != 0;
     if (!track) return 'غير متتبّع للمخزون';
     final q = p['qty'];
@@ -3594,173 +3306,10 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  // شريط الاختصارات مع دعم التحرير والإضافة
-  Widget _buildQuickActionsBar(double qSize) {
-    // الارتفاع = حجم الأيقونة (52%) + نص (20px) + padding (16px top+bottom) + مسافة (4px)
-    final barHeight = (qSize * 0.52) + 20 + 16 + 4 + 16;
-    return SizedBox(
-      height: barHeight,
-      child: ColoredBox(
-        color: _bgColor,
-        child: ListView.builder(
-          scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          itemCount: _quickActions.length + (_isEditMode ? 1 : 0),
-          itemBuilder: (context, index) {
-            if (_isEditMode && index == _quickActions.length) {
-              return Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 6),
-                child: _buildAddQuickActionButton(qSize),
-              );
-            }
-            final action = _quickActions[index];
-            return Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 6),
-              child: _buildQuickActionButton(
-                icon: action.icon,
-                label: action.label,
-                size: qSize,
-                isEditMode: _isEditMode,
-                onTap: () {
-                  if (_isEditMode) {
-                    _showDeleteConfirmation(index);
-                  } else {
-                    _pushInContentTagged(
-                      action.routeId,
-                      action.breadcrumbTitle,
-                      action.destination,
-                    );
-                  }
-                },
-                onLongPress: () {
-                  if (!_isEditMode) {
-                    setState(() {
-                      _isEditMode = true;
-                    });
-                  }
-                },
-              ),
-            );
-          },
-        ),
-      ),
-    );
-  }
-
-  Widget _buildAddQuickActionButton(double size) {
-    final ac = context.appCorners;
-    return GestureDetector(
-      onTap: _showAddQuickActionDialog,
-      child: SizedBox(
-        width: size * 0.85,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              width: size * 0.52,
-              height: size * 0.52,
-              decoration: BoxDecoration(
-                color: Colors.green.withValues(alpha: 0.12),
-                borderRadius: ac.md,
-                border: Border.all(color: Colors.green.shade700, width: 1),
-              ),
-              child: const Icon(Icons.add, color: Colors.green, size: 28),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'إضافة',
-              style: TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.w500,
-                color: _textPrimary,
-              ),
-              textAlign: TextAlign.center,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildQuickActionButton({
-    required IconData icon,
-    required String label,
-    required double size,
-    required bool isEditMode,
-    required VoidCallback onTap,
-    required VoidCallback onLongPress,
-  }) {
-    final ac = context.appCorners;
-    final iconBoxSize = size * 0.52;
-    return GestureDetector(
-      onTap: onTap,
-      onLongPress: onLongPress,
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          SizedBox(
-            width: size * 0.85,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Container(
-                  width: iconBoxSize,
-                  height: iconBoxSize,
-                  decoration: BoxDecoration(
-                    color: AppColors.primary.withValues(alpha: 0.08),
-                    borderRadius: ac.md,
-                    border: Border.all(
-                      color: AppColors.primary.withValues(alpha: 0.35),
-                      width: 1,
-                    ),
-                  ),
-                  child: Icon(
-                    icon,
-                    color: AppColors.primary,
-                    size: iconBoxSize * 0.45,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                SizedBox(
-                  width: size * 0.85,
-                  child: Text(
-                    label,
-                    style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w500,
-                      color: _textPrimary,
-                    ),
-                    textAlign: TextAlign.center,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          if (isEditMode)
-            Positioned(
-              top: -6,
-              right: -6,
-              child: GestureDetector(
-                onTap: onTap,
-                child: Container(
-                  width: 22,
-                  height: 22,
-                  decoration: const BoxDecoration(
-                    color: Colors.red,
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(Icons.close, color: Colors.white, size: 14),
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
+  // ── QuickActionsBar + Add/Item widgets حُذفت في 2026-05 ────────────────────
+  // كانت تبني شريط الـ 4 اختصارات أعلى الـ Dashboard. الميزة أصبحت غير ضرورية
+  // بعد تبني نموذج الـ Dashboard الجديد + Adaptive Search. ASCII wireframes
+  // في docs/migration_checklists/home_screen_wireframe.md تشرح البديل.
 
   Future<void> _persistModulesOrder() async {
     final prefs = await SharedPreferences.getInstance();
@@ -4105,20 +3654,7 @@ class _HomeScreenState extends State<HomeScreen>
 }
 
 // ── Data models ────────────────────────────────────────────────────────────────
-class QuickAction {
-  final IconData icon;
-  final String label;
-  final String routeId;
-  final String breadcrumbTitle;
-  final Widget Function(BuildContext) destination;
-  QuickAction({
-    required this.icon,
-    required this.label,
-    required this.routeId,
-    String? breadcrumbTitle,
-    required this.destination,
-  }) : breadcrumbTitle = breadcrumbTitle ?? label;
-}
+// كانت هنا فئة QuickAction سابقاً — حُذفت بكاملها في 2026-05.
 
 class _HomeInnerNavObserver extends NavigatorObserver {
   _HomeInnerNavObserver(this._state);

@@ -33,9 +33,9 @@ extension BarcodeLabelSizeX on BarcodeLabelSize {
   PdfPageFormat get pageFormat {
     const mm = PdfPageFormat.mm;
     return switch (this) {
-      BarcodeLabelSize.mm40x30 => PdfPageFormat(40 * mm, 30 * mm),
-      BarcodeLabelSize.mm50x30 => PdfPageFormat(50 * mm, 30 * mm),
-      BarcodeLabelSize.mm30x50 => PdfPageFormat(30 * mm, 50 * mm),
+      BarcodeLabelSize.mm40x30 => const PdfPageFormat(40 * mm, 30 * mm),
+      BarcodeLabelSize.mm50x30 => const PdfPageFormat(50 * mm, 30 * mm),
+      BarcodeLabelSize.mm30x50 => const PdfPageFormat(30 * mm, 50 * mm),
     };
   }
 

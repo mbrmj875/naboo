@@ -4,12 +4,12 @@ import 'package:archive/archive.dart';
 class SyncPayloadCodec {
   static String encode(Map<String, dynamic> payload) {
     final raw = utf8.encode(jsonEncode(payload));
-    return base64Encode(GZipEncoder().encodeBytes(raw));
+    return base64Encode(const GZipEncoder().encodeBytes(raw));
   }
 
   static Map<String, dynamic> decode(String text) {
     final gz = base64Decode(text);
-    final decodedBytes = GZipDecoder().decodeBytes(gz);
+    final decodedBytes = const GZipDecoder().decodeBytes(gz);
     final decoded = utf8.decode(decodedBytes);
     final data = jsonDecode(decoded);
     if (data is! Map<String, dynamic>) {

@@ -7,8 +7,8 @@
 # ملاحظة: GitHub قد يعرض تلقائياً «Source code (zip)» لكل إصدار — هذا لقطة الوسم في
 # المستودع وليس من سطور workflow؛ إن كان المستودع خاصاً فالوصول محصور بحساباتك.
 #
-# ملفات Android (naboo.apk) تُرفع يدوياً — لا تُبنى هنا.
-name: Release Windows installer
+# سيقوم Workflow ببناء نسخة ويندوز Naboo-windows-setup.exe ونسخة أندرويد Naboo.apk تلقائياً ورفعها كـ Release.
+name: Build & Release (Windows & Android)
 
 on:
   push:
@@ -99,3 +99,42 @@ jobs:
           fi
           gh release upload "$TAG" naboo-windows-setup.exe naboo-windows.zip --clobber --repo "$REPO"
           echo "OK: Windows assets on $TAG (existing APK untouched)"
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag || github.ref }}
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build APK
+        run: flutter build apk --release
+
+      - name: Rename APK file
+        run: cp build/app/outputs/flutter-apk/app-release.apk naboo.apk
+
+      - name: Attach Android APK to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          TAG="${{ github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag || github.ref_name }}"
+          REPO="${{ github.repository }}"
+          if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release create "$TAG" --repo "$REPO" --generate-notes --title "$TAG"
+          fi
+          gh release upload "$TAG" naboo.apk --clobber --repo "$REPO"
+          echo "OK: Android APK uploaded on $TAG"

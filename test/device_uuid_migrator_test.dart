@@ -8,21 +8,23 @@ void main() {
     SharedPreferences.setMockInitialValues({});
   });
 
-  test('not_started generates uuid and marks in_progress, returns legacy if exists', () async {
+  test(
+      'not_started generates uuid and marks in_progress; يُرجع UUID الجديد (لا legacy) لتجنّب صفّين على السيرفر',
+      () async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('lic.device_id', 'legacy-1');
 
     final migrator = DeviceUuidMigrator(prefs: prefs);
     final id = await migrator.getDeviceIdForUse();
 
-    expect(id, 'legacy-1');
     expect(prefs.getString('lic.uuid_migration_state'), UuidMigrationState.inProgress);
     expect((prefs.getString('lic.device_uuid') ?? '').length, greaterThan(10));
-    // legacy must stay until server confirms.
+    expect(id, prefs.getString('lic.device_uuid'));
+    // legacy يبقى حتى تأكيد السيرفر (completed).
     expect(prefs.getString('lic.device_id'), 'legacy-1');
   });
 
-  test('restart during in_progress keeps returning legacy', () async {
+  test('إثناء in_progress يُعاد نفس UUID المحفوظ إن وُجد', () async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('lic.device_id', 'legacy-1');
     await prefs.setString('lic.device_uuid', 'uuid-1');
@@ -30,7 +32,7 @@ void main() {
 
     final migrator = DeviceUuidMigrator(prefs: prefs);
     final id = await migrator.getDeviceIdForUse();
-    expect(id, 'legacy-1');
+    expect(id, 'uuid-1');
   });
 
   test('completed returns uuid', () async {

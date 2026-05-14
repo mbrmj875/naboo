@@ -2,10 +2,44 @@ part of 'database_helper.dart';
 
 // ── المصروفات (Expenses) ────────────────────────────────────────────────────
 
+/// مفتاح قيد الصندوق المرتبط بمصروف (ثابت لكل [expenseGlobalId]).
+String _expenseCashLedgerGlobalId(String expenseGlobalId) =>
+    '${expenseGlobalId}_cash';
+
+Map<String, dynamic>? _cashLedgerEntryForExpenseRpc({
+  required String expenseGlobalId,
+  required int tenantId,
+  required double amount,
+  required String descriptionLine,
+  required DateTime occurredAt,
+  required int? workShiftId,
+  required String updatedAtIso,
+}) {
+  final ledgerGid = _expenseCashLedgerGlobalId(expenseGlobalId);
+  final fils = -(amount.abs() * 1000).round();
+  return {
+    'global_id': ledgerGid,
+    'expense_global_id': expenseGlobalId,
+    'tenantId': tenantId,
+    'transactionType': 'expense_out',
+    'amount': -amount.abs(),
+    'amountFils': fils,
+    'description': descriptionLine,
+    'invoiceId': null,
+    'workShiftId': workShiftId,
+    'work_shift_global_id': null,
+    'createdAt': occurredAt.toIso8601String(),
+    'updatedAt': updatedAtIso,
+  };
+}
+
+/// ترحيل أعمدة المصروفات/التصنيفات. تجنّب `UNIQUE` داخل `ADD COLUMN` لأن بعض
+/// محركات SQLite (مثل Darwin في macOS/iOS) ترفض الصيغة وتفشل بصمت إذا تُمسَك الأخطاء.
 Future<void> ensureExpensesSchema(Database db) async {
   await db.execute('''
     CREATE TABLE IF NOT EXISTS expense_categories (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      global_id TEXT UNIQUE,
       tenantId INTEGER NOT NULL DEFAULT 1,
       name TEXT NOT NULL,
       sortOrder INTEGER NOT NULL DEFAULT 0,
@@ -18,6 +52,7 @@ Future<void> ensureExpensesSchema(Database db) async {
   await db.execute('''
     CREATE TABLE IF NOT EXISTS expenses (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      global_id TEXT UNIQUE,
       tenantId INTEGER NOT NULL DEFAULT 1,
       categoryId INTEGER NOT NULL,
       amount REAL NOT NULL CHECK(amount > 0),
@@ -30,6 +65,35 @@ Future<void> ensureExpensesSchema(Database db) async {
     )
   ''');
 
+  await db.execute('''
+    CREATE TABLE IF NOT EXISTS sync_queue (
+      mutation_id TEXT PRIMARY KEY,
+      entity_type TEXT NOT NULL,
+      operation TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      synced_at TEXT,
+      retry_count INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      last_attempt_at TEXT
+    )
+  ''');
+
+  Future<void> addSyncQueueColumn(String col, String type) async {
+    final rows = await db.rawQuery('PRAGMA table_info(sync_queue)');
+    final exists = rows.any(
+      (r) => (r['name']?.toString().toLowerCase() ?? '') == col.toLowerCase(),
+    );
+    if (!exists) {
+      try {
+        await db.execute('ALTER TABLE sync_queue ADD COLUMN $col $type');
+      } catch (_) {}
+    }
+  }
+
+  await addSyncQueueColumn('last_attempt_at', 'TEXT');
+
   Future<void> addExpenseColumn(String col, String type) async {
     final rows = await db.rawQuery('PRAGMA table_info(expenses)');
     final exists = rows.any(
@@ -38,9 +102,78 @@ Future<void> ensureExpensesSchema(Database db) async {
     if (!exists) {
       try {
         await db.execute('ALTER TABLE expenses ADD COLUMN $col $type');
-      } catch (_) {}
+      } catch (e, st) {
+        if (kDebugMode) {
+          debugPrint('[ensureExpensesSchema] ALTER expenses ADD $col failed: $e\n$st');
+        }
+      }
     }
   }
+
+  Future<void> addExpenseCategoryColumn(String col, String type) async {
+    final rows = await db.rawQuery('PRAGMA table_info(expense_categories)');
+    final exists = rows.any(
+      (r) => (r['name']?.toString().toLowerCase() ?? '') == col.toLowerCase(),
+    );
+    if (!exists) {
+      try {
+        await db.execute('ALTER TABLE expense_categories ADD COLUMN $col $type');
+      } catch (e, st) {
+        if (kDebugMode) {
+          debugPrint(
+            '[ensureExpensesSchema] ALTER expense_categories ADD $col failed: $e\n$st',
+          );
+        }
+      }
+    }
+  }
+
+  await addExpenseCategoryColumn('global_id', 'TEXT');
+  await addExpenseColumn('global_id', 'TEXT');
+
+  Future<bool> tableHasColumn(String table, String column) async {
+    final cols = await db.rawQuery('PRAGMA table_info($table)');
+    return cols.any(
+      (r) => (r['name']?.toString().toLowerCase() ?? '') == column.toLowerCase(),
+    );
+  }
+
+  Future<void> createPartialUniqueGlobalIdIndex({
+    required String table,
+    required String indexName,
+  }) async {
+    if (!await tableHasColumn(table, 'global_id')) {
+      if (kDebugMode) {
+        debugPrint(
+          '[ensureExpensesSchema] skip index $indexName: no global_id column on $table '
+          '(see ALTER logs above).',
+        );
+      }
+      return;
+    }
+    try {
+      await db.execute('''
+        CREATE UNIQUE INDEX IF NOT EXISTS $indexName
+        ON $table(global_id)
+        WHERE global_id IS NOT NULL AND TRIM(global_id) != ''
+      ''');
+    } catch (e, st) {
+      if (kDebugMode) {
+        debugPrint(
+          '[ensureExpensesSchema] CREATE INDEX $indexName failed: $e\n$st',
+        );
+      }
+    }
+  }
+
+  await createPartialUniqueGlobalIdIndex(
+    table: 'expense_categories',
+    indexName: 'uq_expense_categories_global_id',
+  );
+  await createPartialUniqueGlobalIdIndex(
+    table: 'expenses',
+    indexName: 'uq_expenses_global_id',
+  );
 
   await addExpenseColumn('employeeUserId', 'INTEGER');
   await addExpenseColumn('isRecurring', 'INTEGER NOT NULL DEFAULT 0');
@@ -53,6 +186,24 @@ Future<void> ensureExpensesSchema(Database db) async {
   await addExpenseColumn('invoiceRef', 'TEXT');
   await addExpenseColumn('landlordOrProperty', 'TEXT');
   await addExpenseColumn('taxKind', 'TEXT');
+  await addExpenseColumn('category_global_id', 'TEXT');
+
+  // Step 10 (soft-delete foundation): every read of `expenses` in
+  // reports_repository.dart now filters by `deleted_at IS NULL`. Make sure
+  // existing on-disk DBs gain the column (idempotent ALTER) and a partial
+  // index so the filter stays cheap.
+  await addExpenseColumn('deleted_at', 'TEXT');
+  try {
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_expenses_deleted_at ON expenses(deleted_at)',
+    );
+  } catch (e, st) {
+    if (kDebugMode) {
+      debugPrint(
+        '[ensureExpensesSchema] CREATE INDEX idx_expenses_deleted_at failed: $e\n$st',
+      );
+    }
+  }
 
   await db.execute(
     'CREATE INDEX IF NOT EXISTS idx_expenses_tenant_date ON expenses(tenantId, occurredAt)',
@@ -120,6 +271,33 @@ void _appendExpenseLedgerStatusFilter(
 }
 
 extension DbExpenses on DatabaseHelper {
+  /// يضمن وجود [global_id] للفئة ويُرجعه للمزامنة السحابية (لا يُعتمد على categoryId المحلي بين الأجهزة).
+  Future<String> _ensureCategoryGlobalId(
+    DatabaseExecutor txn,
+    int categoryId,
+  ) async {
+    final rows = await txn.query(
+      'expense_categories',
+      columns: ['global_id'],
+      where: 'id = ?',
+      whereArgs: [categoryId],
+      limit: 1,
+    );
+    var gid = rows.isEmpty
+        ? ''
+        : (rows.first['global_id'] as String?)?.trim() ?? '';
+    if (gid.isEmpty) {
+      gid = const Uuid().v4();
+      await txn.update(
+        'expense_categories',
+        {'global_id': gid},
+        where: 'id = ?',
+        whereArgs: [categoryId],
+      );
+    }
+    return gid;
+  }
+
   Future<List<Map<String, dynamic>>> getExpenseCategories({int tenantId = 1}) async {
     final db = await database;
     await ensureExpensesSchema(db);
@@ -247,12 +425,17 @@ extension DbExpenses on DatabaseHelper {
   }) async {
     final db = await database;
     await ensureExpensesSchema(db);
-    final nowIso = DateTime.now().toIso8601String();
+    await ensureCashLedgerGlobalIdSchema(db);
+    final nowIso = DateTime.now().toUtc().toIso8601String();
     late int expenseId;
     await db.transaction((txn) async {
-      expenseId = await txn.insert('expenses', {
+      final globalId = const Uuid().v4();
+      final categoryGlobalId = await _ensureCategoryGlobalId(txn, categoryId);
+      final basePayload = {
+        'global_id': globalId,
         'tenantId': tenantId,
         'categoryId': categoryId,
+        'category_global_id': categoryGlobalId,
         'amount': amount,
         'occurredAt': occurredAt.toIso8601String(),
         'status': status,
@@ -268,7 +451,9 @@ extension DbExpenses on DatabaseHelper {
         'taxKind': taxKind,
         'createdAt': nowIso,
         'updatedAt': nowIso,
-      });
+      };
+      expenseId = await txn.insert('expenses', basePayload);
+
       final actor = employeeUserId != null ? 'الموظف #$employeeUserId' : 'غير معروف';
       final statusLabel = status == 'paid' ? 'مدفوع' : 'معلق';
       await _insertActivityLogInTxn(
@@ -281,9 +466,13 @@ extension DbExpenses on DatabaseHelper {
         amount: amount,
         tenantId: tenantId,
       );
+      int? ledgerId;
+      String? ledgerNote;
+      int? openShiftIdForRpc;
       if (affectsCash && status == 'paid') {
-        final ledgerId = await _linkExpenseToCashLedger(
+        final link = await _linkExpenseToCashLedger(
           txn,
+          expenseGlobalId: globalId,
           expenseId: expenseId,
           categoryId: categoryId,
           amount: amount,
@@ -292,6 +481,9 @@ extension DbExpenses on DatabaseHelper {
           tenantId: tenantId,
           actorName: actor,
         );
+        ledgerId = link.ledgerId;
+        ledgerNote = link.note;
+        openShiftIdForRpc = link.workShiftId;
         await txn.update(
           'expenses',
           {'cashLedgerId': ledgerId},
@@ -299,13 +491,38 @@ extension DbExpenses on DatabaseHelper {
           whereArgs: [expenseId],
         );
       }
+
+      final queuePayload = Map<String, dynamic>.from(basePayload)
+        ..['cashLedgerId'] = ledgerId;
+      if (affectsCash && status == 'paid' && ledgerNote != null) {
+        queuePayload['cash_ledger_entry'] = _cashLedgerEntryForExpenseRpc(
+          expenseGlobalId: globalId,
+          tenantId: tenantId,
+          amount: amount,
+          descriptionLine: ledgerNote,
+          occurredAt: occurredAt,
+          workShiftId: openShiftIdForRpc,
+          updatedAtIso: nowIso,
+        );
+      } else {
+        queuePayload['cash_ledger_entry'] = null;
+      }
+
+      await SyncQueueService.instance.enqueueMutation(
+        txn,
+        entityType: 'expense',
+        globalId: globalId,
+        operation: 'INSERT',
+        payload: queuePayload,
+      );
     });
     CloudSyncService.instance.scheduleSyncSoon();
     return expenseId;
   }
 
-  Future<int> _linkExpenseToCashLedger(
+  Future<({int ledgerId, String note, int? workShiftId})> _linkExpenseToCashLedger(
     DatabaseExecutor txn, {
+    required String expenseGlobalId,
     required int expenseId,
     required int categoryId,
     required double amount,
@@ -335,26 +552,52 @@ extension DbExpenses on DatabaseHelper {
         : 'مصروف';
     final extra = (description != null && description.isNotEmpty) ? ' — $description' : '';
     final note = 'مصروف — $catName$extra (#exp:$expenseId)';
-    final id = await txn.insert('cash_ledger', {
+    final ledgerGlobalId = _expenseCashLedgerGlobalId(expenseGlobalId);
+    final updatedIso = DateTime.now().toUtc().toIso8601String();
+    final fils = -(amount.abs() * 1000).round();
+    final row = <String, dynamic>{
+      'global_id': ledgerGlobalId,
+      'tenantId': tenantId,
       'transactionType': 'expense_out',
       'amount': -amount.abs(),
+      'amountFils': fils,
       'description': note,
       'invoiceId': null,
       'workShiftId': openShiftId,
       'createdAt': occurredAt.toIso8601String(),
-    });
-    final actor = (actorName ?? '').trim().isEmpty ? 'غير معروف' : actorName!.trim();
-    await _insertActivityLogInTxn(
-      txn,
-      type: 'cash_entry_created',
-      refTable: 'cash_ledger',
-      refId: id,
-      title: 'قيد صندوق: مصروف',
-      details: 'مصروف #$expenseId • فئة #$categoryId • المنفذ: $actor',
-      amount: -amount.abs(),
-      tenantId: tenantId,
+      'updatedAt': updatedIso,
+    };
+
+    final existing = await txn.query(
+      'cash_ledger',
+      columns: ['id'],
+      where: 'global_id = ?',
+      whereArgs: [ledgerGlobalId],
+      limit: 1,
     );
-    return id;
+
+    late final int id;
+    if (existing.isEmpty) {
+      id = await txn.insert('cash_ledger', row);
+    } else {
+      id = existing.first['id'] as int;
+      await txn.update('cash_ledger', row, where: 'id = ?', whereArgs: [id]);
+    }
+
+    final actor = (actorName ?? '').trim().isEmpty ? 'غير معروف' : actorName!.trim();
+    if (existing.isEmpty) {
+      await _insertActivityLogInTxn(
+        txn,
+        type: 'cash_entry_created',
+        refTable: 'cash_ledger',
+        refId: id,
+        title: 'قيد صندوق: مصروف',
+        details: 'مصروف #$expenseId • فئة #$categoryId • المنفذ: $actor',
+        amount: -amount.abs(),
+        tenantId: tenantId,
+      );
+    }
+    return (ledgerId: id, note: note, workShiftId: openShiftId);
   }
 
   Future<void> updateExpense({
@@ -376,37 +619,34 @@ extension DbExpenses on DatabaseHelper {
   }) async {
     final db = await database;
     await ensureExpensesSchema(db);
+    await ensureCashLedgerGlobalIdSchema(db);
     await db.transaction((txn) async {
-      // Remove prior cash ledger link if any (will be recreated if still paid+affectsCash).
-      final prior = await txn.query(
+      final existingRows = await txn.query(
         'expenses',
-        columns: ['cashLedgerId'],
+        columns: ['global_id', 'createdAt', 'cashLedgerId'],
         where: 'id = ? AND tenantId = ?',
         whereArgs: [id, tenantId],
         limit: 1,
       );
-      final priorLedger = prior.isNotEmpty
-          ? (prior.first['cashLedgerId'] as num?)?.toInt()
-          : null;
-      final actor = employeeUserId != null ? 'الموظف #$employeeUserId' : 'غير معروف';
-      if (priorLedger != null) {
-        await txn.delete('cash_ledger', where: 'id = ?', whereArgs: [priorLedger]);
-        await _insertActivityLogInTxn(
-          txn,
-          type: 'cash_entry_deleted',
-          refTable: 'cash_ledger',
-          refId: priorLedger,
-          title: 'حذف قيد صندوق: مصروف',
-          details: 'تم حذف القيد المرتبط بمصروف #$id أثناء التعديل • المنفذ: $actor',
-          amount: null,
-          tenantId: tenantId,
-        );
+      if (existingRows.isEmpty) return;
+
+      String globalId = existingRows.first['global_id'] as String? ?? '';
+      if (globalId.isEmpty) {
+        globalId = const Uuid().v4();
       }
+      final createdAt =
+          existingRows.first['createdAt'] as String? ??
+          DateTime.now().toUtc().toIso8601String();
+      final priorLedger = (existingRows.first['cashLedgerId'] as num?)?.toInt();
+      final actor = employeeUserId != null ? 'الموظف #$employeeUserId' : 'غير معروف';
+      final ledgerGid = _expenseCashLedgerGlobalId(globalId);
 
       int? newLedgerId;
+      ({int ledgerId, String note, int? workShiftId})? paidLink;
       if (affectsCash && status == 'paid') {
-        newLedgerId = await _linkExpenseToCashLedger(
+        paidLink = await _linkExpenseToCashLedger(
           txn,
+          expenseGlobalId: globalId,
           expenseId: id,
           categoryId: categoryId,
           amount: amount,
@@ -415,29 +655,79 @@ extension DbExpenses on DatabaseHelper {
           tenantId: tenantId,
           actorName: actor,
         );
+        newLedgerId = paidLink.ledgerId;
+      } else {
+        final removed = await txn.delete(
+          'cash_ledger',
+          where: 'global_id = ?',
+          whereArgs: [ledgerGid],
+        );
+        if (removed > 0 && priorLedger != null) {
+          await _insertActivityLogInTxn(
+            txn,
+            type: 'cash_entry_deleted',
+            refTable: 'cash_ledger',
+            refId: priorLedger,
+            title: 'حذف قيد صندوق: مصروف',
+            details: 'تم حذف القيد المرتبط بمصروف #$id أثناء التعديل • المنفذ: $actor',
+            amount: null,
+            tenantId: tenantId,
+          );
+        }
       }
+
+      final nowIso = DateTime.now().toUtc().toIso8601String();
+      final categoryGlobalId = await _ensureCategoryGlobalId(txn, categoryId);
+
+      final Map<String, dynamic>? cashLedgerRpc = paidLink != null
+          ? _cashLedgerEntryForExpenseRpc(
+              expenseGlobalId: globalId,
+              tenantId: tenantId,
+              amount: amount,
+              descriptionLine: paidLink.note,
+              occurredAt: occurredAt,
+              workShiftId: paidLink.workShiftId,
+              updatedAtIso: nowIso,
+            )
+          : null;
+
+      final payload = {
+        'global_id': globalId,
+        'tenantId': tenantId,
+        'categoryId': categoryId,
+        'category_global_id': categoryGlobalId,
+        'amount': amount,
+        'occurredAt': occurredAt.toIso8601String(),
+        'status': status,
+        'description': description,
+        'employeeUserId': employeeUserId,
+        'isRecurring': isRecurring ? 1 : 0,
+        'recurringDay': recurringDay,
+        'attachmentPath': attachmentPath,
+        'invoiceRef': invoiceRef,
+        'landlordOrProperty': landlordOrProperty,
+        'taxKind': taxKind,
+        'affectsCash': affectsCash ? 1 : 0,
+        'cashLedgerId': newLedgerId,
+        'createdAt': createdAt,
+        'updatedAt': nowIso,
+      };
 
       await txn.update(
         'expenses',
-        {
-          'categoryId': categoryId,
-          'amount': amount,
-          'occurredAt': occurredAt.toIso8601String(),
-          'status': status,
-          'description': description,
-          'employeeUserId': employeeUserId,
-          'isRecurring': isRecurring ? 1 : 0,
-          'recurringDay': recurringDay,
-          'attachmentPath': attachmentPath,
-          'invoiceRef': invoiceRef,
-          'landlordOrProperty': landlordOrProperty,
-          'taxKind': taxKind,
-          'affectsCash': affectsCash ? 1 : 0,
-          'cashLedgerId': newLedgerId,
-          'updatedAt': DateTime.now().toIso8601String(),
-        },
+        payload,
         where: 'id = ? AND tenantId = ?',
         whereArgs: [id, tenantId],
+      );
+
+      final queuePayload = Map<String, dynamic>.from(payload)
+        ..['cash_ledger_entry'] = cashLedgerRpc;
+      await SyncQueueService.instance.enqueueMutation(
+        txn,
+        entityType: 'expense',
+        globalId: globalId,
+        operation: 'UPDATE',
+        payload: queuePayload,
       );
       final statusLabel = status == 'paid' ? 'مدفوع' : 'معلق';
       await _insertActivityLogInTxn(
@@ -457,10 +747,11 @@ extension DbExpenses on DatabaseHelper {
   Future<void> deleteExpense({required int id, int tenantId = 1}) async {
     final db = await database;
     await ensureExpensesSchema(db);
+    await ensureCashLedgerGlobalIdSchema(db);
     await db.transaction((txn) async {
       final prior = await txn.query(
         'expenses',
-        columns: ['cashLedgerId', 'categoryId', 'amount', 'employeeUserId'],
+        columns: ['cashLedgerId', 'categoryId', 'amount', 'employeeUserId', 'global_id'],
         where: 'id = ? AND tenantId = ?',
         whereArgs: [id, tenantId],
         limit: 1,
@@ -484,11 +775,27 @@ extension DbExpenses on DatabaseHelper {
           tenantId: tenantId,
         );
       }
+      final globalId = prior.isNotEmpty ? (prior.first['global_id'] as String? ?? '') : '';
+
+      final deleteSyncIso = DateTime.now().toUtc().toIso8601String();
       await txn.delete(
         'expenses',
         where: 'id = ? AND tenantId = ?',
         whereArgs: [id, tenantId],
       );
+
+      if (globalId.isNotEmpty) {
+        await SyncQueueService.instance.enqueueMutation(
+          txn,
+          entityType: 'expense',
+          globalId: globalId,
+          operation: 'DELETE',
+          payload: {
+            'global_id': globalId,
+            'updatedAt': deleteSyncIso,
+          },
+        );
+      }
       final categoryId = prior.isNotEmpty
           ? (prior.first['categoryId'] as num?)?.toInt()
           : null;

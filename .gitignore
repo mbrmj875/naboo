@@ -23,6 +23,11 @@ migrate_working_dir/
 # is commented out by default.
 #.vscode/
 
+# launch.json يحمل أسرار التشغيل (SUPABASE_URL / SUPABASE_ANON_KEY عبر
+# --dart-define) — لا يُرفع إلى git إطلاقاً. كل مطوّر ينشئ نسخته المحلّية.
+.vscode/launch.json
+.vscode/launch.*.json
+
 # Flutter/Dart/Pub related
 **/doc/api/
 **/ios/Flutter/.last_build_id

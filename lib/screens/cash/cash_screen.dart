@@ -1749,11 +1749,11 @@ class _AddTransactionSheetState extends State<_AddTransactionSheet> {
               TextField(
                 controller: _desc,
                 textDirection: TextDirection.rtl,
-                decoration: InputDecoration(
+                decoration: const InputDecoration(
                   labelText: 'الوصف',
-                  prefixIcon: const Icon(Icons.notes_rounded),
+                  prefixIcon: Icon(Icons.notes_rounded),
                   border: OutlineInputBorder(borderRadius: AppShape.none),
-                  contentPadding: const EdgeInsets.symmetric(
+                  contentPadding: EdgeInsets.symmetric(
                     horizontal: 14,
                     vertical: 12,
                   ),
@@ -1764,11 +1764,11 @@ class _AddTransactionSheetState extends State<_AddTransactionSheet> {
                 controller: _amount,
                 keyboardType: TextInputType.number,
                 textDirection: TextDirection.ltr,
-                decoration: InputDecoration(
+                decoration: const InputDecoration(
                   labelText: 'المبلغ (د.ع)',
-                  prefixIcon: const Icon(Icons.attach_money_rounded),
+                  prefixIcon: Icon(Icons.attach_money_rounded),
                   border: OutlineInputBorder(borderRadius: AppShape.none),
-                  contentPadding: const EdgeInsets.symmetric(
+                  contentPadding: EdgeInsets.symmetric(
                     horizontal: 14,
                     vertical: 12,
                   ),

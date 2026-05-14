@@ -1,0 +1,134 @@
+--- supabase_sync_queue_rpc.sql	2026-05-04
++++ supabase_sync_queue_rpc.sql	2026-05-04
+@@ -46,6 +46,39 @@
+ 
+ CREATE INDEX IF NOT EXISTS idx_work_shifts_tenant ON public.work_shifts(tenant_id);
+ 
++-- جدول العملاء على السيرفر
++CREATE TABLE IF NOT EXISTS public.customers (
++  global_id text PRIMARY KEY,
++  tenant_id integer NOT NULL DEFAULT 1,
++  name text NOT NULL,
++  phone text,
++  email text,
++  address text,
++  notes text,
++  balance numeric NOT NULL DEFAULT 0,
++  loyalty_points integer NOT NULL DEFAULT 0,
++  created_at timestamptz NOT NULL,
++  updated_at timestamptz NOT NULL
++);
++
++CREATE INDEX IF NOT EXISTS idx_customers_tenant ON public.customers(tenant_id);
++
++-- جدول الموردين على السيرفر
++CREATE TABLE IF NOT EXISTS public.suppliers (
++  global_id text PRIMARY KEY,
++  tenant_id integer NOT NULL DEFAULT 1,
++  name text NOT NULL,
++  phone text,
++  notes text,
++  is_active boolean NOT NULL DEFAULT true,
++  created_at timestamptz NOT NULL,
++  updated_at timestamptz NOT NULL
++);
++
++CREATE INDEX IF NOT EXISTS idx_suppliers_tenant ON public.suppliers(tenant_id);
++
+ -- TODO(security): عند تفعيل SELECT/INSERT/UPDATE مباشرة من عميل Supabase على public.cash_ledger و public.work_shifts
+ -- فعّل RLS وقيود tenant_id (مثل expenses) — لا تعتمد على SECURITY DEFINER وحدها كحماية للقراءة من العميل.
+ 
+@@ -317,6 +350,68 @@
+         END IF;
+ 
+         -- =========================================================================
++        -- 4. CUSTOMERS
++        -- =========================================================================
++        IF entity_type = 'customer' THEN
++            v_updated_at := (mutation->>'updatedAt')::timestamptz;
++
++            IF operation = 'DELETE' THEN
++                DELETE FROM customers WHERE global_id = v_global_id;
++            ELSIF operation IN ('INSERT', 'UPDATE') THEN
++                INSERT INTO customers (
++                    global_id,
++                    tenant_id,
++                    name,
++                    phone,
++                    email,
++                    address,
++                    notes,
++                    balance,
++                    loyalty_points,
++                    created_at,
++                    updated_at
++                ) VALUES (
++                    v_global_id,
++                    (mutation->>'tenantId')::integer,
++                    mutation->>'name',
++                    mutation->>'phone',
++                    mutation->>'email',
++                    mutation->>'address',
++                    mutation->>'notes',
++                    (COALESCE((mutation->>'balance')::numeric, 0)),
++                    (COALESCE((mutation->>'loyaltyPoints')::integer, 0)),
++                    (mutation->>'createdAt')::timestamptz,
++                    v_updated_at
++                )
++                ON CONFLICT (global_id) DO UPDATE SET
++                    tenant_id = EXCLUDED.tenant_id,
++                    name = EXCLUDED.name,
++                    phone = EXCLUDED.phone,
++                    email = EXCLUDED.email,
++                    address = EXCLUDED.address,
++                    notes = EXCLUDED.notes,
++                    balance = EXCLUDED.balance,
++                    loyalty_points = EXCLUDED.loyalty_points,
++                    updated_at = EXCLUDED.updated_at
++                WHERE customers.updated_at < EXCLUDED.updated_at;
++            END IF;
++        END IF;
++
++        -- =========================================================================
++        -- 5. SUPPLIERS
++        -- =========================================================================
++        IF entity_type = 'supplier' THEN
++            v_updated_at := (mutation->>'updatedAt')::timestamptz;
++
++            IF operation = 'DELETE' THEN
++                DELETE FROM suppliers WHERE global_id = v_global_id;
++            ELSIF operation IN ('INSERT', 'UPDATE') THEN
++                INSERT INTO suppliers (
++                    global_id,
++                    tenant_id,
++                    name,
++                    phone,
++                    notes,
++                    is_active,
++                    created_at,
++                    updated_at
++                ) VALUES (
++                    v_global_id,
++                    (mutation->>'tenantId')::integer,
++                    mutation->>'name',
++                    mutation->>'phone',
++                    mutation->>'notes',
++                    (COALESCE((mutation->>'isActive')::integer, 1) <> 0),
++                    (mutation->>'createdAt')::timestamptz,
++                    v_updated_at
++                )
++                ON CONFLICT (global_id) DO UPDATE SET
++                    tenant_id = EXCLUDED.tenant_id,
++                    name = EXCLUDED.name,
++                    phone = EXCLUDED.phone,
++                    notes = EXCLUDED.notes,
++                    is_active = EXCLUDED.is_active,
++                    updated_at = EXCLUDED.updated_at
++                WHERE suppliers.updated_at < EXCLUDED.updated_at;
++            END IF;
++        END IF;
++
++        -- =========================================================================
+         -- 4. STANDALONE CASH LEDGER ENTRIES
+         -- =========================================================================
+         IF entity_type = 'cash_ledger' THEN

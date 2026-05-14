@@ -52,7 +52,11 @@ extension DbFinancialSync on DatabaseHelper {
         await db.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_invoices_global_id ON invoices(global_id)');
         
         // توليد معرفات للقيود القديمة (إن وجدت)
-        final rows = await db.query('invoices', columns: ['id'], where: 'global_id IS NULL OR global_id = ""');
+        final rows = await db.query(
+          'invoices',
+          columns: ['id'],
+          where: "global_id IS NULL OR TRIM(global_id) = ''",
+        );
         if (rows.isNotEmpty) {
           await db.transaction((txn) async {
             final now = DateTime.now().toIso8601String();
@@ -79,7 +83,11 @@ extension DbFinancialSync on DatabaseHelper {
         await db.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_invoice_items_global_id ON invoice_items(global_id)');
         
         // توليد معرفات للعناصر القديمة
-        final rows = await db.query('invoice_items', columns: ['id'], where: 'global_id IS NULL OR global_id = ""');
+        final rows = await db.query(
+          'invoice_items',
+          columns: ['id'],
+          where: "global_id IS NULL OR TRIM(global_id) = ''",
+        );
         if (rows.isNotEmpty) {
           await db.transaction((txn) async {
             final now = DateTime.now().toIso8601String();

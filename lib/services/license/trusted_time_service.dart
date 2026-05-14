@@ -140,6 +140,25 @@ class TrustedTimeService {
     );
   }
 
+  /// أحدث وقت موثوق ممكن (UTC).
+  ///
+  /// التفضيل: آخر وقت تأكّد من السيرفر + Stopwatch monotonic داخل نفس الجلسة.
+  /// fallback: ساعة الجهاز عند عدم وجود baseline من السيرفر.
+  ///
+  /// لا تُستخدم لقرارات أمنية حساسة بدون فحص [checkLocalClock] لاكتشاف التلاعب.
+  Future<DateTime> currentTrustedTime() async {
+    final prefs = await _getPrefs();
+    final serverMs = prefs.getInt(LicensePrefsKeys.lastServerTime);
+    if (serverMs != null && _hasStartedStopwatch) {
+      final serverTime = DateTime.fromMillisecondsSinceEpoch(
+        serverMs,
+        isUtc: true,
+      );
+      return serverTime.add(_stopwatch.elapsed);
+    }
+    return DateTime.now().toUtc();
+  }
+
   /// تقدير drift داخل نفس جلسة التشغيل (Monotonic).
   /// يعيد null إذا لم يتم تأكيد السيرفر بعد.
   Future<Duration?> estimateDriftSinceServerConfirmation() async {

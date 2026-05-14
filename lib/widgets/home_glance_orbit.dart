@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -9,6 +10,7 @@ import '../services/cloud_sync_service.dart';
 import '../services/database_helper.dart';
 import '../services/tenant_context_service.dart';
 import '../utils/iraqi_currency_format.dart';
+import '../utils/screen_layout.dart';
 
 /// أهداف البطاقات المصغّرة في الرئيسية — تُمرَّر إلى [HomeScreen] للتنقّل.
 enum HomeGlanceAction {
@@ -262,9 +264,14 @@ class _HomeGlanceOrbitState extends State<HomeGlanceOrbit> {
     return LayoutBuilder(
       builder: (context, c) {
         final w = c.maxWidth;
-        // صف واحد للشاشات العريضة؛ عمودان للمتوسط؛ عمود واحد للضيق جداً.
-        final useSingleRow = w >= 900;
-        final useTwoColumnWrap = w >= 360 && w < 900;
+        // 2026-05 (Pilot 1-هـ): توزيع البطاقات صار يعتمد على DeviceVariant
+        // بدل breakpoints رقمية. صف واحد في tabletLG+ (≥840dp)، عمودان في
+        // phoneSM/tabletSM (360-839dp)، وعمود واحد في phoneXS (<360dp).
+        final variant = context.screenLayout.layoutVariant;
+        final useSingleRow =
+            variant.index >= DeviceVariant.tabletLG.index;
+        final useTwoColumnWrap = !useSingleRow &&
+            variant != DeviceVariant.phoneXS;
         final cellGap = w < 400 ? 8.0 : 10.0;
         // ارتفاع موحّد للبطاقات حتى لا تختلف بطاقة عن أخرى بسبب طول النص/الشارة.
         // (خصوصاً "الطلبات المنجزة" التي قد تضيف شارة + سطر نص أطول).
@@ -496,127 +503,148 @@ class _GlanceCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    // بطاقة هادئة بسطح موحّد + شريط جانبي رفيع باللون المميّز بدل التدرّجات
+    // المتنافسة، مع ظلّ خفيف يلائم الوضعين الفاتح والداكن.
     return Material(
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(14),
         child: Ink(
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(12),
-            gradient: LinearGradient(
-              begin: Alignment.topRight,
-              end: Alignment.bottomLeft,
-              colors: [Color.lerp(cs.surface, accent, 0.08)!, cs.surface],
-            ),
+            borderRadius: BorderRadius.circular(14),
+            color: cs.surface,
             border: Border.all(
-              color: accent.withValues(alpha: 0.35),
-              width: 1.2,
+              color: cs.outlineVariant.withValues(alpha: isDark ? 0.4 : 0.55),
+              width: 1,
             ),
             boxShadow: [
               BoxShadow(
-                color: accent.withValues(alpha: 0.12),
-                blurRadius: 12,
-                offset: const Offset(0, 4),
+                color: Colors.black.withValues(alpha: isDark ? 0.18 : 0.04),
+                blurRadius: isDark ? 8 : 6,
+                offset: const Offset(0, 2),
               ),
             ],
           ),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
-            child: LayoutBuilder(
-              builder: (context, c) {
-                final compact = c.maxHeight.isFinite && c.maxHeight < 110;
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Row(
+          child: Stack(
+            children: [
+              // شريط جانبي رفيع يحمل اللون المميّز للبطاقة (RTL: على اليمين).
+              PositionedDirectional(
+                start: 0,
+                top: 10,
+                bottom: 10,
+                child: Container(
+                  width: 3,
+                  decoration: BoxDecoration(
+                    color: accent,
+                    borderRadius: const BorderRadiusDirectional.horizontal(
+                      end: Radius.circular(3),
+                    ),
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsetsDirectional.fromSTEB(14, 12, 12, 10),
+                child: LayoutBuilder(
+                  builder: (context, c) {
+                    final compact = c.maxHeight.isFinite && c.maxHeight < 110;
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        Container(
-                          padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                            color: accent.withValues(alpha: 0.15),
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          child: Icon(icon, color: accent, size: 22),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.end,
-                            children: [
-                              Wrap(
-                                alignment: WrapAlignment.end,
-                                crossAxisAlignment: WrapCrossAlignment.center,
-                                spacing: 6,
-                                runSpacing: 2,
+                        Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: accent.withValues(
+                                  alpha: isDark ? 0.18 : 0.10,
+                                ),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: Icon(icon, color: accent, size: 19),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.end,
                                 children: [
-                                  if (alertDot)
-                                    Container(
-                                      width: 8,
-                                      height: 8,
-                                      decoration: const BoxDecoration(
-                                        color: Color(0xFFEF4444),
-                                        shape: BoxShape.circle,
+                                  Wrap(
+                                    alignment: WrapAlignment.end,
+                                    crossAxisAlignment:
+                                        WrapCrossAlignment.center,
+                                    spacing: 6,
+                                    runSpacing: 2,
+                                    children: [
+                                      if (alertDot)
+                                        Container(
+                                          width: 8,
+                                          height: 8,
+                                          decoration: const BoxDecoration(
+                                            color: Color(0xFFEF4444),
+                                            shape: BoxShape.circle,
+                                          ),
+                                        ),
+                                      ConstrainedBox(
+                                        constraints: const BoxConstraints(
+                                          maxWidth: 180,
+                                        ),
+                                        child: Text(
+                                          title,
+                                          textAlign: TextAlign.right,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: GoogleFonts.tajawal(
+                                            fontWeight: FontWeight.w700,
+                                            fontSize: 13,
+                                            color: cs.onSurface,
+                                          ),
+                                        ),
                                       ),
-                                    ),
-                                  ConstrainedBox(
-                                    constraints: const BoxConstraints(
-                                      maxWidth: 180,
-                                    ),
-                                    child: Text(
-                                      title,
-                                      textAlign: TextAlign.right,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.w800,
-                                        fontSize: 13.5,
-                                        color: cs.onSurface,
-                                      ),
+                                      if (badge != null) badge!,
+                                    ],
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    subtitle,
+                                    textAlign: TextAlign.right,
+                                    maxLines: compact ? 1 : 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w800,
+                                      fontSize: 12.5,
+                                      color: cs.onSurface,
+                                      height: 1.2,
                                     ),
                                   ),
-                                  if (badge != null) badge!,
                                 ],
                               ),
-                              const SizedBox(height: 4),
-                              Text(
-                                subtitle,
-                                textAlign: TextAlign.right,
-                                maxLines: compact ? 1 : 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w700,
-                                  fontSize: 12,
-                                  color: cs.primary,
-                                  height: 1.2,
-                                ),
+                            ),
+                          ],
+                        ),
+                        SizedBox(height: compact ? 4 : 8),
+                        Expanded(
+                          child: Align(
+                            alignment: Alignment.topRight,
+                            child: Text(
+                              hint,
+                              textAlign: TextAlign.right,
+                              maxLines: compact ? 1 : 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 10.5,
+                                height: 1.25,
+                                color: cs.onSurfaceVariant,
                               ),
-                            ],
+                            ),
                           ),
                         ),
                       ],
-                    ),
-                    SizedBox(height: compact ? 4 : 8),
-                    Expanded(
-                      child: Align(
-                        alignment: Alignment.topRight,
-                        child: Text(
-                          hint,
-                          textAlign: TextAlign.right,
-                          maxLines: compact ? 1 : 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 10.5,
-                            height: 1.25,
-                            color: cs.onSurfaceVariant,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                );
-              },
-            ),
+                    );
+                  },
+                ),
+              ),
+            ],
           ),
         ),
       ),

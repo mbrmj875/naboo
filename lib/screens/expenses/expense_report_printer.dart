@@ -273,7 +273,7 @@ class ExpenseReportPrinter {
         pw.Center(
           child: pw.Text(
             'الفترة: ${_dateFmt.format(from)}  ->  ${_dateFmt.format(to)}',
-            style: pw.TextStyle(fontSize: 10, color: PdfColors.grey700),
+            style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey700),
           ),
         ),
         pw.SizedBox(height: 6),
@@ -289,12 +289,12 @@ class ExpenseReportPrinter {
         children: [
           pw.Text(
             'تم الإنشاء: ${_dateFmt.format(DateTime.now())}',
-            style: pw.TextStyle(fontSize: 9, color: PdfColors.grey600),
+            style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey600),
           ),
           pw.Spacer(),
           pw.Text(
             'صفحة ${ctx.pageNumber}/${ctx.pagesCount}',
-            style: pw.TextStyle(fontSize: 9, color: PdfColors.grey600),
+            style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey600),
           ),
         ],
       ),
@@ -320,7 +320,7 @@ class ExpenseReportPrinter {
             crossAxisAlignment: pw.CrossAxisAlignment.start,
             children: [
               pw.Text(label,
-                  style: pw.TextStyle(fontSize: 9, color: PdfColors.grey700)),
+                  style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey700)),
               pw.SizedBox(height: 3),
               pw.Text(
                 value,

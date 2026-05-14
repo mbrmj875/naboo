@@ -157,7 +157,7 @@ class CustomersProvider extends ChangeNotifier {
     }
   }
 
-  Future<void> onCustomerChanged() async {
+  void onCustomerChanged() {
     unawaited(refresh());
   }
 }

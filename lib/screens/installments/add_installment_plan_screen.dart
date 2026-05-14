@@ -8,6 +8,7 @@ import '../../models/installment_settings_data.dart';
 import '../../services/database_helper.dart';
 import '../../theme/design_tokens.dart';
 import '../../utils/screen_layout.dart';
+import '../../widgets/adaptive/adaptive_form_container.dart';
 
 final _numFmt = NumberFormat('#,##0', 'en');
 final _dateFmt = DateFormat('dd/MM/yyyy', 'en');
@@ -301,7 +302,8 @@ class _AddInstallmentPlanScreenState extends State<AddInstallmentPlanScreen> {
           backgroundColor: AppColors.primary,
           foregroundColor: Colors.white,
         ),
-        body: Form(
+        body: AdaptiveFormContainer(
+          child: Form(
           key: _formKey,
           child: ListView(
             padding: const EdgeInsets.all(16),
@@ -512,6 +514,7 @@ class _AddInstallmentPlanScreenState extends State<AddInstallmentPlanScreen> {
               ),
             ],
           ),
+        ),
         ),
       ),
     );

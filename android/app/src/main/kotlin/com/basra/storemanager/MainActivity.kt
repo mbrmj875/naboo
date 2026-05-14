@@ -1,4 +1,4 @@
-package com.yourdomain.your_app_name
+package com.basra.storemanager
 
 import io.flutter.embedding.android.FlutterActivity
 

@@ -1,6 +1,27 @@
+import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 
 import 'database_helper.dart';
+import 'tenant_context_service.dart';
+
+// Step 9 (tenant isolation):
+// Every aggregate, list, GROUP BY, and COUNT in this file now binds the active
+// tenant id from [TenantContext] and applies it to the SQL WHERE clause via a
+// parameterised placeholder. The previously-hardcoded fixed-tenant filters in
+// the expenses queries are removed in favour of [TenantContext.requireTenantId]
+// driving every read.
+//
+// The user-listed query bodies are extracted into [ReportsSqlOps] so unit
+// tests can drive them directly against the in-memory FFI database in
+// `test/helpers/in_memory_db`, without instantiating [DatabaseHelper].
+
+/// SQL fragment for the sales-only filter (invoice `type` indices 0..3:
+/// cash / installment / credit / quotation, but NOT receipt-style entries such
+/// as debt collection or supplier payouts). Inlined as a literal because the
+/// type indices are compile-time constants — there is no SQL injection risk.
+/// Shared by [ReportsSqlOps] (static, testable) and [ReportsRepository] so
+/// both stay in sync.
+const String _kSalesTypeInSql = 'type IN (0,1,2,3)';
 
 /// نطاق زمني للتقارير (مقارنة نصية ISO مع عمود `invoices.date`).
 class ReportDateRange {
@@ -264,6 +285,157 @@ class StaffSalesRow {
   final double salesTotal;
 }
 
+/// Pure SQL operations for the reports domain, parameterised over `tenantId`
+/// so they can be unit-tested against the in-memory FFI schema without
+/// touching [DatabaseHelper] or its on-disk file. Production callers go
+/// through [ReportsRepository.loadSnapshot], which gates on
+/// [TenantContextService.requireActiveTenantId] before invoking these helpers.
+@visibleForTesting
+class ReportsSqlOps {
+  ReportsSqlOps._();
+
+  /// Total expenses for the active tenant inside `[from, to]`.
+  ///
+  /// Replaces the previous hardcoded fixed-tenant filter, which was the most
+  /// dangerous bug in the file: it returned tenant one's expenses to every
+  /// caller regardless of session.
+  static Future<double> sumExpenses(
+    DatabaseExecutor db,
+    int tenantId,
+    String from,
+    String to,
+  ) async {
+    final rows = await db.rawQuery(
+      '''
+      SELECT COALESCE(SUM(amount), 0) AS s
+      FROM expenses
+      WHERE tenantId = ?
+        AND deleted_at IS NULL
+        AND occurredAt >= ? AND occurredAt <= ?
+      ''',
+      [tenantId, from, to],
+    );
+    return (rows.first['s'] as num?)?.toDouble() ?? 0.0;
+  }
+
+  /// Net sales total for the active tenant — non-returned sales-type invoices.
+  static Future<double> sumSalesNet(
+    DatabaseExecutor db,
+    int tenantId,
+    String from,
+    String to,
+  ) async {
+    final rows = await db.rawQuery(
+      '''
+      SELECT COALESCE(SUM(total), 0) AS s FROM invoices
+      WHERE tenantId = ?
+        AND deleted_at IS NULL
+        AND IFNULL(isReturned, 0) = 0
+        AND $_kSalesTypeInSql
+        AND date >= ? AND date <= ?
+      ''',
+      [tenantId, from, to],
+    );
+    return (rows.first['s'] as num?)?.toDouble() ?? 0;
+  }
+
+  /// Invoice totals grouped by `type` for the active tenant.
+  static Future<Map<int, double>> salesByType(
+    DatabaseExecutor db,
+    int tenantId,
+    String from,
+    String to,
+  ) async {
+    final rows = await db.rawQuery(
+      '''
+      SELECT type, COALESCE(SUM(total), 0) AS s FROM invoices
+      WHERE tenantId = ?
+        AND deleted_at IS NULL
+        AND IFNULL(isReturned, 0) = 0
+        AND $_kSalesTypeInSql
+        AND date >= ? AND date <= ?
+      GROUP BY type
+      ''',
+      [tenantId, from, to],
+    );
+    final m = <int, double>{};
+    for (final r in rows) {
+      m[(r['type'] as num).toInt()] = (r['s'] as num).toDouble();
+    }
+    return m;
+  }
+
+  /// Sum of *returned* sales invoices for the active tenant.
+  static Future<double> returnsTotals(
+    DatabaseExecutor db,
+    int tenantId,
+    String from,
+    String to,
+  ) async {
+    final rows = await db.rawQuery(
+      '''
+      SELECT COALESCE(SUM(total), 0) AS s FROM invoices
+      WHERE tenantId = ?
+        AND deleted_at IS NULL
+        AND IFNULL(isReturned, 0) = 1
+        AND $_kSalesTypeInSql
+        AND date >= ? AND date <= ?
+      ''',
+      [tenantId, from, to],
+    );
+    return (rows.first['s'] as num?)?.toDouble() ?? 0;
+  }
+
+  /// Count of invoices for the active tenant, optionally filtering by
+  /// returned status.
+  static Future<int> countInvoices(
+    DatabaseExecutor db,
+    int tenantId,
+    String from,
+    String to, {
+    required bool returned,
+  }) async {
+    final rows = await db.rawQuery(
+      '''
+      SELECT COUNT(*) AS c FROM invoices
+      WHERE tenantId = ?
+        AND deleted_at IS NULL
+        AND IFNULL(isReturned, 0) = ?
+        AND $_kSalesTypeInSql
+        AND date >= ? AND date <= ?
+      ''',
+      [tenantId, returned ? 1 : 0, from, to],
+    );
+    return (rows.first['c'] as num?)?.toInt() ?? 0;
+  }
+
+  /// Customers with positive balance for the active tenant. The customers
+  /// table is shared across tenants, so this filter is mandatory to prevent
+  /// cross-tenant debtor leakage.
+  static Future<List<DebtorRow>> debtors(
+    DatabaseExecutor db,
+    int tenantId,
+  ) async {
+    final rows = await db.query(
+      'customers',
+      columns: ['id', 'name', 'balance'],
+      where: 'tenantId = ? AND balance > ?',
+      whereArgs: [tenantId, 0.01],
+      orderBy: 'balance DESC',
+      limit: 100,
+    );
+    return rows
+        .map(
+          (r) => DebtorRow(
+            customerId: r['id'] as int,
+            name: r['name']?.toString() ?? '',
+            balance: (r['balance'] as num?)?.toDouble() ?? 0,
+          ),
+        )
+        .toList();
+  }
+}
+
 /// استعلامات تجميعية للتقارير — لا تُحمّل كل الجدول في الذاكرة.
 class ReportsRepository {
   ReportsRepository._();
@@ -271,41 +443,65 @@ class ReportsRepository {
 
   final DatabaseHelper _db = DatabaseHelper();
 
-  /// أنواع الفواتير التي تُعتبر "مبيعات" (ولا تشمل السندات مثل التحصيل/دفع مورد).
-  static const List<int> _salesInvoiceTypeIdx = <int>[0, 1, 2, 3];
+  Future<int> _tenantId() async {
+    final t = TenantContextService.instance;
+    if (!t.loaded) {
+      await t.load();
+    }
+    return t.requireActiveTenantId();
+  }
 
-  String get _salesTypeInSql => 'type IN (${_salesInvoiceTypeIdx.join(',')})';
+  /// SQL fragment for the sales-only filter, mirrored on the class for
+  /// historical readability inside `loadSnapshot`'s helpers.
+  static const String _salesTypeInSql = _kSalesTypeInSql;
 
   Future<ReportsSnapshot> loadSnapshot(ReportDateRange range) async {
+    final tid = await _tenantId();
     final db = await _db.database;
     final from = range.fromIso;
     final to = range.toIso;
 
-    final salesByType = await _salesByType(db, from, to);
-    final netReturns = await _returnsTotals(db, from, to);
-    final expensesTotal = await _sumExpenses(db, from, to);
-    final invCount = await _countInvoices(db, from, to, returned: false);
-    final retCount = await _countInvoices(db, from, to, returned: true);
-    final daily = await _dailySales(db, from, to);
-    final dailyExpenses = await _dailyExpenses(db, from, to);
-    final dailySalesByType = await _dailySalesByType(db, from, to);
-    final topCust = await _topCustomers(db, from, to);
-    final topProd = await _topProducts(db, from, to);
-    final debtors = await _debtors(db);
-    final inst = await _installmentsInRange(db, from, to);
-    final staff = await _staffSales(db, from, to);
-    final dailyStaff = await _dailySalesByStaff(db, from, to);
+    // Ensure expenses tables exist on older DBs before any read touches them.
+    await ensureExpensesSchema(db);
+
+    final salesByType = await ReportsSqlOps.salesByType(db, tid, from, to);
+    final netReturns = await ReportsSqlOps.returnsTotals(db, tid, from, to);
+    final expensesTotal = await ReportsSqlOps.sumExpenses(db, tid, from, to);
+    final invCount = await ReportsSqlOps.countInvoices(
+      db,
+      tid,
+      from,
+      to,
+      returned: false,
+    );
+    final retCount = await ReportsSqlOps.countInvoices(
+      db,
+      tid,
+      from,
+      to,
+      returned: true,
+    );
+    final daily = await _dailySales(db, tid, from, to);
+    final dailyExpenses = await _dailyExpenses(db, tid, from, to);
+    final dailySalesByType = await _dailySalesByType(db, tid, from, to);
+    final topCust = await _topCustomers(db, tid, from, to);
+    final topProd = await _topProducts(db, tid, from, to);
+    final debtors = await ReportsSqlOps.debtors(db, tid);
+    final inst = await _installmentsInRange(db, tid, from, to);
+    final staff = await _staffSales(db, tid, from, to);
+    final dailyStaff = await _dailySalesByStaff(db, tid, from, to);
     final marginStats = await _marginStats(
       db,
+      tid,
       from,
       to,
       expensesTotal: expensesTotal,
     );
-    final dailyMargin = await _dailyMargin(db, from, to);
-    final productMargins = await _productMargins(db, from, to);
-    final loyalty = await _loyaltyInvoiceTotals(db, from, to);
+    final dailyMargin = await _dailyMargin(db, tid, from, to);
+    final productMargins = await _productMargins(db, tid, from, to);
+    final loyalty = await _loyaltyInvoiceTotals(db, tid, from, to);
 
-    final netSales = await _sumSalesNet(db, from, to);
+    final netSales = await ReportsSqlOps.sumSalesNet(db, tid, from, to);
 
     return ReportsSnapshot(
       range: range,
@@ -334,103 +530,23 @@ class ReportsRepository {
     );
   }
 
-  Future<double> _sumExpenses(Database db, String from, String to) async {
-    // Ensure tables exist even on older DBs.
-    await ensureExpensesSchema(db);
-    final rows = await db.rawQuery(
-      '''
-      SELECT COALESCE(SUM(amount), 0) AS s
-      FROM expenses
-      WHERE tenantId = 1
-        AND occurredAt >= ? AND occurredAt <= ?
-      ''',
-      [from, to],
-    );
-    return (rows.first['s'] as num?)?.toDouble() ?? 0.0;
-  }
-
-  Future<double> _sumSalesNet(Database db, String from, String to) async {
-    final rows = await db.rawQuery(
-      '''
-      SELECT COALESCE(SUM(total), 0) AS s FROM invoices
-      WHERE IFNULL(isReturned, 0) = 0
-        AND $_salesTypeInSql
-        AND date >= ? AND date <= ?
-      ''',
-      [from, to],
-    );
-    return (rows.first['s'] as num?)?.toDouble() ?? 0;
-  }
-
-  Future<Map<int, double>> _salesByType(
-    Database db,
-    String from,
-    String to,
-  ) async {
-    final rows = await db.rawQuery(
-      '''
-      SELECT type, COALESCE(SUM(total), 0) AS s FROM invoices
-      WHERE IFNULL(isReturned, 0) = 0
-        AND $_salesTypeInSql
-        AND date >= ? AND date <= ?
-      GROUP BY type
-      ''',
-      [from, to],
-    );
-    final m = <int, double>{};
-    for (final r in rows) {
-      m[(r['type'] as num).toInt()] = (r['s'] as num).toDouble();
-    }
-    return m;
-  }
-
-  Future<double> _returnsTotals(Database db, String from, String to) async {
-    final rows = await db.rawQuery(
-      '''
-      SELECT COALESCE(SUM(total), 0) AS s FROM invoices
-      WHERE IFNULL(isReturned, 0) = 1
-        AND $_salesTypeInSql
-        AND date >= ? AND date <= ?
-      ''',
-      [from, to],
-    );
-    return (rows.first['s'] as num?)?.toDouble() ?? 0;
-  }
-
-  Future<int> _countInvoices(
-    Database db,
-    String from,
-    String to, {
-    required bool returned,
-  }) async {
-    final rows = await db.rawQuery(
-      '''
-      SELECT COUNT(*) AS c FROM invoices
-      WHERE IFNULL(isReturned, 0) = ?
-        AND $_salesTypeInSql
-        AND date >= ? AND date <= ?
-      ''',
-      [returned ? 1 : 0, from, to],
-    );
-    return (rows.first['c'] as num?)?.toInt() ?? 0;
-  }
-
   Future<List<DailyAmountPoint>> _dailyExpenses(
     Database db,
+    int tenantId,
     String from,
     String to,
   ) async {
-    await ensureExpensesSchema(db);
     final rows = await db.rawQuery(
       '''
       SELECT substr(occurredAt, 1, 10) AS d, COALESCE(SUM(amount), 0) AS s
       FROM expenses
-      WHERE tenantId = 1
+      WHERE tenantId = ?
+        AND deleted_at IS NULL
         AND occurredAt >= ? AND occurredAt <= ?
       GROUP BY substr(occurredAt, 1, 10)
       ORDER BY d ASC
       ''',
-      [from, to],
+      [tenantId, from, to],
     );
     return rows
         .map(
@@ -444,6 +560,7 @@ class ReportsRepository {
 
   Future<List<DailyByTypePoint>> _dailySalesByType(
     Database db,
+    int tenantId,
     String from,
     String to,
   ) async {
@@ -453,13 +570,15 @@ class ReportsRepository {
              type AS t,
              COALESCE(SUM(total), 0) AS s
       FROM invoices
-      WHERE IFNULL(isReturned, 0) = 0
+      WHERE tenantId = ?
+        AND deleted_at IS NULL
+        AND IFNULL(isReturned, 0) = 0
         AND $_salesTypeInSql
         AND date >= ? AND date <= ?
       GROUP BY substr(date, 1, 10), type
       ORDER BY d ASC
       ''',
-      [from, to],
+      [tenantId, from, to],
     );
     return rows
         .map(
@@ -474,6 +593,7 @@ class ReportsRepository {
 
   Future<List<DailyByLabelPoint>> _dailySalesByStaff(
     Database db,
+    int tenantId,
     String from,
     String to,
   ) async {
@@ -484,7 +604,9 @@ class ReportsRepository {
         SELECT IFNULL(NULLIF(TRIM(createdByUserName), ''), '(غير معروف)') AS u,
                COALESCE(SUM(total), 0) AS s
         FROM invoices
-        WHERE IFNULL(isReturned, 0) = 0
+        WHERE tenantId = ?
+          AND deleted_at IS NULL
+          AND IFNULL(isReturned, 0) = 0
           AND $_salesTypeInSql
           AND date >= ? AND date <= ?
         GROUP BY 1
@@ -495,14 +617,16 @@ class ReportsRepository {
              IFNULL(NULLIF(TRIM(createdByUserName), ''), '(غير معروف)') AS u,
              COALESCE(SUM(total), 0) AS s
       FROM invoices
-      WHERE IFNULL(isReturned, 0) = 0
+      WHERE tenantId = ?
+        AND deleted_at IS NULL
+        AND IFNULL(isReturned, 0) = 0
         AND $_salesTypeInSql
         AND date >= ? AND date <= ?
         AND IFNULL(NULLIF(TRIM(createdByUserName), ''), '(غير معروف)') IN (SELECT u FROM top_staff)
       GROUP BY substr(date, 1, 10), u
       ORDER BY d ASC
       ''',
-      [from, to, from, to],
+      [tenantId, from, to, tenantId, from, to],
     );
     return rows
         .map(
@@ -517,6 +641,7 @@ class ReportsRepository {
 
   Future<List<DailySalesPoint>> _dailySales(
     Database db,
+    int tenantId,
     String from,
     String to,
   ) async {
@@ -524,13 +649,15 @@ class ReportsRepository {
       '''
       SELECT substr(date, 1, 10) AS d, COALESCE(SUM(total), 0) AS s
       FROM invoices
-      WHERE IFNULL(isReturned, 0) = 0
+      WHERE tenantId = ?
+        AND deleted_at IS NULL
+        AND IFNULL(isReturned, 0) = 0
         AND $_salesTypeInSql
         AND date >= ? AND date <= ?
       GROUP BY substr(date, 1, 10)
       ORDER BY d ASC
       ''',
-      [from, to],
+      [tenantId, from, to],
     );
     return rows
         .map(
@@ -544,6 +671,7 @@ class ReportsRepository {
 
   Future<List<NamedAmountRow>> _topCustomers(
     Database db,
+    int tenantId,
     String from,
     String to,
   ) async {
@@ -551,7 +679,9 @@ class ReportsRepository {
       '''
       SELECT TRIM(customerName) AS n, COALESCE(SUM(total), 0) AS s, COUNT(*) AS c
       FROM invoices
-      WHERE IFNULL(isReturned, 0) = 0
+      WHERE tenantId = ?
+        AND deleted_at IS NULL
+        AND IFNULL(isReturned, 0) = 0
         AND $_salesTypeInSql
         AND date >= ? AND date <= ?
         AND IFNULL(customerName, '') != ''
@@ -559,7 +689,7 @@ class ReportsRepository {
       ORDER BY s DESC
       LIMIT 20
       ''',
-      [from, to],
+      [tenantId, from, to],
     );
     return rows
         .map(
@@ -574,6 +704,7 @@ class ReportsRepository {
 
   Future<List<ProductSalesRow>> _topProducts(
     Database db,
+    int tenantId,
     String from,
     String to,
   ) async {
@@ -584,14 +715,17 @@ class ReportsRepository {
              COALESCE(SUM(ii.total), 0) AS t
       FROM invoice_items ii
       INNER JOIN invoices inv ON inv.id = ii.invoiceId
-      WHERE IFNULL(inv.isReturned, 0) = 0
+      WHERE inv.tenantId = ?
+        AND inv.deleted_at IS NULL
+        AND ii.deleted_at IS NULL
+        AND IFNULL(inv.isReturned, 0) = 0
         AND inv.$_salesTypeInSql
         AND inv.date >= ? AND inv.date <= ?
       GROUP BY ii.productName
       ORDER BY t DESC
       LIMIT 20
       ''',
-      [from, to],
+      [tenantId, from, to],
     );
     return rows
         .map(
@@ -604,28 +738,13 @@ class ReportsRepository {
         .toList();
   }
 
-  Future<List<DebtorRow>> _debtors(Database db) async {
-    final rows = await db.query(
-      'customers',
-      columns: ['id', 'name', 'balance'],
-      where: 'balance > ?',
-      whereArgs: [0.01],
-      orderBy: 'balance DESC',
-      limit: 100,
-    );
-    return rows
-        .map(
-          (r) => DebtorRow(
-            customerId: r['id'] as int,
-            name: r['name']?.toString() ?? '',
-            balance: (r['balance'] as num?)?.toDouble() ?? 0,
-          ),
-        )
-        .toList();
-  }
-
   Future<({List<InstallmentPlanRow> plans, InstallmentTotals totals})>
-  _installmentsInRange(Database db, String from, String to) async {
+  _installmentsInRange(
+    Database db,
+    int tenantId,
+    String from,
+    String to,
+  ) async {
     List<Map<String, Object?>> rows;
     try {
       rows = await db.rawQuery(
@@ -637,10 +756,12 @@ class ReportsRepository {
              p.invoiceId AS iid
       FROM installment_plans p
       INNER JOIN invoices i ON i.id = p.invoiceId
-      WHERE i.date >= ? AND i.date <= ?
+      WHERE i.tenantId = ?
+        AND i.deleted_at IS NULL
+        AND i.date >= ? AND i.date <= ?
       ORDER BY (p.totalAmount - p.paidAmount) DESC
       ''',
-        [from, to],
+        [tenantId, from, to],
       );
     } catch (_) {
       rows = const [];
@@ -676,6 +797,7 @@ class ReportsRepository {
 
   Future<List<StaffSalesRow>> _staffSales(
     Database db,
+    int tenantId,
     String from,
     String to,
   ) async {
@@ -685,13 +807,15 @@ class ReportsRepository {
              COUNT(*) AS c,
              COALESCE(SUM(total), 0) AS s
       FROM invoices
-      WHERE IFNULL(isReturned, 0) = 0
+      WHERE tenantId = ?
+        AND deleted_at IS NULL
+        AND IFNULL(isReturned, 0) = 0
         AND $_salesTypeInSql
         AND date >= ? AND date <= ?
       GROUP BY 1
       ORDER BY s DESC
       ''',
-      [from, to],
+      [tenantId, from, to],
     );
     return rows
         .map(
@@ -719,6 +843,7 @@ class ReportsRepository {
   /// مدى موثوقية الرقم.
   Future<MarginStats> _marginStats(
     Database db,
+    int tenantId,
     String from,
     String to, {
     required double expensesTotal,
@@ -755,12 +880,16 @@ class ReportsRepository {
         LEFT JOIN (
           SELECT invoiceId, SUM(total) AS gross
           FROM invoice_items
+          WHERE deleted_at IS NULL
           GROUP BY invoiceId
         ) t ON t.invoiceId = inv.id
-        WHERE inv.$_salesTypeInSql
+        WHERE inv.tenantId = ?
+          AND inv.deleted_at IS NULL
+          AND ii.deleted_at IS NULL
+          AND inv.$_salesTypeInSql
           AND inv.date >= ? AND inv.date <= ?
         ''',
-        [from, to],
+        [tenantId, from, to],
       );
       if (rows.isEmpty) {
         return MarginStats(
@@ -819,6 +948,7 @@ class ReportsRepository {
   /// (توزيع الخصم + معالجة المرتجعات + سلسلة Fallback للتكلفة).
   Future<List<DailyMarginPoint>> _dailyMargin(
     Database db,
+    int tenantId,
     String from,
     String to,
   ) async {
@@ -851,14 +981,18 @@ class ReportsRepository {
         LEFT JOIN (
           SELECT invoiceId, SUM(total) AS gross
           FROM invoice_items
+          WHERE deleted_at IS NULL
           GROUP BY invoiceId
         ) t ON t.invoiceId = inv.id
-        WHERE inv.$_salesTypeInSql
+        WHERE inv.tenantId = ?
+          AND inv.deleted_at IS NULL
+          AND ii.deleted_at IS NULL
+          AND inv.$_salesTypeInSql
           AND inv.date >= ? AND inv.date <= ?
         GROUP BY substr(inv.date, 1, 10)
         ORDER BY d ASC
         ''',
-        [from, to],
+        [tenantId, from, to],
       );
       return rows
           .map(
@@ -877,6 +1011,7 @@ class ReportsRepository {
   /// أعلى/أدنى المنتجات هامشاً — نعيد كل المنتجات في الفترة ويُرتّب في الـ UI.
   Future<List<ProductMarginRow>> _productMargins(
     Database db,
+    int tenantId,
     String from,
     String to,
   ) async {
@@ -913,16 +1048,20 @@ class ReportsRepository {
         LEFT JOIN (
           SELECT invoiceId, SUM(total) AS gross
           FROM invoice_items
+          WHERE deleted_at IS NULL
           GROUP BY invoiceId
         ) t ON t.invoiceId = inv.id
-        WHERE inv.$_salesTypeInSql
+        WHERE inv.tenantId = ?
+          AND inv.deleted_at IS NULL
+          AND ii.deleted_at IS NULL
+          AND inv.$_salesTypeInSql
           AND inv.date >= ? AND inv.date <= ?
         GROUP BY ii.productId, name
         HAVING ABS(revenue) > 0.0001 OR ABS(cost) > 0.0001
         ORDER BY (revenue - cost) DESC
         LIMIT 200
         ''',
-        [from, to],
+        [tenantId, from, to],
       );
       return rows
           .map(
@@ -942,6 +1081,7 @@ class ReportsRepository {
 
   Future<(double redeemed, double earned)> _loyaltyInvoiceTotals(
     Database db,
+    int tenantId,
     String from,
     String to,
   ) async {
@@ -951,11 +1091,13 @@ class ReportsRepository {
         SELECT COALESCE(SUM(loyaltyDiscount), 0) AS r,
                COALESCE(SUM(loyaltyPointsEarned), 0) AS e
         FROM invoices
-        WHERE IFNULL(isReturned, 0) = 0
+        WHERE tenantId = ?
+          AND deleted_at IS NULL
+          AND IFNULL(isReturned, 0) = 0
           AND $_salesTypeInSql
           AND date >= ? AND date <= ?
         ''',
-        [from, to],
+        [tenantId, from, to],
       );
       if (rows.isEmpty) return (0.0, 0.0);
       final r = (rows.first['r'] as num?)?.toDouble() ?? 0;

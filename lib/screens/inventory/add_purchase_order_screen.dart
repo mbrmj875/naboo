@@ -3,6 +3,7 @@ import 'dart:async' show unawaited;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 import 'package:provider/provider.dart';
+import 'package:sqflite/sqflite.dart' show Database;
 
 import '../../providers/notification_provider.dart';
 import '../../services/database_helper.dart';
@@ -92,7 +93,7 @@ class _AddPurchaseOrderScreenState extends State<AddPurchaseOrderScreen> {
     });
   }
 
-  Future<void> _loadExistingPo(dynamic db, {required int? poId}) async {
+  Future<void> _loadExistingPo(Database db, {required int? poId}) async {
     final rows = await db.query(
       'purchase_orders',
       where: 'id = ?',
@@ -396,7 +397,7 @@ class _AddPurchaseOrderScreenState extends State<AddPurchaseOrderScreen> {
     }
   }
 
-  Future<double?> _getExistingReceived(dynamic db) async {
+  Future<double?> _getExistingReceived(Database db) async {
     final r = await db.query('purchase_orders',
         columns: ['receivedAmount'],
         where: 'id = ?', whereArgs: [widget.poId], limit: 1);

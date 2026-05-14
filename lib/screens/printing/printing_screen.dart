@@ -138,7 +138,7 @@ class _PrintingScreenState extends State<PrintingScreen> {
               children: [
                 const _HeroCard(),
                 const SizedBox(height: 14),
-                _SectionTitle(icon: Icons.description_outlined, title: 'إيصال البيع'),
+                const _SectionTitle(icon: Icons.description_outlined, title: 'إيصال البيع'),
                 const SizedBox(height: 8),
                 Card(
                   elevation: 0,
@@ -260,7 +260,7 @@ class _PrintingScreenState extends State<PrintingScreen> {
                   ),
                 ),
                 const SizedBox(height: 20),
-                _SectionTitle(icon: Icons.link_rounded, title: 'ربط مع بقية النظام'),
+                const _SectionTitle(icon: Icons.link_rounded, title: 'ربط مع بقية النظام'),
                 const SizedBox(height: 8),
                 Card(
                   elevation: 0,

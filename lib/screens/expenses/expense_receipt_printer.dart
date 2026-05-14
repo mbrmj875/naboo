@@ -44,7 +44,7 @@ class ExpenseReceiptPrinter {
                   pw.Expanded(
                     child: pw.Text(
                       label,
-                      style: pw.TextStyle(fontSize: 9, color: PdfColors.grey700),
+                      style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey700),
                     ),
                   ),
                   pw.Text(
@@ -69,7 +69,7 @@ class ExpenseReceiptPrinter {
               pw.Center(
                 child: pw.Text(
                   '#${entry.id}',
-                  style: pw.TextStyle(fontSize: 10, color: PdfColors.grey700),
+                  style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey700),
                 ),
               ),
               pw.Divider(thickness: 0.6, color: PdfColors.grey400),
@@ -114,7 +114,7 @@ class ExpenseReceiptPrinter {
               pw.Center(
                 child: pw.Text(
                   'شكرًا لاستخدام NaBoo',
-                  style: pw.TextStyle(fontSize: 9, color: PdfColors.grey600),
+                  style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey600),
                 ),
               ),
             ],

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/product_repository.dart';
+import '../services/product_variants_repository.dart';
 import '../utils/iraqi_currency_format.dart';
 
 const _kSalePinnedGridHeightPref = 'sale_wide_pinned_grid_height_v1';
@@ -72,6 +73,8 @@ class _WideHomeProductRailState extends State<WideHomeProductRail> {
   List<Map<String, dynamic>> _pinnedRows = [];
   List<int> _pinnedIds = [];
   bool _loading = true;
+  final Map<int, int> _variantStockSumByProductId = {};
+  final Set<int> _variantStockLoading = {};
   Timer? _debounce;
   double _pinnedGridHeight = 240;
   int _group = 0; // 0 الكل | 1 بالقطعة | 2 بالوزن
@@ -436,12 +439,37 @@ class _WideHomeProductRailState extends State<WideHomeProductRail> {
     unawaited(_load());
   }
 
+  void _ensureVariantStockSum(int productId) {
+    if (productId <= 0) return;
+    if (_variantStockSumByProductId.containsKey(productId)) return;
+    if (_variantStockLoading.contains(productId)) return;
+    _variantStockLoading.add(productId);
+    unawaited(() async {
+      try {
+        final vars =
+            await ProductVariantsRepository.instance.getVariantsForProduct(productId);
+        final sum = vars.fold<int>(
+          0,
+          (s, r) => s + ((r['quantity'] as num?)?.toInt() ?? 0),
+        );
+        if (!mounted) return;
+        setState(() => _variantStockSumByProductId[productId] = sum);
+      } catch (_) {
+        if (!mounted) return;
+        setState(() => _variantStockSumByProductId[productId] = 0);
+      } finally {
+        _variantStockLoading.remove(productId);
+      }
+    }());
+  }
+
   static String _stockLine(Map<String, dynamic> p) {
     final track = (p['trackInventory'] as int?) != 0;
     if (!track) return 'غير متتبّع';
     final q = p['qty'];
     if (q == null) return '—';
     final n = (q as num).toDouble();
+    if (n < 0) return '—';
     if (n.abs() < 1e-9) return '0';
     final s = (n % 1).abs() < 1e-6
         ? IraqiCurrencyFormat.formatInt(n)
@@ -489,20 +517,31 @@ class _WideHomeProductRailState extends State<WideHomeProductRail> {
       final name = (p['name'] as String?)?.trim() ?? 'منتج';
       final sellRaw = p['sell'] as num?;
       final sell = sellRaw != null ? sellRaw.toDouble() : 0.0;
-      final stock = _stockLine(p);
       final pid = (p['id'] as num?)?.toInt();
       final flashing = pid != null && _flashProductId == pid;
+      final isService = ((p['isService'] as num?)?.toInt() ?? 0) == 1;
       final track = (p['trackInventory'] as int?) != 0;
-      final outOfStock = track && ((p['qty'] as num?)?.toDouble() ?? 0) <= 0;
+      final rawQty = ((p['qty'] as num?)?.toDouble() ?? 0);
+      // الملابس لا تستخدم products.qty؛ إذا كانت 0/سالبة نعرض مجموع مخزون الـ variants.
+      final needsVariantFix = track && pid != null && rawQty <= 0;
+      if (needsVariantFix) _ensureVariantStockSum(pid);
+      final variantSum = (pid == null) ? null : _variantStockSumByProductId[pid];
+      final effectiveQty = needsVariantFix && variantSum != null
+          ? variantSum.toDouble()
+          : rawQty;
+      final stock = needsVariantFix && variantSum != null
+          ? IraqiCurrencyFormat.formatInt(effectiveQty)
+          : _stockLine(p);
+      final outOfStock = track && effectiveQty <= 0;
       final border2 = widget.isDark
           ? Colors.white.withValues(alpha: 0.12)
           : Colors.black.withValues(alpha: 0.10);
       final textMuted = widget.isDark ? Colors.white60 : const Color(0xFF64748B);
       final stockColor = (p['trackInventory'] as int?) == 0
           ? textMuted
-          : ((p['qty'] as num?)?.toDouble() ?? 0) <= 0
+          : effectiveQty <= 0
               ? const Color(0xFFEF4444)
-              : (((p['qty'] as num?)?.toDouble() ?? 0) < 5
+              : (effectiveQty < 5
                   ? const Color(0xFFF59E0B)
                   : textMuted);
 
@@ -593,17 +632,54 @@ class _WideHomeProductRailState extends State<WideHomeProductRail> {
                             Expanded(
                               child: Align(
                                 alignment: Alignment.bottomCenter,
-                                child: Text(
-                                  'الكمية المتاحة: $stock',
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(
-                                    fontSize: 9.5,
-                                    fontWeight: FontWeight.w700,
-                                    color: stockColor,
-                                  ),
-                                ),
+                                child: isService
+                                    ? Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 8,
+                                          vertical: 3,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: widget.isDark
+                                              ? const Color(0xFF0F172A)
+                                                  .withValues(alpha: 0.55)
+                                              : const Color(0xFF2563EB)
+                                                  .withValues(alpha: 0.10),
+                                          borderRadius:
+                                              BorderRadius.circular(999),
+                                          border: Border.all(
+                                            color: widget.isDark
+                                                ? Colors.white.withValues(
+                                                    alpha: 0.12,
+                                                  )
+                                                : const Color(0xFF2563EB)
+                                                    .withValues(alpha: 0.22),
+                                          ),
+                                        ),
+                                        child: Text(
+                                          'خدمة فنية',
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          textAlign: TextAlign.center,
+                                          style: TextStyle(
+                                            fontSize: 9.5,
+                                            fontWeight: FontWeight.w800,
+                                            color: widget.isDark
+                                                ? Colors.white70
+                                                : const Color(0xFF1D4ED8),
+                                          ),
+                                        ),
+                                      )
+                                    : Text(
+                                        'الكمية المتاحة: $stock',
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                        textAlign: TextAlign.center,
+                                        style: TextStyle(
+                                          fontSize: 9.5,
+                                          fontWeight: FontWeight.w700,
+                                          color: stockColor,
+                                        ),
+                                      ),
                               ),
                             ),
                           ],
@@ -833,15 +909,25 @@ class _WideHomeProductRailState extends State<WideHomeProductRail> {
                             final p = _rows[i];
                             final pid = p['id'] as int;
                             final pinned = _pinnedIds.contains(pid);
+                            final isService =
+                                ((p['isService'] as num?)?.toInt() ?? 0) == 1;
                             final sellRaw = p['sell'] as num?;
                             final sellDisp = sellRaw != null
                                 ? IraqiCurrencyFormat.formatIqd(sellRaw)
                                 : '—';
                             final flashing = _flashProductId == pid;
                             final track = (p['trackInventory'] as int?) != 0;
-                            final outOfStock =
-                                track && ((p['qty'] as num?)?.toDouble() ?? 0) <= 0;
-                            final stock = _stockLine(p);
+                            final rawQty = ((p['qty'] as num?)?.toDouble() ?? 0);
+                            final needsVariantFix = track && rawQty <= 0;
+                            if (needsVariantFix) _ensureVariantStockSum(pid);
+                            final variantSum = _variantStockSumByProductId[pid];
+                            final effectiveQty = needsVariantFix && variantSum != null
+                                ? variantSum.toDouble()
+                                : rawQty;
+                            final outOfStock = track && effectiveQty <= 0;
+                            final stock = needsVariantFix && variantSum != null
+                                ? IraqiCurrencyFormat.formatInt(effectiveQty)
+                                : _stockLine(p);
                             final cardBg = widget.isDark
                                 ? const Color(0xFF334155)
                                     .withValues(alpha: 0.35)
@@ -929,16 +1015,69 @@ class _WideHomeProductRailState extends State<WideHomeProductRail> {
                                               ),
                                             ),
                                             const SizedBox(height: 2),
-                                            Text(
-                                              'الكمية المتاحة: $stock',
-                                              maxLines: 2,
-                                              overflow: TextOverflow.ellipsis,
-                                              textAlign: TextAlign.center,
-                                              style: TextStyle(
-                                                fontSize: 10,
-                                                color: text2,
+                                            if (isService)
+                                              Container(
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                  horizontal: 10,
+                                                  vertical: 4,
+                                                ),
+                                                decoration: BoxDecoration(
+                                                  color: widget.isDark
+                                                      ? const Color(0xFF0F172A)
+                                                          .withValues(
+                                                            alpha: 0.52,
+                                                          )
+                                                      : const Color(0xFF2563EB)
+                                                          .withValues(
+                                                            alpha: 0.10,
+                                                          ),
+                                                  borderRadius:
+                                                      BorderRadius.circular(
+                                                    999,
+                                                  ),
+                                                  border: Border.all(
+                                                    color: widget.isDark
+                                                        ? Colors.white
+                                                            .withValues(
+                                                              alpha: 0.12,
+                                                            )
+                                                        : const Color(
+                                                            0xFF2563EB,
+                                                          ).withValues(
+                                                            alpha: 0.22,
+                                                          ),
+                                                  ),
+                                                ),
+                                                child: Text(
+                                                  'خدمة فنية',
+                                                  maxLines: 1,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                  textAlign: TextAlign.center,
+                                                  style: TextStyle(
+                                                    fontSize: 10,
+                                                    fontWeight: FontWeight.w800,
+                                                    color: widget.isDark
+                                                        ? Colors.white70
+                                                        : const Color(
+                                                            0xFF1D4ED8,
+                                                          ),
+                                                  ),
+                                                ),
+                                              )
+                                            else
+                                              Text(
+                                                'الكمية المتاحة: $stock',
+                                                maxLines: 2,
+                                                overflow:
+                                                    TextOverflow.ellipsis,
+                                                textAlign: TextAlign.center,
+                                                style: TextStyle(
+                                                  fontSize: 10,
+                                                  color: text2,
+                                                ),
                                               ),
-                                            ),
                                           ],
                                         ),
                                       ),

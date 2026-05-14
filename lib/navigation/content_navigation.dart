@@ -64,11 +64,19 @@ abstract class AppContentRoutes {
   static const reportsPrefix = 'app_reports_';
   static String reports(int section) => '$reportsPrefix$section';
   static String processReturn(int invoiceId) => 'app_process_return_$invoiceId';
+
+  // ── Services & Job Tickets ────────────────────────────────────────────────
+  static const servicesHub = 'app_services_hub';
+  /// إضافة خدمة فنية للبيع المباشر (مستقل عن إضافة منتج مخزني كامل).
+  static const servicesAdd = 'app_services_add';
+  static const servicesCatalog = 'app_services_catalog';
+  static const serviceOrdersHub = 'app_service_orders_hub';
+  static const serviceOrdersCreate = 'app_service_orders_create';
 }
 
 /// مسار محتوى بانتقال أسرع من [MaterialPageRoute] الافتراضي (~300ms) —
 /// يحافظ على [PageTransitionsTheme] (مثل CupertinoSlide) من الثيم.
-class FastContentPageRoute extends MaterialPageRoute<void> {
+class FastContentPageRoute<T> extends MaterialPageRoute<T> {
   FastContentPageRoute({
     required super.builder,
     super.settings,
@@ -88,7 +96,7 @@ class FastContentPageRoute extends MaterialPageRoute<void> {
 }
 
 /// مسار Material مع اسم للتعرّف عليه في [Navigator.popUntil] وفتات الخبز.
-FastContentPageRoute contentMaterialRoute({
+FastContentPageRoute<T> contentMaterialRoute<T>({
   required String routeId,
   required String breadcrumbTitle,
   required WidgetBuilder builder,
@@ -219,6 +227,16 @@ String breadcrumbFallbackTitleForRouteId(String id) {
       return 'ميزات المتجر';
     case AppContentRoutes.subscriptionPlans:
       return 'خطط الاشتراك';
+    case AppContentRoutes.servicesHub:
+      return 'الخدمات والصيانة';
+    case AppContentRoutes.servicesAdd:
+      return 'إضافة خدمة';
+    case AppContentRoutes.servicesCatalog:
+      return 'دليل الخدمات والأسعار';
+    case AppContentRoutes.serviceOrdersHub:
+      return 'طلبات الصيانة وتذاكر العمل';
+    case AppContentRoutes.serviceOrdersCreate:
+      return 'تذكرة صيانة جديدة';
     default:
       break;
   }
@@ -308,6 +326,13 @@ IconData breadcrumbIconForRouteId(String id) {
       return Icons.tune_rounded;
     case AppContentRoutes.subscriptionPlans:
       return Icons.upgrade_rounded;
+    case AppContentRoutes.servicesHub:
+    case AppContentRoutes.servicesAdd:
+    case AppContentRoutes.servicesCatalog:
+      return Icons.handyman_rounded;
+    case AppContentRoutes.serviceOrdersHub:
+    case AppContentRoutes.serviceOrdersCreate:
+      return Icons.assignment_rounded;
     default:
       if (id.startsWith(AppContentRoutes.reportsPrefix)) {
         return Icons.bar_chart_rounded;

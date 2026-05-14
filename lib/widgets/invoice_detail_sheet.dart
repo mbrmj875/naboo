@@ -38,7 +38,11 @@ String _invoiceTypeAr(InvoiceType t) {
   }
 }
 
-/// عرض تفاصيل فاتورة كاملة (بنود، إجماليات، ولاء، وردية…) من [invoiceId].
+/// عرض تفاصيل فاتورة كاملة (بنود، إجماليات، ولاء، وردية…) من [invoiceId]
+/// عبر `showModalBottomSheet`. يُستخدم على الموبايل والتابلت الصغير.
+///
+/// على الديسكتوب يفضّل استخدام [InvoiceDetailPanel] مباشرة داخل
+/// `MasterDetailLayout` لعرض إنلاين (جنباً إلى جنب مع القائمة).
 Future<void> showInvoiceDetailSheet(
   BuildContext context,
   DatabaseHelper db,
@@ -55,7 +59,6 @@ Future<void> showInvoiceDetailSheet(
 
   final isDark = Theme.of(context).brightness == Brightness.dark;
   final border = isDark ? AppColors.borderDark : AppColors.borderLight;
-  final itemsSum = inv.items.fold<double>(0, (s, e) => s + e.total);
   final sl = ScreenLayout.of(context);
 
   await showModalBottomSheet<void>(
@@ -76,42 +79,192 @@ Future<void> showInvoiceDetailSheet(
                 color: isDark ? AppColors.cardDark : AppColors.cardLight,
                 border: Border.all(color: border),
               ),
-              child: Column(
-                children: [
-                  const SizedBox(height: 8),
-                  Container(
-                    width: 40,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: Colors.grey.shade400,
-                      borderRadius: BorderRadius.circular(2),
-                    ),
+              child: _InvoiceDetailContent(
+                invoice: inv,
+                isDark: isDark,
+                scrollController: scrollController,
+                showDragHandle: true,
+                onClose: () => Navigator.pop(ctx),
+              ),
+            );
+          },
+        ),
+      );
+    },
+  );
+}
+
+/// لوحة تفاصيل الفاتورة كودجت Inline — تُستخدم في `MasterDetailLayout`
+/// على الديسكتوب لعرض التفاصيل جنباً إلى جنب مع القائمة.
+///
+/// تتعامل مع التحميل الـ async داخلياً وتعرض حالة فارغة عند `invoiceId == null`.
+class InvoiceDetailPanel extends StatefulWidget {
+  const InvoiceDetailPanel({
+    super.key,
+    required this.invoiceId,
+    required this.db,
+    this.onClose,
+  });
+
+  /// `null` ⇒ يعرض حالة "لم يُختر شيء".
+  final int? invoiceId;
+  final DatabaseHelper db;
+
+  /// زر إغلاق (X). على الديسكتوب يمسح الاختيار. `null` ⇒ يُخفى.
+  final VoidCallback? onClose;
+
+  @override
+  State<InvoiceDetailPanel> createState() => _InvoiceDetailPanelState();
+}
+
+class _InvoiceDetailPanelState extends State<InvoiceDetailPanel> {
+  Invoice? _invoice;
+  bool _loading = false;
+  int? _loadedId;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadIfNeeded();
+  }
+
+  @override
+  void didUpdateWidget(covariant InvoiceDetailPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.invoiceId != widget.invoiceId) {
+      _loadIfNeeded();
+    }
+  }
+
+  Future<void> _loadIfNeeded() async {
+    final id = widget.invoiceId;
+    if (id == null) {
+      setState(() {
+        _invoice = null;
+        _loadedId = null;
+        _loading = false;
+      });
+      return;
+    }
+    if (_loadedId == id) return;
+    setState(() => _loading = true);
+    final inv = await widget.db.getInvoiceById(id);
+    if (!mounted) return;
+    setState(() {
+      _invoice = inv;
+      _loadedId = id;
+      _loading = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final cs = Theme.of(context).colorScheme;
+
+    if (widget.invoiceId == null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.receipt_long_outlined,
+                  size: 64, color: cs.onSurfaceVariant.withValues(alpha: 0.4)),
+              const SizedBox(height: 16),
+              Text(
+                'اختر فاتورة لعرض تفاصيلها',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: cs.onSurfaceVariant,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (_loading || _invoice == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: _InvoiceDetailContent(
+        invoice: _invoice!,
+        isDark: isDark,
+        scrollController: null,
+        showDragHandle: false,
+        onClose: widget.onClose,
+      ),
+    );
+  }
+}
+
+/// محتوى تفاصيل الفاتورة (المشترك بين BottomSheet و Inline Panel).
+class _InvoiceDetailContent extends StatelessWidget {
+  const _InvoiceDetailContent({
+    required this.invoice,
+    required this.isDark,
+    required this.scrollController,
+    required this.showDragHandle,
+    required this.onClose,
+  });
+
+  final Invoice invoice;
+  final bool isDark;
+  final ScrollController? scrollController;
+  final bool showDragHandle;
+  final VoidCallback? onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    final inv = invoice;
+    final border = isDark ? AppColors.borderDark : AppColors.borderLight;
+    final itemsSum = inv.items.fold<double>(0, (s, e) => s + e.total);
+
+    return Column(
+      children: [
+        if (showDragHandle) ...[
+          const SizedBox(height: 8),
+          Container(
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Colors.grey.shade400,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+        ],
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'فاتورة #${inv.id}',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 18,
                   ),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            'فاتورة #${inv.id}',
-                            style: const TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 18,
-                            ),
-                          ),
-                        ),
-                        IconButton(
-                          onPressed: () => Navigator.pop(ctx),
-                          icon: const Icon(Icons.close_rounded),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Expanded(
-                    child: ListView(
-                      controller: scrollController,
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 28),
-                      children: [
+                ),
+              ),
+              if (onClose != null)
+                IconButton(
+                  onPressed: onClose,
+                  icon: const Icon(Icons.close_rounded),
+                  tooltip: 'إغلاق',
+                ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: ListView(
+            controller: scrollController,
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 28),
+            children: [
                         _kv('العميل', inv.customerName.isEmpty ? '—' : inv.customerName),
                         _kv('التاريخ', _dateFmt.format(inv.date)),
                         _kv('نوع الفاتورة', _invoiceTypeAr(inv.type)),
@@ -223,7 +376,7 @@ Future<void> showInvoiceDetailSheet(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(
+                                const Text(
                                   'معلومات الفائدة (محفوظة عند البيع)',
                                   style: TextStyle(
                                     fontWeight: FontWeight.w800,
@@ -285,28 +438,23 @@ Future<void> showInvoiceDetailSheet(
                                 ),
                               ),
                               const Spacer(),
-                              Text(
-                                '${_numFmt.format(inv.total)} د.ع',
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w800,
-                                  fontSize: 17,
-                                  color: AppColors.primary,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
+              Text(
+                '${_numFmt.format(inv.total)} د.ع',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w800,
+                  fontSize: 17,
+                  color: AppColors.primary,
+                ),
               ),
-            );
-          },
+            ],
+          ),
         ),
-      );
-    },
-  );
+      ],
+    ),
+  ),
+      ],
+    );
+  }
 }
 
 Widget _kv(String k, String v) {

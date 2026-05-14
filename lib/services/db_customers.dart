@@ -2,6 +2,62 @@ part of 'database_helper.dart';
 
 // ── العملاء ───────────────────────────────────────────────────────────────
 
+Future<void> ensureCustomersGlobalIdSchema(Database db) async {
+  Future<void> addColumn(String col, String type) async {
+    final rows = await db.rawQuery('PRAGMA table_info(customers)');
+    final exists = rows.any((r) => (r['name']?.toString().toLowerCase() ?? '') == col.toLowerCase());
+    if (!exists) {
+      try {
+        await db.execute('ALTER TABLE customers ADD COLUMN $col $type');
+      } catch (_) {}
+    }
+  }
+
+  await addColumn('global_id', 'TEXT');
+  await addColumn('tenantId', 'INTEGER NOT NULL DEFAULT 1');
+
+  Future<bool> colExists(String name) async {
+    final rows = await db.rawQuery('PRAGMA table_info(customers)');
+    return rows.any((r) => (r['name']?.toString().toLowerCase() ?? '') == name.toLowerCase());
+  }
+
+  if (await colExists('global_id')) {
+    try {
+      await db.execute('''
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_customers_global_id
+        ON customers(global_id)
+        WHERE global_id IS NOT NULL AND TRIM(global_id) != ''
+      ''');
+    } catch (_) {}
+  }
+
+  if (!await colExists('global_id')) return;
+
+  final missing = await db.rawQuery('''
+    SELECT id, createdAt FROM customers
+    WHERE global_id IS NULL OR TRIM(IFNULL(global_id, '')) = ''
+  ''');
+  for (final r in missing) {
+    final id = r['id'] as int?;
+    if (id == null) continue;
+    await db.update(
+      'customers',
+      {
+        'global_id': const Uuid().v4(),
+        'updatedAt': r['createdAt'] ?? DateTime.now().toIso8601String(),
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  await db.execute('''
+    UPDATE customers
+    SET updatedAt = createdAt
+    WHERE updatedAt IS NULL OR TRIM(IFNULL(updatedAt, '')) = ''
+  ''');
+}
+
 ({List<String> clauses, List<Object?> args}) _customerSearchWhereParts(
   String rawQuery,
 ) {
@@ -417,6 +473,7 @@ LEFT JOIN (
     String? address,
     String? notes,
     List<String> extraPhones = const [],
+    int tenantId = 1,
   }) async {
     final extras = extraPhones
         .map((e) => e.trim())
@@ -428,20 +485,34 @@ LEFT JOIN (
       excludeCustomerId: null,
     );
     final db = await database;
+    await ensureCustomersGlobalIdSchema(db);
     final now = DateTime.now().toIso8601String();
+    final globalId = const Uuid().v4();
     late final int id;
     await db.transaction((txn) async {
-      id = await txn.insert('customers', {
+      final payload = {
+        'global_id': globalId,
+        'tenantId': tenantId,
         'name': name.trim(),
         'phone': phone?.trim().isEmpty == true ? null : phone?.trim(),
         'email': email?.trim().isEmpty == true ? null : email?.trim(),
         'address': address?.trim().isEmpty == true ? null : address?.trim(),
         'notes': notes?.trim().isEmpty == true ? null : notes?.trim(),
         'balance': 0,
+        'loyaltyPoints': 0,
         'createdAt': now,
         'updatedAt': now,
-      });
+      };
+      id = await txn.insert('customers', payload);
       await _replaceCustomerExtraPhones(txn, id, extras);
+
+      await SyncQueueService.instance.enqueueMutation(
+        txn,
+        entityType: 'customer',
+        globalId: globalId,
+        operation: 'INSERT',
+        payload: payload,
+      );
     });
     CloudSyncService.instance.scheduleSyncSoon();
     return id;
@@ -466,21 +537,43 @@ LEFT JOIN (
       excludeCustomerId: id,
     );
     final db = await database;
+    await ensureCustomersGlobalIdSchema(db);
+    final rows = await db.query('customers', where: 'id = ?', whereArgs: [id]);
+    if (rows.isEmpty) return;
+    var gid = (rows.first['global_id'] as String?)?.trim() ?? '';
+
     await db.transaction((txn) async {
+      final nowIso = DateTime.now().toUtc().toIso8601String();
+      final updatedPayload = {
+        'name': name.trim(),
+        'phone': phone?.trim().isEmpty == true ? null : phone?.trim(),
+        'email': email?.trim().isEmpty == true ? null : email?.trim(),
+        'address': address?.trim().isEmpty == true ? null : address?.trim(),
+        'notes': notes?.trim().isEmpty == true ? null : notes?.trim(),
+        'updatedAt': nowIso,
+      };
+
+      if (gid.isEmpty) {
+        gid = const Uuid().v4();
+        updatedPayload['global_id'] = gid;
+      }
+
       await txn.update(
         'customers',
-        {
-          'name': name.trim(),
-          'phone': phone?.trim().isEmpty == true ? null : phone?.trim(),
-          'email': email?.trim().isEmpty == true ? null : email?.trim(),
-          'address': address?.trim().isEmpty == true ? null : address?.trim(),
-          'notes': notes?.trim().isEmpty == true ? null : notes?.trim(),
-          'updatedAt': DateTime.now().toIso8601String(),
-        },
+        updatedPayload,
         where: 'id = ?',
         whereArgs: [id],
       );
       await _replaceCustomerExtraPhones(txn, id, extras);
+
+      final fullRow = Map<String, dynamic>.from(rows.first)..addAll(updatedPayload);
+      await SyncQueueService.instance.enqueueMutation(
+        txn,
+        entityType: 'customer',
+        globalId: gid,
+        operation: 'UPDATE',
+        payload: fullRow,
+      );
     });
     CloudSyncService.instance.scheduleSyncSoon();
   }
@@ -495,6 +588,16 @@ LEFT JOIN (
     final list = ids.toSet().toList();
     if (list.isEmpty) return;
     final db = await database;
+    await ensureCustomersGlobalIdSchema(db);
+
+    final placeholders = List.filled(list.length, '?').join(',');
+    final rows = await db.query(
+      'customers',
+      columns: ['id', 'global_id', 'updatedAt'],
+      where: 'id IN ($placeholders)',
+      whereArgs: list,
+    );
+
     await db.transaction((txn) async {
       for (final id in list) {
         await txn.update(
@@ -504,6 +607,19 @@ LEFT JOIN (
           whereArgs: [id],
         );
         await txn.delete('customers', where: 'id = ?', whereArgs: [id]);
+      }
+
+      for (final r in rows) {
+        final gid = r['global_id'] as String?;
+        if (gid != null && gid.isNotEmpty) {
+          await SyncQueueService.instance.enqueueMutation(
+            txn,
+            entityType: 'customer',
+            globalId: gid,
+            operation: 'DELETE',
+            payload: {'updatedAt': DateTime.now().toIso8601String()},
+          );
+        }
       }
     });
     CloudSyncService.instance.scheduleSyncSoon();

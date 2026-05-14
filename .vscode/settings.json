@@ -4,5 +4,6 @@
   "dart.env": {
     "PATH": "/usr/local/bin:/Users/mohamed123/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin",
     "LANG": "en_US.UTF-8"
-  }
+  },
+  "editor.find.addExtraSpaceOnTop": true
 }

@@ -1,36 +1,21 @@
+import 'dart:async' show unawaited;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../widgets/app_brand_mark.dart';
 import '../widgets/inputs/app_input.dart';
 import '../theme/erp_input_constants.dart';
+import '../theme/design_tokens.dart';
 import 'auth/email_otp_screen.dart';
 import 'auth/forgot_password_email_screen.dart';
 import '../services/app_settings_repository.dart';
 import '../services/business_setup_settings.dart';
-
-/// ثيم فاتح للوحة تسجيل الدخول/إنشاء الحساب — الحقول بيضاء ولا ينبغي أن يرث
-/// [ColorScheme.onSurface] من ثيم التطبيق الداكن (نص فاتح على أبيض).
-ThemeData _authPanelLightTheme(BuildContext context) {
-  const onSurface = Color(0xFF0D1F3C);
-  const onVariant = Color(0xFF5C6570);
-  final base = Theme.of(context);
-  return base.copyWith(
-    colorScheme: base.colorScheme.copyWith(
-      brightness: Brightness.light,
-      surface: const Color(0xFFF7F8FA),
-      onSurface: onSurface,
-      onSurfaceVariant: onVariant,
-      outline: const Color(0xFFC5CAD3),
-      primary: const Color(0xFF1A3A6B),
-    ),
-    textTheme: base.textTheme.apply(
-      bodyColor: onSurface,
-      displayColor: onSurface,
-    ),
-  );
-}
+import '../widgets/glass/glass_background.dart';
+import '../widgets/glass/glass_surface.dart';
+import '../utils/screen_layout.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -63,11 +48,7 @@ class _LoginScreenState extends State<LoginScreen>
   late Animation<double> _slideAnim;
   late Animation<double> _fadeAnim;
 
-  static const Color _navy1 = Color(0xFF050A14);
-  static const Color _navy2 = Color(0xFF0D1F3C);
-  static const Color _navy3 = Color(0xFF1A3A6B);
-  static const Color _gold = Color(0xFFB8960C);
-  static const Color _navyPrimary = Color(0xFF1A2340);
+  static const Color _gold = AppColors.accentGold;
   static const Color _goldLink = Color(0xFFF5C518);
 
   final _focusLoginUser = FocusNode();
@@ -273,7 +254,7 @@ class _LoginScreenState extends State<LoginScreen>
         );
         if (!completed) target = '/onboarding';
       } catch (_) {}
-      nav.pushReplacementNamed(target);
+      unawaited(nav.pushReplacementNamed(target));
       return;
     }
     messenger.showSnackBar(
@@ -326,195 +307,242 @@ class _LoginScreenState extends State<LoginScreen>
 
   @override
   Widget build(BuildContext context) {
-    final isWide = MediaQuery.of(context).size.width >= 760;
-    return Scaffold(
-      backgroundColor: _navy1,
-      body: isWide
-          ? Directionality(
-              textDirection: TextDirection.ltr,
-              child: Row(
-                children: [
-                  Expanded(
-                    flex: 6,
-                    child: Directionality(
-                      textDirection: TextDirection.rtl,
-                      child: _formPanel(isNarrow: false),
-                    ),
+    // 2026-05 (Phase 2): قرار التخطيط أصبح يعتمد على DeviceVariant
+    // (Single Source of Truth) بدل breakpoint رقمي 760. الـ side-by-side
+    // (Brand | Form) يظهر في tabletLG+ (≥840dp). أصغر ⇒ Column مع
+    // Brand مضغوط فوق الفورم.
+    final variant = context.screenLayout.layoutVariant;
+    final isWide = variant.index >= DeviceVariant.tabletLG.index;
+    final keyboardH = MediaQuery.viewInsetsOf(context).bottom;
+    final keyboardVisible = keyboardH > 0;
+
+    final base = Theme.of(context);
+    final glassAuthTheme = base.copyWith(
+      colorScheme: base.colorScheme.copyWith(
+        brightness: Brightness.dark,
+        primary: AppColors.accentBlue,
+        secondary: AppColors.accentGold,
+        surface: AppColors.primary,
+        onSurface: Colors.white,
+        onSurfaceVariant: Colors.white.withValues(alpha: 0.72),
+        outline: AppGlass.stroke,
+      ),
+      scaffoldBackgroundColor: Colors.transparent,
+      snackBarTheme: base.snackBarTheme.copyWith(
+        backgroundColor: AppColors.primaryDark.withValues(alpha: 0.95),
+        contentTextStyle: const TextStyle(color: Colors.white, fontSize: 14),
+      ),
+    );
+
+    return Theme(
+      data: glassAuthTheme,
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        body: GlassBackground(
+          backgroundImage: const AssetImage('assets/images/splash_bg.png'),
+          child: SafeArea(
+            child: isWide
+                ? Row(
+                    textDirection: TextDirection.rtl,
+                    children: [
+                      Expanded(
+                        flex: 5,
+                        child: _brandPanel(isNarrow: false, collapsed: false),
+                      ),
+                      Expanded(flex: 6, child: _formPanel(isNarrow: false)),
+                    ],
+                  )
+                : Column(
+                    children: [
+                      AnimatedContainer(
+                        duration: const Duration(milliseconds: 220),
+                        curve: Curves.easeOutCubic,
+                        height: keyboardVisible ? 120 : 290,
+                        width: double.infinity,
+                        child: _brandPanel(
+                          isNarrow: true,
+                          collapsed: keyboardVisible,
+                        ),
+                      ),
+                      Expanded(child: _formPanel(isNarrow: true)),
+                    ],
                   ),
-                  Expanded(
-                    flex: 5,
-                    child: Directionality(
-                      textDirection: TextDirection.rtl,
-                      child: _brandPanel(isNarrow: false),
-                    ),
-                  ),
-                ],
-              ),
-            )
-          : Column(
-              children: [
-                _brandPanel(isNarrow: true),
-                Expanded(child: _formPanel(isNarrow: true)),
-              ],
-            ),
+          ),
+        ),
+      ),
     );
   }
 
-  Widget _brandPanel({required bool isNarrow}) {
-    return Container(
-      height: isNarrow ? 300 : double.infinity,
-      width: double.infinity,
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [_navy1, _navy2, _navy3],
+  Widget _brandPanel({required bool isNarrow, required bool collapsed}) {
+    final logoSize = isNarrow ? (collapsed ? 44.0 : 64.0) : 96.0;
+    final titleSize = isNarrow ? (collapsed ? 34.0 : 44.0) : 64.0;
+    final content = Center(
+      child: Padding(
+        padding: EdgeInsetsDirectional.only(
+          top: isNarrow ? (collapsed ? 8 : 18) : 0,
+          start: isNarrow ? 16 : 32,
+          end: isNarrow ? 16 : 32,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            AppBrandMark(
+              title: 'naboo',
+              logoSize: logoSize,
+              titleFontSize: titleSize,
+              titleColor: const Color(0xFFF2D36B),
+              strokeColor: AppColors.primary,
+              borderColor: _gold,
+              borderWidth: isNarrow ? 2.0 : 2.4,
+            ),
+            if (!collapsed) ...[
+              SizedBox(height: isNarrow ? 10 : 20),
+              Text(
+                'نظام إدارة الأعمال',
+                style: GoogleFonts.tajawal(
+                  color: Colors.white.withValues(alpha: 0.74),
+                  fontSize: isNarrow ? 13 : 17,
+                  fontWeight: FontWeight.w500,
+                  letterSpacing: 3.0,
+                ),
+              ),
+            ],
+            if (!isNarrow) ...[
+              const SizedBox(height: 36),
+              _feature(Icons.receipt_long_rounded, 'المبيعات والفواتير'),
+              const SizedBox(height: 10),
+              _feature(Icons.account_balance_rounded, 'الحسابات والتقارير'),
+              const SizedBox(height: 10),
+              _feature(Icons.inventory_2_rounded, 'المخزون والمستودعات'),
+            ],
+          ],
         ),
       ),
-      child: Stack(
-        children: [
-          Positioned(
-            top: -50,
-            right: -50,
-            child: _glow(_gold.withValues(alpha: 0.16), 230),
-          ),
-          Positioned(
-            bottom: -60,
-            left: -40,
-            child: _glow(_navy3.withValues(alpha: 0.35), 260),
-          ),
-          Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                AppBrandMark(
-                  title: 'naboo',
-                  logoSize: isNarrow ? 64 : 84,
-                  titleFontSize: isNarrow ? 44 : 60,
-                  titleColor: const Color(0xFFF2D36B),
-                  strokeColor: const Color(0xFF071A36),
-                  borderColor: _gold,
-                  borderWidth: isNarrow ? 2.0 : 2.2,
-                ),
-                SizedBox(height: isNarrow ? 10 : 16),
-                Text(
-                  'نظام إدارة الأعمال',
-                  style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.65),
-                    fontSize: isNarrow ? 12 : 16,
-                    letterSpacing: 2.5,
-                  ),
-                ),
-                if (!isNarrow) ...[
-                  const SizedBox(height: 24),
-                  _feature(Icons.receipt_long_rounded, 'المبيعات والفواتير'),
-                  _feature(Icons.account_balance_rounded, 'الحسابات والتقارير'),
-                  _feature(Icons.inventory_2_rounded, 'المخزون والمستودعات'),
-                ],
-              ],
-            ),
-          ),
-        ],
-      ),
+    );
+
+    return SizedBox(
+      width: double.infinity,
+      child: content,
     );
   }
 
   Widget _feature(IconData icon, String title) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
+    return GlassSurface(
+      borderRadius: const BorderRadius.all(Radius.circular(12)),
+      blurSigma: 10,
+      tintColor: Colors.white.withValues(alpha: 0.07),
+      strokeColor: Colors.white.withValues(alpha: 0.10),
+      padding: const EdgeInsetsDirectional.symmetric(horizontal: 18, vertical: 10),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 18, color: Colors.white70),
-          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              color: _gold.withValues(alpha: 0.16),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(icon, size: 16, color: const Color(0xFFF2D36B)),
+          ),
+          const SizedBox(width: 10),
           Text(
             title,
-            style: const TextStyle(
-              color: Colors.white70,
+            style: GoogleFonts.tajawal(
+              color: Colors.white.withValues(alpha: 0.86),
               fontWeight: FontWeight.w600,
+              fontSize: 14,
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _glow(Color color, double size) {
-    return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        gradient: RadialGradient(colors: [color, Colors.transparent]),
       ),
     );
   }
 
   Widget _formPanel({required bool isNarrow}) {
-    return Theme(
-      data: _authPanelLightTheme(context),
-      child: Container(
-        width: double.infinity,
-        decoration: isNarrow
-            ? const BoxDecoration(
-                color: Color(0xFFF7F8FA),
-                borderRadius: BorderRadius.zero,
-              )
-            : const BoxDecoration(color: Color(0xFFF7F8FA)),
-        child: AnimatedBuilder(
-        animation: _animController,
-        builder: (_, child) => Opacity(
-          opacity: _fadeAnim.value,
-          child: Transform.translate(
-            offset: Offset(0, _slideAnim.value),
-            child: child,
-          ),
+    return AnimatedBuilder(
+      animation: _animController,
+      builder: (_, child) => Opacity(
+        opacity: _fadeAnim.value,
+        child: Transform.translate(
+          offset: Offset(0, _slideAnim.value),
+          child: child,
         ),
-        child: Center(
-          child: SingleChildScrollView(
-            padding: EdgeInsets.fromLTRB(
-              isNarrow ? 24 : 40,
-              isNarrow ? 28 : 40,
-              isNarrow ? 24 : 40,
-              isNarrow ? 24 : 40,
-            ),
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 470),
+      ),
+      child: Center(
+        child: SingleChildScrollView(
+          padding: EdgeInsetsDirectional.fromSTEB(
+            isNarrow ? 20 : 32,
+            isNarrow ? 18 : 28,
+            isNarrow ? 20 : 32,
+            (isNarrow ? 24 : 28) + MediaQuery.viewInsetsOf(context).bottom,
+          ),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 520),
+            child: GlassSurface(
+              borderRadius: const BorderRadius.all(Radius.circular(16)),
+              tintColor: AppGlass.surfaceTint,
+              strokeColor: AppGlass.stroke,
+              padding: const EdgeInsetsDirectional.fromSTEB(18, 18, 18, 16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  Center(
+                    child: Container(
+                      width: 46,
+                      height: 3,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(2),
+                        gradient: const LinearGradient(
+                          colors: [Color(0xFFB8960C), Color(0xFFFFE08A)],
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
                   Text(
                     _isSignUpMode ? 'إنشاء حساب جديد' : 'تسجيل الدخول',
                     textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      fontSize: 28,
-                      fontWeight: FontWeight.bold,
-                      color: _navy2,
+                    style: GoogleFonts.tajawal(
+                      fontSize: isNarrow ? 24 : 28,
+                      fontWeight: FontWeight.w800,
+                      color: Colors.white,
+                      letterSpacing: 0.2,
                     ),
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 10),
                   Text(
                     _isSignUpMode
                         ? 'سيصلك رمز تحقق على بريدك الإلكتروني لتأكيد حسابك'
                         : 'أدخل البريد الإلكتروني وكلمة السر للدخول',
                     textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 13, color: Colors.grey.shade500),
+                    style: GoogleFonts.tajawal(
+                      fontSize: 14,
+                      color: Colors.white.withValues(alpha: 0.72),
+                      fontWeight: FontWeight.w500,
+                      height: 1.5,
+                    ),
                   ),
                   const SizedBox(height: 20),
                   AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 260),
+                    duration: const Duration(milliseconds: 320),
+                    switchInCurve: Curves.easeOutCubic,
+                    switchOutCurve: Curves.easeInCubic,
                     child: _isSignUpMode ? _signUpForm() : _loginForm(),
                   ),
                   const SizedBox(height: 12),
                   TextButton(
                     onPressed: _isLoading ? null : _toggleMode,
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsetsDirectional.symmetric(vertical: 10),
+                      foregroundColor: const Color(0xFFF5C518),
+                    ),
                     child: Text(
                       _isSignUpMode
                           ? 'لديك حساب؟ العودة إلى تسجيل الدخول'
                           : 'ليس لديك حساب؟ إنشاء حساب جديد',
-                      style: const TextStyle(
-                        color: _goldLink,
+                      style: GoogleFonts.tajawal(
                         fontWeight: FontWeight.w700,
+                        fontSize: 14,
                       ),
                     ),
                   ),
@@ -523,7 +551,6 @@ class _LoginScreenState extends State<LoginScreen>
             ),
           ),
         ),
-      ),
       ),
     );
   }
@@ -556,11 +583,11 @@ class _LoginScreenState extends State<LoginScreen>
             hint: 'البريد أو اسم الدخول',
             controller: _usernameController,
             focusNode: _focusLoginUser,
-            fillColor: Colors.white,
-            cursorColor: _navy2,
+            useGlass: true,
+            cursorColor: Colors.white,
             suffixIcon: Icon(
               Icons.person_outline_rounded,
-              color: _navy3,
+              color: Colors.white.withValues(alpha: 0.82),
               size: 20,
             ),
             keyboardType: TextInputType.text,
@@ -578,8 +605,8 @@ class _LoginScreenState extends State<LoginScreen>
             controller: _passwordController,
             focusNode: _focusLoginPass,
             obscureText: _obscurePassword,
-            fillColor: Colors.white,
-            cursorColor: _navy2,
+            useGlass: true,
+            cursorColor: Colors.white,
             textDirection: TextDirection.ltr,
             densePrefixConstraints: const BoxConstraints(
               minHeight: 48,
@@ -592,14 +619,14 @@ class _LoginScreenState extends State<LoginScreen>
                 _obscurePassword
                     ? Icons.visibility_off_outlined
                     : Icons.visibility_outlined,
-                color: _navy3,
+                color: Colors.white.withValues(alpha: 0.82),
               ),
               onPressed: () =>
                   setState(() => _obscurePassword = !_obscurePassword),
             ),
             suffixIcon: Icon(
               Icons.lock_outline_rounded,
-              color: _navy3,
+              color: Colors.white.withValues(alpha: 0.82),
               size: 20,
             ),
             textInputAction: TextInputAction.done,
@@ -631,25 +658,51 @@ class _LoginScreenState extends State<LoginScreen>
               ),
             ),
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 24),
           SizedBox(
-            height: 52,
-            child: ElevatedButton(
-              onPressed: _isLoading ? null : _login,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _navyPrimary,
-                foregroundColor: Colors.white,
+            height: 54,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF071A36), Color(0xFF0D1F3C)],
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.28),
+                    blurRadius: 12,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
               ),
-              child: _isLoading
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
+              child: ElevatedButton(
+                onPressed: _isLoading ? null : _login,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.transparent,
+                  shadowColor: Colors.transparent,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: _isLoading
+                    ? const SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : Text(
+                        'تسجيل الدخول',
+                        style: GoogleFonts.tajawal(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.5,
+                        ),
                       ),
-                    )
-                  : const Text('تسجيل الدخول'),
+              ),
             ),
           ),
         ],
@@ -666,34 +719,34 @@ class _LoginScreenState extends State<LoginScreen>
           onTap: () {},
           borderRadius: ErpInputConstants.borderRadius,
           child: Container(
-            constraints: BoxConstraints(
+            constraints: const BoxConstraints(
               minHeight: ErpInputConstants.minHeightSingleLine + 14,
             ),
             padding: const EdgeInsetsDirectional.symmetric(horizontal: 10),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: Colors.white.withValues(alpha: 0.08),
               borderRadius: ErpInputConstants.borderRadius,
-              border: Border.all(color: Colors.grey.shade300, width: 1.25),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.14), width: 1),
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(
+                const Text(
                   '🇮🇶',
                   style: TextStyle(
                     fontSize: 22,
                     height: 1,
-                    fontFamilyFallback: const [
+                    fontFamilyFallback: [
                       'Segoe UI Emoji',
                       'Apple Color Emoji',
                     ],
                   ),
                 ),
                 const SizedBox(width: 8),
-                const Text('+964'),
+                const Text('+964', style: TextStyle(color: Colors.white)),
                 Icon(
                   Icons.keyboard_arrow_down_rounded,
-                  color: _navy3,
+                  color: Colors.white.withValues(alpha: 0.85),
                   size: 22,
                 ),
               ],
@@ -771,11 +824,11 @@ class _LoginScreenState extends State<LoginScreen>
             hint: 'أدخل الاسم',
             controller: _nameController,
             focusNode: _focusSignupName,
-            fillColor: Colors.white,
-            cursorColor: _navy2,
+            useGlass: true,
+            cursorColor: Colors.white,
             suffixIcon: Icon(
               Icons.storefront_outlined,
-              color: _navy3,
+              color: Colors.white.withValues(alpha: 0.82),
               size: 20,
             ),
             keyboardType: TextInputType.text,
@@ -792,9 +845,13 @@ class _LoginScreenState extends State<LoginScreen>
             hint: 'example@domain.com',
             controller: _emailController,
             focusNode: _focusSignupEmail,
-            fillColor: Colors.white,
-            cursorColor: _navy2,
-            suffixIcon: Icon(Icons.email_outlined, color: _navy3, size: 20),
+            useGlass: true,
+            cursorColor: Colors.white,
+            suffixIcon: Icon(
+              Icons.email_outlined,
+              color: Colors.white.withValues(alpha: 0.82),
+              size: 20,
+            ),
             keyboardType: TextInputType.emailAddress,
             textDirection: TextDirection.ltr,
             textInputAction: TextInputAction.next,
@@ -813,7 +870,7 @@ class _LoginScreenState extends State<LoginScreen>
                   style: Theme.of(context).textTheme.titleSmall?.copyWith(
                     fontSize: 13,
                     fontWeight: FontWeight.w700,
-                    color: _navy2,
+                    color: Colors.white,
                   ),
                   maxLines: 2,
                   textAlign: TextAlign.end,
@@ -848,11 +905,11 @@ class _LoginScreenState extends State<LoginScreen>
                     hint: '07701234567',
                     controller: _phoneController,
                     focusNode: _focusSignupPhone,
-                    fillColor: Colors.white,
-                    cursorColor: _navy2,
+                    useGlass: true,
+                    cursorColor: Colors.white,
                     suffixIcon: Icon(
                       Icons.phone_outlined,
-                      color: _navy3,
+                      color: Colors.white.withValues(alpha: 0.82),
                       size: 20,
                     ),
                     keyboardType: TextInputType.number,
@@ -881,8 +938,8 @@ class _LoginScreenState extends State<LoginScreen>
             controller: _signupPasswordController,
             focusNode: _focusSignupPwd,
             obscureText: _obscureSignupPassword,
-            fillColor: Colors.white,
-            cursorColor: _navy2,
+            useGlass: true,
+            cursorColor: Colors.white,
             textDirection: TextDirection.ltr,
             densePrefixConstraints: const BoxConstraints(
               minHeight: 48,
@@ -895,7 +952,7 @@ class _LoginScreenState extends State<LoginScreen>
                 _obscureSignupPassword
                     ? Icons.visibility_off_outlined
                     : Icons.visibility_outlined,
-                color: _navy3,
+                color: Colors.white.withValues(alpha: 0.82),
               ),
               onPressed: () => setState(
                 () => _obscureSignupPassword = !_obscureSignupPassword,
@@ -903,7 +960,7 @@ class _LoginScreenState extends State<LoginScreen>
             ),
             suffixIcon: Icon(
               Icons.lock_outline_rounded,
-              color: _navy3,
+              color: Colors.white.withValues(alpha: 0.82),
               size: 20,
             ),
             textInputAction: TextInputAction.next,
@@ -934,7 +991,9 @@ class _LoginScreenState extends State<LoginScreen>
                   style: Theme.of(context).textTheme.titleSmall?.copyWith(
                     fontSize: 13,
                     fontWeight: FontWeight.w700,
-                    color: mismatchLabelVisible ? Colors.red.shade700 : _navy2,
+                    color: mismatchLabelVisible
+                        ? const Color(0xFFEF4444)
+                        : Colors.white,
                   ),
                   textAlign: TextAlign.end,
                 ),
@@ -960,8 +1019,8 @@ class _LoginScreenState extends State<LoginScreen>
             controller: _confirmSignupPasswordController,
             focusNode: _focusSignupConfirm,
             obscureText: _obscureConfirmSignupPassword,
-            fillColor: Colors.white,
-            cursorColor: _navy2,
+            useGlass: true,
+            cursorColor: Colors.white,
             textDirection: TextDirection.ltr,
             densePrefixConstraints: BoxConstraints(
               minWidth: confirmHasText ? 112 : 48,
@@ -979,7 +1038,7 @@ class _LoginScreenState extends State<LoginScreen>
                     _obscureConfirmSignupPassword
                         ? Icons.visibility_off_outlined
                         : Icons.visibility_outlined,
-                    color: _navy3,
+                    color: Colors.white.withValues(alpha: 0.82),
                   ),
                   onPressed: () => setState(
                     () => _obscureConfirmSignupPassword =
@@ -990,9 +1049,9 @@ class _LoginScreenState extends State<LoginScreen>
                   IconButton(
                     tooltip: 'مسح',
                     splashRadius: 22,
-                    icon: Icon(
+                    icon: const Icon(
                       Icons.cancel_rounded,
-                      color: Colors.red.shade600,
+                      color: Color(0xFFEF4444),
                       size: 22,
                     ),
                     onPressed: () {
@@ -1002,7 +1061,11 @@ class _LoginScreenState extends State<LoginScreen>
                   ),
               ],
             ),
-            suffixIcon: Icon(Icons.task_alt_rounded, color: _navy3, size: 20),
+            suffixIcon: Icon(
+              Icons.task_alt_rounded,
+              color: Colors.white.withValues(alpha: 0.82),
+              size: 20,
+            ),
             textInputAction: TextInputAction.done,
             onChanged: (_) => setState(() {}),
             onFieldSubmitted: (_) {
@@ -1010,27 +1073,61 @@ class _LoginScreenState extends State<LoginScreen>
             },
             validator: validateConfirm,
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 24),
           SizedBox(
-            height: 52,
-            child: ElevatedButton(
-              onPressed: (_isLoading || !_signupSubmissionReady)
-                  ? null
-                  : _signup,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _navyPrimary,
-                foregroundColor: Colors.white,
+            height: 54,
+            child: AnimatedOpacity(
+              duration: const Duration(milliseconds: 200),
+              opacity: _signupSubmissionReady ? 1.0 : 0.5,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(12),
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFF071A36), Color(0xFF0D1F3C)],
+                  ),
+                  boxShadow: _signupSubmissionReady
+                      ? [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.28),
+                            blurRadius: 12,
+                            offset: const Offset(0, 4),
+                          ),
+                        ]
+                      : [],
+                ),
+                child: ElevatedButton(
+                  onPressed: (_isLoading || !_signupSubmissionReady)
+                      ? null
+                      : _signup,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.transparent,
+                    shadowColor: Colors.transparent,
+                    disabledBackgroundColor: Colors.transparent,
+                    foregroundColor: Colors.white,
+                    disabledForegroundColor: Colors.white70,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: _isLoading
+                      ? const SizedBox(
+                          width: 22,
+                          height: 22,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : Text(
+                          'إنشاء الحساب',
+                          style: GoogleFonts.tajawal(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                ),
               ),
-              child: _isLoading
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
-                    )
-                  : const Text('إنشاء الحساب'),
             ),
           ),
         ],
@@ -1039,25 +1136,58 @@ class _LoginScreenState extends State<LoginScreen>
   }
 
   Widget _passwordRulesCard() {
-    return Container(
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFC),
-        borderRadius: ErpInputConstants.borderRadius,
-        border: Border.all(color: Colors.grey.shade300),
-      ),
+    final metCount = [_hasMinLength, _hasUppercase, _hasLowercase, _hasDigit, _hasSpecialChar]
+        .where((v) => v).length;
+    final strength = metCount / 5.0;
+    final strengthColor = strength < 0.4
+        ? Colors.red.shade400
+        : strength < 0.8
+            ? const Color(0xFFF59E0B)
+            : Colors.green.shade600;
+    return GlassSurface(
+      borderRadius: const BorderRadius.all(Radius.circular(12)),
+      blurSigma: 10,
+      tintColor: AppGlass.surfaceTintStrong,
+      strokeColor: Colors.white.withValues(alpha: 0.14),
+      padding: const EdgeInsets.all(14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'شروط كلمة السر (احترافي)',
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
-              color: _navy2,
+          Row(
+            children: [
+              Icon(
+                Icons.shield_outlined,
+                size: 16,
+                color: Colors.white.withValues(alpha: 0.86),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                'شروط كلمة السر',
+                style: GoogleFonts.tajawal(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.white,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          // Strength bar
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: TweenAnimationBuilder<double>(
+              tween: Tween(begin: 0, end: strength),
+              duration: const Duration(milliseconds: 300),
+              curve: Curves.easeOut,
+              builder: (_, value, __) => LinearProgressIndicator(
+                value: value,
+                minHeight: 4,
+                backgroundColor: Colors.white.withValues(alpha: 0.12),
+                color: strengthColor,
+              ),
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 10),
           _ruleItem(_hasMinLength, '8 أحرف على الأقل'),
           _ruleItem(_hasUppercase, 'حرف كبير واحد على الأقل (A-Z)'),
           _ruleItem(_hasLowercase, 'حرف صغير واحد على الأقل (a-z)'),
@@ -1077,14 +1207,16 @@ class _LoginScreenState extends State<LoginScreen>
           Icon(
             ok ? Icons.check_circle_rounded : Icons.cancel_rounded,
             size: 16,
-            color: ok ? Colors.green.shade700 : amberUnmet,
+            color: ok ? const Color(0xFF22C55E) : amberUnmet,
           ),
           const SizedBox(width: 8),
           Text(
             label,
             style: TextStyle(
               fontSize: 12,
-              color: ok ? Colors.green.shade800 : Colors.grey.shade700,
+              color: ok
+                  ? const Color(0xFFBBF7D0)
+                  : Colors.white.withValues(alpha: 0.72),
               fontWeight: ok ? FontWeight.w600 : FontWeight.w400,
             ),
           ),

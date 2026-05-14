@@ -75,8 +75,8 @@ Gs1ParseResult parseGs1Linear(String raw) {
       if (four.startsWith('310') &&
           RegExp(r'^[0-9]$').hasMatch(four[3]) &&
           i + 10 <= s.length) {
-        final dec = int.parse(four[3]);
-        final v = int.parse(s.substring(i + 4, i + 10));
+        final dec = int.tryParse(four[3]) ?? 0;
+        final v = int.tryParse(s.substring(i + 4, i + 10)) ?? 0;
         wKg = v / pow(10, dec);
         i += 10;
         continue;

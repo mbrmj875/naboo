@@ -12,6 +12,8 @@ abstract class BusinessSetupKeys {
   static const enableLoyalty = 'biz.feature.loyalty';
   static const enableTaxOnSale = 'biz.feature.sale_tax';
   static const enableInvoiceDiscount = 'biz.feature.sale_discount';
+  static const enableClothingVariants = 'biz.feature.clothing_variants';
+  static const enableServices = 'biz.feature.services';
 }
 
 class BusinessSetupSettingsData {
@@ -24,6 +26,8 @@ class BusinessSetupSettingsData {
     required this.enableLoyalty,
     required this.enableTaxOnSale,
     required this.enableInvoiceDiscount,
+    required this.enableClothingVariants,
+    required this.enableServices,
   });
 
   final bool onboardingCompleted;
@@ -34,6 +38,8 @@ class BusinessSetupSettingsData {
   final bool enableLoyalty;
   final bool enableTaxOnSale;
   final bool enableInvoiceDiscount;
+  final bool enableClothingVariants;
+  final bool enableServices;
 
   static BusinessSetupSettingsData defaults() => const BusinessSetupSettingsData(
         onboardingCompleted: false,
@@ -44,6 +50,8 @@ class BusinessSetupSettingsData {
         enableLoyalty: false,
         enableTaxOnSale: false,
         enableInvoiceDiscount: true,
+        enableClothingVariants: false,
+        enableServices: true,
       );
 
   static Future<BusinessSetupSettingsData> load(AppSettingsRepository repo) async {
@@ -57,6 +65,8 @@ class BusinessSetupSettingsData {
       't:$tenantId:${BusinessSetupKeys.enableLoyalty}',
       't:$tenantId:${BusinessSetupKeys.enableTaxOnSale}',
       't:$tenantId:${BusinessSetupKeys.enableInvoiceDiscount}',
+      't:$tenantId:${BusinessSetupKeys.enableClothingVariants}',
+      't:$tenantId:${BusinessSetupKeys.enableServices}',
     ]);
     bool b(String key) => (raw[key] ?? '0') == '1';
     return BusinessSetupSettingsData(
@@ -73,6 +83,10 @@ class BusinessSetupSettingsData {
           (raw['t:$tenantId:${BusinessSetupKeys.enableInvoiceDiscount}'] ??
                   (defaults().enableInvoiceDiscount ? '1' : '0')) ==
               '1',
+      enableClothingVariants: b('t:$tenantId:${BusinessSetupKeys.enableClothingVariants}'),
+      enableServices: (raw['t:$tenantId:${BusinessSetupKeys.enableServices}'] ??
+              (defaults().enableServices ? '1' : '0')) ==
+          '1',
     );
   }
 
@@ -122,6 +136,16 @@ class BusinessSetupSettingsData {
     await repo.setForTenant(
       BusinessSetupKeys.enableInvoiceDiscount,
       enableInvoiceDiscount ? '1' : '0',
+      tenantId: tenantId,
+    );
+    await repo.setForTenant(
+      BusinessSetupKeys.enableClothingVariants,
+      enableClothingVariants ? '1' : '0',
+      tenantId: tenantId,
+    );
+    await repo.setForTenant(
+      BusinessSetupKeys.enableServices,
+      enableServices ? '1' : '0',
       tenantId: tenantId,
     );
   }

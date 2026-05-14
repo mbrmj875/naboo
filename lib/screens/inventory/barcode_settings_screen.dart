@@ -292,7 +292,7 @@ class _BarcodeSettingsScreenState extends State<BarcodeSettingsScreen> {
                       FilteringTextInputFormatter.allow(RegExp(r'[XWPNxwpn]')),
                     ],
                     onChanged: (_) => setState(() {}),
-                    decoration: InputDecoration(
+                    decoration: const InputDecoration(
                       hintText: 'XXXXXXXXWWWWWWPPPPN',
                       filled: true,
                       border: OutlineInputBorder(
@@ -334,7 +334,7 @@ class _BarcodeSettingsScreenState extends State<BarcodeSettingsScreen> {
                     textAlign: TextAlign.right,
                     keyboardType: const TextInputType.numberWithOptions(
                         decimal: true),
-                    decoration: InputDecoration(
+                    decoration: const InputDecoration(
                       hintText: 'مثال: 1000',
                       filled: true,
                       border: OutlineInputBorder(
@@ -367,7 +367,7 @@ class _BarcodeSettingsScreenState extends State<BarcodeSettingsScreen> {
                     textAlign: TextAlign.right,
                     keyboardType: const TextInputType.numberWithOptions(
                         decimal: true),
-                    decoration: InputDecoration(
+                    decoration: const InputDecoration(
                       hintText: 'مثال: 100',
                       filled: true,
                       border: OutlineInputBorder(

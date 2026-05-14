@@ -576,10 +576,10 @@ class _CustomerContactsScreenState extends State<CustomerContactsScreen> {
                 ),
               ],
             )
-          : Row(
+          : const Row(
               children: [
-                const SizedBox(width: 44),
-                const SizedBox(
+                SizedBox(width: 44),
+                SizedBox(
                   width: 88,
                   child: Text(
                     'الحالة',
@@ -587,7 +587,7 @@ class _CustomerContactsScreenState extends State<CustomerContactsScreen> {
                     style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
                   ),
                 ),
-                const Expanded(
+                Expanded(
                   flex: 2,
                   child: Text(
                     'الرصيد',
@@ -595,7 +595,7 @@ class _CustomerContactsScreenState extends State<CustomerContactsScreen> {
                     style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
                   ),
                 ),
-                const Expanded(
+                Expanded(
                   flex: 2,
                   child: Text(
                     'البريد',
@@ -603,7 +603,7 @@ class _CustomerContactsScreenState extends State<CustomerContactsScreen> {
                     style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
                   ),
                 ),
-                const Expanded(
+                Expanded(
                   flex: 2,
                   child: Text(
                     'الهاتف',
@@ -611,7 +611,7 @@ class _CustomerContactsScreenState extends State<CustomerContactsScreen> {
                     style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
                   ),
                 ),
-                const Expanded(
+                Expanded(
                   flex: 4,
                   child: Text(
                     'العميل',

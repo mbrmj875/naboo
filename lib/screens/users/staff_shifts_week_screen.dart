@@ -6,6 +6,7 @@ import 'package:intl/intl.dart' hide TextDirection;
 import '../../services/database_helper.dart';
 import '../../utils/screen_layout.dart';
 import '../../theme/design_tokens.dart';
+import '../../widgets/secure_screen.dart';
 
 /// يحوّل الأرقام العربية/الفارسية إلى أرقام لاتينية (0–9) مع الإبقاء على باقي النص.
 String _latinDigits(String s) {
@@ -632,7 +633,8 @@ class _StaffShiftsWeekScreenState extends State<StaffShiftsWeekScreen> {
     final byDay = _segmentsByDay();
     final totals = _totalsByStaff(byDay);
 
-    return Directionality(
+    return SecureScreen(
+      child: Directionality(
       textDirection: TextDirection.rtl,
       child: Scaffold(
         backgroundColor: bg,
@@ -687,6 +689,7 @@ class _StaffShiftsWeekScreenState extends State<StaffShiftsWeekScreen> {
                 },
               ),
       ),
+      ),
     );
   }
 }
@@ -718,7 +721,7 @@ class _TimeRuler extends StatelessWidget {
       height: height + _DayTimelineColumn.headerHeight,
       child: Column(
         children: [
-          SizedBox(height: _DayTimelineColumn.headerHeight),
+          const SizedBox(height: _DayTimelineColumn.headerHeight),
           SizedBox(
             height: height,
             child: Directionality(

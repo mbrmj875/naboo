@@ -3,6 +3,7 @@ import '../models/invoice.dart';
 import '../services/cloud_sync_service.dart';
 import '../services/database_helper.dart';
 import '../services/license_service.dart';
+import '../utils/invoice_validation.dart';
 
 class InvoiceProvider extends ChangeNotifier {
   static const int _pageSize = 120;
@@ -94,6 +95,15 @@ class InvoiceProvider extends ChangeNotifier {
   }
 
   Future<int> addInvoice(Invoice invoice) async {
+    // Step 14 — defense-in-depth: لا نحفظ فاتورة غير متوازنة في قاعدة البيانات
+    // حتى لو فات المستخدم فحص الواجهة.
+    final validation = validateInvoiceBalance(invoice);
+    if (!validation.isValid) {
+      throw InvoiceValidationException(
+        validation.errorMessage ?? 'الفاتورة غير متوازنة',
+      );
+    }
+
     final isRestricted =
         LicenseService.instance.state.status == LicenseStatus.restricted;
     final id = await _db.insertInvoiceWithPolicy(

@@ -78,7 +78,7 @@ class _DashboardRecentActivityState extends State<DashboardRecentActivity> {
       if (savedW != null) _panelWidth = savedW;
       _panelOffset = Offset(savedX ?? 0, savedY ?? defaultDownY);
     });
-    _load();
+    unawaited(_load());
   }
 
   double _clampListHeight(BuildContext context, double value) {

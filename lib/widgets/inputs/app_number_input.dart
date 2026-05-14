@@ -148,7 +148,7 @@ class _AppNumberInputState extends State<AppNumberInput> {
       floatingLabelBehavior: FloatingLabelBehavior.never,
       isDense: true,
       constraints:
-          BoxConstraints(minHeight: ErpInputConstants.minHeightSingleLine),
+          const BoxConstraints(minHeight: ErpInputConstants.minHeightSingleLine),
       contentPadding: ErpInputConstants.contentPadding,
       filled: true,
       fillColor: fill,

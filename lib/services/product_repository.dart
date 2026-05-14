@@ -1,5 +1,8 @@
+import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
-import 'package:flutter/foundation.dart' show ValueNotifier;
+import 'package:uuid/uuid.dart';
+import 'sync_queue_service.dart';
+
 import 'cloud_sync_service.dart';
 import 'database_helper.dart';
 import 'tenant_context_service.dart';
@@ -315,31 +318,50 @@ class ProductRepository {
       limit: 1,
     );
     if (clash.isNotEmpty) return 'هذا الاسم مستخدم مسبقاً';
+    String? parentGlobalId;
     if (parentId != null) {
       final p = await db.query(
         'categories',
-        columns: ['id'],
+        columns: ['id', 'global_id'],
         where: 'id = ? AND isActive = 1',
         whereArgs: [parentId],
         limit: 1,
       );
       if (p.isEmpty) return 'التصنيف الرئيسي غير صالح';
+      parentGlobalId = p.first['global_id'] as String?;
     }
     final now = DateTime.now().toIso8601String();
     String? desc;
     if (description != null && description.trim().isNotEmpty) {
       desc = description.trim();
     }
-    await db.insert('categories', {
+    
+    final gid = const Uuid().v4();
+    final row = {
       'name': trimmed,
       'code': 'CAT-${DateTime.now().millisecondsSinceEpoch}',
       'parentId': parentId,
       'description': desc,
       'createdAt': now,
+      'global_id': gid,
+      'updatedAt': now,
+      'parent_global_id': parentGlobalId,
+    };
+    
+    await db.transaction((txn) async {
+      await txn.insert('categories', row);
+      await SyncQueueService.instance.enqueueMutation(
+        txn,
+        entityType: 'category',
+        operation: 'INSERT',
+        globalId: gid,
+        payload: row,
+      );
     });
     CloudSyncService.instance.scheduleSyncSoon();
     return null;
   }
+
 
   /// حذف تصنيف بعد التحقق من الفروع والمنتجات.
   Future<String?> deleteCategory(int id) async {
@@ -364,10 +386,27 @@ class ProductRepository {
     if (prods.isNotEmpty) {
       return 'لا يمكن الحذف: التصنيف مرتبط بمنتجات';
     }
-    await db.delete('categories', where: 'id = ?', whereArgs: [id]);
+    await db.transaction((txn) async {
+      final cRow = await txn.query('categories', columns: ['global_id'], where: 'id = ?', whereArgs: [id], limit: 1);
+      if (cRow.isEmpty) return;
+      final gid = cRow.first['global_id'] as String?;
+      
+      await txn.delete('categories', where: 'id = ?', whereArgs: [id]);
+      
+      if (gid != null) {
+        await SyncQueueService.instance.enqueueMutation(
+          txn,
+          entityType: 'category',
+          operation: 'DELETE',
+          globalId: gid,
+          payload: {},
+        );
+      }
+    });
     CloudSyncService.instance.scheduleSyncSoon();
     return null;
   }
+
 
   /// علامات تجارية نشطة (لإدارة القائمة).
   Future<List<Map<String, dynamic>>> listBrandsForSettings() async {
@@ -394,22 +433,55 @@ class ProductRepository {
     );
     if (clash.isNotEmpty) return 'هذه الماركة موجودة مسبقاً';
     final now = DateTime.now().toIso8601String();
-    await db.insert('brands', {
+    final gid = const Uuid().v4();
+    final row = {
       'name': trimmed,
       'code': 'BR-${DateTime.now().millisecondsSinceEpoch}',
       'createdAt': now,
+      'global_id': gid,
+      'updatedAt': now,
+    };
+    
+    await db.transaction((txn) async {
+      await txn.insert('brands', row);
+      await SyncQueueService.instance.enqueueMutation(
+        txn,
+        entityType: 'brand',
+        operation: 'INSERT',
+        globalId: gid,
+        payload: row,
+      );
+    });
+    
+    CloudSyncService.instance.scheduleSyncSoon();
+    return null;
+  }
+
+
+  /// حذف ماركة (المنتجات المرتبطة تُفرّغ brandId تلقائياً).
+  Future<String?> deleteBrand(int id) async {
+    final db = await _db;
+    await db.transaction((txn) async {
+      final bRow = await txn.query('brands', columns: ['global_id'], where: 'id = ?', whereArgs: [id], limit: 1);
+      if (bRow.isEmpty) return;
+      final gid = bRow.first['global_id'] as String?;
+      
+      await txn.delete('brands', where: 'id = ?', whereArgs: [id]);
+      
+      if (gid != null) {
+        await SyncQueueService.instance.enqueueMutation(
+          txn,
+          entityType: 'brand',
+          operation: 'DELETE',
+          globalId: gid,
+          payload: {},
+        );
+      }
     });
     CloudSyncService.instance.scheduleSyncSoon();
     return null;
   }
 
-  /// حذف ماركة (المنتجات المرتبطة تُفرّغ brandId تلقائياً).
-  Future<String?> deleteBrand(int id) async {
-    final db = await _db;
-    await db.delete('brands', where: 'id = ?', whereArgs: [id]);
-    CloudSyncService.instance.scheduleSyncSoon();
-    return null;
-  }
 
   Future<List<Map<String, dynamic>>> getProducts() async {
     final db = await _db;
@@ -419,6 +491,8 @@ class ProductRepository {
         p.name,
         p.barcode,
         p.productCode,
+        IFNULL(p.isService, 0) AS isService,
+        p.serviceKind AS serviceKind,
         p.sellPrice AS sell,
         p.buyPrice AS buy,
         p.qty,
@@ -458,6 +532,8 @@ class ProductRepository {
     final where = <String>['p.tenantId = ?'];
     final args = <Object?>[tid];
 
+    const effQtyExpr = 'COALESCE(v.sumQty, p.qty)';
+
     void addStatusAndActive() {
       switch (statusArabic) {
         case 'معطّل':
@@ -469,14 +545,14 @@ class ProductRepository {
       switch (statusArabic) {
         case 'نشط':
         case 'في المخزون':
-          where.add("(p.qty > 0 AND p.status = 'instock')");
+          where.add("($effQtyExpr > 0 AND p.status = 'instock')");
           break;
         case 'مخزون منخفض':
         case 'منخفض':
           where.add("p.status = 'low'");
           break;
         case 'نفذ من المخزون':
-          where.add('p.qty <= 0');
+          where.add('$effQtyExpr <= 0');
           break;
         case 'الكل':
         case 'معطّل':
@@ -491,7 +567,7 @@ class ProductRepository {
     if (kw.isNotEmpty) {
       final safe = kwRaw.replaceAll('%', '').replaceAll('_', '');
       if (safe.isNotEmpty) {
-        final like = '%${kw}%';
+        final like = '%$kw%';
         final likeRaw = '%$safe%';
         where.add('''
 (
@@ -539,7 +615,7 @@ class ProductRepository {
     final asc = sortAscending ? 'ASC' : 'DESC';
     final orderBy = switch (sortByArabic) {
       'السعر' => 'p.sellPrice $asc, p.id DESC',
-      'الكمية' => 'p.qty $asc, p.id DESC',
+      'الكمية' => '$effQtyExpr $asc, p.id DESC',
       'تاريخ الإضافة' => 'p.createdAt $asc, p.id DESC',
       _ => 'p.name COLLATE NOCASE $asc, p.id DESC',
     };
@@ -551,22 +627,33 @@ class ProductRepository {
         p.name,
         p.barcode,
         p.productCode,
+        IFNULL(p.isService, 0) AS isService,
+        p.serviceKind AS serviceKind,
+        IFNULL(p.trackInventory, 1) AS trackInventory,
         p.sellPrice AS sell,
         p.buyPrice AS buy,
-        p.qty,
+        $effQtyExpr AS qty,
         p.status,
         p.isActive AS isActive,
         p.lowStockThreshold AS lowStockThreshold,
         IFNULL(p.isPinned, 0) AS isPinned,
+        p.imagePath AS imagePath,
+        p.imageUrl AS imageUrl,
         c.name AS categoryName,
         b.name AS brandName
       FROM products p
+      LEFT JOIN (
+        SELECT productId, SUM(quantity) AS sumQty
+        FROM product_variants
+        WHERE tenantId = ? AND deleted_at IS NULL
+        GROUP BY productId
+      ) v ON v.productId = p.id
       LEFT JOIN categories c ON c.id = p.categoryId
       LEFT JOIN brands b ON b.id = p.brandId
       $whereSql
       ORDER BY $orderBy
       LIMIT ? OFFSET ?
-    ''', [...args, limit, offset]);
+    ''', [tid, ...args, limit, offset]);
   }
 
   /// عدد المنتجات المطابقة لنفس شروط [queryProductsPage] (بدون LIMIT/OFFSET).
@@ -585,6 +672,8 @@ class ProductRepository {
     final where = <String>['p.tenantId = ?'];
     final args = <Object?>[tid];
 
+    const effQtyExpr = 'COALESCE(v.sumQty, p.qty)';
+
     void addStatusAndActive() {
       switch (statusArabic) {
         case 'معطّل':
@@ -596,14 +685,14 @@ class ProductRepository {
       switch (statusArabic) {
         case 'نشط':
         case 'في المخزون':
-          where.add("(p.qty > 0 AND p.status = 'instock')");
+          where.add("($effQtyExpr > 0 AND p.status = 'instock')");
           break;
         case 'مخزون منخفض':
         case 'منخفض':
           where.add("p.status = 'low'");
           break;
         case 'نفذ من المخزون':
-          where.add('p.qty <= 0');
+          where.add('$effQtyExpr <= 0');
           break;
         case 'الكل':
         case 'معطّل':
@@ -618,7 +707,7 @@ class ProductRepository {
     if (kw.isNotEmpty) {
       final safe = kwRaw.replaceAll('%', '').replaceAll('_', '');
       if (safe.isNotEmpty) {
-        final like = '%${kw}%';
+        final like = '%$kw%';
         final likeRaw = '%$safe%';
         where.add('''
 (
@@ -668,11 +757,17 @@ class ProductRepository {
       '''
       SELECT COUNT(*) AS c
       FROM products p
+      LEFT JOIN (
+        SELECT productId, SUM(quantity) AS sumQty
+        FROM product_variants
+        WHERE tenantId = ? AND deleted_at IS NULL
+        GROUP BY productId
+      ) v ON v.productId = p.id
       LEFT JOIN categories c ON c.id = p.categoryId
       LEFT JOIN brands b ON b.id = p.brandId
       $whereSql
       ''',
-      args,
+      [tid, ...args],
     );
     final v = rows.isEmpty ? null : rows.first['c'];
     return (v as num?)?.toInt() ?? 0;
@@ -697,17 +792,21 @@ class ProductRepository {
   /// إعادة تفعيل منتج كان معطّلاً حذفاً منطقياً.
   Future<void> activateProduct(int productId) async {
     final db = await _db;
-    await db.update(
-      'products',
-      {
-        'isActive': 1,
-        'updatedAt': DateTime.now().toIso8601String(),
-      },
-      where: 'id = ?',
-      whereArgs: [productId],
-    );
+    await db.transaction((txn) async {
+      await txn.update(
+        'products',
+        {
+          'isActive': 1,
+          'updatedAt': DateTime.now().toIso8601String(),
+        },
+        where: 'id = ?',
+        whereArgs: [productId],
+      );
+      await _enqueueProductMutation(txn, productId, 'UPDATE');
+    });
     CloudSyncService.instance.scheduleSyncSoon();
   }
+
 
   /// صفحات لشاشة «تحديث منتج موجود»: بحث موحّد (اسم / باركود / رمز / معرف) أو كل الأصناف عند فراغ النص.
   Future<List<Map<String, dynamic>>> queryProductsQuickEditPage({
@@ -823,6 +922,8 @@ class ProductRepository {
             ELSE dv.unitName || ' (' || dv.unitSymbol || ')'
           END
         ) AS defaultUnitLabel,
+        IFNULL(p.isService, 0) AS isService,
+        p.serviceKind AS serviceKind,
         p.status
       FROM products p
       LEFT JOIN product_unit_variants dv
@@ -874,6 +975,8 @@ class ProductRepository {
             ELSE dv.unitName || ' (' || dv.unitSymbol || ')'
           END
         ) AS defaultUnitLabel,
+        IFNULL(p.isService, 0) AS isService,
+        p.serviceKind AS serviceKind,
         p.status
       FROM products p
       LEFT JOIN product_unit_variants dv
@@ -930,6 +1033,8 @@ class ProductRepository {
             ELSE dv.unitName || ' (' || dv.unitSymbol || ')'
           END
         ) AS defaultUnitLabel,
+        IFNULL(p.isService, 0) AS isService,
+        p.serviceKind AS serviceKind,
         p.status
       FROM products p
       LEFT JOIN product_unit_variants dv
@@ -1317,10 +1422,25 @@ class ProductRepository {
   /// المنتجات المثبّتة بترتيب آخر تثبيت (الأحدث أولاً).
   Future<List<Map<String, dynamic>>> getPinnedProducts() async {
     final db = await _db;
-    return db.query(
-      'products',
-      where: 'isPinned = 1 AND isActive = 1',
-      orderBy: 'pinnedAt DESC',
+    // الملابس لا تستخدم products.qty؛ نعرض كمية “القطعة” بمجموع variants إن وجد.
+    // لا نؤثر على باقي المنتجات (تبقى qty كما هي).
+    final tid = _tenant.activeTenantId;
+    return db.rawQuery(
+      '''
+      SELECT
+        p.*,
+        COALESCE(v.sumQty, p.qty) AS qty
+      FROM products p
+      LEFT JOIN (
+        SELECT productId, SUM(quantity) AS sumQty
+        FROM product_variants
+        WHERE tenantId = ? AND deleted_at IS NULL
+        GROUP BY productId
+      ) v ON v.productId = p.id
+      WHERE p.isPinned = 1 AND p.isActive = 1 AND p.tenantId = ?
+      ORDER BY p.pinnedAt DESC
+      ''',
+      [tid, tid],
     );
   }
 
@@ -1361,29 +1481,37 @@ class ProductRepository {
     if (stockBaseKind != null) {
       patch['stockBaseKind'] = stockBaseKind.clamp(0, 1);
     }
-    await db.update(
-      'products',
-      patch,
-      where: 'id = ? AND isActive = 1',
-      whereArgs: [productId],
-    );
+    await db.transaction((txn) async {
+      await txn.update(
+        'products',
+        patch,
+        where: 'id = ? AND isActive = 1',
+        whereArgs: [productId],
+      );
+      await _enqueueProductMutation(txn, productId, 'UPDATE');
+    });
     CloudSyncService.instance.scheduleSyncSoon();
   }
+
 
   /// حذف منطقي: تعطيل المنتج بدل حذفه لتفادي كسر روابط الفواتير.
   Future<void> deactivateProduct(int productId) async {
     final db = await _db;
-    await db.update(
-      'products',
-      {
-        'isActive': 0,
-        'updatedAt': DateTime.now().toIso8601String(),
-      },
-      where: 'id = ?',
-      whereArgs: [productId],
-    );
+    await db.transaction((txn) async {
+      await txn.update(
+        'products',
+        {
+          'isActive': 0,
+          'updatedAt': DateTime.now().toIso8601String(),
+        },
+        where: 'id = ?',
+        whereArgs: [productId],
+      );
+      await _enqueueProductMutation(txn, productId, 'UPDATE');
+    });
     CloudSyncService.instance.scheduleSyncSoon();
   }
+
 
   Future<bool> isBarcodeTaken(String barcode) async {
     final bc = barcode.trim();
@@ -1512,6 +1640,73 @@ class ProductRepository {
     if (bc.isEmpty) return null;
     final db = await _db;
 
+    // 0) Clothing variant barcode (color+size).
+    try {
+      final tid = _tenant.activeTenantId;
+      final rows = await db.rawQuery(
+        '''
+        SELECT
+          v.id AS clothingVariantId,
+          v.productId AS productId,
+          v.colorId AS colorId,
+          v.size AS size,
+          v.quantity AS quantity,
+          v.barcode AS variantBarcode,
+          v.sku AS sku,
+          c.name AS colorName,
+          c.hexCode AS colorHex,
+          p.id AS id,
+          p.name AS name,
+          p.barcode AS barcode,
+          p.sellPrice AS sellPrice,
+          p.minSellPrice AS minSellPrice,
+          p.buyPrice AS buyPrice,
+          p.qty AS qty,
+          p.trackInventory AS trackInventory,
+          p.allowNegativeStock AS allowNegativeStock,
+          p.stockBaseKind AS stockBaseKind
+        FROM product_variants v
+        INNER JOIN product_colors c ON c.id = v.colorId
+        INNER JOIN products p ON p.id = v.productId
+        WHERE v.deleted_at IS NULL
+          AND c.deleted_at IS NULL
+          AND p.isActive = 1
+          AND v.tenantId = ?
+          AND c.tenantId = ?
+          AND UPPER(TRIM(v.barcode)) = UPPER(TRIM(?))
+        LIMIT 1
+        ''',
+        [tid, tid, bc],
+      );
+      if (rows.isNotEmpty) {
+        final r = rows.first;
+        final product = <String, dynamic>{
+          'id': r['id'],
+          'name': r['name'],
+          'barcode': r['barcode'],
+          'sellPrice': r['sellPrice'],
+          'minSellPrice': r['minSellPrice'],
+          'buyPrice': r['buyPrice'],
+          'qty': r['qty'],
+          'trackInventory': r['trackInventory'],
+          'allowNegativeStock': r['allowNegativeStock'],
+          'stockBaseKind': r['stockBaseKind'],
+        };
+        final clothingVariant = <String, dynamic>{
+          'id': r['clothingVariantId'],
+          'productId': r['productId'],
+          'colorId': r['colorId'],
+          'size': r['size'],
+          'quantity': r['quantity'],
+          'barcode': r['variantBarcode'],
+          'sku': r['sku'],
+          'colorName': r['colorName'],
+          'colorHex': r['colorHex'],
+        };
+        return {'product': product, 'variant': null, 'clothingVariant': clothingVariant};
+      }
+    } catch (_) {}
+
     // 1) Variant barcode match (hybrid recommended).
     try {
       final varRows = await db.rawQuery(
@@ -1568,14 +1763,14 @@ class ProductRepository {
           'sellPrice': r['variantSellPrice'],
           'minSellPrice': r['variantMinSellPrice'],
         };
-        return {'product': product, 'variant': variant};
+        return {'product': product, 'variant': variant, 'clothingVariant': null};
       }
     } catch (_) {}
 
     // 2) Base product barcode match.
     final prod = await findProductByBarcode(bc);
     if (prod == null) return null;
-    return {'product': prod, 'variant': null};
+    return {'product': prod, 'variant': null, 'clothingVariant': null};
   }
 
   Future<List<Map<String, dynamic>>> listActiveUnitVariantsForProduct(int productId) async {
@@ -1755,41 +1950,47 @@ class ProductRepository {
       return t;
     }
 
-    final id = await db.insert('products', {
-      'tenantId': tid,
-      'name': name.trim(),
-      'barcode': bc,
-      'productCode': code,
-      'categoryId': categoryId,
-      'brandId': brandId,
-      'buyPrice': buyPrice,
-      'sellPrice': sellPrice,
-      'minSellPrice': minP,
-      'qty': qty,
-      'lowStockThreshold': lowStockThreshold,
-      'status': status,
-      'createdAt': now,
-      'updatedAt': now,
-      'description': nz(description),
-      'imagePath': nz(imagePath),
-      'imageUrl': nz(imageUrl),
-      'internalNotes': nz(internalNotes),
-      'tags': nz(tags),
-      'saleUnit': nz(saleUnit),
-      'supplierName': nz(supplierName),
-      'taxPercent': taxPercent,
-      'discountPercent': discountPercent,
-      'discountAmount': discountAmount,
-      'buyConversionLabel': nz(buyConversionLabel),
-      'trackInventory': trackInventory,
-      'allowNegativeStock': allowNegativeStock,
-      'supplierItemCode': nz(supplierItemCode),
-      'netWeightGrams': netWeightGrams,
-      'manufacturingDate': nz(manufacturingDate),
-      'expiryDate': nz(expiryDate),
-      'grade': nz(grade),
-      'expiryAlertDaysBefore': expiryAlertDaysBefore,
+    final id = await db.transaction<int>((txn) async {
+      final newId = await txn.insert('products', {
+        'tenantId': tid,
+        'name': name.trim(),
+        'barcode': bc,
+        'productCode': code,
+        'categoryId': categoryId,
+        'brandId': brandId,
+        'buyPrice': buyPrice,
+        'sellPrice': sellPrice,
+        'minSellPrice': minP,
+        'qty': qty,
+        'lowStockThreshold': lowStockThreshold,
+        'status': status,
+        'createdAt': now,
+        'updatedAt': now,
+        'description': nz(description),
+        'imagePath': nz(imagePath),
+        'imageUrl': nz(imageUrl),
+        'internalNotes': nz(internalNotes),
+        'tags': nz(tags),
+        'saleUnit': nz(saleUnit),
+        'supplierName': nz(supplierName),
+        'taxPercent': taxPercent,
+        'discountPercent': discountPercent,
+        'discountAmount': discountAmount,
+        'buyConversionLabel': nz(buyConversionLabel),
+        'trackInventory': trackInventory,
+        'allowNegativeStock': allowNegativeStock,
+        'supplierItemCode': nz(supplierItemCode),
+        'netWeightGrams': netWeightGrams,
+        'manufacturingDate': nz(manufacturingDate),
+        'expiryDate': nz(expiryDate),
+        'grade': nz(grade),
+        'expiryAlertDaysBefore': expiryAlertDaysBefore,
+        'global_id': const Uuid().v4(),
+      });
+      await _enqueueProductMutation(txn, newId, 'INSERT');
+      return newId;
     });
+
 
     // وحدة افتراضية للبيع/المسح (factor=1). تُكمّل مهاجرات قواعد قديمة لكنها لا تغطي المنتجات الجديدة بعد إنشاء الجدول.
     try {
@@ -1881,6 +2082,9 @@ class ProductRepository {
     required int stockBaseKind,
     List<NewProductExtraUnit> extraUnits = const [],
     int? warehouseId,
+    /// `1` = صف خدمة فنية (بدون مخزون؛ يُعرَض في البيع ككمية ثابتة 1).
+    int isService = 0,
+    String? serviceKind,
   }) async {
     final db = await _db;
     final now = DateTime.now().toIso8601String();
@@ -1890,10 +2094,13 @@ class ProductRepository {
     final minN = IqdMoney.normalizeDinar(minP0);
     final tid = (tenantId ?? _tenant.activeTenantId).clamp(1, 999999999);
     final k = stockBaseKind.clamp(0, 1);
-    final ti = trackInventory != 0;
-    final qtyF = ti ? qty : 0.0;
-    final lowF = ti ? lowStockThreshold : 0.0;
-    final status = qtyF <= lowF ? 'low' : 'instock';
+    final svc = isService != 0;
+    final storedTrack = svc ? 0 : (trackInventory != 0 ? 1 : 0);
+    final tiEffective = storedTrack != 0;
+    final qtyF = tiEffective ? qty : 0.0;
+    final lowF = tiEffective ? lowStockThreshold : 0.0;
+    final status =
+        !tiEffective ? 'instock' : (qtyF <= lowF ? 'low' : 'instock');
     String? bc;
     final b0 = barcode?.trim();
     if (b0 != null && b0.isNotEmpty) {
@@ -1980,7 +2187,7 @@ class ProductRepository {
         'discountPercent': discountPercent,
         'discountAmount': discountAmount,
         'buyConversionLabel': nz(buyConversionLabel),
-        'trackInventory': trackInventory,
+        'trackInventory': storedTrack,
         'allowNegativeStock': allowNegativeStock,
         'supplierItemCode': nz(supplierItemCode),
         'netWeightGrams': netWeightGrams,
@@ -1988,7 +2195,12 @@ class ProductRepository {
         'expiryDate': nz(expiryDate),
         'grade': nz(grade),
         'expiryAlertDaysBefore': expiryAlertDaysBefore,
+        'isService': svc ? 1 : 0,
+        'serviceKind': nz(serviceKind),
+        'global_id': const Uuid().v4(),
       });
+      await _enqueueProductMutation(txn, id, 'INSERT');
+
 
       final defaultUnitName = k == 1 ? 'كيلوغرام' : 'قطعة';
       await txn.insert('product_unit_variants', {
@@ -2030,7 +2242,7 @@ class ProductRepository {
         await _ensureInternalBarcodeIfMissing(txn, id);
       }
 
-      if (warehouseId != null && ti && qtyF > 0) {
+      if (warehouseId != null && tiEffective && qtyF > 0) {
         await upsertProductWarehouseStock(
           productId: id,
           warehouseId: warehouseId,
@@ -2067,5 +2279,33 @@ class ProductRepository {
     }
     throw StateError('تعذر توليد رمز منتج فريد. حاول مجدداً.');
   }
+
+  Future<void> _enqueueProductMutation(DatabaseExecutor txn, int productId, String operation) async {
+    final rows = await txn.rawQuery('''
+      SELECT p.*, 
+             c.global_id AS category_global_id,
+             b.global_id AS brand_global_id
+      FROM products p
+      LEFT JOIN categories c ON p.categoryId = c.id
+      LEFT JOIN brands b ON p.brandId = b.id
+      WHERE p.id = ?
+      LIMIT 1
+    ''', [productId]);
+    
+    if (rows.isEmpty) return;
+    final payload = Map<String, dynamic>.from(rows.first);
+    final globalId = payload['global_id'] as String?;
+    if (globalId == null) return;
+    
+    await SyncQueueService.instance.enqueueMutation(
+      txn,
+      entityType: 'product',
+      operation: operation,
+      globalId: globalId,
+      payload: payload,
+    );
+  }
 }
+
+
 

@@ -1459,11 +1459,11 @@ class _WarehouseSheetState extends State<_WarehouseSheet> {
                   });
                 },
               ),
-              Expanded(
+              const Expanded(
                 child: Text(
                   'مستودع نشط',
                   textAlign: TextAlign.end,
-                  style: const TextStyle(fontSize: 14, color: _t1),
+                  style: TextStyle(fontSize: 14, color: _t1),
                 ),
               ),
             ],
@@ -1489,11 +1489,11 @@ class _WarehouseSheetState extends State<_WarehouseSheet> {
                     ? null
                     : (v) => unawaited(_onDefaultToggleRequest(v)),
               ),
-              Expanded(
+              const Expanded(
                 child: Text(
                   'افتراضي',
                   textAlign: TextAlign.end,
-                  style: const TextStyle(fontSize: 14, color: _t1),
+                  style: TextStyle(fontSize: 14, color: _t1),
                 ),
               ),
             ],

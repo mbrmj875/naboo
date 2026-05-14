@@ -1,14 +1,10 @@
 import 'dart:async' show unawaited;
-import 'dart:io';
 
-import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import 'license/license_engine.dart';
-import 'license/license_engine_v1.dart';
 import 'license/license_engine_v2.dart';
 import 'license/license_token.dart';
 import 'license/trusted_time_service.dart';
@@ -121,7 +117,6 @@ class SubscriptionPlan {
 
 abstract class _Prefs {
   static const licenseKey = 'lic.key';
-  static const deviceId = 'lic.device_id';
   static const status = 'lic.status';
   static const expiresAt = 'lic.expires_at';
   static const lastCheckAt = 'lic.last_check';
@@ -137,11 +132,20 @@ abstract class _Prefs {
   static const deviceOverLimit = 'lic.device_over_limit';
   static const deviceOverLimitCheckedAt = 'lic.device_over_limit_checked_at';
 
-  /// من profiles.license_system_version — v1 مفتاح قديم، v2 JWT.
-  static const licenseSystemVersion = 'lic.license_system_version';
+  /// مفتاح قديم من نظام v1؛ يُمسح في [resetLicenseStateForDataScopeChange] لتنظيف التركة.
+  static const legacyLicenseSystemVersion = 'lic.license_system_version';
 
-  /// آخر بصمة إصدار طُبِّقت بعدها سياسة الترخيص (`version+buildNumber` من [PackageInfo]).
+  /// آخر بصمة إصدار طُبِّقت بعدها سياسة الترخيص (`version+buildNumber` من [PackageInfo]).
   static const appVersion = 'lic.app_version';
+
+  // ── Step 21: Kill Switch / tenant_access cache ───────────────────────────
+  // مصدر الحقيقة على الخادم (جدول tenant_access). نُخزّنه offline لاتخاذ
+  // قرار "آخر حالة معروفة + تحذير" عند انقطاع الشبكة.
+  static const tenantAccessStatus = 'lic.tenant.access_status';
+  static const tenantAccessKillSwitch = 'lic.tenant.kill_switch';
+  static const tenantAccessValidUntil = 'lic.tenant.valid_until';
+  static const tenantAccessGraceUntil = 'lic.tenant.grace_until';
+  static const tenantAccessCheckedAt = 'lic.tenant.checked_at';
 }
 
 // ── حالة الترخيص ─────────────────────────────────────────────────────────────
@@ -158,11 +162,7 @@ enum LicenseStatus {
   pendingLock,
 }
 
-enum LockReason {
-  expired,
-  suspended,
-  timeTamper,
-}
+enum LockReason { expired, suspended, timeTamper }
 
 class LicenseState {
   const LicenseState({
@@ -200,22 +200,108 @@ class LicenseState {
   static const checking = LicenseState(status: LicenseStatus.checking);
 }
 
+// ── Step 21: Kill Switch decision (مصفوفة قرار من tenant_access) ─────────────
+
+/// قرار overlay من جدول `tenant_access` على الخادم.
+///
+/// `null` يعني "كل شيء على ما يرام" — نترك حالة الـ JWT كما هي (active/trial).
+/// خلاف ذلك، الـ overlay سيُطبّق هذا القرار على [LicenseService.state] فيعلو
+/// على ما حدّده الـ JWT.
+@immutable
+class KillSwitchDecision {
+  const KillSwitchDecision({
+    required this.status,
+    required this.message,
+    this.lockReason,
+  });
+
+  final LicenseStatus status;
+  final String message;
+  final LockReason? lockReason;
+}
+
+/// منطق قرار Kill Switch — pure function، يخضع لاختبار شامل.
+///
+/// أولوية القرار (من الأشدّ إلى الأخفّ):
+///   1) `killSwitch == true`               ⇒ suspended (يعلو على كل شيء)
+///   2) `accessStatus == 'revoked'`        ⇒ suspended
+///   3) `accessStatus == 'suspended'`      ⇒ suspended
+///   4) `accessStatus == 'grace'`          ⇒ restricted (مسموح بالقراءة + بيع محدود)
+///   5) `validUntil <= trustedNow`         ⇒ expired (الحدّ مرفوض — تطابق اختبار boundary)
+///   6) خلاف ذلك                            ⇒ `null` (لا تغيير على الـ state).
+///
+/// 🔒 [trustedNow] يجب أن يأتي من [TrustedTimeService] فقط — لا [DateTime.now]
+///    إطلاقاً. مقارنة الزمن تتمّ بـ UTC على الجانبين.
+KillSwitchDecision? computeKillSwitchDecision({
+  required String? accessStatus,
+  required bool killSwitch,
+  required DateTime? validUntil,
+  required DateTime? graceUntil,
+  required DateTime trustedNow,
+}) {
+  if (killSwitch) {
+    return const KillSwitchDecision(
+      status: LicenseStatus.suspended,
+      lockReason: LockReason.suspended,
+      message:
+          'تم إيقاف الوصول إلى حسابك إدارياً. تواصل مع الدعم لإعادة التفعيل.',
+    );
+  }
+  if (accessStatus == 'revoked') {
+    return const KillSwitchDecision(
+      status: LicenseStatus.suspended,
+      lockReason: LockReason.suspended,
+      message: 'تم إلغاء وصولك إلى الخدمة. تواصل مع الدعم.',
+    );
+  }
+  if (accessStatus == 'suspended') {
+    return const KillSwitchDecision(
+      status: LicenseStatus.suspended,
+      lockReason: LockReason.suspended,
+      message: 'حسابك معلَّق مؤقتاً. تواصل مع الدعم لمتابعة الاستخدام.',
+    );
+  }
+  if (accessStatus == 'grace') {
+    return const KillSwitchDecision(
+      status: LicenseStatus.restricted,
+      message:
+          'حسابك في فترة سماح بعد انتهاء الاشتراك. جدّد قبل انتهاء المهلة لاستعادة جميع الميزات.',
+    );
+  }
+  if (validUntil != null) {
+    final nowUtc = trustedNow.toUtc();
+    final endUtc = validUntil.toUtc();
+    // ملاحظة الحدود: `!isBefore` ⇒ trustedNow >= validUntil ⇒ expired.
+    // هذا يجعل "valid_until == trustedNow" مرفوضاً (مطابق لـ Step 19).
+    if (!nowUtc.isBefore(endUtc)) {
+      return const KillSwitchDecision(
+        status: LicenseStatus.expired,
+        lockReason: LockReason.expired,
+        message: 'انتهت صلاحية اشتراكك. جدّد المفتاح للمتابعة.',
+      );
+    }
+  }
+  return null;
+}
+
 // ── الخدمة الرئيسية ───────────────────────────────────────────────────────────
 
+/// خدمة الترخيص — نظام v2 (JWT RS256) فقط.
+///
+/// تم إلغاء v1 (المفتاح القديم + جدول `licenses`) بالكامل في 2026-05-07؛
+/// كل التفعيلات الآن عبر JWT موقّع، وقرارات الصلاحية تستخدم
+/// [TrustedTimeService.currentTrustedTime] لا [DateTime.now] لتفادي
+/// التلاعب بساعة الجهاز.
 class LicenseService extends ChangeNotifier {
   LicenseService._();
   static final LicenseService instance = LicenseService._();
 
   final TrustedTimeService _trustedTime = TrustedTimeService();
-  late final LicenseEngine _v1 = LicenseEngineV1(this);
   late final LicenseEngineV2 _v2Activator =
       LicenseEngineV2(trustedTime: _trustedTime);
 
-  String _licenseSystemVersion = 'v1';
-  bool get _useV2 => _licenseSystemVersion == 'v2';
-
-  /// v2: تفعيل بـ JWT موقّع؛ v1: مفتاح ترخيص قديم.
-  bool get usesSignedLicenseJwt => _licenseSystemVersion == 'v2';
+  /// نظام التراخيص v2 فقط (JWT). نُبقي الـ getter لتوافق الواجهات.
+  bool get usesSignedLicenseJwt => true;
 
   OpenOpsRegistry? _openOps;
   void attachOpenOpsRegistry(OpenOpsRegistry r) {
@@ -230,7 +316,7 @@ class LicenseService extends ChangeNotifier {
     final hasOpen = _openOps?.hasOpenOperation ?? false;
     if (!hasOpen) {
       _setState(
-        LicenseState(
+        const LicenseState(
           status: LicenseStatus.expired,
           lockReason: LockReason.timeTamper,
           message:
@@ -242,76 +328,26 @@ class LicenseService extends ChangeNotifier {
 
   LicenseState _state = LicenseState.checking;
   LicenseState get state => _state;
-  String? _cachedDeviceId;
 
   // ── تهيئة ─────────────────────────────────────────────────────────────────
-
-  void _loadCachedLicenseSystemVersion(SharedPreferences prefs) {
-    final raw =
-        (prefs.getString(_Prefs.licenseSystemVersion) ?? 'v1')
-            .trim()
-            .toLowerCase();
-    _licenseSystemVersion = raw == 'v2' ? 'v2' : 'v1';
-  }
-
-  /// يقرأ [profiles.license_system_version] ويحدّث التفضيلات المحلية.
-  Future<void> refreshLicenseSystemVersionFromProfile({
-    bool revalidate = true,
-  }) async {
-    final prev = _licenseSystemVersion;
-    final prefs = await SharedPreferences.getInstance();
-    final user = Supabase.instance.client.auth.currentUser;
-    if (user == null) {
-      _loadCachedLicenseSystemVersion(prefs);
-      if (revalidate && _licenseSystemVersion != prev) {
-        await checkLicense(forceRemote: true);
-      }
-      return;
-    }
-    try {
-      final row = await Supabase.instance.client
-          .from('profiles')
-          .select('license_system_version')
-          .eq('id', user.id)
-          .maybeSingle();
-      final raw =
-          (row?['license_system_version'] as String?)?.trim().toLowerCase() ??
-          'v1';
-      final v = raw == 'v2' ? 'v2' : 'v1';
-      await prefs.setString(_Prefs.licenseSystemVersion, v);
-      _licenseSystemVersion = v;
-    } catch (_) {
-      _loadCachedLicenseSystemVersion(prefs);
-    }
-    if (revalidate && _licenseSystemVersion != prev) {
-      await checkLicense(forceRemote: true);
-    }
-  }
 
   Future<void> initialize() async {
     final prefs = await SharedPreferences.getInstance();
     final packageInfo = await PackageInfo.fromPlatform();
     final currentVersion = packageInfo.version.trim();
     final buildNumber = packageInfo.buildNumber.trim();
-    final fullVersion =
-        buildNumber.isEmpty ? currentVersion : '$currentVersion+$buildNumber';
+    final fullVersion = buildNumber.isEmpty
+        ? currentVersion
+        : '$currentVersion+$buildNumber';
     final storedVersion = (prefs.getString(_Prefs.appVersion) ?? '').trim();
     if (storedVersion != fullVersion) {
       await resetLicenseStateForDataScopeChange();
       await prefs.setString(_Prefs.appVersion, fullVersion);
     }
-    _loadCachedLicenseSystemVersion(prefs);
-    if (Supabase.instance.client.auth.currentUser != null) {
-      await refreshLicenseSystemVersionFromProfile(revalidate: false);
-    }
-    if (_useV2) {
-      await _initializeV2Only();
-    } else {
-      await _v1.initialize();
-    }
+    await _initializeV2();
   }
 
-  Future<void> _initializeV2Only() async {
+  Future<void> _initializeV2() async {
     _setState(LicenseState.checking);
     final prefs = await SharedPreferences.getInstance();
     final user = Supabase.instance.client.auth.currentUser;
@@ -320,7 +356,7 @@ class LicenseService extends ChangeNotifier {
       if (user != null) {
         await applyTrialFromSupabaseProfileV2();
       } else {
-        _setState(_resolveLocalTrialState(prefs));
+        _setState(await _resolveLocalTrialState(prefs));
       }
       await _maybeApplyServerDeviceLimitOverlay(forceRemote: true);
       return;
@@ -329,7 +365,7 @@ class LicenseService extends ChangeNotifier {
     await _maybeApplyServerDeviceLimitOverlay(forceRemote: true);
   }
 
-  Future<void> _checkLicenseV2Only({bool forceRemote = false}) async {
+  Future<void> _checkLicenseV2({bool forceRemote = false}) async {
     _setState(LicenseState.checking);
     final prefs = await SharedPreferences.getInstance();
     final tok = await _v2Activator.loadAndVerifyStoredToken();
@@ -338,210 +374,30 @@ class LicenseService extends ChangeNotifier {
       if (user != null) {
         await applyTrialFromSupabaseProfileV2();
       } else {
-        _setState(_resolveLocalTrialState(prefs));
+        _setState(await _resolveLocalTrialState(prefs));
       }
+      // Step 21: حتى للحسابات بلا JWT (تجربة) نطبّق kill-switch إن وُجد.
+      await _maybeApplyTenantAccessOverlay(forceRemote: forceRemote);
       await _maybeApplyServerDeviceLimitOverlay(forceRemote: forceRemote);
       return;
     }
     await _maybeApplySignedTokenAndTrustedTimeOverlay();
+    // Step 21: kill-switch overlay قبل device-limit overlay — قرارات "Suspended"
+    // الإدارية لها أولوية على قرارات حد الأجهزة.
+    await _maybeApplyTenantAccessOverlay(forceRemote: forceRemote);
     await _maybeApplyServerDeviceLimitOverlay(forceRemote: forceRemote);
   }
 
   // ── معرّف الجهاز ──────────────────────────────────────────────────────────
 
-  Future<String> getDeviceId() =>
-      _useV2 ? _v2Activator.getDeviceId() : _v1.getDeviceId();
+  Future<String> getDeviceId() => _v2Activator.getDeviceId();
 
-  /// تنفيذ v1 الحالي (سيتحول إلى UUID لاحقاً في v2).
-  Future<String> getDeviceIdV1() async {
-    if (_cachedDeviceId != null) return _cachedDeviceId!;
-    final prefs = await SharedPreferences.getInstance();
-    final saved = prefs.getString(_Prefs.deviceId);
-    if (saved != null && saved.isNotEmpty) {
-      _cachedDeviceId = saved;
-      return saved;
-    }
-    String id = 'unknown-${DateTime.now().millisecondsSinceEpoch}';
-    try {
-      final p = DeviceInfoPlugin();
-      if (Platform.isMacOS) {
-        final i = await p.macOsInfo;
-        id = '${i.hostName}-${i.model}-${i.systemGUID ?? i.computerName}';
-      } else if (Platform.isAndroid) {
-        id = (await p.androidInfo).id;
-      } else if (Platform.isIOS) {
-        final i = await p.iosInfo;
-        id = i.identifierForVendor ?? i.name;
-      } else if (Platform.isWindows) {
-        id = (await p.windowsInfo).deviceId;
-      } else if (kIsWeb) {
-        id = 'web-${DateTime.now().millisecondsSinceEpoch}';
-      }
-    } catch (_) {}
-    id = id.replaceAll(RegExp(r'[^a-zA-Z0-9\-_]'), '-').toLowerCase();
-    if (id.length > 64) id = id.substring(0, 64);
-    _cachedDeviceId = id;
-    await prefs.setString(_Prefs.deviceId, id);
-    return id;
-  }
-
-  Future<String> getDeviceName() =>
-      _useV2 ? _v2Activator.getDeviceName() : _v1.getDeviceName();
-
-  Future<String> getDeviceNameV1() async {
-    try {
-      final p = DeviceInfoPlugin();
-      if (Platform.isMacOS) {
-        final i = await p.macOsInfo;
-        return '${i.model} (${i.computerName})';
-      } else if (Platform.isAndroid) {
-        final i = await p.androidInfo;
-        return '${i.brand} ${i.model}';
-      } else if (Platform.isIOS) {
-        final i = await p.iosInfo;
-        return '${i.name} (${i.model})';
-      } else if (Platform.isWindows) {
-        return (await p.windowsInfo).computerName;
-      }
-    } catch (_) {}
-    return 'Unknown Device';
-  }
-
-  // ── Supabase (عبر Supabase.instance.client) ──────────────────────────────
-
-  Future<Map<String, dynamic>?> _fetchLicense(String key) async {
-    final client = Supabase.instance.client;
-    final row = await client
-        .from('licenses')
-        .select()
-        .eq('license_key', key)
-        .maybeSingle();
-    if (row == null) return null;
-    return Map<String, dynamic>.from(row);
-  }
-
-  Future<void> _patchLicense(String key, Map<String, dynamic> data) async {
-    final client = Supabase.instance.client;
-    await client.from('licenses').update(data).eq('license_key', key);
-  }
+  Future<String> getDeviceName() => _v2Activator.getDeviceName();
 
   // ── التحقق من الترخيص ─────────────────────────────────────────────────────
 
-  /// يختار ترخيصاً واحداً مفعّلاً ليُربط بهذا الحساب (أفضلية: active ثم trial؛ يتجاهل الموقوف).
-  static Map<String, dynamic>? pickBestAssignedLicense(
-    List<Map<String, dynamic>> rows,
-  ) {
-    if (rows.isEmpty) return null;
-    int statusRank(String raw) {
-      switch (raw.toLowerCase()) {
-        case 'active':
-          return 0;
-        case 'trial':
-          return 1;
-        case 'expired':
-          return 2;
-        default:
-          return 9;
-      }
-    }
-
-    final usable = rows.where((r) {
-      final st = (r['status'] as String? ?? '').toLowerCase();
-      return st != 'suspended';
-    }).toList();
-
-    if (usable.isEmpty) return null;
-
-    final activeOrTrial =
-        usable
-            .where((r) {
-              final st = (r['status'] as String? ?? '').toLowerCase();
-              return st == 'active' || st == 'trial';
-            })
-            .toList();
-
-    final pool = activeOrTrial.isNotEmpty ? activeOrTrial : usable;
-
-    pool.sort((a, b) {
-      final ra = statusRank(a['status'] as String? ?? '');
-      final rb = statusRank(b['status'] as String? ?? '');
-      if (ra != rb) return ra.compareTo(rb);
-      int idVal(Map<String, dynamic> m) {
-        final v = m['id'];
-        if (v is int) return v;
-        if (v is num) return v.toInt();
-        return 0;
-      }
-
-      DateTime? expiresVal(Map<String, dynamic> m) {
-        final s = m['expires_at']?.toString();
-        if (s == null || s.isEmpty) return null;
-        return DateTime.tryParse(s);
-      }
-
-      final ea = expiresVal(a);
-      final eb = expiresVal(b);
-      if (ea != null && eb != null && !ea.isAtSameMomentAs(eb)) {
-        return eb.compareTo(ea);
-      }
-      if (ea != null && eb == null) return -1;
-      if (ea == null && eb != null) return 1;
-      return idVal(b).compareTo(idVal(a));
-    });
-    return pool.first;
-  }
-
-  /// عند تسجيل الدخول: يجعل الترخيص المربوط بـ assigned_user_id مصدر الحقيقة
-  /// ويكتبه في التفضيلات حتى لا يظل جهاز بحفظ مفتاح قديم (مثلاً تجربة basic)
-  /// بعد تعيين pro من لوحة الإدارة بدون إدخال مفتاح.
-  Future<void> _syncAssignedLicenseFromSupabaseIntoPrefs(
-    SharedPreferences prefs,
-  ) async {
-    final user = Supabase.instance.client.auth.currentUser;
-    if (user == null) return;
-    try {
-      final response = await Supabase.instance.client
-          .from('licenses')
-          .select()
-          .eq('assigned_user_id', user.id);
-      final maps = List<Map<String, dynamic>>.from(
-        (response as List<dynamic>).map(
-          (e) => Map<String, dynamic>.from(e as Map),
-        ),
-      );
-      final picked = pickBestAssignedLicense(maps);
-      if (picked == null) return;
-      final keyRaw = picked['license_key']?.toString().trim() ?? '';
-      if (keyRaw.isEmpty) return;
-      final key = keyRaw.toUpperCase();
-      final prevUpper = (prefs.getString(_Prefs.licenseKey) ?? '').trim().toUpperCase();
-      if (prevUpper != key) {
-        await prefs.remove(_Prefs.status);
-        await prefs.remove(_Prefs.businessName);
-        await prefs.remove(_Prefs.expiresAt);
-        await prefs.remove(_Prefs.planKey);
-        await prefs.remove(_Prefs.maxDevices);
-        await prefs.remove(_Prefs.deviceCount);
-        await prefs.remove(_Prefs.lastCheckAt);
-      }
-      await prefs.setString(_Prefs.licenseKey, key);
-      await prefs.setBool(_Prefs.useCloudTrial, false);
-      await prefs.remove(_Prefs.trialEndsAt);
-      await prefs.remove(_Prefs.localTrialStartAt);
-    } catch (_) {
-      // تجاهل؛ يُكمِل checkLicense بدون تعيين
-    }
-  }
-
-  Future<void> checkLicense({bool forceRemote = false}) async {
-    if (_useV2) {
-      await _checkLicenseV2Only(forceRemote: forceRemote);
-      return;
-    }
-    await _v1.checkLicense(forceRemote: forceRemote);
-    await _maybeApplySignedTokenAndTrustedTimeOverlay();
-    await _maybeApplyServerDeviceLimitOverlay(forceRemote: forceRemote);
-  }
+  Future<void> checkLicense({bool forceRemote = false}) =>
+      _checkLicenseV2(forceRemote: forceRemote);
 
   bool _readCachedOverLimit(SharedPreferences prefs) =>
       prefs.getBool(_Prefs.deviceOverLimit) ?? false;
@@ -551,9 +407,10 @@ class LicenseService extends ChangeNotifier {
     bool v,
   ) async {
     await prefs.setBool(_Prefs.deviceOverLimit, v);
+    final trustedNow = await _trustedTime.currentTrustedTime();
     await prefs.setInt(
       _Prefs.deviceOverLimitCheckedAt,
-      DateTime.now().toUtc().millisecondsSinceEpoch,
+      trustedNow.millisecondsSinceEpoch,
     );
   }
 
@@ -597,18 +454,17 @@ class LicenseService extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     final cached = _readCachedOverLimit(prefs);
 
-    // Avoid spamming the server unless forced.
     final checkedAtMs = prefs.getInt(_Prefs.deviceOverLimitCheckedAt);
     final checkedAt = checkedAtMs != null
         ? DateTime.fromMillisecondsSinceEpoch(checkedAtMs, isUtc: true)
         : null;
+    final trustedNow = await _trustedTime.currentTrustedTime();
     final recentlyChecked = checkedAt != null &&
-        DateTime.now().toUtc().difference(checkedAt) <
-            const Duration(minutes: 5);
+        trustedNow.difference(checkedAt) < const Duration(minutes: 5);
     if (!forceRemote && recentlyChecked) {
       if (cached) {
         _setState(
-          LicenseState(
+          const LicenseState(
             status: LicenseStatus.restricted,
             message:
                 'تم تجاوز حد الأجهزة في حسابك. افصل جهازاً من لوحة الإدارة أو قم بترقية الخطة.',
@@ -623,7 +479,7 @@ class LicenseService extends ChangeNotifier {
       // Offline/failed: cached true stays true.
       if (cached) {
         _setState(
-          LicenseState(
+          const LicenseState(
             status: LicenseStatus.restricted,
             message:
                 'تم تجاوز حد الأجهزة في حسابك. اتصل بالإنترنت لإعادة التحقق بعد فصل جهاز.',
@@ -633,11 +489,12 @@ class LicenseService extends ChangeNotifier {
       return;
     }
 
-    // Server is the source of truth.
     await _writeCachedOverLimit(prefs, server.isOverLimit);
 
     if (server.isOverLimit) {
-      final maxLabel = server.maxDevices == 0 ? 'غير محدود' : '${server.maxDevices}';
+      final maxLabel = server.maxDevices == 0
+          ? 'غير محدود'
+          : '${server.maxDevices}';
       _setState(
         LicenseState(
           status: LicenseStatus.restricted,
@@ -648,12 +505,183 @@ class LicenseService extends ChangeNotifier {
     }
   }
 
+  // ── Step 21: Kill Switch overlay (tenant_access RPC) ────────────────────
+
+  /// متاح للاختبار: استبدال استدعاء RPC `app_tenant_access_status`.
+  /// الإرجاع `null` يحاكي خطأ شبكة/RPC.
+  @visibleForTesting
+  Future<Map<String, dynamic>?> Function()? tenantAccessFetcherForTesting;
+
+  /// متاح للاختبار: استبدال [TrustedTimeService.currentTrustedTime].
+  /// لا يُستعمل إلا في kill-switch overlay لتجنّب آثار جانبية على باقي المنطق.
+  @visibleForTesting
+  Future<DateTime> Function()? trustedNowOverrideForTesting;
+
+  /// متاح للاختبار: ضبط [_state] مباشرة لإعداد baseline قبل تشغيل overlay.
+  @visibleForTesting
+  void debugSetStateForTesting(LicenseState s) => _setState(s);
+
+  /// متاح للاختبار: تشغيل kill-switch overlay فقط بدون JWT/device-limit.
+  @visibleForTesting
+  Future<void> applyTenantAccessOverlayForTesting({bool forceRemote = true}) =>
+      _maybeApplyTenantAccessOverlay(forceRemote: forceRemote);
+
+  Future<DateTime> _resolveTrustedNow() async {
+    final override = trustedNowOverrideForTesting;
+    if (override != null) return override();
+    return _trustedTime.currentTrustedTime();
+  }
+
+  Future<Map<String, dynamic>?> _fetchTenantAccessFromServer() async {
+    final override = tenantAccessFetcherForTesting;
+    if (override != null) return override();
+    try {
+      final user = Supabase.instance.client.auth.currentUser;
+      if (user == null) return null;
+      final res =
+          await Supabase.instance.client.rpc('app_tenant_access_status');
+      if (res is Map) return Map<String, dynamic>.from(res);
+      if (res is List && res.isNotEmpty && res.first is Map) {
+        return Map<String, dynamic>.from(res.first as Map);
+      }
+    } on PostgrestException catch (_) {
+      return null;
+    } catch (_) {
+      return null;
+    }
+    return null;
+  }
+
+  static bool _coerceBool(Object? raw) {
+    if (raw is bool) return raw;
+    if (raw is num) return raw != 0;
+    if (raw is String) {
+      final s = raw.toLowerCase().trim();
+      return s == 'true' || s == 't' || s == '1' || s == 'yes';
+    }
+    return false;
+  }
+
+  static DateTime? _coerceTimestamp(Object? raw) {
+    if (raw == null) return null;
+    if (raw is DateTime) return raw.toUtc();
+    if (raw is int) {
+      return DateTime.fromMillisecondsSinceEpoch(raw, isUtc: true);
+    }
+    if (raw is num) {
+      return DateTime.fromMillisecondsSinceEpoch(raw.toInt(), isUtc: true);
+    }
+    if (raw is String) {
+      final s = raw.trim();
+      if (s.isEmpty) return null;
+      return DateTime.tryParse(s)?.toUtc();
+    }
+    return null;
+  }
+
+  Future<void> _persistTenantAccess(
+    SharedPreferences prefs,
+    Map<String, dynamic> data, {
+    required DateTime trustedNow,
+  }) async {
+    final status = data['access_status']?.toString();
+    if (status != null && status.isNotEmpty) {
+      await prefs.setString(_Prefs.tenantAccessStatus, status);
+    } else {
+      await prefs.remove(_Prefs.tenantAccessStatus);
+    }
+    await prefs.setBool(
+      _Prefs.tenantAccessKillSwitch,
+      _coerceBool(data['kill_switch']),
+    );
+    final validUntil = _coerceTimestamp(data['valid_until']);
+    if (validUntil != null) {
+      await prefs.setInt(
+          _Prefs.tenantAccessValidUntil, validUntil.millisecondsSinceEpoch);
+    } else {
+      await prefs.remove(_Prefs.tenantAccessValidUntil);
+    }
+    final graceUntil = _coerceTimestamp(data['grace_until']);
+    if (graceUntil != null) {
+      await prefs.setInt(
+          _Prefs.tenantAccessGraceUntil, graceUntil.millisecondsSinceEpoch);
+    } else {
+      await prefs.remove(_Prefs.tenantAccessGraceUntil);
+    }
+    await prefs.setInt(
+        _Prefs.tenantAccessCheckedAt, trustedNow.millisecondsSinceEpoch);
+  }
+
+  Map<String, dynamic>? _readTenantAccessCache(SharedPreferences prefs) {
+    final status = prefs.getString(_Prefs.tenantAccessStatus);
+    if (status == null) return null;
+    return {
+      'access_status': status,
+      'kill_switch': prefs.getBool(_Prefs.tenantAccessKillSwitch) ?? false,
+      'valid_until': prefs.getInt(_Prefs.tenantAccessValidUntil),
+      'grace_until': prefs.getInt(_Prefs.tenantAccessGraceUntil),
+    };
+  }
+
+  /// overlay يقرأ `app_tenant_access_status()` من الخادم (أو الكاش عند الفشل)
+  /// ويُطبّق [computeKillSwitchDecision] على [_state].
+  Future<void> _maybeApplyTenantAccessOverlay({
+    required bool forceRemote,
+  }) async {
+    // لا نتجاوز قرارات الوقت/القفل الحرجة.
+    if (_state.status == LicenseStatus.pendingLock) return;
+    if (_state.lockReason == LockReason.timeTamper) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    final trustedNow = await _resolveTrustedNow();
+
+    Map<String, dynamic>? data = await _fetchTenantAccessFromServer();
+    bool fromCache = false;
+
+    if (data != null) {
+      await _persistTenantAccess(prefs, data, trustedNow: trustedNow);
+    } else {
+      // فشل شبكة/RPC: نعتمد على آخر حالة معروفة إن وُجدت.
+      final cached = _readTenantAccessCache(prefs);
+      if (cached == null) {
+        // لا كاش ولا شبكة ⇒ نُبقي [_state] كما هو (مع تحذير في log فقط).
+        if (kDebugMode) {
+          debugPrint(
+            '[LicenseService] tenant_access offline + no cache; keeping current state.',
+          );
+        }
+        return;
+      }
+      data = cached;
+      fromCache = true;
+    }
+
+    final decision = computeKillSwitchDecision(
+      accessStatus: data['access_status']?.toString(),
+      killSwitch: _coerceBool(data['kill_switch']),
+      validUntil: _coerceTimestamp(data['valid_until']),
+      graceUntil: _coerceTimestamp(data['grace_until']),
+      trustedNow: trustedNow,
+    );
+
+    if (decision == null) return;
+
+    final messageWithWarning = fromCache
+        ? '${decision.message}\n(تعذّر التحقق من الخادم — الحالة من آخر مزامنة.)'
+        : decision.message;
+
+    _setState(LicenseState(
+      status: decision.status,
+      lockReason: decision.lockReason,
+      message: messageWithWarning,
+    ));
+  }
+
   Future<void> _maybeApplySignedTokenAndTrustedTimeOverlay() async {
-    // إذا لا يوجد توكن v2 مخزّن، لا نفعل شيئاً.
     final tok = await _v2Activator.loadAndVerifyStoredToken();
     if (tok == null) return;
 
-    // محاولة تأكيد وقت السيرفر عند أي تحقق عن بُعد (إن أمكن).
+    // تأكيد وقت السيرفر (إن أمكن) قبل قرار الانتهاء.
     unawaited(_trustedTime.confirmWithServer());
     final local = await _trustedTime.checkLocalClock(
       backJumpTolerance: const Duration(minutes: 10),
@@ -662,7 +690,7 @@ class LicenseService extends ChangeNotifier {
     if (local.isTampered) {
       // سياسة عقوبة مرنة: أول مرة -> restricted. تكرار أو فرق كبير -> pendingLock.
       final prefs = await SharedPreferences.getInstance();
-      final countKey = 'lic.v2.time_tamper_count';
+      const countKey = 'lic.v2.time_tamper_count';
       final count = (prefs.getInt(countKey) ?? 0) + 1;
       await prefs.setInt(countKey, count);
 
@@ -670,7 +698,7 @@ class LicenseService extends ChangeNotifier {
       final severe = diff >= const Duration(hours: 2);
       if (severe || count >= 2) {
         _setState(
-          LicenseState(
+          const LicenseState(
             status: LicenseStatus.pendingLock,
             lockReason: LockReason.timeTamper,
             message:
@@ -679,22 +707,20 @@ class LicenseService extends ChangeNotifier {
         );
       } else {
         _setState(
-          LicenseState(
+          const LicenseState(
             status: LicenseStatus.restricted,
             lockReason: LockReason.timeTamper,
             message: 'يرجى الاتصال بالإنترنت للتحقق من الوقت.',
           ),
         );
       }
-      // إذا أصبح pendingLock وكان لا توجد عملية مفتوحة -> اقفل فوراً.
       _onOpenOpsChanged();
       return;
     }
 
-    // إن لم يوجد تلاعب وقت: اجعل حالة الترخيص "نشط" حسب التوكن (overlay مؤقت قبل feature-flag).
     if (tok.isExpired) {
       _setState(
-        LicenseState(
+        const LicenseState(
           status: LicenseStatus.expired,
           lockReason: LockReason.expired,
           message: 'انتهى اشتراكك. جدّد للمتابعة.',
@@ -702,7 +728,7 @@ class LicenseService extends ChangeNotifier {
       );
       return;
     }
-    final now = DateTime.now();
+    final trustedNow = (await _trustedTime.currentTrustedTime()).toLocal();
     final endsLocal = tok.endsAt.toLocal();
     _setState(
       LicenseState(
@@ -715,92 +741,11 @@ class LicenseService extends ChangeNotifier {
         maxDevices: tok.maxDevices,
         trialEndsAt: tok.isTrial ? endsLocal : null,
         daysLeft: tok.isTrial
-            ? trialDaysLeftCalendar(endsLocal, now).clamp(0, 15)
+            ? trialDaysLeftCalendar(endsLocal, trustedNow).clamp(0, 15)
             : null,
         expiresAt: tok.isTrial ? null : endsLocal,
       ),
     );
-  }
-
-  Future<void> initializeV1() => checkLicenseV1();
-
-  Future<void> checkLicenseV1({bool forceRemote = false}) async {
-    _setState(LicenseState.checking);
-    final prefs = await SharedPreferences.getInstance();
-    await _syncAssignedLicenseFromSupabaseIntoPrefs(prefs);
-    var effectiveKey = (prefs.getString(_Prefs.licenseKey) ?? '').trim();
-    if (effectiveKey.isEmpty) {
-      _setState(_resolveLocalTrialState(prefs));
-      return;
-    }
-
-    final keyUpper = effectiveKey.toUpperCase();
-
-    final lastMs = prefs.getInt(_Prefs.lastCheckAt) ?? 0;
-    final since = DateTime.now().millisecondsSinceEpoch - lastMs;
-    final cacheValid = since < const Duration(hours: 1).inMilliseconds;
-
-    if (!forceRemote && cacheValid) {
-      final cached = await _loadFromCache(prefs);
-      if (cached != null) {
-        _setState(cached);
-        return;
-      }
-    }
-
-    try {
-      final data = await _fetchLicense(keyUpper);
-      if (data == null) {
-        _setState(
-          const LicenseState(
-            status: LicenseStatus.none,
-            message: 'مفتاح الترخيص غير صالح',
-          ),
-        );
-        await prefs.remove(_Prefs.licenseKey);
-        return;
-      }
-
-      final deviceId = await getDeviceId();
-      final maxDev = (data['max_devices'] as num?)?.toInt() ?? 2;
-      final regDevices =
-          (data['registered_devices'] as Map?)?.cast<String, dynamic>() ?? {};
-      final isUnlimited = maxDev == 0;
-      final isRegistered = regDevices.containsKey(deviceId);
-
-      if (!isRegistered && !isUnlimited && regDevices.length >= maxDev) {
-        _setState(
-          LicenseState(
-            status: LicenseStatus.suspended,
-            plan: SubscriptionPlan.fromKey(data['plan'] as String?),
-            maxDevices: maxDev,
-            registeredDeviceCount: regDevices.length,
-            message:
-                'وصلت الحد الأقصى للأجهزة ($maxDev) في خطتك. رقِّ خطتك لإضافة أجهزة.',
-          ),
-        );
-        return;
-      }
-
-      final result = await _resolveState(
-        data,
-        keyUpper,
-        prefs,
-        deviceId,
-        regDevices,
-      );
-      await _saveToCache(prefs, result, keyUpper);
-      _setState(result);
-    } catch (_) {
-      final cached = await _loadFromCache(prefs);
-      _setState(
-        cached ??
-            const LicenseState(
-              status: LicenseStatus.offline,
-              message: 'لا يوجد اتصال بالإنترنت.',
-            ),
-      );
-    }
   }
 
   /// حساب الأيام المتبقية بشكل يوم كامل تقريبًا (لا يظهر «0» بينما لا يزال هناك وقت في نفس اليوم).
@@ -810,9 +755,12 @@ class LicenseService extends ChangeNotifier {
     return ((ms + 86400000 - 1) ~/ 86400000).clamp(0, 9999);
   }
 
-  LicenseState _stateFromTrialEndLocal(DateTime trialEnd, {required bool cloud}) {
-    final now = DateTime.now();
-    if (!now.isBefore(trialEnd)) {
+  Future<LicenseState> _stateFromTrialEndLocal(
+    DateTime trialEnd, {
+    required bool cloud,
+  }) async {
+    final trustedNow = (await _trustedTime.currentTrustedTime()).toLocal();
+    if (!trustedNow.isBefore(trialEnd)) {
       return LicenseState(
         status: LicenseStatus.expired,
         trialEndsAt: trialEnd,
@@ -825,7 +773,7 @@ class LicenseService extends ChangeNotifier {
     return LicenseState(
       status: LicenseStatus.trial,
       trialEndsAt: trialEnd,
-      daysLeft: trialDaysLeftCalendar(trialEnd, now).clamp(0, 15),
+      daysLeft: trialDaysLeftCalendar(trialEnd, trustedNow).clamp(0, 15),
       plan: SubscriptionPlan.trial,
       maxDevices: SubscriptionPlan.trial.maxDevices,
       registeredDeviceCount: 1,
@@ -835,7 +783,7 @@ class LicenseService extends ChangeNotifier {
     );
   }
 
-  LicenseState _resolveLocalTrialState(SharedPreferences prefs) {
+  Future<LicenseState> _resolveLocalTrialState(SharedPreferences prefs) async {
     final useCloud = prefs.getBool(_Prefs.useCloudTrial) ?? false;
     final endMs = prefs.getInt(_Prefs.trialEndsAt);
     if (useCloud && endMs != null) {
@@ -843,11 +791,11 @@ class LicenseService extends ChangeNotifier {
       return _stateFromTrialEndLocal(trialEnd, cloud: true);
     }
 
-    final trialStartMs =
-        prefs.getInt(_Prefs.localTrialStartAt) ??
-        DateTime.now().millisecondsSinceEpoch;
+    // أول تشغيل: نخزّن لحظة بداية التجربة (timestamp بسيط، ليس قراراً للانتهاء).
+    final trialStartMs = prefs.getInt(_Prefs.localTrialStartAt) ??
+        (await _trustedTime.currentTrustedTime()).millisecondsSinceEpoch;
     if (!prefs.containsKey(_Prefs.localTrialStartAt)) {
-      prefs.setInt(_Prefs.localTrialStartAt, trialStartMs);
+      await prefs.setInt(_Prefs.localTrialStartAt, trialStartMs);
     }
 
     final trialStart = DateTime.fromMillisecondsSinceEpoch(trialStartMs);
@@ -856,20 +804,13 @@ class LicenseService extends ChangeNotifier {
     return _stateFromTrialEndLocal(trialEnd, cloud: false);
   }
 
-  /// بعد تسجيل Google: تاريخ بداية التجربة في `profiles.trial_started_at` (نفسه لكل الأجهزة).
-  ///
-  /// مهم: لا نستخدم `upsert` بحقول جزئية فقط — في PostgreSQL قد يصفّر ذلك
-  /// أعمدة أخرى مثل `trial_started_at` فيُعاد احتساب الـ 15 يوماً عند كل تسجيل دخول.
+  /// بعد تسجيل Google: تاريخ بداية التجربة في `profiles.trial_started_at`
+  /// (نفسه لكل الأجهزة). لا نعتمد على جدول `licenses` بعد إلغاء v1.
   Future<void> applyTrialFromSupabaseProfile() async {
-    await refreshLicenseSystemVersionFromProfile(revalidate: false);
-    if (_useV2) {
-      await applyTrialFromSupabaseProfileV2();
-    } else {
-      await _v1.applyTrialFromSupabaseProfile();
-    }
+    await applyTrialFromSupabaseProfileV2();
   }
 
-  /// تجربة سحابية من [profiles] دون سحب مفتاح الترخيص القديم من جدول licenses.
+  /// تجربة سحابية من [profiles] دون أي قراءة من جدول licenses القديم.
   Future<void> applyTrialFromSupabaseProfileV2() async {
     final user = Supabase.instance.client.auth.currentUser;
     if (user == null) {
@@ -889,18 +830,24 @@ class LicenseService extends ChangeNotifier {
           .eq('id', user.id)
           .maybeSingle();
 
+      final updatedAtIso = (await _trustedTime.currentTrustedTime())
+          .toUtc()
+          .toIso8601String();
       if (row == null) {
         await client.from('profiles').insert({
           'id': user.id,
           'email': user.email,
           'trial_started_at': accountCreatedAtIso,
-          'updated_at': DateTime.now().toUtc().toIso8601String(),
+          'updated_at': updatedAtIso,
         });
       } else {
-        await client.from('profiles').update({
-          'email': user.email,
-          'updated_at': DateTime.now().toUtc().toIso8601String(),
-        }).eq('id', user.id);
+        await client
+            .from('profiles')
+            .update({
+              'email': user.email,
+              'updated_at': updatedAtIso,
+            })
+            .eq('id', user.id);
       }
 
       row = await client
@@ -910,9 +857,10 @@ class LicenseService extends ChangeNotifier {
           .maybeSingle();
       dynamic ts = row?['trial_started_at'];
       if (ts == null || ts.toString().isEmpty) {
-        await client.from('profiles').update({
-          'trial_started_at': accountCreatedAtIso,
-        }).eq('id', user.id);
+        await client
+            .from('profiles')
+            .update({'trial_started_at': accountCreatedAtIso})
+            .eq('id', user.id);
         ts = accountCreatedAtIso;
       }
       final start = DateTime.parse(ts.toString()).toUtc();
@@ -921,68 +869,9 @@ class LicenseService extends ChangeNotifier {
       await prefs.setBool(_Prefs.useCloudTrial, true);
       await prefs.setInt(_Prefs.trialEndsAt, endUtc.millisecondsSinceEpoch);
       await prefs.remove(_Prefs.localTrialStartAt);
-      _setState(_stateFromTrialEndLocal(endUtc.toLocal(), cloud: true));
+      _setState(await _stateFromTrialEndLocal(endUtc.toLocal(), cloud: true));
     } catch (_) {
       await ensureLocalTrialStartedV2();
-    }
-  }
-
-  Future<void> applyTrialFromSupabaseProfileV1() async {
-    final user = Supabase.instance.client.auth.currentUser;
-    if (user == null) {
-      await ensureLocalTrialStarted();
-      return;
-    }
-    final prefsEarly = await SharedPreferences.getInstance();
-    await _syncAssignedLicenseFromSupabaseIntoPrefs(prefsEarly);
-    if ((prefsEarly.getString(_Prefs.licenseKey) ?? '').trim().isNotEmpty) {
-      await checkLicense(forceRemote: true);
-      return;
-    }
-    final accountCreatedAtIso = _supabaseUserCreatedAtIsoUtc(user);
-    try {
-      final client = Supabase.instance.client;
-      var row = await client
-          .from('profiles')
-          .select('trial_started_at')
-          .eq('id', user.id)
-          .maybeSingle();
-
-      if (row == null) {
-        await client.from('profiles').insert({
-          'id': user.id,
-          'email': user.email,
-          'trial_started_at': accountCreatedAtIso,
-          'updated_at': DateTime.now().toUtc().toIso8601String(),
-        });
-      } else {
-        await client.from('profiles').update({
-          'email': user.email,
-          'updated_at': DateTime.now().toUtc().toIso8601String(),
-        }).eq('id', user.id);
-      }
-
-      row = await client
-          .from('profiles')
-          .select('trial_started_at')
-          .eq('id', user.id)
-          .maybeSingle();
-      dynamic ts = row?['trial_started_at'];
-      if (ts == null || ts.toString().isEmpty) {
-        await client.from('profiles').update({
-          'trial_started_at': accountCreatedAtIso,
-        }).eq('id', user.id);
-        ts = accountCreatedAtIso;
-      }
-      final start = DateTime.parse(ts.toString()).toUtc();
-      final endUtc = start.add(const Duration(days: 15));
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool(_Prefs.useCloudTrial, true);
-      await prefs.setInt(_Prefs.trialEndsAt, endUtc.millisecondsSinceEpoch);
-      await prefs.remove(_Prefs.localTrialStartAt);
-      _setState(_stateFromTrialEndLocal(endUtc.toLocal(), cloud: true));
-    } catch (_) {
-      await ensureLocalTrialStarted();
     }
   }
 
@@ -993,256 +882,59 @@ class LicenseService extends ChangeNotifier {
         return DateTime.parse(raw).toUtc().toIso8601String();
       }
     } catch (_) {}
+    // fallback: الاعتماد على ساعة الجهاز هنا للتسجيل أول مرة فقط.
     return DateTime.now().toUtc().toIso8601String();
+  }
+
+  Future<void> ensureLocalTrialStarted() async {
+    await ensureLocalTrialStartedV2();
   }
 
   Future<void> ensureLocalTrialStartedV2() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_Prefs.useCloudTrial, false);
     if (!prefs.containsKey(_Prefs.localTrialStartAt)) {
+      final trustedNow = await _trustedTime.currentTrustedTime();
       await prefs.setInt(
         _Prefs.localTrialStartAt,
-        DateTime.now().millisecondsSinceEpoch,
+        trustedNow.millisecondsSinceEpoch,
       );
     }
     final hasJwt = (await _v2Activator.loadAndVerifyStoredToken()) != null;
     if (!hasJwt && (prefs.getString(_Prefs.licenseKey) ?? '').isEmpty) {
-      _setState(_resolveLocalTrialState(prefs));
+      _setState(await _resolveLocalTrialState(prefs));
     }
   }
 
-  Future<void> ensureLocalTrialStarted() async {
-    if (_useV2) {
-      await ensureLocalTrialStartedV2();
-    } else {
-      await _v1.ensureLocalTrialStarted();
-    }
-  }
-
-  Future<void> ensureLocalTrialStartedV1() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_Prefs.useCloudTrial, false);
-    if (!prefs.containsKey(_Prefs.localTrialStartAt)) {
-      await prefs.setInt(
-        _Prefs.localTrialStartAt,
-        DateTime.now().millisecondsSinceEpoch,
-      );
-    }
-    if ((prefs.getString(_Prefs.licenseKey) ?? '').isEmpty) {
-      _setState(_resolveLocalTrialState(prefs));
-    }
-  }
-
-  Future<LicenseState> _resolveState(
-    Map<String, dynamic> data,
-    String licenseKey,
-    SharedPreferences prefs,
-    String deviceId,
-    Map<String, dynamic> regDevices,
-  ) async {
-    final status = (data['status'] as String?) ?? 'none';
-    final businessName = (data['business_name'] as String?) ?? '';
-    final plan = SubscriptionPlan.fromKey(data['plan'] as String?);
-    final maxDev = (data['max_devices'] as num?)?.toInt() ?? plan.maxDevices;
-    final isRegistered = regDevices.containsKey(deviceId);
-
-    // تسجيل الجهاز إذا جديد
-    if (!isRegistered) {
-      final deviceName = await getDeviceName();
-      final updated = Map<String, dynamic>.from(regDevices);
-      updated[deviceId] = {
-        'name': deviceName,
-        'registered_at': DateTime.now().toIso8601String(),
-        'last_seen_at': DateTime.now().toIso8601String(),
-      };
-      await _patchLicense(licenseKey, {'registered_devices': updated});
-    } else {
-      final updated = Map<String, dynamic>.from(regDevices);
-      if (updated[deviceId] is Map) {
-        (updated[deviceId] as Map)['last_seen_at'] = DateTime.now()
-            .toIso8601String();
-      }
-      await _patchLicense(licenseKey, {'registered_devices': updated});
-    }
-
-    final deviceCount = regDevices.length + (isRegistered ? 0 : 1);
-
-    switch (status) {
-      case 'suspended':
-        return LicenseState(
-          status: LicenseStatus.suspended,
-          businessName: businessName,
-          plan: plan,
-          maxDevices: maxDev,
-          registeredDeviceCount: deviceCount,
-          message: 'تم إيقاف الترخيص. تواصل مع الدعم.',
-        );
-
-      case 'expired':
-        return LicenseState(
-          status: LicenseStatus.expired,
-          businessName: businessName,
-          plan: plan,
-          maxDevices: maxDev,
-          registeredDeviceCount: deviceCount,
-          message: 'انتهى الاشتراك. جدّد للمتابعة.',
-        );
-
-      case 'trial':
-        {
-          final trialDays = (data['trial_days'] as num?)?.toInt() ?? 15;
-          String? trialStartedAtStr = data['trial_started_at'] as String?;
-          if (trialStartedAtStr == null || trialStartedAtStr.isEmpty) {
-            trialStartedAtStr = DateTime.now().toIso8601String();
-            await _patchLicense(licenseKey, {
-              'trial_started_at': trialStartedAtStr,
-            });
-          }
-          final trialStart = DateTime.parse(trialStartedAtStr);
-          final trialEnd = trialStart.add(Duration(days: trialDays));
-          final now = DateTime.now();
-          if (now.isAfter(trialEnd)) {
-            await _patchLicense(licenseKey, {'status': 'expired'});
-            return LicenseState(
-              status: LicenseStatus.expired,
-              businessName: businessName,
-              plan: plan,
-              maxDevices: maxDev,
-              registeredDeviceCount: deviceCount,
-              trialEndsAt: trialEnd,
-              message: 'انتهت فترة التجربة.',
-            );
-          }
-          return LicenseState(
-            status: LicenseStatus.trial,
-            businessName: businessName,
-            plan: plan,
-            maxDevices: maxDev,
-            registeredDeviceCount: deviceCount,
-            trialEndsAt: trialEnd,
-            daysLeft: trialDaysLeftCalendar(trialEnd, now).clamp(0, trialDays),
-          );
-        }
-
-      case 'active':
-        {
-          final expiresAtStr = data['expires_at'] as String?;
-          if (expiresAtStr == null || expiresAtStr.isEmpty) {
-            return LicenseState(
-              status: LicenseStatus.active,
-              businessName: businessName,
-              plan: plan,
-              maxDevices: maxDev,
-              registeredDeviceCount: deviceCount,
-            );
-          }
-          final expiresAt = DateTime.parse(expiresAtStr);
-          final now = DateTime.now();
-          if (now.isAfter(expiresAt)) {
-            await _patchLicense(licenseKey, {'status': 'expired'});
-            return LicenseState(
-              status: LicenseStatus.expired,
-              businessName: businessName,
-              plan: plan,
-              maxDevices: maxDev,
-              registeredDeviceCount: deviceCount,
-              expiresAt: expiresAt,
-            );
-          }
-          return LicenseState(
-            status: LicenseStatus.active,
-            businessName: businessName,
-            plan: plan,
-            maxDevices: maxDev,
-            registeredDeviceCount: deviceCount,
-            expiresAt: expiresAt,
-            daysLeft: expiresAt.difference(now).inDays,
-          );
-        }
-
-      default:
-        return LicenseState.none;
-    }
-  }
-
-  // ── تفعيل مفتاح جديد ─────────────────────────────────────────────────────
+  // ── تفعيل مفتاح جديد (JWT فقط) ───────────────────────────────────────────
 
   Future<({bool ok, String message})> activateLicense(String key) async {
-    if (_useV2) {
-      final k = normalizeJwtCompactInput(key);
-      if (k.split('.').length != 3) {
-        return (
-          ok: false,
-          message:
-              'حسابك يستخدم ترخيصاً موقّعاً. الصق رمز التفعيل الكامل (JWT) وليس المفتاح القديم.',
-        );
-      }
-      return activateSignedToken(k);
+    final k = normalizeJwtCompactInput(key);
+    if (k.split('.').length != 3) {
+      return (
+        ok: false,
+        message:
+            'حسابك يستخدم ترخيصاً موقّعاً. الصق رمز التفعيل الكامل (JWT) وليس المفتاح القديم.',
+      );
     }
-    return _v1.activateLicense(key);
+    return activateSignedToken(k);
   }
 
   /// تفعيل JWT موقّع (v2). يُستخدم من واجهة إدخال المفتاح فقط.
   Future<({bool ok, String message})> activateSignedToken(String jwt) async {
     final r = await _v2Activator.activateLicense(jwt);
     if (!r.ok) return r;
-    // محاولة تأكيد وقت السيرفر فوراً (إن توفر).
     unawaited(_trustedTime.confirmWithServer());
-    // لا نغيّر حالة التطبيق بالكامل هنا؛ لكن نزيل القفل فوراً بإعادة check.
     await checkLicense(forceRemote: true);
     return r;
-  }
-
-  Future<({bool ok, String message})> activateLicenseV1(String key) async {
-    final cleaned = key.trim().toUpperCase();
-    if (cleaned.isEmpty) return (ok: false, message: 'أدخل مفتاح الترخيص');
-    try {
-      final data = await _fetchLicense(cleaned);
-      if (data == null) {
-        return (
-          ok: false,
-          message: 'مفتاح الترخيص غير صالح. تحقق وأعد المحاولة.',
-        );
-      }
-      final statusVal = (data['status'] as String?) ?? '';
-      final maxDev = (data['max_devices'] as num?)?.toInt() ?? 2;
-      final regDevices =
-          (data['registered_devices'] as Map?)?.cast<String, dynamic>() ?? {};
-      final deviceId = await getDeviceId();
-      final isReg = regDevices.containsKey(deviceId);
-
-      if (statusVal == 'suspended') {
-        return (ok: false, message: 'هذا الترخيص موقوف. تواصل مع الدعم.');
-      }
-      if (statusVal == 'expired') {
-        return (ok: false, message: 'انتهى هذا الترخيص. تواصل لتجديده.');
-      }
-      if (!isReg && maxDev != 0 && regDevices.length >= maxDev) {
-        return (
-          ok: false,
-          message: 'وصل الحساب للحد الأقصى ($maxDev أجهزة). رقِّ خطتك.',
-        );
-      }
-
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_Prefs.licenseKey, cleaned);
-      await checkLicense(forceRemote: true);
-      if (state.isAllowed) {
-        return (ok: true, message: 'تم تفعيل الترخيص بنجاح!');
-      }
-      return (ok: false, message: state.message ?? 'حالة غير معروفة');
-    } catch (e) {
-      return (ok: false, message: 'خطأ: $e');
-    }
   }
 
   // ── إلغاء الترخيص ────────────────────────────────────────────────────────
 
   Future<void> deactivate() async {
-    if (_useV2) {
-      await _v2Activator.deactivate();
-    }
-    await deactivateV1();
+    await _v2Activator.deactivate();
+    await _clearLegacyLicensePrefs();
+    _setState(LicenseState.none);
   }
 
   /// عند تبديل مالك البيانات السحابي ([AuthProvider] يمسح القاعدة المحلية):
@@ -1264,15 +956,19 @@ class LicenseService extends ChangeNotifier {
       _Prefs.localTrialStartAt,
       _Prefs.deviceOverLimit,
       _Prefs.deviceOverLimitCheckedAt,
-      _Prefs.licenseSystemVersion,
+      _Prefs.legacyLicenseSystemVersion,
+      _Prefs.tenantAccessStatus,
+      _Prefs.tenantAccessKillSwitch,
+      _Prefs.tenantAccessValidUntil,
+      _Prefs.tenantAccessGraceUntil,
+      _Prefs.tenantAccessCheckedAt,
     ]) {
       await prefs.remove(k);
     }
-    _licenseSystemVersion = 'v1';
     _setState(LicenseState.checking);
   }
 
-  Future<void> deactivateV1() async {
+  Future<void> _clearLegacyLicensePrefs() async {
     final prefs = await SharedPreferences.getInstance();
     for (final k in [
       _Prefs.licenseKey,
@@ -1289,101 +985,6 @@ class LicenseService extends ChangeNotifier {
     ]) {
       await prefs.remove(k);
     }
-    _setState(LicenseState.none);
-  }
-
-  // ── الكاش المحلي ─────────────────────────────────────────────────────────
-
-  Future<LicenseState?> _loadFromCache(SharedPreferences prefs) async {
-    final s = prefs.getString(_Prefs.status);
-    if (s == null) return null;
-    LicenseStatus status;
-    try {
-      status = LicenseStatus.values.firstWhere((e) => e.name == s);
-    } catch (_) {
-      return null;
-    }
-    final businessName = prefs.getString(_Prefs.businessName);
-    final expiresMs = prefs.getInt(_Prefs.expiresAt);
-    final trialMs = prefs.getInt(_Prefs.trialEndsAt);
-    final planK = prefs.getString(_Prefs.planKey);
-    final maxDev = prefs.getInt(_Prefs.maxDevices) ?? 1;
-    final devCount = prefs.getInt(_Prefs.deviceCount) ?? 1;
-    final expiresAt = expiresMs != null
-        ? DateTime.fromMillisecondsSinceEpoch(expiresMs)
-        : null;
-    final trialEndsAt = trialMs != null
-        ? DateTime.fromMillisecondsSinceEpoch(trialMs)
-        : null;
-    int? daysLeft;
-    if (status == LicenseStatus.trial && trialEndsAt != null) {
-      if (DateTime.now().isAfter(trialEndsAt)) {
-        return LicenseState(
-          status: LicenseStatus.expired,
-          message: 'انتهت فترة التجربة.',
-          plan: SubscriptionPlan.trial,
-          maxDevices: prefs.getInt(_Prefs.maxDevices) ??
-              SubscriptionPlan.basic.maxDevices,
-          trialEndsAt: trialEndsAt,
-        );
-      }
-      daysLeft = trialDaysLeftCalendar(
-        trialEndsAt,
-        DateTime.now(),
-      ).clamp(0, 15);
-    } else if (status == LicenseStatus.active && expiresAt != null) {
-      if (DateTime.now().isAfter(expiresAt)) {
-        return const LicenseState(
-          status: LicenseStatus.expired,
-          message: 'انتهى الاشتراك.',
-        );
-      }
-      daysLeft = expiresAt.difference(DateTime.now()).inDays.clamp(0, 9999);
-    }
-    var resolvedPlan = SubscriptionPlan.fromKey(planK);
-    var resolvedMax = maxDev;
-    // عرض «بطاقة التجربة» في الواجهة دون تغيير حد الأجهزة المخزّن (v1 كان 2 لغالبية التجارب).
-    if (status == LicenseStatus.trial) {
-      resolvedPlan = SubscriptionPlan.trial;
-    }
-    return LicenseState(
-      status: status,
-      businessName: businessName,
-      expiresAt: expiresAt,
-      trialEndsAt: trialEndsAt,
-      daysLeft: daysLeft,
-      plan: resolvedPlan,
-      maxDevices: resolvedMax,
-      registeredDeviceCount: devCount,
-    );
-  }
-
-  Future<void> _saveToCache(
-    SharedPreferences prefs,
-    LicenseState s,
-    String key,
-  ) async {
-    await prefs.setString(_Prefs.licenseKey, key);
-    await prefs.setString(_Prefs.status, s.status.name);
-    await prefs.setInt(
-      _Prefs.lastCheckAt,
-      DateTime.now().millisecondsSinceEpoch,
-    );
-    if (s.businessName != null) {
-      await prefs.setString(_Prefs.businessName, s.businessName!);
-    }
-    if (s.expiresAt != null) {
-      await prefs.setInt(_Prefs.expiresAt, s.expiresAt!.millisecondsSinceEpoch);
-    }
-    if (s.trialEndsAt != null) {
-      await prefs.setInt(
-        _Prefs.trialEndsAt,
-        s.trialEndsAt!.millisecondsSinceEpoch,
-      );
-    }
-    if (s.plan != null) await prefs.setString(_Prefs.planKey, s.plan!.key);
-    await prefs.setInt(_Prefs.maxDevices, s.maxDevices);
-    await prefs.setInt(_Prefs.deviceCount, s.registeredDeviceCount);
   }
 
   void _setState(LicenseState s) {
@@ -1395,32 +996,37 @@ class LicenseService extends ChangeNotifier {
   }
 
   Future<void> _auditStateChange(LicenseState s) async {
-    // Critical events only to avoid noise.
-    final st = s.status;
-    if (st == LicenseStatus.restricted) {
-      await SecurityAuditLogService.instance.log(
-        event: 'license_restricted',
-        eventTier: 'critical',
-        context: {'reason': s.lockReason?.name ?? ''},
-      );
-    } else if (st == LicenseStatus.pendingLock) {
-      await SecurityAuditLogService.instance.log(
-        event: 'license_pending_lock',
-        eventTier: 'critical',
-        context: {'reason': s.lockReason?.name ?? ''},
-      );
-    } else if (st == LicenseStatus.expired) {
-      await SecurityAuditLogService.instance.log(
-        event: 'license_expired',
-        eventTier: 'critical',
-        context: {'reason': s.lockReason?.name ?? ''},
-      );
-    } else if (st == LicenseStatus.suspended) {
-      await SecurityAuditLogService.instance.log(
-        event: 'license_suspended',
-        eventTier: 'critical',
-        context: const {},
-      );
+    // أمان دفاعي: لا نريد للسجلّ أن يُسقط أي مسار حرج (مثل تسجيل الخروج، أو
+    // اختبارات بيئة بلا Supabase). أي خطأ هنا يُبلَع بصمت.
+    try {
+      final st = s.status;
+      if (st == LicenseStatus.restricted) {
+        await SecurityAuditLogService.instance.log(
+          event: 'license_restricted',
+          eventTier: 'critical',
+          context: {'reason': s.lockReason?.name ?? ''},
+        );
+      } else if (st == LicenseStatus.pendingLock) {
+        await SecurityAuditLogService.instance.log(
+          event: 'license_pending_lock',
+          eventTier: 'critical',
+          context: {'reason': s.lockReason?.name ?? ''},
+        );
+      } else if (st == LicenseStatus.expired) {
+        await SecurityAuditLogService.instance.log(
+          event: 'license_expired',
+          eventTier: 'critical',
+          context: {'reason': s.lockReason?.name ?? ''},
+        );
+      } else if (st == LicenseStatus.suspended) {
+        await SecurityAuditLogService.instance.log(
+          event: 'license_suspended',
+          eventTier: 'critical',
+          context: const {},
+        );
+      }
+    } catch (_) {
+      // best-effort فقط — لا نُسقط تغيير الحالة بسبب فشل تسجيل الـ audit.
     }
   }
 }

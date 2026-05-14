@@ -101,7 +101,7 @@ class _ProductSkuNumberingDialogState extends State<_ProductSkuNumberingDialog> 
       textDirection: TextDirection.rtl,
       child: Dialog(
         insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
         child: ConstrainedBox(
           constraints: BoxConstraints(maxWidth: maxW, maxHeight: maxH),
           child: Column(
@@ -156,7 +156,7 @@ class _ProductSkuNumberingDialogState extends State<_ProductSkuNumberingDialog> 
                       const SizedBox(height: 8),
                       DropdownButtonFormField<String>(
                         value: _format,
-                        decoration: InputDecoration(
+                        decoration: const InputDecoration(
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.zero,
                           ),
@@ -311,7 +311,7 @@ class _ProductSkuNumberingDialogState extends State<_ProductSkuNumberingDialog> 
 
   InputDecoration _dec(ColorScheme cs) {
     return InputDecoration(
-      border: OutlineInputBorder(borderRadius: BorderRadius.zero),
+      border: const OutlineInputBorder(borderRadius: BorderRadius.zero),
       isDense: true,
       filled: true,
       fillColor: cs.surface,

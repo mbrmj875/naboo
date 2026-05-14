@@ -203,10 +203,10 @@ class _InstallmentsScreenState extends State<InstallmentsScreen>
             foregroundColor: cs.onPrimary,
             elevation: 0,
             actions: [
-              IconButton(
+              const IconButton(
                 tooltip: 'تحديث',
                 onPressed: null,
-                icon: const Icon(Icons.refresh_rounded),
+                icon: Icon(Icons.refresh_rounded),
               ),
             ],
           ),
@@ -610,7 +610,7 @@ class _InstallmentSearchBar extends StatelessWidget {
               ),
               filled: true,
               fillColor: cs.surfaceContainerHighest.withValues(alpha: 0.65),
-              border: OutlineInputBorder(
+              border: const OutlineInputBorder(
                 borderRadius: AppShape.none,
                 borderSide: BorderSide.none,
               ),

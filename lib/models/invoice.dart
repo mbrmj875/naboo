@@ -189,6 +189,11 @@ class InvoiceItem {
   double enteredQty;
   double baseQty;
 
+  /// Variant للملابس (لون+مقاس) — خصم المخزون من product_variants.quantity عند وجوده.
+  int? productVariantId;
+  String? variantColorNameSnapshot;
+  String? variantSizeSnapshot;
+
   InvoiceItem({
     required this.productName,
     required this.quantity,
@@ -198,6 +203,9 @@ class InvoiceItem {
     this.unitVariantId,
     this.unitLabel,
     this.unitFactor = 1,
+    this.productVariantId,
+    this.variantColorNameSnapshot,
+    this.variantSizeSnapshot,
     double? enteredQty,
     double? baseQty,
   })  : enteredQty = enteredQty ?? quantity,
@@ -233,6 +241,9 @@ class InvoiceItem {
       'unitFactor': unitFactor,
       'enteredQty': enteredQty,
       'baseQty': baseQty,
+      'productVariantId': productVariantId,
+      'variantColorNameSnapshot': variantColorNameSnapshot,
+      'variantSizeSnapshot': variantSizeSnapshot,
     };
   }
 
@@ -257,6 +268,9 @@ class InvoiceItem {
       unitFactor: factor,
       enteredQty: resolvedEntered,
       baseQty: resolvedBase,
+      productVariantId: (map['productVariantId'] as num?)?.toInt(),
+      variantColorNameSnapshot: map['variantColorNameSnapshot'] as String?,
+      variantSizeSnapshot: map['variantSizeSnapshot'] as String?,
     );
   }
 }

@@ -188,7 +188,7 @@ class _StockAnalyticsScreenState extends State<StockAnalyticsScreen> {
                     padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
                     children: [
                       // ── الإحصاءات الرئيسية ────────────────────────────────
-                      _SectionTitle(title: 'نظرة عامة على المخزون'),
+                      const _SectionTitle(title: 'نظرة عامة على المخزون'),
                       const SizedBox(height: 10),
                       GridView.count(
                         crossAxisCount: 2,
@@ -317,7 +317,7 @@ class _StockAnalyticsScreenState extends State<StockAnalyticsScreen> {
 
                       // ── الأكثر مبيعاً (30 يوم) ────────────────────────────
                       if (_topMovers.isNotEmpty) ...[
-                        _SectionTitle(title: 'الأكثر مبيعاً — آخر 30 يوم'),
+                        const _SectionTitle(title: 'الأكثر مبيعاً — آخر 30 يوم'),
                         const SizedBox(height: 8),
                         _TableCard(
                           surface: surface,
@@ -333,7 +333,7 @@ class _StockAnalyticsScreenState extends State<StockAnalyticsScreen> {
 
                       // ── قيمة المخزون حسب الفئة ────────────────────────────
                       if (_categoryValues.isNotEmpty) ...[
-                        _SectionTitle(title: 'قيمة المخزون حسب الفئة'),
+                        const _SectionTitle(title: 'قيمة المخزون حسب الفئة'),
                         const SizedBox(height: 8),
                         Container(
                           decoration: BoxDecoration(

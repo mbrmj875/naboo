@@ -32,58 +32,63 @@ class _RestrictedModeBannerControllerState
   void _syncBanner() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      final lic = context.read<LicenseService>();
-      final messenger = ScaffoldMessenger.of(context);
+      try {
+        final lic = context.read<LicenseService>();
+        final messenger = ScaffoldMessenger.of(context);
 
-      final restricted = lic.state.status == LicenseStatus.restricted;
-      if (!restricted) {
-        if (_lastBanner != null) {
-          messenger.clearMaterialBanners();
-          _lastBanner = null;
+        final restricted = lic.state.status == LicenseStatus.restricted;
+        if (!restricted) {
+          if (_lastBanner != null) {
+            messenger.clearMaterialBanners();
+            _lastBanner = null;
+          }
+          return;
         }
-        return;
-      }
 
-      final cs = Theme.of(context).colorScheme;
-      final banner = MaterialBanner(
-        backgroundColor: cs.errorContainer,
-        leading: Icon(
-          Icons.warning_amber_rounded,
-          color: cs.onErrorContainer,
-        ),
-        content: Text(
-          lic.state.message?.trim().isNotEmpty == true
-              ? lic.state.message!
-              : 'وضع مقيّد — اتصل بالإنترنت للتحقق',
-          style: TextStyle(color: cs.onErrorContainer),
-        ),
-        actions: [
-          TextButton(
-            onPressed: _retrying
-                ? null
-                : () async {
-                    _retrying = true;
-                    try {
-                      await LicenseService.instance.checkLicense(
-                        forceRemote: true,
-                      );
-                    } finally {
-                      if (!mounted) return;
-                      setState(() {
-                        _retrying = false;
-                      });
-                    }
-                  },
-            child: const Text('إعادة المحاولة'),
+        final cs = Theme.of(context).colorScheme;
+        final banner = MaterialBanner(
+          backgroundColor: cs.errorContainer,
+          leading: Icon(
+            Icons.warning_amber_rounded,
+            color: cs.onErrorContainer,
           ),
-        ],
-      );
+          content: Text(
+            lic.state.message?.trim().isNotEmpty == true
+                ? lic.state.message!
+                : 'وضع مقيّد — اتصل بالإنترنت للتحقق',
+            style: TextStyle(color: cs.onErrorContainer),
+          ),
+          actions: [
+            TextButton(
+              onPressed: _retrying
+                  ? null
+                  : () async {
+                      _retrying = true;
+                      try {
+                        await LicenseService.instance.checkLicense(
+                          forceRemote: true,
+                        );
+                      } finally {
+                        if (mounted) {
+                          setState(() {
+                            _retrying = false;
+                          });
+                        }
+                      }
+                    },
+              child: const Text('إعادة المحاولة'),
+            ),
+          ],
+        );
 
-      // Avoid re-showing same banner every rebuild.
-      if (_lastBanner != null) return;
-      _lastBanner = banner;
-      messenger.hideCurrentMaterialBanner();
-      messenger.showMaterialBanner(banner);
+        // Avoid re-showing same banner every rebuild.
+        if (_lastBanner != null) return;
+        _lastBanner = banner;
+        messenger.hideCurrentMaterialBanner();
+        messenger.showMaterialBanner(banner);
+      } catch (_) {
+        // أول إطار أو سياق بلا ScaffoldMessenger — لا نُسقط الشجرة بأكملها.
+      }
     });
   }
 
@@ -94,4 +99,3 @@ class _RestrictedModeBannerControllerState
     return widget.child;
   }
 }
-

@@ -81,6 +81,8 @@ class ProductProvider extends ChangeNotifier {
     String discountType = '%',
     double discountValue = 0,
     bool trackInventory = true,
+    bool isService = false,
+    String? serviceKind,
     String? supplierItemCode,
     double? netWeightGrams,
     String? manufacturingDate,
@@ -114,9 +116,9 @@ class ProductProvider extends ChangeNotifier {
         }
       }
 
-      final ti = trackInventory ? 1 : 0;
-      final qtyFinal = trackInventory ? qty : 0.0;
-      final lowFinal = trackInventory ? lowStockThreshold : 0.0;
+      final ti = (trackInventory && !isService) ? 1 : 0;
+      final qtyFinal = ti != 0 ? qty : 0.0;
+      final lowFinal = ti != 0 ? lowStockThreshold : 0.0;
 
       await _repo.insertProductComplete(
         name: name,
@@ -148,6 +150,8 @@ class ProductProvider extends ChangeNotifier {
         stockBaseKind: stockBaseKind,
         extraUnits: extraUnits,
         warehouseId: warehouseId,
+        isService: isService ? 1 : 0,
+        serviceKind: serviceKind,
       );
 
       _products = await _repo.getProducts();
