@@ -203,7 +203,6 @@ class BarcodeLabelsPdf {
                 actions: [
                   printing.PdfPreviewAction(
                     icon: const Icon(Icons.print_rounded),
-                    tooltip: 'طباعة',
                     onPressed: (c, b, f) => _safePrintAction(c, b, f),
                   ),
                 ],
@@ -233,6 +232,8 @@ class BarcodeLabelsPdf {
         },
       ),
     );
+  }
+
   static Future<void> _safePrintAction(
     BuildContext context,
     FutureOr<Uint8List> Function(PdfPageFormat) buildPdf,
@@ -254,8 +255,16 @@ class BarcodeLabelsPdf {
         );
         return;
       }
+      
+      final printer = printers.firstWhere(
+        (p) => p.isDefault,
+        orElse: () => printers.first,
+      );
+      
       final bytes = await buildPdf(pageFormat);
-      await printing.Printing.layoutPdf(
+      
+      await printing.Printing.directPrintPdf(
+        printer: printer,
         onLayout: (_) => bytes,
         format: pageFormat,
       );
@@ -263,7 +272,7 @@ class BarcodeLabelsPdf {
       scaffoldMsg.showSnackBar(
         const SnackBar(
           content: Text(
-            'تعذر تشغيل الطباعة. يرجى مراجعة إعدادات جهاز الطباعة لديك.',
+            'تعذر تشغيل الطباعة المباشرة. يرجى مراجعة إعدادات جهاز الطباعة لديك.',
             style: TextStyle(fontFamily: 'NotoNaskhArabic'),
           ),
           backgroundColor: Colors.redAccent,
