@@ -200,6 +200,18 @@ class BarcodeLabelsPdf {
                 allowSharing: true,
                 canDebug: false,
                 pdfFileName: 'barcode-labels.pdf',
+                onPrintError: (context, error) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                        'لم يتم العثور على طابعة متصلة بالجهاز. يرجى مراجعة توصيل الطابعة.',
+                        style: TextStyle(fontFamily: 'NotoNaskhArabic'),
+                      ),
+                      backgroundColor: Colors.redAccent,
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
+                },
                 build: (_) => build(
                   products: products,
                   copiesByProductId: copiesByProductId,

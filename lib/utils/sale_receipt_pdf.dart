@@ -1243,6 +1243,18 @@ class SaleReceiptPdf {
                 canDebug: false,
                 pdfFileName:
                     'installment-receipt-${plan.id ?? justPaidInstallmentId}.pdf',
+                onPrintError: (context, error) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                        'لم يتم العثور على طابعة متصلة بالجهاز. يرجى مراجعة توصيل الطابعة.',
+                        style: TextStyle(fontFamily: 'NotoNaskhArabic'),
+                      ),
+                      backgroundColor: Colors.redAccent,
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
+                },
                 build: (() {
                   final cache = <String, Future<Uint8List>>{};
                   return (PdfPageFormat format) {
@@ -1494,6 +1506,18 @@ class SaleReceiptPdf {
                 canDebug: false,
                 pdfFileName:
                     'debt-receipt-$paymentRowId${receiptInvoiceId != null ? '-$receiptInvoiceId' : ''}.pdf',
+                onPrintError: (context, error) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                        'لم يتم العثور على طابعة متصلة بالجهاز. يرجى مراجعة توصيل الطابعة.',
+                        style: TextStyle(fontFamily: 'NotoNaskhArabic'),
+                      ),
+                      backgroundColor: Colors.redAccent,
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
+                },
                 build: (() {
                   final cache = <String, Future<Uint8List>>{};
                   return (PdfPageFormat format) {
@@ -1583,6 +1607,18 @@ class SaleReceiptPdf {
                     allowSharing: true,
                     canDebug: false,
                     pdfFileName: 'receipt-${invoice.id ?? "sale"}.pdf',
+                    onPrintError: (context, error) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                            'لم يتم العثور على طابعة متصلة بالجهاز. يرجى مراجعة توصيل الطابعة.',
+                            style: TextStyle(fontFamily: 'NotoNaskhArabic'),
+                          ),
+                          backgroundColor: Colors.redAccent,
+                          behavior: SnackBarBehavior.floating,
+                        ),
+                      );
+                    },
                     build: (() {
                       final cache = <String, Future<Uint8List>>{};
                       return (PdfPageFormat format) {
@@ -1685,6 +1721,18 @@ class SaleReceiptPdf {
                         allowSharing: true,
                         canDebug: false,
                         pdfFileName: 'receipt-${invoice.id ?? "sale"}.pdf',
+                        onPrintError: (context, error) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                'لم يتم العثور على طابعة متصلة بالجهاز. يرجى مراجعة توصيل الطابعة.',
+                                style: TextStyle(fontFamily: 'NotoNaskhArabic'),
+                              ),
+                              backgroundColor: Colors.redAccent,
+                              behavior: SnackBarBehavior.floating,
+                            ),
+                          );
+                        },
                         build: (format) => buildPdfBytes(
                           invoice: invoice,
                           subtotalBeforeDiscount: subtotalBeforeDiscount,
@@ -1897,6 +1945,18 @@ class SaleReceiptPdf {
                 canDebug: false,
                 pdfFileName:
                     'supplier-payment-$payoutRowId-$receiptInvoiceId.pdf',
+                onPrintError: (context, error) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                        'لم يتم العثور على طابعة متصلة بالجهاز. يرجى مراجعة توصيل الطابعة.',
+                        style: TextStyle(fontFamily: 'NotoNaskhArabic'),
+                      ),
+                      backgroundColor: Colors.redAccent,
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
+                },
                 build: (() {
                   final cache = <String, Future<Uint8List>>{};
                   return (PdfPageFormat format) {
