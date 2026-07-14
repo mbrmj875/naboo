@@ -3,6 +3,8 @@ import 'package:sqflite/sqflite.dart';
 
 import 'database_helper.dart';
 import 'tenant_context_service.dart';
+import '../utils/app_logger.dart';
+import '../utils/money_sql.dart';
 
 // Step 9 (tenant isolation):
 // Every aggregate, list, GROUP BY, and COUNT in this file now binds the active
@@ -22,6 +24,7 @@ import 'tenant_context_service.dart';
 /// Shared by [ReportsSqlOps] (static, testable) and [ReportsRepository] so
 /// both stay in sync.
 const String _kSalesTypeInSql = 'type IN (0,1,2,3)';
+int _toFils(double value) => (value * 1000).round();
 
 /// نطاق زمني للتقارير (مقارنة نصية ISO مع عمود `invoices.date`).
 class ReportDateRange {
@@ -48,6 +51,7 @@ class ReportsSnapshot {
     required this.invoiceCount,
     required this.returnCount,
     required this.salesByType,
+    required this.salesByTypeFils,
     required this.dailySales,
     required this.dailyExpenses,
     required this.dailySalesByType,
@@ -73,6 +77,7 @@ class ReportsSnapshot {
   final int invoiceCount;
   final int returnCount;
   final Map<int, double> salesByType; // InvoiceType.index -> sum total
+  final Map<int, int> salesByTypeFils; // InvoiceType.index -> sum total (fils)
   final List<DailySalesPoint> dailySales;
   final List<DailyAmountPoint> dailyExpenses;
   final List<DailyByTypePoint> dailySalesByType;
@@ -89,18 +94,28 @@ class ReportsSnapshot {
   final MarginStats marginStats;
   final double loyaltyRedeemedInRange;
   final double loyaltyEarnedInRange;
+
+  int get salesNetFils => _toFils(salesNet);
+  int get returnsTotalFils => _toFils(returnsTotal);
+  int get expensesTotalFils => _toFils(expensesTotal);
+  int get loyaltyRedeemedInRangeFils => _toFils(loyaltyRedeemedInRange);
+  int get loyaltyEarnedInRangeFils => _toFils(loyaltyEarnedInRange);
 }
 
 class DailySalesPoint {
   const DailySalesPoint({required this.dayLabel, required this.amount});
   final String dayLabel;
   final double amount;
+
+  int get amountFils => _toFils(amount);
 }
 
 class DailyAmountPoint {
   const DailyAmountPoint({required this.dayLabel, required this.amount});
   final String dayLabel;
   final double amount;
+
+  int get amountFils => _toFils(amount);
 }
 
 class DailyByTypePoint {
@@ -112,6 +127,8 @@ class DailyByTypePoint {
   final String dayLabel;
   final int typeIdx;
   final double amount;
+
+  int get amountFils => _toFils(amount);
 }
 
 class DailyByLabelPoint {
@@ -123,6 +140,8 @@ class DailyByLabelPoint {
   final String dayLabel;
   final String label;
   final double amount;
+
+  int get amountFils => _toFils(amount);
 }
 
 /// نقطة يومية للهامش — تعطينا إيراد وتكلفة وهامش في اليوم الواحد.
@@ -136,6 +155,9 @@ class DailyMarginPoint {
   final double revenue;
   final double cost;
   double get margin => revenue - cost;
+  int get revenueFils => _toFils(revenue);
+  int get costFils => _toFils(cost);
+  int get marginFils => revenueFils - costFils;
 }
 
 /// صف هامش لمنتج — يُستخدم في قوائم Top/Bottom.
@@ -155,6 +177,9 @@ class ProductMarginRow {
   double get margin => revenue - cost;
   double? get marginPct =>
       revenue > 0 ? (margin / revenue) * 100.0 : null;
+  int get revenueFils => _toFils(revenue);
+  int get costFils => _toFils(cost);
+  int get marginFils => revenueFils - costFils;
 }
 
 class NamedAmountRow {
@@ -162,6 +187,8 @@ class NamedAmountRow {
   final String name;
   final double amount;
   final int? count;
+
+  int get amountFils => _toFils(amount);
 }
 
 class ProductSalesRow {
@@ -173,6 +200,8 @@ class ProductSalesRow {
   final String name;
   final double qty;
   final double revenue;
+
+  int get revenueFils => _toFils(revenue);
 }
 
 class DebtorRow {
@@ -184,6 +213,8 @@ class DebtorRow {
   final int customerId;
   final String name;
   final double balance;
+
+  int get balanceFils => _toFils(balance);
 }
 
 class InstallmentPlanRow {
@@ -201,6 +232,10 @@ class InstallmentPlanRow {
   final double paidAmount;
   final double remaining;
   final int? invoiceId;
+
+  int get totalAmountFils => _toFils(totalAmount);
+  int get paidAmountFils => _toFils(paidAmount);
+  int get remainingFils => _toFils(remaining);
 }
 
 /// إحصائيات الهامش الذكية — تشمل الإيراد والتكلفة والهامش والصافي بعد المصروفات
@@ -253,6 +288,12 @@ class MarginStats {
   /// هل الحساب تم بنجاح؟ false فقط عند خطأ قاعدة بيانات.
   final bool available;
 
+  int get revenueNetFils => _toFils(revenueNet);
+  int get costFils => _toFils(cost);
+  int get grossMarginFils => revenueNetFils - costFils;
+  int get expensesFils => _toFils(expenses);
+  int get netProfitFils => grossMarginFils - expensesFils;
+
   /// نسبة جودة البيانات (0..100).
   double get coveragePct {
     if (totalLines <= 0) return 0;
@@ -272,6 +313,10 @@ class InstallmentTotals {
   final double totalDue;
   final double totalPaid;
   final double totalRemaining;
+
+  int get totalDueFils => _toFils(totalDue);
+  int get totalPaidFils => _toFils(totalPaid);
+  int get totalRemainingFils => _toFils(totalRemaining);
 }
 
 class StaffSalesRow {
@@ -283,6 +328,8 @@ class StaffSalesRow {
   final String staffLabel;
   final int invoiceCount;
   final double salesTotal;
+
+  int get salesTotalFils => _toFils(salesTotal);
 }
 
 /// Pure SQL operations for the reports domain, parameterised over `tenantId`
@@ -299,7 +346,7 @@ class ReportsSqlOps {
   /// Replaces the previous hardcoded fixed-tenant filter, which was the most
   /// dangerous bug in the file: it returned tenant one's expenses to every
   /// caller regardless of session.
-  static Future<double> sumExpenses(
+  static Future<int> sumExpensesFils(
     DatabaseExecutor db,
     int tenantId,
     String from,
@@ -307,7 +354,7 @@ class ReportsSqlOps {
   ) async {
     final rows = await db.rawQuery(
       '''
-      SELECT COALESCE(SUM(amount), 0) AS s
+      SELECT COALESCE(SUM(${MoneySql.expenseAmountFils}), 0) AS s_fils
       FROM expenses
       WHERE tenantId = ?
         AND deleted_at IS NULL
@@ -315,11 +362,21 @@ class ReportsSqlOps {
       ''',
       [tenantId, from, to],
     );
-    return (rows.first['s'] as num?)?.toDouble() ?? 0.0;
+    return (rows.first['s_fils'] as num?)?.toInt() ?? 0;
+  }
+
+  static Future<double> sumExpenses(
+    DatabaseExecutor db,
+    int tenantId,
+    String from,
+    String to,
+  ) async {
+    final fils = await sumExpensesFils(db, tenantId, from, to);
+    return fils / 1000.0;
   }
 
   /// Net sales total for the active tenant — non-returned sales-type invoices.
-  static Future<double> sumSalesNet(
+  static Future<int> sumSalesNetFils(
     DatabaseExecutor db,
     int tenantId,
     String from,
@@ -327,7 +384,7 @@ class ReportsSqlOps {
   ) async {
     final rows = await db.rawQuery(
       '''
-      SELECT COALESCE(SUM(total), 0) AS s FROM invoices
+      SELECT COALESCE(SUM(${MoneySql.invoiceTotalFils}), 0) AS s_fils FROM invoices
       WHERE tenantId = ?
         AND deleted_at IS NULL
         AND IFNULL(isReturned, 0) = 0
@@ -336,11 +393,21 @@ class ReportsSqlOps {
       ''',
       [tenantId, from, to],
     );
-    return (rows.first['s'] as num?)?.toDouble() ?? 0;
+    return (rows.first['s_fils'] as num?)?.toInt() ?? 0;
+  }
+
+  static Future<double> sumSalesNet(
+    DatabaseExecutor db,
+    int tenantId,
+    String from,
+    String to,
+  ) async {
+    final fils = await sumSalesNetFils(db, tenantId, from, to);
+    return fils / 1000.0;
   }
 
   /// Invoice totals grouped by `type` for the active tenant.
-  static Future<Map<int, double>> salesByType(
+  static Future<Map<int, int>> salesByTypeFils(
     DatabaseExecutor db,
     int tenantId,
     String from,
@@ -348,7 +415,7 @@ class ReportsSqlOps {
   ) async {
     final rows = await db.rawQuery(
       '''
-      SELECT type, COALESCE(SUM(total), 0) AS s FROM invoices
+      SELECT type, COALESCE(SUM(${MoneySql.invoiceTotalFils}), 0) AS s_fils FROM invoices
       WHERE tenantId = ?
         AND deleted_at IS NULL
         AND IFNULL(isReturned, 0) = 0
@@ -358,15 +425,27 @@ class ReportsSqlOps {
       ''',
       [tenantId, from, to],
     );
-    final m = <int, double>{};
+    final m = <int, int>{};
     for (final r in rows) {
-      m[(r['type'] as num).toInt()] = (r['s'] as num).toDouble();
+      m[(r['type'] as num).toInt()] = (r['s_fils'] as num?)?.toInt() ?? 0;
     }
     return m;
   }
 
+  static Future<Map<int, double>> salesByType(
+    DatabaseExecutor db,
+    int tenantId,
+    String from,
+    String to,
+  ) async {
+    final filsMap = await salesByTypeFils(db, tenantId, from, to);
+    return {
+      for (final e in filsMap.entries) e.key: e.value / 1000.0,
+    };
+  }
+
   /// Sum of *returned* sales invoices for the active tenant.
-  static Future<double> returnsTotals(
+  static Future<int> returnsTotalsFils(
     DatabaseExecutor db,
     int tenantId,
     String from,
@@ -374,7 +453,7 @@ class ReportsSqlOps {
   ) async {
     final rows = await db.rawQuery(
       '''
-      SELECT COALESCE(SUM(total), 0) AS s FROM invoices
+      SELECT COALESCE(SUM(${MoneySql.invoiceTotalFils}), 0) AS s_fils FROM invoices
       WHERE tenantId = ?
         AND deleted_at IS NULL
         AND IFNULL(isReturned, 0) = 1
@@ -383,7 +462,17 @@ class ReportsSqlOps {
       ''',
       [tenantId, from, to],
     );
-    return (rows.first['s'] as num?)?.toDouble() ?? 0;
+    return (rows.first['s_fils'] as num?)?.toInt() ?? 0;
+  }
+
+  static Future<double> returnsTotals(
+    DatabaseExecutor db,
+    int tenantId,
+    String from,
+    String to,
+  ) async {
+    final fils = await returnsTotalsFils(db, tenantId, from, to);
+    return fils / 1000.0;
   }
 
   /// Count of invoices for the active tenant, optionally filtering by
@@ -419,8 +508,8 @@ class ReportsSqlOps {
     final rows = await db.query(
       'customers',
       columns: ['id', 'name', 'balance'],
-      where: 'tenantId = ? AND balance > ?',
-      whereArgs: [tenantId, 0.01],
+      where: 'tenantId = ? AND ROUND(balance * 1000) > 0',
+      whereArgs: [tenantId],
       orderBy: 'balance DESC',
       limit: 100,
     );
@@ -464,9 +553,29 @@ class ReportsRepository {
     // Ensure expenses tables exist on older DBs before any read touches them.
     await ensureExpensesSchema(db);
 
-    final salesByType = await ReportsSqlOps.salesByType(db, tid, from, to);
-    final netReturns = await ReportsSqlOps.returnsTotals(db, tid, from, to);
-    final expensesTotal = await ReportsSqlOps.sumExpenses(db, tid, from, to);
+    final salesByTypeFils = await ReportsSqlOps.salesByTypeFils(
+      db,
+      tid,
+      from,
+      to,
+    );
+    final salesByType = {
+      for (final e in salesByTypeFils.entries) e.key: e.value / 1000.0,
+    };
+    final netReturnsFils = await ReportsSqlOps.returnsTotalsFils(
+      db,
+      tid,
+      from,
+      to,
+    );
+    final expensesTotalFils = await ReportsSqlOps.sumExpensesFils(
+      db,
+      tid,
+      from,
+      to,
+    );
+    final netReturns = netReturnsFils / 1000.0;
+    final expensesTotal = expensesTotalFils / 1000.0;
     final invCount = await ReportsSqlOps.countInvoices(
       db,
       tid,
@@ -501,7 +610,8 @@ class ReportsRepository {
     final productMargins = await _productMargins(db, tid, from, to);
     final loyalty = await _loyaltyInvoiceTotals(db, tid, from, to);
 
-    final netSales = await ReportsSqlOps.sumSalesNet(db, tid, from, to);
+    final netSalesFils = await ReportsSqlOps.sumSalesNetFils(db, tid, from, to);
+    final netSales = netSalesFils / 1000.0;
 
     return ReportsSnapshot(
       range: range,
@@ -511,6 +621,7 @@ class ReportsRepository {
       invoiceCount: invCount,
       returnCount: retCount,
       salesByType: salesByType,
+      salesByTypeFils: salesByTypeFils,
       dailySales: daily,
       dailyExpenses: dailyExpenses,
       dailySalesByType: dailySalesByType,
@@ -538,7 +649,8 @@ class ReportsRepository {
   ) async {
     final rows = await db.rawQuery(
       '''
-      SELECT substr(occurredAt, 1, 10) AS d, COALESCE(SUM(amount), 0) AS s
+      SELECT substr(occurredAt, 1, 10) AS d,
+             COALESCE(SUM(${MoneySql.expenseAmountFils}), 0) AS s_fils
       FROM expenses
       WHERE tenantId = ?
         AND deleted_at IS NULL
@@ -552,7 +664,7 @@ class ReportsRepository {
         .map(
           (r) => DailyAmountPoint(
             dayLabel: r['d']?.toString() ?? '',
-            amount: (r['s'] as num?)?.toDouble() ?? 0.0,
+            amount: ((r['s_fils'] as num?)?.toInt() ?? 0) / 1000.0,
           ),
         )
         .toList();
@@ -568,7 +680,7 @@ class ReportsRepository {
       '''
       SELECT substr(date, 1, 10) AS d,
              type AS t,
-             COALESCE(SUM(total), 0) AS s
+             COALESCE(SUM(${MoneySql.invoiceTotalFils}), 0) AS s_fils
       FROM invoices
       WHERE tenantId = ?
         AND deleted_at IS NULL
@@ -585,7 +697,7 @@ class ReportsRepository {
           (r) => DailyByTypePoint(
             dayLabel: r['d']?.toString() ?? '',
             typeIdx: (r['t'] as num?)?.toInt() ?? -1,
-            amount: (r['s'] as num?)?.toDouble() ?? 0.0,
+            amount: ((r['s_fils'] as num?)?.toInt() ?? 0) / 1000.0,
           ),
         )
         .toList();
@@ -602,7 +714,7 @@ class ReportsRepository {
       '''
       WITH top_staff AS (
         SELECT IFNULL(NULLIF(TRIM(createdByUserName), ''), '(غير معروف)') AS u,
-               COALESCE(SUM(total), 0) AS s
+               COALESCE(SUM(${MoneySql.invoiceTotalFils}), 0) AS s_fils
         FROM invoices
         WHERE tenantId = ?
           AND deleted_at IS NULL
@@ -610,12 +722,12 @@ class ReportsRepository {
           AND $_salesTypeInSql
           AND date >= ? AND date <= ?
         GROUP BY 1
-        ORDER BY s DESC
+        ORDER BY s_fils DESC
         LIMIT 5
       )
       SELECT substr(date, 1, 10) AS d,
              IFNULL(NULLIF(TRIM(createdByUserName), ''), '(غير معروف)') AS u,
-             COALESCE(SUM(total), 0) AS s
+             COALESCE(SUM(${MoneySql.invoiceTotalFils}), 0) AS s_fils
       FROM invoices
       WHERE tenantId = ?
         AND deleted_at IS NULL
@@ -633,7 +745,7 @@ class ReportsRepository {
           (r) => DailyByLabelPoint(
             dayLabel: r['d']?.toString() ?? '',
             label: r['u']?.toString() ?? '',
-            amount: (r['s'] as num?)?.toDouble() ?? 0.0,
+            amount: ((r['s_fils'] as num?)?.toInt() ?? 0) / 1000.0,
           ),
         )
         .toList();
@@ -647,7 +759,7 @@ class ReportsRepository {
   ) async {
     final rows = await db.rawQuery(
       '''
-      SELECT substr(date, 1, 10) AS d, COALESCE(SUM(total), 0) AS s
+      SELECT substr(date, 1, 10) AS d, COALESCE(SUM(${MoneySql.invoiceTotalFils}), 0) AS s_fils
       FROM invoices
       WHERE tenantId = ?
         AND deleted_at IS NULL
@@ -663,7 +775,7 @@ class ReportsRepository {
         .map(
           (r) => DailySalesPoint(
             dayLabel: r['d']?.toString() ?? '',
-            amount: (r['s'] as num?)?.toDouble() ?? 0,
+            amount: ((r['s_fils'] as num?)?.toInt() ?? 0) / 1000.0,
           ),
         )
         .toList();
@@ -677,7 +789,9 @@ class ReportsRepository {
   ) async {
     final rows = await db.rawQuery(
       '''
-      SELECT TRIM(customerName) AS n, COALESCE(SUM(total), 0) AS s, COUNT(*) AS c
+      SELECT TRIM(customerName) AS n,
+             COALESCE(SUM(${MoneySql.invoiceTotalFils}), 0) AS s_fils,
+             COUNT(*) AS c
       FROM invoices
       WHERE tenantId = ?
         AND deleted_at IS NULL
@@ -686,7 +800,7 @@ class ReportsRepository {
         AND date >= ? AND date <= ?
         AND IFNULL(customerName, '') != ''
       GROUP BY TRIM(customerName)
-      ORDER BY s DESC
+      ORDER BY s_fils DESC
       LIMIT 20
       ''',
       [tenantId, from, to],
@@ -695,7 +809,7 @@ class ReportsRepository {
         .map(
           (r) => NamedAmountRow(
             name: r['n']?.toString() ?? '',
-            amount: (r['s'] as num?)?.toDouble() ?? 0,
+            amount: ((r['s_fils'] as num?)?.toInt() ?? 0) / 1000.0,
             count: (r['c'] as num?)?.toInt(),
           ),
         )
@@ -712,7 +826,7 @@ class ReportsRepository {
       '''
       SELECT ii.productName AS n,
              COALESCE(SUM(ii.quantity), 0) AS q,
-             COALESCE(SUM(ii.total), 0) AS t
+             COALESCE(SUM(${MoneySql.invoiceItemTotalFilsOf('ii')}), 0) AS t_fils
       FROM invoice_items ii
       INNER JOIN invoices inv ON inv.id = ii.invoiceId
       WHERE inv.tenantId = ?
@@ -722,7 +836,7 @@ class ReportsRepository {
         AND inv.$_salesTypeInSql
         AND inv.date >= ? AND inv.date <= ?
       GROUP BY ii.productName
-      ORDER BY t DESC
+      ORDER BY t_fils DESC
       LIMIT 20
       ''',
       [tenantId, from, to],
@@ -732,7 +846,7 @@ class ReportsRepository {
           (r) => ProductSalesRow(
             name: r['n']?.toString() ?? '',
             qty: (r['q'] as num?)?.toDouble() ?? 0,
-            revenue: (r['t'] as num?)?.toDouble() ?? 0,
+            revenue: ((r['t_fils'] as num?)?.toInt() ?? 0) / 1000.0,
           ),
         )
         .toList();
@@ -763,7 +877,17 @@ class ReportsRepository {
       ''',
         [tenantId, from, to],
       );
-    } catch (_) {
+    } catch (e, st) {
+      AppLogger.warn(
+        'ReportsRepository',
+        'installmentsInRange failed for tenant=$tenantId: $e',
+      );
+      AppLogger.error(
+        'ReportsRepository',
+        'installmentsInRange stacktrace',
+        null,
+        st,
+      );
       rows = const [];
     }
     double sumDue = 0, sumPaid = 0, sumRem = 0;
@@ -805,7 +929,7 @@ class ReportsRepository {
       '''
       SELECT IFNULL(NULLIF(TRIM(createdByUserName), ''), '(غير معروف)') AS u,
              COUNT(*) AS c,
-             COALESCE(SUM(total), 0) AS s
+             COALESCE(SUM(${MoneySql.invoiceTotalFils}), 0) AS s_fils
       FROM invoices
       WHERE tenantId = ?
         AND deleted_at IS NULL
@@ -813,7 +937,7 @@ class ReportsRepository {
         AND $_salesTypeInSql
         AND date >= ? AND date <= ?
       GROUP BY 1
-      ORDER BY s DESC
+      ORDER BY s_fils DESC
       ''',
       [tenantId, from, to],
     );
@@ -822,7 +946,7 @@ class ReportsRepository {
           (r) => StaffSalesRow(
             staffLabel: r['u']?.toString() ?? '',
             invoiceCount: (r['c'] as num?)?.toInt() ?? 0,
-            salesTotal: (r['s'] as num?)?.toDouble() ?? 0,
+            salesTotal: ((r['s_fils'] as num?)?.toInt() ?? 0) / 1000.0,
           ),
         )
         .toList();
@@ -927,7 +1051,12 @@ class ReportsRepository {
         linesZeroCost: zc,
         available: true,
       );
-    } catch (_) {
+    } catch (e, st) {
+      AppLogger.warn(
+        'ReportsRepository',
+        'marginStats failed for tenant=$tenantId: $e',
+      );
+      AppLogger.error('ReportsRepository', 'marginStats stacktrace', null, st);
       return MarginStats(
         revenueNet: 0,
         cost: 0,
@@ -1003,7 +1132,12 @@ class ReportsRepository {
             ),
           )
           .toList();
-    } catch (_) {
+    } catch (e, st) {
+      AppLogger.warn(
+        'ReportsRepository',
+        'dailyMargin failed for tenant=$tenantId: $e',
+      );
+      AppLogger.error('ReportsRepository', 'dailyMargin stacktrace', null, st);
       return const [];
     }
   }
@@ -1074,7 +1208,17 @@ class ReportsRepository {
             ),
           )
           .toList();
-    } catch (_) {
+    } catch (e, st) {
+      AppLogger.warn(
+        'ReportsRepository',
+        'productMargins failed for tenant=$tenantId: $e',
+      );
+      AppLogger.error(
+        'ReportsRepository',
+        'productMargins stacktrace',
+        null,
+        st,
+      );
       return const [];
     }
   }
@@ -1088,7 +1232,7 @@ class ReportsRepository {
     try {
       final rows = await db.rawQuery(
         '''
-        SELECT COALESCE(SUM(loyaltyDiscount), 0) AS r,
+        SELECT COALESCE(ROUND(SUM(loyaltyDiscount) * 1000), 0) AS r_fils,
                COALESCE(SUM(loyaltyPointsEarned), 0) AS e
         FROM invoices
         WHERE tenantId = ?
@@ -1100,10 +1244,20 @@ class ReportsRepository {
         [tenantId, from, to],
       );
       if (rows.isEmpty) return (0.0, 0.0);
-      final r = (rows.first['r'] as num?)?.toDouble() ?? 0;
+      final r = ((rows.first['r_fils'] as num?)?.toInt() ?? 0) / 1000.0;
       final e = (rows.first['e'] as num?)?.toDouble() ?? 0;
       return (r, e);
-    } catch (_) {
+    } catch (e, st) {
+      AppLogger.warn(
+        'ReportsRepository',
+        'loyaltyInvoiceTotals failed for tenant=$tenantId: $e',
+      );
+      AppLogger.error(
+        'ReportsRepository',
+        'loyaltyInvoiceTotals stacktrace',
+        null,
+        st,
+      );
       return (0.0, 0.0);
     }
   }

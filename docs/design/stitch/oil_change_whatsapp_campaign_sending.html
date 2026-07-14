@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+
+<html dir="rtl" lang="ar"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<title>Naboo ERP - WhatsApp Campaign</title>
+<style>
+        body {
+            font-family: 'IBM Plex Sans Arabic', sans-serif;
+            background-color: #fbf8fc;
+            overflow: hidden;
+        }
+
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+
+        .progress-ring__circle {
+            transition: stroke-dashoffset 0.35s;
+            transform: rotate(-90deg);
+            transform-origin: 50% 50%;
+        }
+
+        @keyframes pulse-soft {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.8; transform: scale(0.95); }
+        }
+
+        .pulse-animation {
+            animation: pulse-soft 2s infinite ease-in-out;
+        }
+
+        .glass-blur {
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+        }
+    </style>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "primary": "#000000",
+                        "primary-container": "#081b37",
+                        "on-primary-container": "#7484a5",
+                        "secondary": "#725c00",
+                        "secondary-container": "#fed752",
+                        "on-secondary-container": "#735d00",
+                        "surface": "#fbf8fc",
+                        "surface-container": "#f0edf1",
+                        "on-surface": "#1b1b1e",
+                        "on-surface-variant": "#44474d",
+                        "outline": "#75777e",
+                        "outline-variant": "#c5c6ce",
+                        "error": "#ba1a1a",
+                        "success": "#2e7d32",
+                        "naboo-navy": "#071A36",
+                        "naboo-gold": "#B8960C"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "2xl": "1rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "sm": "8px",
+                        "margin-mobile": "16px",
+                        "xs": "4px",
+                        "md": "12px",
+                        "xl": "24px",
+                        "lg": "16px"
+                    },
+                    "fontFamily": {
+                        "display-price": ["IBM Plex Sans Arabic"],
+                        "headline-md": ["IBM Plex Sans Arabic"],
+                        "headline-lg": ["IBM Plex Sans Arabic"],
+                        "body-md": ["IBM Plex Sans Arabic"],
+                        "label-md": ["IBM Plex Sans Arabic"]
+                    },
+                    "fontSize": {
+                        "headline-md": ["18px", {"lineHeight": "24px", "fontWeight": "600"}],
+                        "headline-lg-mobile": ["20px", {"lineHeight": "28px", "fontWeight": "600"}],
+                        "body-md": ["14px", {"lineHeight": "20px", "fontWeight": "400"}],
+                        "label-md": ["12px", {"lineHeight": "16px", "fontWeight": "500"}]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-surface text-on-surface">
+<!-- Background Layer (Service Log Content - Mocked) -->
+<div class="fixed inset-0 p-margin-mobile">
+<!-- Top App Bar -->
+<header class="flex flex-row-reverse justify-between items-center py-sm mb-lg">
+<h1 class="font-headline-lg-mobile text-headline-lg-mobile font-bold text-naboo-navy">نابو ERP</h1>
+<div class="w-10 h-10 rounded-full bg-surface-variant overflow-hidden">
+<img class="w-full h-full object-cover" data-alt="A professional close-up studio portrait of a modern Iraqi business administrator wearing a sleek dark suit. The lighting is soft and directional, typical of corporate high-end photography, with a clean neutral background. The overall aesthetic is professional, reliable, and modern corporate." src="https://lh3.googleusercontent.com/aida-public/AB6AXuDSdOnPHF3ijF4lzCCoxv36m40NXs-Cip__N19iTmbVo89SZSf2TGfT8G47PBJIHz_agUUQZo2m2uvtrEHENKzq87D-m7oGIAwwBtje242TQ_CPQTxjq7sHb3cusfjFdBkdfPnZxBUNkt3ubjuK1gQIWaAOHWIVuyzzqx-Ewvrdnj95ArgseUNTMUfGFgKOUteMFzYAGj168nLXHA2ySDUXsIc7nJKmUFEprW6m1DZ5Sg1h5VxHZI_FjSBVbPCcCtf1yuS_XzN718Vg"/>
+</div>
+</header>
+<!-- Mock List Content -->
+<div class="space-y-md opacity-40">
+<div class="p-md bg-white rounded-xl shadow-sm border border-outline-variant flex justify-between items-center">
+<div class="flex items-center gap-md">
+<div class="w-10 h-10 rounded-lg bg-surface-container flex items-center justify-center">
+<span class="material-symbols-outlined text-naboo-navy">history</span>
+</div>
+<div>
+<p class="font-headline-md text-naboo-navy">سجل العمليات</p>
+<p class="font-label-md text-on-surface-variant">آخر تحديث: 10:24 ص</p>
+</div>
+</div>
+</div>
+<div class="grid grid-cols-2 gap-md">
+<div class="p-md bg-white rounded-xl shadow-sm border border-outline-variant h-32 flex flex-col justify-end">
+<p class="text-on-surface-variant font-label-md">النشاط الأسبوعي</p>
+<p class="text-naboo-navy font-headline-lg-mobile">1,240 رسالة</p>
+</div>
+<div class="p-md bg-white rounded-xl shadow-sm border border-outline-variant h-32 flex flex-col justify-end">
+<p class="text-on-surface-variant font-label-md">العملاء النشطون</p>
+<p class="text-naboo-navy font-headline-lg-mobile">342 عميل</p>
+</div>
+</div>
+<div class="h-64 bg-surface-container rounded-2xl border-dashed border-2 border-outline-variant flex items-center justify-center">
+<span class="material-symbols-outlined text-outline text-4xl">analytics</span>
+</div>
+</div>
+</div>
+<!-- Dimmed Backdrop Overlay -->
+<div class="fixed inset-0 bg-naboo-navy/60 glass-blur z-40 flex items-center justify-center p-margin-mobile">
+<!-- Center Floating Card -->
+<div class="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden flex flex-col z-50 animate-in fade-in zoom-in duration-300">
+<div class="p-xl space-y-lg">
+<!-- Progress Visualization -->
+<div class="flex justify-center relative">
+<svg class="w-32 h-32" viewbox="0 0 100 100">
+<!-- Background Circle -->
+<circle class="text-outline-variant" cx="50" cy="50" fill="transparent" r="42" stroke="currentColor" stroke-width="8"></circle>
+<!-- Progress Circle -->
+<circle class="text-naboo-gold progress-ring__circle" cx="50" cy="50" fill="transparent" r="42" stroke="currentColor" stroke-dasharray="264" stroke-dashoffset="166" stroke-linecap="round" stroke-width="8"></circle>
+</svg>
+<div class="absolute inset-0 flex items-center justify-center">
+<span class="text-display-price-sm font-display-price-sm text-naboo-navy">37%</span>
+</div>
+</div>
+<!-- Status Header -->
+<div class="text-center space-y-xs">
+<h2 class="font-headline-lg-mobile text-naboo-navy">جاري الإرسال صامتاً...</h2>
+<p class="font-body-md text-on-surface-variant">لا تغلق التطبيق — يمكنك متابعة العمل</p>
+</div>
+<!-- Stats Grid -->
+<div class="grid grid-cols-3 gap-sm bg-surface-container/50 p-md rounded-xl">
+<div class="flex flex-col items-center">
+<div class="flex items-center gap-xs text-success font-headline-md">
+<span>24</span>
+<span class="material-symbols-outlined text-sm">check_circle</span>
+</div>
+<span class="font-label-md text-on-surface-variant">نُجح</span>
+</div>
+<div class="flex flex-col items-center border-x border-outline-variant/30">
+<div class="flex items-center gap-xs text-error font-headline-md">
+<span>3</span>
+<span class="material-symbols-outlined text-sm">error</span>
+</div>
+<span class="font-label-md text-on-surface-variant">فشل</span>
+</div>
+<div class="flex flex-col items-center">
+<div class="flex items-center gap-xs text-outline font-headline-md">
+<span>8</span>
+<span class="material-symbols-outlined text-sm">hourglass_empty</span>
+</div>
+<span class="font-label-md text-on-surface-variant">متبقي</span>
+</div>
+</div>
+<!-- Linear Progress -->
+<div class="space-y-xs">
+<div class="flex justify-between items-center text-label-md font-label-md text-on-surface-variant">
+<span>التقدم الكلي</span>
+<span>24 / 35 رسالة</span>
+</div>
+<div class="w-full h-1.5 bg-surface-container rounded-full overflow-hidden">
+<div class="h-full bg-naboo-navy rounded-full" style="width: 68%;"></div>
+</div>
+</div>
+<!-- Active Item Detail -->
+<div class="flex items-center justify-between p-md bg-surface-container-low rounded-xl">
+<div class="flex items-center gap-md">
+<div class="w-10 h-10 rounded-full bg-naboo-navy/10 flex items-center justify-center text-naboo-navy font-bold">ب</div>
+<div>
+<p class="font-body-md font-bold text-naboo-navy">باقر محمد</p>
+<p class="font-label-md text-on-surface-variant">تويوتا · 2.4L</p>
+</div>
+</div>
+<div class="flex items-center text-success gap-xs font-label-md">
+<span>تم الإرسال</span>
+<span class="material-symbols-outlined text-sm">done_all</span>
+</div>
+</div>
+<!-- Timer -->
+<div class="flex items-center justify-center gap-sm text-on-surface-variant">
+<span class="material-symbols-outlined text-sm">schedule</span>
+<span class="font-label-md">الرسالة التالية خلال 00:18</span>
+</div>
+</div>
+<!-- Safety Banner -->
+<div class="bg-secondary-container/20 border-y border-secondary-container/30 px-xl py-md">
+<div class="flex items-start gap-md">
+<div class="mt-1 w-8 h-8 bg-secondary-container rounded-lg flex items-center justify-center text-on-secondary-container">
+<span class="material-symbols-outlined text-sm">pause</span>
+</div>
+<div class="flex-1 space-y-xs">
+<div class="flex justify-between items-center">
+<p class="font-body-md font-bold text-on-secondary-container">استراحة أمان — 5 دقائق</p>
+<p class="font-label-md font-bold text-on-secondary-container">04:12 متبقية</p>
+</div>
+<p class="font-label-md text-on-secondary-container/80 leading-tight">تم إرسال 25 رسالة — نستريح لتجنب الحظر</p>
+</div>
+</div>
+</div>
+<!-- Actions -->
+<div class="p-lg flex gap-md">
+<button class="flex-1 py-3 px-4 border border-naboo-navy text-naboo-navy rounded-full font-headline-md hover:bg-naboo-navy/5 transition-colors">
+                    تصغير
+                </button>
+<button class="flex-1 py-3 px-4 bg-error text-white rounded-full font-headline-md hover:bg-error/90 transition-colors">
+                    إيقاف الحملة
+                </button>
+</div>
+</div>
+</div>
+<!-- Minimized State Peek -->
+<div class="fixed bottom-margin-mobile left-1/2 -translate-x-1/2 z-50">
+<div class="pulse-animation flex items-center gap-sm bg-success text-white px-4 py-2 rounded-full shadow-lg border-2 border-white/20">
+<span class="w-2 h-2 bg-white rounded-full animate-pulse"></span>
+<span class="font-label-md">إرسال 24/35</span>
+<span class="material-symbols-outlined text-sm">whatshot</span>
+</div>
+</div>
+<script>
+        // Micro-interaction: Mimic counting down for the next action
+        let seconds = 18;
+        const timerSpan = document.querySelector('.text-on-surface-variant .font-label-md');
+        
+        if (timerSpan) {
+            setInterval(() => {
+                if (seconds > 0) {
+                    seconds--;
+                    const display = seconds < 10 ? `00:0${seconds}` : `00:${seconds}`;
+                    timerSpan.innerText = `الرسالة التالية خلال ${display}`;
+                } else {
+                    seconds = 30; // Reset just for demo
+                }
+            }, 1000);
+        }
+
+        // Safety pause countdown
+        let pauseSeconds = 252; // 4:12
+        const pauseTimer = document.querySelector('.text-on-secondary-container.font-label-md');
+        
+        if (pauseTimer) {
+            setInterval(() => {
+                if (pauseSeconds > 0) {
+                    pauseSeconds--;
+                    const mins = Math.floor(pauseSeconds / 60);
+                    const secs = pauseSeconds % 60;
+                    pauseTimer.innerText = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')} متبقية`;
+                }
+            }, 1000);
+        }
+    </script>
+</body></html>

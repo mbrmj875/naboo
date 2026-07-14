@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' hide TextDirection;
+import 'package:provider/provider.dart';
 
 import '../../models/credit_debt_invoice.dart';
+import '../../providers/business_features_provider.dart';
 import '../../models/customer_record.dart';
 import '../../models/installment.dart';
 import '../../theme/design_tokens.dart';
@@ -82,8 +84,13 @@ class _CustomerFinancialDetailPanelState
       _error = null;
     });
     try {
-      final credits = await _db.getCreditDebtInvoicesForCustomerId(c.id);
-      final plans = await _db.getInstallmentPlansForCustomerId(c.id);
+      final features = context.read<BusinessFeaturesProvider>().data;
+      final credits = features.enableDebts
+          ? await _db.getCreditDebtInvoicesForCustomerId(c.id)
+          : <CreditDebtInvoice>[];
+      final plans = features.enableInstallments
+          ? await _db.getInstallmentPlansForCustomerId(c.id)
+          : <InstallmentPlan>[];
       if (!mounted) return;
       setState(() {
         _creditInvoices = credits;
@@ -113,6 +120,7 @@ class _CustomerFinancialDetailPanelState
       );
     }
 
+    final features = context.watch<BusinessFeaturesProvider>();
     final cs = Theme.of(context).colorScheme;
     return RefreshIndicator(
       onRefresh: _load,
@@ -126,93 +134,97 @@ class _CustomerFinancialDetailPanelState
           ),
           const SizedBox(height: 12),
           _SummaryCard(customer: c),
-          const SizedBox(height: 16),
-          OutlinedButton.icon(
-            onPressed: () {
-              Navigator.push<void>(
-                context,
-                MaterialPageRoute<void>(
-                  builder: (_) => CustomerDebtDetailScreen.fromCustomerId(
-                    registeredCustomerId: c.id,
+          if (features.data.enableDebts) ...[
+            const SizedBox(height: 16),
+            OutlinedButton.icon(
+              onPressed: () {
+                Navigator.push<void>(
+                  context,
+                  MaterialPageRoute<void>(
+                    builder: (_) => CustomerDebtDetailScreen.fromCustomerId(
+                      registeredCustomerId: c.id,
+                    ),
+                  ),
+                );
+              },
+              style: OutlinedButton.styleFrom(
+                foregroundColor: cs.primary,
+                side: BorderSide(color: cs.primary.withValues(alpha: 0.5)),
+                shape: const RoundedRectangleBorder(
+                  borderRadius: AppShape.none,
+                ),
+                padding: const EdgeInsets.symmetric(
+                  vertical: 12,
+                  horizontal: 16,
+                ),
+              ),
+              icon: const Icon(Icons.account_balance_wallet_outlined),
+              label: const Text('شاشة الديون الكاملة (تسديد وتفاصيل)'),
+            ),
+            const SizedBox(height: 20),
+            const _SectionTitle(
+              icon: Icons.receipt_long_outlined,
+              title: 'مبيعات بالأجل (دين)',
+              subtitle:
+                  'كل فاتورة مرتبطة بإيصال البيع — اضغط لعرض التفاصيل',
+              color: AppSemanticColors.warning,
+            ),
+            const SizedBox(height: 8),
+            if (_creditInvoices.isEmpty)
+              const _EmptyHint(
+                text:
+                    'لا توجد فواتير «آجل» مربوطة بهذا العميل. استخدم البيع بالدين مع اختيار العميل من القائمة.',
+              )
+            else
+              ..._creditInvoices.map(
+                (inv) => _CreditInvoiceTile(
+                  inv: inv,
+                  onReceipt: () => showInvoiceDetailSheet(
+                    context,
+                    _db,
+                    inv.invoiceId,
                   ),
                 ),
-              );
-            },
-            style: OutlinedButton.styleFrom(
-              foregroundColor: cs.primary,
-              side: BorderSide(color: cs.primary.withValues(alpha: 0.5)),
-              shape: const RoundedRectangleBorder(
-                borderRadius: AppShape.none,
               ),
-              padding: const EdgeInsets.symmetric(
-                vertical: 12,
-                horizontal: 16,
-              ),
+          ],
+          if (features.data.enableInstallments) ...[
+            const SizedBox(height: 22),
+            _SectionTitle(
+              icon: Icons.calendar_month_rounded,
+              title: 'التقسيط',
+              subtitle: 'خطط الأقساط المرتبطة بفواتير البيع',
+              color: cs.primary,
             ),
-            icon: const Icon(Icons.account_balance_wallet_outlined),
-            label: const Text('شاشة الديون الكاملة (تسديد وتفاصيل)'),
-          ),
-          const SizedBox(height: 20),
-          const _SectionTitle(
-            icon: Icons.receipt_long_outlined,
-            title: 'مبيعات بالأجل (دين)',
-            subtitle:
-                'كل فاتورة مرتبطة بإيصال البيع — اضغط لعرض التفاصيل',
-            color: AppSemanticColors.warning,
-          ),
-          const SizedBox(height: 8),
-          if (_creditInvoices.isEmpty)
-            const _EmptyHint(
-              text:
-                  'لا توجد فواتير «آجل» مربوطة بهذا العميل. استخدم البيع بالدين مع اختيار العميل من القائمة.',
-            )
-          else
-            ..._creditInvoices.map(
-              (inv) => _CreditInvoiceTile(
-                inv: inv,
-                onReceipt: () => showInvoiceDetailSheet(
-                  context,
-                  _db,
-                  inv.invoiceId,
-                ),
-              ),
-            ),
-          const SizedBox(height: 22),
-          _SectionTitle(
-            icon: Icons.calendar_month_rounded,
-            title: 'التقسيط',
-            subtitle: 'خطط الأقساط المرتبطة بفواتير البيع',
-            color: cs.primary,
-          ),
-          const SizedBox(height: 8),
-          if (_plans.isEmpty)
-            const _EmptyHint(
-              text:
-                  'لا توجد خطط تقسيط مربوطة بهذا العميل. استخدم نوع البيع «تقسيط» مع اختيار العميل.',
-            )
-          else
-            ..._plans.map(
-              (p) => _InstallmentPlanTile(
-                plan: p,
-                onReceipt: () => showInvoiceDetailSheet(
-                  context,
-                  _db,
-                  p.invoiceId,
-                ),
-                onPlanDetails: p.id != null
-                    ? () {
-                        Navigator.push<void>(
-                          context,
-                          MaterialPageRoute<void>(
-                            builder: (_) => InstallmentDetailsScreen(
-                              planId: p.id!,
+            const SizedBox(height: 8),
+            if (_plans.isEmpty)
+              const _EmptyHint(
+                text:
+                    'لا توجد خطط تقسيط مربوطة بهذا العميل. استخدم نوع البيع «تقسيط» مع اختيار العميل.',
+              )
+            else
+              ..._plans.map(
+                (p) => _InstallmentPlanTile(
+                  plan: p,
+                  onReceipt: () => showInvoiceDetailSheet(
+                    context,
+                    _db,
+                    p.invoiceId,
+                  ),
+                  onPlanDetails: p.id != null
+                      ? () {
+                          Navigator.push<void>(
+                            context,
+                            MaterialPageRoute<void>(
+                              builder: (_) => InstallmentDetailsScreen(
+                                planId: p.id!,
+                              ),
                             ),
-                          ),
-                        );
-                      }
-                    : null,
+                          );
+                        }
+                      : null,
+                ),
               ),
-            ),
+          ],
         ],
       ),
     );

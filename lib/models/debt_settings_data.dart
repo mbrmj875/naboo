@@ -1,4 +1,5 @@
 import 'dart:convert';
+import '../utils/app_logger.dart';
 
 /// إعدادات حدود بيع «دين / آجل» — صف واحد JSON في [debt_settings].
 class DebtSettingsData {
@@ -70,7 +71,13 @@ class DebtSettingsData {
     try {
       final m = jsonDecode(raw) as Map<String, dynamic>;
       return DebtSettingsData.fromJson(m);
-    } catch (_) {
+    } catch (e, st) {
+      AppLogger.error(
+        'DebtSettingsData',
+        'تعذر فك JSON إعدادات الدين',
+        e,
+        st,
+      );
       return DebtSettingsData.defaults();
     }
   }

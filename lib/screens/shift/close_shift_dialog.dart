@@ -10,11 +10,9 @@ import '../../providers/auth_provider.dart';
 import '../../providers/notification_provider.dart';
 import '../../providers/shift_provider.dart';
 import '../../services/database_helper.dart';
-import '../../services/password_hashing.dart';
 import '../../theme/app_corner_style.dart';
 import '../../utils/iraqi_currency_format.dart';
 import '../../utils/numeric_format.dart';
-import '../../widgets/inputs/app_input.dart';
 import '../../widgets/inputs/app_price_input.dart';
 
 /// إغلاق الوردية: عرض الرصيد تلقائياً، جرد الصندوق، المبلغ المسحوب، وملخص الفواتير.
@@ -72,10 +70,8 @@ class _CloseShiftDialogState extends State<_CloseShiftDialog> {
   final DatabaseHelper _db = DatabaseHelper();
   final _inBoxCtrl = TextEditingController();
   final _withdrawCtrl = TextEditingController();
-  final _passwordVerifyCtrl = TextEditingController();
   final _formKey = GlobalKey<FormState>();
 
-  final _focusPwd = FocusNode();
   final _focusInBox = FocusNode();
   final _focusWithdraw = FocusNode();
 
@@ -84,7 +80,6 @@ class _CloseShiftDialogState extends State<_CloseShiftDialog> {
   double _systemBalance = 0;
   Map<String, int> _counts = const {'sales': 0, 'returns': 0};
   String _shiftStaffName = '';
-  String? _passwordInlineError;
   bool _submitting = false;
 
   @override
@@ -136,51 +131,15 @@ class _CloseShiftDialogState extends State<_CloseShiftDialog> {
   void dispose() {
     _inBoxCtrl.dispose();
     _withdrawCtrl.dispose();
-    _passwordVerifyCtrl.dispose();
-    _focusPwd.dispose();
     _focusInBox.dispose();
     _focusWithdraw.dispose();
     super.dispose();
   }
 
   Future<void> _confirm() async {
-    setState(() => _passwordInlineError = null);
     if (!(_formKey.currentState?.validate() ?? false)) return;
 
-    final pwdIn = _passwordVerifyCtrl.text.trim();
-    final auth = context.read<AuthProvider>();
-    if (pwdIn.isNotEmpty) {
-      final uid = auth.userId;
-      if (uid == null || uid <= 0) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('تعذر التحقق من كلمة المرور لهذا الحساب'),
-          ),
-        );
-        return;
-      }
-      final row = await _db.getUserById(uid);
-      if (!mounted) return;
-      if (row == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('تعذر التحقق من المستخدم الحالي')),
-        );
-        return;
-      }
-      final salt = row['passwordSalt'] as String?;
-      final hash = row['passwordHash'] as String?;
-      if (salt == null || hash == null || salt.isEmpty || hash.isEmpty) {
-        setState(
-          () => _passwordInlineError =
-              'لا توجد كلمة مرور محفوظة لهذا الحساب. اترك الحقل فارغاً.',
-        );
-        return;
-      }
-      if (!PasswordHashing.verify(pwdIn, salt, hash)) {
-        setState(() => _passwordInlineError = 'كلمة المرور غير صحيحة');
-        return;
-      }
-    }
+
 
     final inBox = _inParsed().toDouble();
     final withdraw = _wdParsed().toDouble();
@@ -272,8 +231,6 @@ class _CloseShiftDialogState extends State<_CloseShiftDialog> {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
     final ac = context.appCorners;
-    final username = context.watch<AuthProvider>().username;
-    final uLabel = username.isEmpty ? '' : username;
 
     return CallbackShortcuts(
       bindings: <ShortcutActivator, VoidCallback>{
@@ -356,42 +313,7 @@ class _CloseShiftDialogState extends State<_CloseShiftDialog> {
                               ],
                             ),
                             const SizedBox(height: 16),
-                            Text(
-                              'تأكيد بكلمة مرور موظف الوردية (اختياري)',
-                              style: theme.textTheme.labelLarge?.copyWith(
-                                color: cs.onSurfaceVariant,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            const SizedBox(height: 6),
-                            Text(
-                              uLabel.isEmpty
-                                  ? 'أدخل كلمة مرور حساب الدخول إن أردت التحقق. اترك الحقل فارغاً لتخطّي التحقق'
-                                  : 'أدخل كلمة مرور الحساب «$uLabel» إن أردت التحقق. اترك الحقل فارغاً لتخطي التحقق',
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                height: 1.35,
-                                color: cs.onSurfaceVariant,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            AppInput(
-                              label: ' ',
-                              showLabel: false,
-                              hint: 'كلمة مرور الدخول (اختياري)',
-                              controller: _passwordVerifyCtrl,
-                              focusNode: _focusPwd,
-                              obscureText: true,
-                              fillColor: Colors.white,
-                              cursorColor: theme.colorScheme.onSurface,
-                              validator: (_) => _passwordInlineError,
-                              onChanged: (_) =>
-                                  setState(() => _passwordInlineError = null),
-                              textDirection: TextDirection.ltr,
-                              textInputAction: TextInputAction.next,
-                              onFieldSubmitted: (_) =>
-                                  _focusInBox.requestFocus(),
-                            ),
-                            const SizedBox(height: 16),
+
                             _BalanceHero(
                               label: 'رصيد الصندوق (حسب النظام)',
                               amountIQD:
@@ -457,14 +379,19 @@ class _CloseShiftDialogState extends State<_CloseShiftDialog> {
                                     ),
                                   ),
                                   child: Row(
-                                    mainAxisAlignment:
-                                        MainAxisAlignment.spaceBetween,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
                                     children: [
-                                      Text(
-                                        'المتبقي في الصندوق بعد السحب',
-                                        style: theme.textTheme.bodyMedium
-                                            ?.copyWith(fontSize: 13),
+                                      Expanded(
+                                        child: Text(
+                                          'المتبقي في الصندوق بعد السحب',
+                                          style: theme.textTheme.bodyMedium
+                                              ?.copyWith(fontSize: 13),
+                                          textAlign: TextAlign.start,
+                                          softWrap: true,
+                                        ),
                                       ),
+                                      const SizedBox(width: 8),
                                       Text(
                                         '${IraqiCurrencyFormat.formatInt(rem)} د.ع',
                                         style: TextStyle(
@@ -472,6 +399,8 @@ class _CloseShiftDialogState extends State<_CloseShiftDialog> {
                                           fontSize: 15,
                                           color: neg ? cs.error : cs.primary,
                                         ),
+                                        textDirection: TextDirection.ltr,
+                                        textAlign: TextAlign.end,
                                       ),
                                     ],
                                   ),

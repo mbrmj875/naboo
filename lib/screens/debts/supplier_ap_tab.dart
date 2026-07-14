@@ -168,9 +168,9 @@ class _SupplierApTabState extends State<SupplierApTab> {
                     width: double.infinity,
                     padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
-                      color: card,
+                      color: cs.surfaceContainerHighest.withValues(alpha: 0.3),
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: cs.outlineVariant),
+                      border: Border.all(color: AppColors.accentGold.withValues(alpha: 0.5)),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -208,15 +208,26 @@ class _SupplierApTabState extends State<SupplierApTab> {
                     controller: _search,
                     decoration: InputDecoration(
                       hintText: 'بحث باسم المورد…',
-                      prefixIcon: const Icon(Icons.search_rounded),
+                      prefixIcon: const Icon(Icons.search_rounded, color: AppColors.accentGold),
                       suffixIcon: _search.text.isNotEmpty
                           ? IconButton(
                               icon: const Icon(Icons.clear_rounded),
                               onPressed: () => _search.clear(),
                             )
                           : null,
-                      border: const OutlineInputBorder(
-                        borderRadius: AppShape.none,
+                      filled: true,
+                      fillColor: isDark ? AppColors.surfaceDark : cs.surface,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.5)),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.5)),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(color: AppColors.accentGold, width: 2),
                       ),
                     ),
                   ),
@@ -236,11 +247,11 @@ class _SupplierApTabState extends State<SupplierApTab> {
                       Padding(
                         padding: const EdgeInsets.only(bottom: 10),
                         child: Material(
-                          color: card,
-                          elevation: isDark ? 2 : 0.5,
+                          color: cs.surfaceContainerHighest.withValues(alpha: 0.3),
+                          elevation: 0,
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(12),
-                            side: BorderSide(color: cs.outlineVariant),
+                            side: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.5)),
                           ),
                           clipBehavior: Clip.antiAlias,
                           child: InkWell(
@@ -408,6 +419,8 @@ class _SupplierApTabState extends State<SupplierApTab> {
           ),
           floatingActionButton: FloatingActionButton.extended(
             onPressed: _addSupplierDialog,
+            backgroundColor: AppColors.accentGold,
+            foregroundColor: Colors.white,
             icon: const Icon(Icons.add_rounded),
             label: const Text('مورد'),
           ),

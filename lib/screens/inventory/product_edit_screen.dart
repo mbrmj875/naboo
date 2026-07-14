@@ -4,18 +4,25 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
+import '../../models/product_variant_kind.dart';
 import '../../providers/notification_provider.dart';
 import '../../services/database_helper.dart';
+import '../../services/oil_product_grades_repository.dart';
 import '../../services/product_repository.dart';
 import '../../services/product_variants_repository.dart';
 import '../../services/product_variants_sql_ops.dart';
 import '../../services/tenant_context.dart';
 import '../../utils/color_name_ar.dart';
 import '../../widgets/app_color_picker_dialog.dart';
+import '../../widgets/oil_variants/fluid_family_editor_mode.dart';
+import '../../widgets/oil_variants/oil_grade_draft.dart';
+import '../../widgets/oil_variants/oil_viscosity_editor.dart';
 import '../../widgets/variants/variant_size_picker_sheet.dart';
+import '../../utils/iraqi_currency_format.dart';
 import '../../theme/app_corner_style.dart';
 import '../../services/app_settings_repository.dart';
 import '../../services/business_setup_settings.dart';
+import '../../utils/app_logger.dart';
 
 class _VariantEditRow {
   _VariantEditRow({
@@ -143,8 +150,23 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
   bool _loading = true;
   bool _saving = false;
   int _stockBaseKind = 0;
-  int _stockTypeUi = 0; // 0 عدد | 1 وزن | 2 ملابس (ألوان ومقاسات)
+  int _stockTypeUi = 0; // 0 عدد | 1 وزن | 2 ملابس | 3 زيت مفرد | 4 هيدروليك عائلة | 5 زيت عائلة
+  int _variantKind = 0;
+  int? _parentProductId;
+  int? _fluidParentEditId;
+  final List<OilGradeDraft> _hydraulicGradeDrafts = [];
+  final List<OilGradeDraft> _oilFamilyGradeDrafts = [];
   bool _variantsLoading = false;
+
+  bool get _isFluidFamilyUi => _stockTypeUi == 4 || _stockTypeUi == 5;
+  bool get _isFluidFamilyChild =>
+      _parentProductId != null && _parentProductId! > 0;
+  FluidFamilyEditorMode get _fluidEditorMode => _stockTypeUi == 5
+      ? FluidFamilyEditorMode.oil
+      : FluidFamilyEditorMode.hydraulic;
+  List<OilGradeDraft> get _activeFluidGradeDrafts => _stockTypeUi == 5
+      ? _oilFamilyGradeDrafts
+      : _hydraulicGradeDrafts;
   final List<_VariantEditRow> _variantRows = [];
   final List<_NewUnitVariantDraft> _newVariantDrafts = [];
 
@@ -176,6 +198,12 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
     }
     for (final c in _colorDrafts) {
       c.dispose();
+    }
+    for (final g in _hydraulicGradeDrafts) {
+      g.dispose();
+    }
+    for (final g in _oilFamilyGradeDrafts) {
+      g.dispose();
     }
     super.dispose();
   }
@@ -318,7 +346,9 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
       final biz = await BusinessSetupSettingsData.load(AppSettingsRepository.instance);
       _enableWeightSales = biz.enableWeightSales;
       _enableClothingVariants = biz.enableClothingVariants;
-    } catch (_) {}
+    } catch (e, st) {
+      AppLogger.error('ProductEdit', 'فشل تحميل إعدادات النشاط', e, st);
+    }
     final p = await _repo.getProductDetailsById(widget.productId);
     if (!mounted) return;
     if (p == null) {
@@ -335,7 +365,21 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
     _low.text = dnum(p['lowStockThreshold']).toStringAsFixed(0);
     _track = ((p['trackInventory'] as num?)?.toInt() ?? 1) == 1;
     _stockBaseKind = (p['stockBaseKind'] as num?)?.toInt() ?? 0;
-    _stockTypeUi = _stockBaseKind;
+    _variantKind = (p['variantKind'] as num?)?.toInt() ?? 0;
+    _parentProductId = (p['parentProductId'] as num?)?.toInt();
+    final isFluidParent = ProductVariantKind.isFluidFamilyParent(p);
+    if (isFluidParent) {
+      _fluidParentEditId = widget.productId;
+      _stockTypeUi =
+          _variantKind == ProductVariantKind.oilFamily ? 5 : 4;
+      _stockBaseKind = 3;
+    } else if (_parentProductId != null && _parentProductId! > 0) {
+      _fluidParentEditId = _parentProductId;
+      _stockTypeUi = 3;
+      _stockBaseKind = 3;
+    } else {
+      _stockTypeUi = _stockBaseKind == 3 ? 3 : _stockBaseKind.clamp(0, 1);
+    }
 
     // Load color+size variants (new system)
     try {
@@ -374,13 +418,17 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
           ),
         );
       }
-      _multiVariantEnabled = _colorDrafts.isNotEmpty;
+      _multiVariantEnabled = _colorDrafts.isNotEmpty && !isFluidParent;
       if (_multiVariantEnabled) {
         _track = true;
+        _stockTypeUi = 2;
       }
-      _stockTypeUi = _multiVariantEnabled ? 2 : _stockBaseKind;
-    } catch (_) {
-      // ignore: fallback to no-variants UI
+    } catch (e, st) {
+      AppLogger.error('ProductEdit', 'فشل تحميل متغيرات الملابس', e, st);
+    }
+
+    if (isFluidParent) {
+      await _loadFluidFamilyDrafts(widget.productId);
     }
 
     setState(() => _variantsLoading = true);
@@ -408,7 +456,8 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
         if (mp is num) row.minSell.text = mp.toString();
         _variantRows.add(row);
       }
-    } catch (_) {
+    } catch (e, st) {
+      AppLogger.error('ProductEdit', 'فشل تحميل وحدات المنتج', e, st);
       for (final r in _variantRows) {
         r.dispose();
       }
@@ -420,6 +469,68 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
           _loading = false;
         });
       }
+    }
+  }
+
+  Future<void> _loadFluidFamilyDrafts(int parentId) async {
+    for (final g in _hydraulicGradeDrafts) {
+      g.dispose();
+    }
+    for (final g in _oilFamilyGradeDrafts) {
+      g.dispose();
+    }
+    _hydraulicGradeDrafts.clear();
+    _oilFamilyGradeDrafts.clear();
+
+    final snaps =
+        await OilProductGradesRepository.instance.loadGradeSnapshotsForParent(
+      parentId,
+    );
+    final target = _stockTypeUi == 5
+        ? _oilFamilyGradeDrafts
+        : _hydraulicGradeDrafts;
+    for (final s in snaps) {
+      final g = s.input;
+      final draft = OilGradeDraft(
+        viscosity: g.viscosity,
+        qtyLiters: g.openingQtyLiters.toString(),
+        buy: g.buyPrice.toStringAsFixed(0),
+        sell: g.sellPrice.toStringAsFixed(0),
+        gradeRowId: s.gradeRowId,
+        linkedProductId: s.linkedProductId,
+      );
+      if (g.barcode != null && g.barcode!.isNotEmpty) {
+        draft.barcodeCtrl.text = g.barcode!;
+      }
+      for (final p in g.packs) {
+        draft.packs.add(
+          OilGradePackDraft(
+            unitName: p.unitName,
+            unitSymbol: p.unitSymbol ?? '',
+            factor: p.factorToBase.toString(),
+          )..sellCtrl.text = p.sellPrice == null
+              ? ''
+              : IraqiCurrencyFormat.formatIqd(p.sellPrice!.round()),
+        );
+      }
+      target.add(draft);
+    }
+    if (target.isEmpty) {
+      target.add(OilGradeDraft());
+    }
+  }
+
+  Future<void> _openFluidFamilyEditor() async {
+    final pid = _fluidParentEditId;
+    if (pid == null || pid <= 0) return;
+    final changed = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ProductEditScreen(productId: pid),
+      ),
+    );
+    if (changed == true && mounted) {
+      await _bootstrap();
     }
   }
 
@@ -490,6 +601,27 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
     }
     setState(() => _saving = true);
     try {
+      if (_fluidParentEditId == widget.productId && _isFluidFamilyUi) {
+        final family = _name.text.trim();
+        if (family.isEmpty) {
+          throw StateError('family_name_required');
+        }
+        final grades = oilGradesFromDrafts(_activeFluidGradeDrafts);
+        if (grades.isEmpty) {
+          throw StateError('oil_grade_required');
+        }
+        await OilProductGradesRepository.instance.updateFluidFamily(
+          parentProductId: widget.productId,
+          familyName: family,
+          grades: grades,
+          lowStockThreshold: _parseMoney(_low),
+        );
+        if (!mounted) return;
+        unawaited(context.read<NotificationProvider>().refresh());
+        Navigator.pop(context, true);
+        return;
+      }
+
       final buy = _parseMoney(_buy);
       final sell = _parseMoney(_sell);
       final minSell = _parseMoney(_minSell);
@@ -633,6 +765,10 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
           ? 'الباركود مستخدم لمنتج/وحدة أخرى'
           : e.toString().contains('duplicate_variant_barcode')
               ? 'باركود المتغير مستخدم مسبقاً'
+          : (e is StateError && e.message == 'family_name_required')
+              ? 'اسم العائلة مطلوب'
+          : (e is StateError && e.message == 'oil_grade_required')
+              ? 'أضف لزوجة/درجة واحدة على الأقل'
           : (e is StateError && e.message == 'bad_unit_factor')
               ? 'عامل التحويل يجب أن يكون أكبر من 0'
               : 'تعذر حفظ التعديلات';
@@ -1092,10 +1228,47 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
                             hint: 'SEED-...',
                             keyboard: TextInputType.number,
                           ),
+                          if (_isFluidFamilyChild &&
+                              _fluidParentEditId != null) ...[
+                            const SizedBox(height: 10),
+                            Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: cs.primaryContainer.withValues(alpha: 0.35),
+                                borderRadius: ac.md,
+                                border: Border.all(
+                                  color: cs.outlineVariant.withValues(alpha: 0.65),
+                                ),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  Text(
+                                    'هذا صنف لزوجة ضمن عائلة زيت/هيدروليك. الكمية والأسعار هنا لهذه اللزوجة فقط.',
+                                    style: TextStyle(
+                                      fontSize: 12.5,
+                                      color: cs.onSurfaceVariant,
+                                      height: 1.35,
+                                    ),
+                                    textAlign: TextAlign.start,
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Align(
+                                    alignment: AlignmentDirectional.centerEnd,
+                                    child: OutlinedButton.icon(
+                                      onPressed: _openFluidFamilyEditor,
+                                      icon: const Icon(Icons.hub_outlined, size: 18),
+                                      label: const Text('تعديل العائلة كاملة'),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
                           const SizedBox(height: 10),
                           SwitchListTile.adaptive(
                             value: _track,
-                            onChanged: _multiVariantEnabled
+                            onChanged: _multiVariantEnabled || _isFluidFamilyUi
                                 ? null
                                 : (v) => setState(() => _track = v),
                             contentPadding: EdgeInsets.zero,
@@ -1108,6 +1281,7 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
                         ],
                       ),
                     ),
+                    if (!_isFluidFamilyUi) ...[
                     const SizedBox(height: 12),
                     Container(
                       padding: const EdgeInsets.all(14),
@@ -1155,6 +1329,7 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
                         ],
                       ),
                     ),
+                    ],
                     const SizedBox(height: 12),
                     Container(
                       padding: const EdgeInsets.all(14),
@@ -1186,8 +1361,24 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
                                   value: 2,
                                   child: Text('ملابس (ألوان ومقاسات)'),
                                 ),
+                              const DropdownMenuItem(
+                                value: 3,
+                                child: Text('حجم (لتر كأساس — زيت مفرد)'),
+                              ),
+                              if (_stockTypeUi == 4 || _variantKind == ProductVariantKind.hydraulicFamily)
+                                const DropdownMenuItem(
+                                  value: 4,
+                                  child: Text('هيدروليك — عائلة (ماركة + درجات وعبوات)'),
+                                ),
+                              if (_stockTypeUi == 5 || _variantKind == ProductVariantKind.oilFamily)
+                                const DropdownMenuItem(
+                                  value: 5,
+                                  child: Text('زيت — عائلة (ماركة + لزوجات وعبوات)'),
+                                ),
                             ],
-                            onChanged: (v) {
+                            onChanged: _fluidParentEditId == widget.productId
+                                ? null
+                                : (v) {
                               final next = v ?? 0;
                               setState(() {
                                 _stockTypeUi = next;
@@ -1200,13 +1391,34 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
                                     c.sizes.add(_VariantSizeDraft());
                                     _colorDrafts.add(c);
                                   }
+                                } else if (next == 4 || next == 5) {
+                                  _multiVariantEnabled = false;
+                                  _stockBaseKind = 3;
                                 } else {
                                   _multiVariantEnabled = false;
-                                  _stockBaseKind = next;
+                                  _stockBaseKind = next == 3 ? 3 : next;
                                 }
                               });
                             },
                           ),
+                          if (_isFluidFamilyUi) ...[
+                            const SizedBox(height: 10),
+                            Text(
+                              'اسم العائلة أعلاه. لكل لزوجة/درجة: رصيد باللتر، أسعار، وعبوات البيع.',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: cs.onSurfaceVariant,
+                                height: 1.35,
+                              ),
+                              textAlign: TextAlign.start,
+                            ),
+                            const SizedBox(height: 10),
+                            OilViscosityEditor(
+                              mode: _fluidEditorMode,
+                              grades: _activeFluidGradeDrafts,
+                              onChanged: () => setState(() {}),
+                            ),
+                          ],
                           if (_stockTypeUi == 2) ...[
                             const SizedBox(height: 10),
                             Container(
@@ -1248,6 +1460,7 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
                         ],
                       ),
                     ),
+                    if (!_isFluidFamilyUi) ...[
                     const SizedBox(height: 12),
                     Container(
                       padding: const EdgeInsets.all(14),
@@ -1515,6 +1728,7 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
                         ],
                       ),
                     ),
+                    ],
                     const SizedBox(height: 12),
                     Container(
                       padding: const EdgeInsets.all(14),
@@ -1528,7 +1742,13 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
                         children: [
                           Text('المخزون', style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface)),
                           const SizedBox(height: 10),
-                          if (_multiVariantEnabled)
+                          if (_isFluidFamilyUi)
+                            Text(
+                              'رصيد اللترات وأسعار الشراء/البيع لكل لزوجة في جدول العائلة أعلاه.',
+                              style: TextStyle(color: cs.onSurfaceVariant, height: 1.35),
+                              textAlign: TextAlign.start,
+                            )
+                          else if (_multiVariantEnabled)
                             Text(
                               'المخزون يُدار عبر الألوان والمقاسات. الإجمالي الحالي: ${_totalQtyAllVariants()}',
                               textAlign: TextAlign.end,

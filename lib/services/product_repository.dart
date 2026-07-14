@@ -1,13 +1,21 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 import 'sync_queue_service.dart';
 
+import '../owner/owner_command_center_refresh_bridge.dart';
+import '../owner/models/owner_section_ttl.dart';
+import '../owner/services/business_audit_log_service.dart';
 import 'cloud_sync_service.dart';
+import 'marketplace/marketplace_catalog_sync_service.dart';
 import 'database_helper.dart';
 import 'tenant_context_service.dart';
 import '../models/new_product_extra_unit.dart';
+import '../utils/app_logger.dart';
 import '../utils/iqd_money.dart';
+import 'marketplace_sync_service.dart';
 
 class ProductRepository {
   final DatabaseHelper _dbHelper = DatabaseHelper();
@@ -561,6 +569,8 @@ class ProductRepository {
     }
 
     addStatusAndActive();
+    // عائلة زيت/هيدروليك: المخزون والأسعار على أصناف اللزوجات فقط.
+    where.add('IFNULL(p.variantKind, 0) NOT IN (2, 3)');
 
     final kwRaw = keyword.trim();
     final kw = kwRaw.toLowerCase();
@@ -701,6 +711,8 @@ class ProductRepository {
     }
 
     addStatusAndActive();
+    // عائلة زيت/هيدروليك: المخزون والأسعار على أصناف اللزوجات فقط.
+    where.add('IFNULL(p.variantKind, 0) NOT IN (2, 3)');
 
     final kwRaw = keyword.trim();
     final kw = kwRaw.toLowerCase();
@@ -1458,6 +1470,15 @@ class ProductRepository {
     int? stockBaseKind,
   }) async {
     final db = await _db;
+    final oldRows = await db.query(
+      'products',
+      columns: ['name', 'sellPrice', 'buyPrice', 'minSellPrice', 'qty', 'global_id'],
+      where: 'id = ? AND isActive = 1',
+      whereArgs: [productId],
+      limit: 1,
+    );
+    final oldRow = oldRows.isEmpty ? null : oldRows.first;
+
     final bc = barcode?.trim();
     if (bc != null && bc.isNotEmpty) {
       if (await isBarcodeTakenAnywhere(bc, excludeProductId: productId)) {
@@ -1479,7 +1500,8 @@ class ProductRepository {
       'updatedAt': DateTime.now().toIso8601String(),
     };
     if (stockBaseKind != null) {
-      patch['stockBaseKind'] = stockBaseKind.clamp(0, 1);
+      patch['stockBaseKind'] =
+          stockBaseKind == 3 ? 3 : stockBaseKind.clamp(0, 1);
     }
     await db.transaction((txn) async {
       await txn.update(
@@ -1491,12 +1513,62 @@ class ProductRepository {
       await _enqueueProductMutation(txn, productId, 'UPDATE');
     });
     CloudSyncService.instance.scheduleSyncSoon();
+
+    if (oldRow != null) {
+      final oldSell = (oldRow['sellPrice'] as num?)?.toDouble();
+      final oldBuy = (oldRow['buyPrice'] as num?)?.toDouble();
+      final oldQty = (oldRow['qty'] as num?)?.toDouble();
+      final oldName = oldRow['name'] as String?;
+      final globalId = oldRow['global_id'] as String?;
+
+      if (globalId != null) {
+        if (oldSell != sellPrice) {
+          MarketplaceSyncService.instance.syncPrice(globalId, IqdMoney.toFils(sellPrice));
+        }
+        if (oldQty != qty && trackInventory) {
+          MarketplaceSyncService.instance.syncStock(globalId, qty.toInt());
+        }
+        if (oldName != name.trim()) {
+          MarketplaceSyncService.instance.syncDetails(globalId, name: name.trim());
+        }
+      }
+
+      if (oldSell != sellPrice || oldBuy != buyPrice) {
+        await BusinessAuditLogService.instance.record(
+          eventType: 'price_change',
+          entityType: 'product',
+          entityId: '$productId',
+          oldValueJson: jsonEncode({
+            'name': oldRow['name'],
+            'sellPrice': oldSell,
+            'buyPrice': oldBuy,
+          }),
+          newValueJson: jsonEncode({
+            'name': name.trim(),
+            'sellPrice': sellPrice,
+            'buyPrice': buyPrice,
+          }),
+          tenantId: _tenant.activeTenantId,
+        );
+        OwnerCommandCenterRefreshBridge.instance.invalidateSections([
+          OwnerSectionIds.inventoryValue,
+          OwnerSectionIds.inventoryShortages,
+        ]);
+      }
+    }
   }
 
 
   /// حذف منطقي: تعطيل المنتج بدل حذفه لتفادي كسر روابط الفواتير.
   Future<void> deactivateProduct(int productId) async {
     final db = await _db;
+    final oldRows = await db.query(
+      'products',
+      columns: ['name'],
+      where: 'id = ?',
+      whereArgs: [productId],
+      limit: 1,
+    );
     await db.transaction((txn) async {
       await txn.update(
         'products',
@@ -1510,6 +1582,19 @@ class ProductRepository {
       await _enqueueProductMutation(txn, productId, 'UPDATE');
     });
     CloudSyncService.instance.scheduleSyncSoon();
+    await BusinessAuditLogService.instance.record(
+      eventType: 'product_soft_delete',
+      entityType: 'product',
+      entityId: '$productId',
+      oldValueJson: oldRows.isEmpty
+          ? null
+          : jsonEncode({'name': oldRows.first['name']}),
+      tenantId: _tenant.activeTenantId,
+    );
+    OwnerCommandCenterRefreshBridge.instance.invalidateSections([
+      OwnerSectionIds.inventoryValue,
+      OwnerSectionIds.inventoryShortages,
+    ]);
   }
 
 
@@ -1705,7 +1790,14 @@ class ProductRepository {
         };
         return {'product': product, 'variant': null, 'clothingVariant': clothingVariant};
       }
-    } catch (_) {}
+    } catch (e, st) {
+      AppLogger.error(
+        'ProductRepo',
+        'بحث باركود ملابس — متابعة لوحدة أخرى',
+        e,
+        st,
+      );
+    }
 
     // 1) Variant barcode match (hybrid recommended).
     try {
@@ -1765,7 +1857,14 @@ class ProductRepository {
         };
         return {'product': product, 'variant': variant, 'clothingVariant': null};
       }
-    } catch (_) {}
+    } catch (e, st) {
+      AppLogger.error(
+        'ProductRepo',
+        'بحث باركود وحدة — متابعة للمنتج الأساسي',
+        e,
+        st,
+      );
+    }
 
     // 2) Base product barcode match.
     final prod = await findProductByBarcode(bc);
@@ -2011,7 +2110,14 @@ class ProductRepository {
           'createdAt': now,
         },
       );
-    } catch (_) {}
+    } catch (e, st) {
+      AppLogger.error(
+        'ProductRepo',
+        'فشل إنشاء وحدة افتراضية للمنتج الجديد',
+        e,
+        st,
+      );
+    }
 
     if (bc == null) {
       await _ensureInternalBarcodeIfMissing(db, id);
@@ -2085,6 +2191,8 @@ class ProductRepository {
     /// `1` = صف خدمة فنية (بدون مخزون؛ يُعرَض في البيع ككمية ثابتة 1).
     int isService = 0,
     String? serviceKind,
+    int variantKind = 0,
+    int? parentProductId,
   }) async {
     final db = await _db;
     final now = DateTime.now().toIso8601String();
@@ -2093,7 +2201,7 @@ class ProductRepository {
     final sellN = IqdMoney.normalizeDinar(sellPrice);
     final minN = IqdMoney.normalizeDinar(minP0);
     final tid = (tenantId ?? _tenant.activeTenantId).clamp(1, 999999999);
-    final k = stockBaseKind.clamp(0, 1);
+    final k = stockBaseKind == 3 ? 3 : stockBaseKind.clamp(0, 1);
     final svc = isService != 0;
     final storedTrack = svc ? 0 : (trackInventory != 0 ? 1 : 0);
     final tiEffective = storedTrack != 0;
@@ -2197,20 +2305,26 @@ class ProductRepository {
         'expiryAlertDaysBefore': expiryAlertDaysBefore,
         'isService': svc ? 1 : 0,
         'serviceKind': nz(serviceKind),
+        'variantKind': variantKind,
+        'parentProductId': parentProductId,
+        'isActive': 1,
         'global_id': const Uuid().v4(),
       });
       await _enqueueProductMutation(txn, id, 'INSERT');
 
 
-      final defaultUnitName = k == 1 ? 'كيلوغرام' : 'قطعة';
+      final defaultUnitName = k == 3
+          ? 'لتر'
+          : (k == 1 ? 'كيلوغرام' : 'قطعة');
+      final defaultSymbol = k == 3 ? 'L' : null;
       await txn.insert('product_unit_variants', {
         'productId': id,
         'unitName': defaultUnitName,
-        'unitSymbol': null,
+        'unitSymbol': defaultSymbol,
         'factorToBase': 1.0,
         'barcode': null,
-        'sellPrice': null,
-        'minSellPrice': null,
+        'sellPrice': sellN,
+        'minSellPrice': minN,
         'isDefault': 1,
         'isActive': 1,
         'createdAt': now,
@@ -2255,6 +2369,17 @@ class ProductRepository {
       return id;
     });
     CloudSyncService.instance.scheduleSyncSoon();
+    await BusinessAuditLogService.instance.record(
+      eventType: 'product_create',
+      entityType: 'product',
+      entityId: '$newId',
+      newValueJson: jsonEncode({'name': name.trim(), 'sellPrice': sellN}),
+      tenantId: tid,
+    );
+    OwnerCommandCenterRefreshBridge.instance.invalidateSections([
+      OwnerSectionIds.inventoryValue,
+      OwnerSectionIds.inventoryShortages,
+    ]);
     return newId;
   }
 
@@ -2304,6 +2429,7 @@ class ProductRepository {
       globalId: globalId,
       payload: payload,
     );
+    MarketplaceCatalogSyncService.instance.scheduleSyncSoon();
   }
 }
 

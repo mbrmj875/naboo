@@ -2,8 +2,21 @@
   "git.ignoreLimitWarning": true,
   "java.configuration.updateBuildConfiguration": "interactive",
   "dart.env": {
-    "PATH": "/usr/local/bin:/Users/mohamed123/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin",
-    "LANG": "en_US.UTF-8"
+    "PATH": "/Users/mohamed123/bin:/Users/mohamed123/.rvm/gems/ruby-3.1.2/bin:/Users/mohamed123/.rvm/rubies/ruby-3.1.2/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+    "GEM_HOME": "/Users/mohamed123/.rvm/gems/ruby-3.1.2",
+    "GEM_PATH": "/Users/mohamed123/.rvm/gems/ruby-3.1.2:/Users/mohamed123/.rvm/gems/ruby-3.1.2@global",
+    "LANG": "en_US.UTF-8",
+    "LC_ALL": "en_US.UTF-8"
   },
-  "editor.find.addExtraSpaceOnTop": true
+  "terminal.integrated.env.osx": {
+    "PATH": "/Users/mohamed123/bin:/Users/mohamed123/.rvm/gems/ruby-3.1.2/bin:/Users/mohamed123/.rvm/rubies/ruby-3.1.2/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+    "GEM_HOME": "/Users/mohamed123/.rvm/gems/ruby-3.1.2",
+    "GEM_PATH": "/Users/mohamed123/.rvm/gems/ruby-3.1.2:/Users/mohamed123/.rvm/gems/ruby-3.1.2@global",
+    "LANG": "en_US.UTF-8",
+    "LC_ALL": "en_US.UTF-8"
+  },
+  "editor.find.addExtraSpaceOnTop": true,
+  "dart.flutterAdditionalArgs": [
+    "--dart-define=GOOGLE_WEB_CLIENT_ID=281392172783-ngr4g28b2c4cap8mvfdav60t9b62pj13.apps.googleusercontent.com"
+  ]
 }

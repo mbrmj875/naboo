@@ -264,14 +264,14 @@ class _StaffShiftsWeekScreenState extends State<StaffShiftsWeekScreen> {
     required bool isDark,
   }) {
     final surface = isDark ? AppColors.cardDark : AppColors.cardLight;
-    final border = isDark ? AppColors.borderDark : AppColors.borderLight;
-    final iconColor = Theme.of(context).colorScheme.onSurfaceVariant;
+    final border = AppColors.accentGold.withValues(alpha: 0.5);
+    final iconColor = AppColors.accentGold;
 
     return Material(
       color: surface,
       elevation: 0,
       shape: RoundedRectangleBorder(
-        borderRadius: AppShape.none,
+        borderRadius: BorderRadius.circular(12),
         side: BorderSide(color: border, width: 1),
       ),
       child: Padding(
@@ -381,7 +381,7 @@ class _StaffShiftsWeekScreenState extends State<StaffShiftsWeekScreen> {
         final dayNum = _latinDigits('${dayDate.day}');
         final today = _isSameCalendarDay(dayDate, DateTime.now());
         final surface = isDark ? AppColors.cardDark : AppColors.cardLight;
-        final border = isDark ? AppColors.borderDark : AppColors.borderLight;
+        final border = AppColors.accentGold.withValues(alpha: 0.5);
 
         final dayHeader = Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
@@ -397,7 +397,7 @@ class _StaffShiftsWeekScreenState extends State<StaffShiftsWeekScreen> {
                           ?.copyWith(
                             fontWeight: FontWeight.w800,
                             height: 1.05,
-                            color: today ? cs.primary : null,
+                            color: today ? AppColors.accentGold : null,
                           ),
                     ),
                     const SizedBox(height: 2),
@@ -405,7 +405,7 @@ class _StaffShiftsWeekScreenState extends State<StaffShiftsWeekScreen> {
                       dayShort,
                       style: Theme.of(context).textTheme.labelMedium?.copyWith(
                         fontWeight: FontWeight.w600,
-                        color: today ? cs.primary : cs.onSurfaceVariant,
+                        color: today ? AppColors.accentGold : cs.onSurfaceVariant,
                       ),
                     ),
                   ],
@@ -420,7 +420,7 @@ class _StaffShiftsWeekScreenState extends State<StaffShiftsWeekScreen> {
             color: surface,
             elevation: 0,
             shape: RoundedRectangleBorder(
-              borderRadius: AppShape.none,
+              borderRadius: BorderRadius.circular(12),
               side: BorderSide(color: border),
             ),
             child: Column(
@@ -449,7 +449,7 @@ class _StaffShiftsWeekScreenState extends State<StaffShiftsWeekScreen> {
           color: surface,
           elevation: 0,
           shape: RoundedRectangleBorder(
-            borderRadius: AppShape.none,
+            borderRadius: BorderRadius.circular(12),
             side: BorderSide(color: border),
           ),
           child: Theme(
@@ -473,7 +473,7 @@ class _StaffShiftsWeekScreenState extends State<StaffShiftsWeekScreen> {
                   child: Text(
                     '${segs.length} ${segs.length == 1 ? 'وردية' : 'ورديات'}',
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: cs.primary,
+                      color: AppColors.accentGold,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -639,13 +639,16 @@ class _StaffShiftsWeekScreenState extends State<StaffShiftsWeekScreen> {
       child: Scaffold(
         backgroundColor: bg,
         appBar: AppBar(
-          backgroundColor: AppColors.primary,
-          foregroundColor: Colors.white,
+          backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+          foregroundColor: Theme.of(context).colorScheme.onSurface,
           surfaceTintColor: Colors.transparent,
           elevation: 0,
-          title: const Text(
+          title: Text(
             'ورديات الموظفين — أسبوع',
-            style: TextStyle(fontWeight: FontWeight.bold),
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              color: Theme.of(context).colorScheme.onSurface,
+            ),
           ),
         ),
         body: _loading
@@ -793,7 +796,7 @@ class _DayTimelineColumn extends StatelessWidget {
     final dayNum = _latinDigits('${dayDate.day}');
     final dayShort = DateFormat('EEE', 'ar').format(dayDate);
     final headerBg = isToday
-        ? cs.primary.withValues(alpha: isDark ? 0.18 : 0.12)
+        ? AppColors.accentGold.withValues(alpha: isDark ? 0.18 : 0.12)
         : (isDark ? const Color(0xFF1E293B) : cs.surface);
 
     return Column(
@@ -831,7 +834,7 @@ class _DayTimelineColumn extends StatelessWidget {
                   fontWeight: FontWeight.w800,
                   fontSize: 17,
                   height: 1.0,
-                  color: isToday ? cs.primary : cs.onSurface,
+                  color: isToday ? AppColors.accentGold : cs.onSurface,
                   fontFeatures: const [FontFeature.tabularFigures()],
                 ),
               ),
@@ -845,7 +848,7 @@ class _DayTimelineColumn extends StatelessWidget {
                   fontWeight: FontWeight.w600,
                   fontSize: 11,
                   height: 1.1,
-                  color: isToday ? cs.primary : cs.onSurfaceVariant,
+                  color: isToday ? AppColors.accentGold : cs.onSurfaceVariant,
                 ),
               ),
             ],
@@ -1036,7 +1039,7 @@ class _TotalsBar extends StatelessWidget {
                     Icon(
                       Icons.pie_chart_outline_rounded,
                       size: 20,
-                      color: Theme.of(context).colorScheme.primary,
+                      color: AppColors.accentGold,
                     ),
                     const SizedBox(width: 8),
                     Text(
@@ -1062,7 +1065,8 @@ class _TotalsBar extends StatelessWidget {
                             color: isDark
                                 ? AppColors.surfaceDark
                                 : AppColors.surfaceLight,
-                            border: Border.all(color: border),
+                            border: Border.all(color: AppColors.accentGold.withValues(alpha: 0.5)),
+                            borderRadius: BorderRadius.circular(8),
                           ),
                           child: Text(
                             '${e.key}: ${fmt(e.value)}',

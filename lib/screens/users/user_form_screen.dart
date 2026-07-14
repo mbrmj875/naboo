@@ -1,26 +1,17 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
+import '../../providers/auth_provider.dart';
 import '../../models/user_permission_catalog.dart';
-import '../../services/cloud_sync_service.dart';
 import '../../services/database_helper.dart';
 import '../../services/password_hashing.dart';
 import '../../services/permission_service.dart';
 import '../../theme/design_tokens.dart';
+import '../../utils/pin_input_constraints.dart';
 import '../../utils/screen_layout.dart';
-import '../../utils/customer_validation.dart';
+import '../../widgets/inputs/pin_four_boxes_field.dart';
 
-/// التحقق من هاتف عراقي شائع (اختياري): أرقام فقط، طول معقول.
-String? _iraqPhoneOptional(String? v) {
-  final t = v?.trim() ?? '';
-  if (t.isEmpty) return null;
-  final digits = t.replaceAll(RegExp(r'\D'), '');
-  if (digits.length < 10 || digits.length > 11) {
-    return 'استخدم صيغة هاتف عراقي (مثال: 07XXXXXXXXX)';
-  }
-  return null;
-}
-
-/// صفحة إضافة أو تعديل مستخدم — هوية التطبيق، صلاحيات مفصّلة، ربط بقاعدة البيانات.
+/// صفحة إضافة أو تعديل مستخدم — مبسّطة: اسم + رمز PIN + مستوى صلاحية.
 class UserFormScreen extends StatefulWidget {
   const UserFormScreen({super.key, this.existing});
 
@@ -36,17 +27,20 @@ class _UserFormScreenState extends State<UserFormScreen> {
   final _formKey = GlobalKey<FormState>();
 
   late final TextEditingController _nameCtrl;
-  late final TextEditingController _emailCtrl;
-  late final TextEditingController _phoneCtrl;
-  late final TextEditingController _phone2Ctrl;
-  late final TextEditingController _jobCtrl;
-  late final TextEditingController _passCtrl;
-  late final TextEditingController _pass2Ctrl;
+  late final TextEditingController _pinCtrl;
+  late final TextEditingController _pin2Ctrl;
 
-  String _role = 'staff';
+  /// true = كامل التخصيص (كل الصلاحيات), false = محدود (صلاحيات افتراضية)
+  bool _fullAccess = false;
+
   Map<String, bool> _permMap = {};
   bool _booting = true;
   bool _saving = false;
+  bool _showPin = false;
+  bool _showPin2 = false;
+
+  /// التخصيص المتقدم — يُفتح فقط عند اختيار "تخصيص يدوي"
+  bool _showAdvancedPerms = false;
 
   final _groups = buildPermissionGroupsUi();
 
@@ -56,7 +50,8 @@ class _UserFormScreenState extends State<UserFormScreen> {
   Color get _surface => Theme.of(context).colorScheme.surface;
   Color get _primary => Theme.of(context).colorScheme.primary;
   Color get _onPrimary => Theme.of(context).colorScheme.onPrimary;
-  Color get _filterBg => Theme.of(context).colorScheme.surfaceContainerHighest;
+  Color get _filterBg =>
+      Theme.of(context).colorScheme.surfaceContainerHighest;
   Color get _textPrimary => Theme.of(context).colorScheme.onSurface;
   Color get _textSecondary => Theme.of(context).colorScheme.onSurfaceVariant;
   Color get _outline => Theme.of(context).colorScheme.outline;
@@ -68,13 +63,8 @@ class _UserFormScreenState extends State<UserFormScreen> {
     _nameCtrl = TextEditingController(
       text: e?['displayName']?.toString() ?? '',
     );
-    _emailCtrl = TextEditingController(text: e?['email']?.toString() ?? '');
-    _phoneCtrl = TextEditingController(text: e?['phone']?.toString() ?? '');
-    _phone2Ctrl = TextEditingController(text: e?['phone2']?.toString() ?? '');
-    _jobCtrl = TextEditingController(text: e?['jobTitle']?.toString() ?? '');
-    _passCtrl = TextEditingController();
-    _pass2Ctrl = TextEditingController();
-    _role = (e?['role'] as String?) == 'admin' ? 'admin' : 'staff';
+    _pinCtrl = TextEditingController();
+    _pin2Ctrl = TextEditingController();
 
     if (_isEdit) {
       _loadPermsForEdit();
@@ -92,8 +82,11 @@ class _UserFormScreenState extends State<UserFormScreen> {
       roleKey: role,
     );
     if (!mounted) return;
+    // تحديد ما إذا كانت الصلاحيات كاملة
+    final allTrue = m.values.every((v) => v);
     setState(() {
       _permMap = m;
+      _fullAccess = allTrue;
       _booting = false;
     });
   }
@@ -101,12 +94,8 @@ class _UserFormScreenState extends State<UserFormScreen> {
   @override
   void dispose() {
     _nameCtrl.dispose();
-    _emailCtrl.dispose();
-    _phoneCtrl.dispose();
-    _phone2Ctrl.dispose();
-    _jobCtrl.dispose();
-    _passCtrl.dispose();
-    _pass2Ctrl.dispose();
+    _pinCtrl.dispose();
+    _pin2Ctrl.dispose();
     super.dispose();
   }
 
@@ -115,6 +104,7 @@ class _UserFormScreenState extends State<UserFormScreen> {
     String? hint,
     String? helper,
     Widget? prefixIcon,
+    Widget? suffixIcon,
   }) {
     return InputDecoration(
       labelText: label,
@@ -124,6 +114,7 @@ class _UserFormScreenState extends State<UserFormScreen> {
       fillColor: _filterBg,
       isDense: true,
       prefixIcon: prefixIcon,
+      suffixIcon: suffixIcon,
       border: OutlineInputBorder(
         borderRadius: AppShape.none,
         borderSide: BorderSide(color: _outline.withValues(alpha: 0.55)),
@@ -139,77 +130,48 @@ class _UserFormScreenState extends State<UserFormScreen> {
     );
   }
 
-  void _onRoleChanged(String? v) {
-    final nv = v ?? 'staff';
-    setState(() {
-      _role = nv;
-      if (nv == 'admin') {
-        _permMap = {for (final k in PermissionKeys.allKeys) k: true};
-      } else {
-        _permMap = _perm.defaultStaffPermissionMap();
-      }
-    });
+  /// يولّد username فريد من الاسم (بدون مسافات، أحرف صغيرة + رقم عشوائي)
+  String _generateUsername(String name) {
+    final base = name
+        .trim()
+        .toLowerCase()
+        .replaceAll(RegExp(r'\s+'), '_')
+        .replaceAll(RegExp(r'[^\w\u0600-\u06FF]'), '');
+    final suffix = DateTime.now().millisecondsSinceEpoch % 10000;
+    return '${base.isEmpty ? 'user' : base}_$suffix';
   }
 
   Future<void> _save() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
-    final email = _emailCtrl.text.trim();
-    if (email.isEmpty) {
+
+    final name = _nameCtrl.text.trim();
+    if (name.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('البريد مطلوب (يُستخدم كاسم دخول)')),
+        const SnackBar(content: Text('الاسم مطلوب')),
       );
       return;
     }
-    final p1 = _iraqPhoneOptional(_phoneCtrl.text);
-    final p2 = _iraqPhoneOptional(_phone2Ctrl.text);
-    if (p1 != null) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(p1)));
-      return;
-    }
-    if (p2 != null) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(p2)));
-      return;
-    }
 
+    // التحقق من رمز PIN
     if (!_isEdit) {
-      if (await _db.signupEmailTaken(email)) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('هذا البريد مسجّل مسبقاً')),
-          );
-        }
-        return;
-      }
-      if (!mounted) return;
-      if (_passCtrl.text.length < 6) {
+      if (!PinInputConstraints.isValid(_pinCtrl.text)) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('كلمة المرور 6 أحرف على الأقل')),
+          SnackBar(content: Text(PinInputConstraints.invalidMessage)),
         );
         return;
       }
-      if (_passCtrl.text != _pass2Ctrl.text) {
+      if (!PinInputConstraints.matches(_pinCtrl.text, _pin2Ctrl.text)) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('تأكيد كلمة المرور غير مطابق')),
+          SnackBar(content: Text(PinInputConstraints.mismatchMessage)),
         );
         return;
       }
     } else {
-      final oldMail =
-          (widget.existing!['email'] as String?)?.trim().toLowerCase() ?? '';
-      if (email.toLowerCase() != oldMail && await _db.signupEmailTaken(email)) {
-        if (mounted) {
+      if (_pinCtrl.text.isNotEmpty) {
+        if (!PinInputConstraints.matches(_pinCtrl.text, _pin2Ctrl.text)) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('هذا البريد مسجّل لمستخدم آخر')),
-          );
-        }
-        return;
-      }
-      if (!mounted) return;
-      if (_passCtrl.text.isNotEmpty) {
-        if (_passCtrl.text.length < 6 || _passCtrl.text != _pass2Ctrl.text) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('كلمة المرور غير صالحة أو التأكيد غير مطابق'),
+            SnackBar(
+              content: Text(PinInputConstraints.mismatchMessage),
             ),
           );
           return;
@@ -217,47 +179,61 @@ class _UserFormScreenState extends State<UserFormScreen> {
       }
     }
 
+    // تطبيق مستوى الصلاحية
+    if (_fullAccess && !_showAdvancedPerms) {
+      _permMap = {
+        for (final k in PermissionKeys.allKeys) k: true,
+      };
+    } else if (!_fullAccess && !_showAdvancedPerms) {
+      _permMap = _perm.defaultStaffPermissionMap();
+    }
+    // إذا _showAdvancedPerms فإن _permMap يحتوي على التخصيص اليدوي
+
     setState(() => _saving = true);
     try {
       if (_isEdit) {
         final id = widget.existing!['id'] as int;
         String? hash;
         String? salt;
-        if (_passCtrl.text.isNotEmpty) {
+        if (_pinCtrl.text.isNotEmpty) {
           salt = PasswordHashing.generateSalt();
-          hash = PasswordHashing.hash(_passCtrl.text, salt);
+          hash = await PasswordHashing.hashPin(_pinCtrl.text, salt);
         }
+        final auth = context.read<AuthProvider>();
         await _db.updateUserAdminBasic(
           id: id,
-          displayName: _nameCtrl.text.trim(),
-          email: email,
-          phone: _phoneCtrl.text.trim(),
-          phone2: _phone2Ctrl.text.trim(),
-          jobTitle: _jobCtrl.text.trim(),
-          role: _role,
+          displayName: name,
+          email: widget.existing!['email']?.toString() ?? '',
+          phone: widget.existing!['phone']?.toString() ?? '',
+          phone2: widget.existing!['phone2']?.toString() ?? '',
+          jobTitle: widget.existing!['jobTitle']?.toString() ?? '',
+          role: 'staff',
           passwordHash: hash,
           passwordSalt: salt,
+          actingUserId: auth.userId,
+          actingRoleKey: auth.roleKey,
         );
         await _syncPermissions(id);
-        CloudSyncService.instance.scheduleSyncSoon();
         if (!mounted) return;
         Navigator.pop(context, true);
       } else {
         final salt = PasswordHashing.generateSalt();
-        final hash = PasswordHashing.hash(_passCtrl.text, salt);
+        final hash = await PasswordHashing.hashPin(_pinCtrl.text, salt);
+        final auth = context.read<AuthProvider>();
+        final username = _generateUsername(name);
         final id = await _db.insertUserByAdmin(
-          username: email.toLowerCase(),
+          username: username,
           passwordHash: hash,
           passwordSalt: salt,
-          role: _role,
-          email: email,
-          phone: _phoneCtrl.text.trim(),
-          phone2: _phone2Ctrl.text.trim(),
-          displayName: _nameCtrl.text.trim(),
-          jobTitle: _jobCtrl.text.trim(),
+          role: 'staff',
+          email: '',
+          phone: '',
+          phone2: '',
+          displayName: name,
+          jobTitle: '',
+          actingRoleKey: auth.roleKey,
         );
         await _syncPermissions(id);
-        CloudSyncService.instance.scheduleSyncSoon();
         if (!mounted) return;
         Navigator.pop(context, id);
       }
@@ -273,11 +249,7 @@ class _UserFormScreenState extends State<UserFormScreen> {
   }
 
   Future<void> _syncPermissions(int userId) async {
-    if (_role == 'admin') {
-      await _perm.clearUserPermissionOverrides(userId);
-    } else {
-      await _perm.replaceUserPermissions(userId: userId, permissions: _permMap);
-    }
+    await _perm.replaceUserPermissions(userId: userId, permissions: _permMap);
   }
 
   PreferredSizeWidget _buildAppBar() {
@@ -330,16 +302,16 @@ class _UserFormScreenState extends State<UserFormScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
+                          // ── 1. الاسم ──
                           _sectionCard(
                             icon: Icons.person_outline,
-                            title: 'بيانات الحساب',
-                            subtitle:
-                                'البريد يُستخدم كاسم دخول. الهاتف بصيغة عراقية شائعة (07…).',
+                            title: 'بيانات الموظف',
                             children: [
                               TextFormField(
                                 controller: _nameCtrl,
                                 decoration: _decoration(
-                                  label: 'الاسم الكامل',
+                                  label: 'الاسم',
+                                  hint: 'اسم الموظف',
                                   prefixIcon: Icon(
                                     Icons.badge_outlined,
                                     color: _textSecondary,
@@ -351,164 +323,109 @@ class _UserFormScreenState extends State<UserFormScreen> {
                                     ? 'مطلوب'
                                     : null,
                               ),
-                              const SizedBox(height: 14),
-                              TextFormField(
-                                controller: _jobCtrl,
-                                decoration: _decoration(
-                                  label: 'الدور الوظيفي',
-                                  hint: 'كاشير، مخزن، …',
-                                  prefixIcon: Icon(
-                                    Icons.work_outline,
-                                    color: _textSecondary,
-                                    size: 22,
-                                  ),
-                                ),
+                            ],
+                          ),
+
+                          const SizedBox(height: 16),
+
+                          // ── 2. رمز PIN ──
+                          _sectionCard(
+                            icon: Icons.pin_outlined,
+                            title: 'رمز الدخول (PIN)',
+                            subtitle: PinInputConstraints.staffSubtitle,
+                            children: [
+                              PinFourBoxesField(
+                                controller: _pinCtrl,
+                                label: _isEdit
+                                    ? 'رمز PIN جديد (اختياري)'
+                                    : 'رمز PIN',
+                                obscureText: !_showPin,
+                                onToggleObscure: () =>
+                                    setState(() => _showPin = !_showPin),
+                                validator: _isEdit
+                                    ? PinInputConstraints.validateOptional
+                                    : PinInputConstraints.validateRequired,
                               ),
                               const SizedBox(height: 14),
-                              TextFormField(
-                                controller: _emailCtrl,
-                                enabled: !_isEdit,
-                                keyboardType: TextInputType.emailAddress,
-                                decoration: _decoration(
-                                  label: 'البريد الإلكتروني (اسم الدخول)',
-                                  prefixIcon: Icon(
-                                    Icons.email_outlined,
-                                    color: _textSecondary,
-                                    size: 22,
-                                  ),
-                                ),
+                              PinFourBoxesField(
+                                controller: _pin2Ctrl,
+                                label: 'تأكيد رمز PIN',
+                                obscureText: !_showPin2,
+                                onToggleObscure: () =>
+                                    setState(() => _showPin2 = !_showPin2),
                                 validator: (v) {
-                                  final t = v?.trim() ?? '';
-                                  if (t.isEmpty) return 'مطلوب';
-                                  return CustomerValidation.optionalEmail(v);
+                                  if (_isEdit && _pinCtrl.text.isEmpty) {
+                                    return null;
+                                  }
+                                  if (!PinInputConstraints.isValid(v ?? '')) {
+                                    return PinInputConstraints.invalidMessage;
+                                  }
+                                  if (v != _pinCtrl.text) {
+                                    return PinInputConstraints.mismatchMessage;
+                                  }
+                                  return null;
                                 },
                               ),
-                              const SizedBox(height: 14),
-                              TextFormField(
-                                controller: _phoneCtrl,
-                                keyboardType: TextInputType.phone,
-                                decoration: _decoration(
-                                  label: 'رقم الهاتف (العراق)',
-                                  hint: '07XXXXXXXXX',
-                                  helper: 'أرقام عراقية شائعة تبدأ بـ 07',
-                                  prefixIcon: Icon(
-                                    Icons.phone_android_outlined,
-                                    color: _textSecondary,
-                                    size: 22,
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(height: 14),
-                              TextFormField(
-                                controller: _phone2Ctrl,
-                                keyboardType: TextInputType.phone,
-                                decoration: _decoration(
-                                  label: 'هاتف ثانٍ (اختياري)',
-                                  hint: 'إن وُجد',
-                                  prefixIcon: Icon(
-                                    Icons.phone_in_talk_outlined,
-                                    color: _textSecondary,
-                                    size: 22,
-                                  ),
-                                ),
-                              ),
                             ],
                           ),
+
                           const SizedBox(height: 16),
+
+                          // ── 3. مستوى الصلاحية ──
                           _sectionCard(
-                            icon: Icons.lock_outline,
-                            title: 'الصلاحية وكلمة المرور',
+                            icon: Icons.security_outlined,
+                            title: 'مستوى الصلاحية',
                             children: [
-                              DropdownButtonFormField<String>(
-                                key: ValueKey<String>(_role),
-                                initialValue: _role,
-                                decoration: _decoration(
-                                  label: 'نوع الحساب',
-                                  prefixIcon: Icon(
-                                    Icons.admin_panel_settings_outlined,
-                                    color: _textSecondary,
-                                    size: 22,
-                                  ),
-                                ),
-                                items: const [
-                                  DropdownMenuItem(
-                                    value: 'staff',
-                                    child: Text('موظف (صلاحيات مفصّلة)'),
-                                  ),
-                                  DropdownMenuItem(
-                                    value: 'admin',
-                                    child: Text('مدير (كل الصلاحيات)'),
-                                  ),
-                                ],
-                                onChanged: _saving ? null : _onRoleChanged,
+                              _accessLevelTile(
+                                title: 'موظف محدود التخصيص',
+                                subtitle:
+                                    'صلاحيات أساسية فقط (نقطة بيع، عرض المخزون، الصندوق)',
+                                icon: Icons.shield_outlined,
+                                selected: !_fullAccess && !_showAdvancedPerms,
+                                onTap: () => setState(() {
+                                  _fullAccess = false;
+                                  _showAdvancedPerms = false;
+                                  _permMap = _perm.defaultStaffPermissionMap();
+                                }),
                               ),
-                              if (_role == 'admin') ...[
-                                const SizedBox(height: 10),
-                                Container(
-                                  padding: const EdgeInsets.all(12),
-                                  decoration: BoxDecoration(
-                                    color: _primary.withValues(alpha: 0.08),
-                                    border: Border.all(
-                                      color: _primary.withValues(alpha: 0.25),
-                                    ),
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      Icon(Icons.info_outline, color: _primary),
-                                      const SizedBox(width: 10),
-                                      Expanded(
-                                        child: Text(
-                                          'حساب المدير يتجاوز القيود التفصيلية ويُطبَّق عليه السماح الكامل في النظام.',
-                                          style: TextStyle(
-                                            fontSize: 12.5,
-                                            color: _textSecondary,
-                                            height: 1.35,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                              const SizedBox(height: 14),
-                              TextFormField(
-                                controller: _passCtrl,
-                                obscureText: true,
-                                decoration: _decoration(
-                                  label: _isEdit
-                                      ? 'كلمة مرور جديدة (اختياري)'
-                                      : 'كلمة المرور',
-                                  prefixIcon: Icon(
-                                    Icons.password_outlined,
-                                    color: _textSecondary,
-                                    size: 22,
-                                  ),
-                                ),
+                              const SizedBox(height: 8),
+                              _accessLevelTile(
+                                title: 'موظف كامل التخصيص',
+                                subtitle:
+                                    'جميع الصلاحيات (تقارير، إدارة مخزون، عملاء، إعدادات)',
+                                icon: Icons.admin_panel_settings_outlined,
+                                selected: _fullAccess && !_showAdvancedPerms,
+                                onTap: () => setState(() {
+                                  _fullAccess = true;
+                                  _showAdvancedPerms = false;
+                                  _permMap = {
+                                    for (final k in PermissionKeys.allKeys)
+                                      k: true,
+                                  };
+                                }),
                               ),
-                              const SizedBox(height: 14),
-                              TextFormField(
-                                controller: _pass2Ctrl,
-                                obscureText: true,
-                                decoration: _decoration(
-                                  label: _isEdit
-                                      ? 'تأكيد كلمة المرور الجديدة'
-                                      : 'تأكيد كلمة المرور',
-                                  prefixIcon: Icon(
-                                    Icons.verified_user_outlined,
-                                    color: _textSecondary,
-                                    size: 22,
-                                  ),
-                                ),
+                              const SizedBox(height: 8),
+                              _accessLevelTile(
+                                title: 'تخصيص يدوي',
+                                subtitle:
+                                    'اختر الصلاحيات بنفسك واحدة تلو الأخرى',
+                                icon: Icons.tune_outlined,
+                                selected: _showAdvancedPerms,
+                                onTap: () => setState(() {
+                                  _showAdvancedPerms = true;
+                                }),
                               ),
                             ],
                           ),
-                          if (_role == 'staff') ...[
+
+                          // ── تفاصيل الصلاحيات (تظهر فقط عند تخصيص يدوي) ──
+                          if (_showAdvancedPerms) ...[
                             const SizedBox(height: 16),
                             _sectionCard(
                               icon: Icons.rule_folder_outlined,
                               title: 'الصلاحيات التفصيلية',
                               subtitle:
-                                  'فعّل ما يحق لهذا الموظف الوصول إليه. يُحفظ في قاعدة البيانات لكل مستخدم.',
+                                  'فعّل ما يحق لهذا الموظف الوصول إليه.',
                               children: [
                                 for (final g in _groups) ...[
                                   _permExpansion(g),
@@ -517,6 +434,7 @@ class _UserFormScreenState extends State<UserFormScreen> {
                               ],
                             ),
                           ],
+
                           const SizedBox(height: 28),
                           FilledButton.icon(
                             onPressed: _saving ? null : _save,
@@ -563,6 +481,71 @@ class _UserFormScreenState extends State<UserFormScreen> {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _accessLevelTile({
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return Material(
+      color: selected
+          ? _primary.withValues(alpha: 0.12)
+          : _filterBg.withValues(alpha: 0.5),
+      child: InkWell(
+        onTap: _saving ? null : onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: selected
+                  ? _primary
+                  : _outline.withValues(alpha: 0.35),
+              width: selected ? 1.5 : 1,
+            ),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                icon,
+                color: selected ? _primary : _textSecondary,
+                size: 26,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14,
+                        color: selected ? _primary : _textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: _textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (selected)
+                Icon(Icons.check_circle, color: _primary, size: 22),
+            ],
+          ),
         ),
       ),
     );

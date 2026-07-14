@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import 'invoice.dart';
+import '../utils/activity_timestamp.dart';
 import '../utils/iraqi_currency_format.dart';
 
 /// نوع سطر في خلاصة «آخر النشاط» على لوحة التحكم.
@@ -38,6 +39,8 @@ class RecentActivityEntry {
     required this.at,
     required this.title,
     required this.subtitle,
+    this.actorName,
+    this.actorUserId,
     this.amountIqd,
     this.invoiceId,
     this.cashLedgerId,
@@ -54,6 +57,12 @@ class RecentActivityEntry {
   final DateTime at;
   final String title;
   final String subtitle;
+
+  /// اسم الموظف المرتبط بالنشاط — للفلترة في لوحة المالك.
+  final String? actorName;
+
+  /// معرّف المستخدم من [users.id] عند توفره (ورديات، فواتير، …).
+  final int? actorUserId;
 
   /// للعرض (فاتورة إجمالي، صندوق المبلغ الموقّع).
   final double? amountIqd;
@@ -86,17 +95,29 @@ class RecentActivityEntry {
       : IraqiCurrencyFormat.formatIqd(amountIqd!);
 
   String get timeLabel {
+    final local = at.toLocal();
     final now = DateTime.now();
-    final d = DateTime(at.year, at.month, at.day);
+    final d = DateTime(local.year, local.month, local.day);
     final t = DateTime(now.year, now.month, now.day);
     final diff = t.difference(d).inDays;
     if (diff == 0) {
-      final h = at.hour.toString().padLeft(2, '0');
-      final m = at.minute.toString().padLeft(2, '0');
+      final h = local.hour.toString().padLeft(2, '0');
+      final m = local.minute.toString().padLeft(2, '0');
       return 'اليوم $h:$m';
     }
     if (diff == 1) return 'أمس';
-    return '${at.day.toString().padLeft(2, '0')}/${at.month.toString().padLeft(2, '0')}/${at.year}';
+    return '${local.day.toString().padLeft(2, '0')}/${local.month.toString().padLeft(2, '0')}/${local.year}';
+  }
+
+  /// «منذ ٥ د» — للوحة نشاط الموظفين المضغوطة.
+  String get relativeTimeLabel {
+    final diff = DateTime.now().difference(at.toLocal());
+    if (diff.inSeconds < 45) return 'الآن';
+    if (diff.inMinutes < 60) return 'منذ ${diff.inMinutes} د';
+    if (diff.inHours < 24) return 'منذ ${diff.inHours} س';
+    if (diff.inDays == 1) return 'أمس';
+    if (diff.inDays < 7) return 'منذ ${diff.inDays} ي';
+    return timeLabel;
   }
 
   factory RecentActivityEntry.fromInvoiceRow(Map<String, dynamic> r) {
@@ -106,17 +127,20 @@ class RecentActivityEntry {
     final name = r['customerName']?.toString().trim();
     final total = (r['total'] as num?)?.toDouble() ?? 0;
     final rawDate = r['date']?.toString();
-    final date = DateTime.tryParse(rawDate ?? '') ?? DateTime.now();
+    final date = parseActivityTimestamp(rawDate);
     final typeLabel = _invoiceTypeLabelAr(type);
     final title = isRet ? 'مرتجع #$id' : 'فاتورة $typeLabel · #$id';
     final sub = (name != null && name.isNotEmpty) ? name : 'بدون اسم عميل';
     final by = r['createdByUserName']?.toString().trim();
     final sub2 = (by != null && by.isNotEmpty) ? '$sub · $by' : sub;
+    final byUserId = (r['createdByUserId'] as num?)?.toInt();
     return RecentActivityEntry(
       kind: RecentActivityKind.invoice,
       at: date,
       title: title,
       subtitle: sub2,
+      actorName: by?.isNotEmpty == true ? by : null,
+      actorUserId: byUserId != null && byUserId > 0 ? byUserId : null,
       amountIqd: total,
       invoiceId: id,
       cashLedgerId: null,
@@ -137,7 +161,7 @@ class RecentActivityEntry {
     final desc = r['description']?.toString().trim() ?? '';
     final invId = r['invoiceId'] as int?;
     final raw = r['createdAt']?.toString();
-    final date = DateTime.tryParse(raw ?? '') ?? DateTime.now();
+    final date = parseActivityTimestamp(raw);
     final typeLabel = ledgerTransactionTypeLabelAr(tt);
     String sub;
     if (desc.isNotEmpty) {
@@ -169,7 +193,7 @@ class RecentActivityEntry {
     final id = r['id'] as int;
     final title = r['title']?.toString().trim();
     final raw = r['updatedAt']?.toString();
-    final date = DateTime.tryParse(raw ?? '') ?? DateTime.now();
+    final date = parseActivityTimestamp(raw);
     final label = (title != null && title.isNotEmpty) ? title : 'بيع مؤجّل';
     return RecentActivityEntry(
       kind: RecentActivityKind.parkedSale,
@@ -197,7 +221,7 @@ class RecentActivityEntry {
     final name = r['customerName']?.toString().trim();
     final sub = (name != null && name.isNotEmpty) ? name : 'عميل #$cid';
     final raw = r['createdAt']?.toString();
-    final date = DateTime.tryParse(raw ?? '') ?? DateTime.now();
+    final date = parseActivityTimestamp(raw);
     final typeLabel = loyaltyKindLabelAr(kind);
     return RecentActivityEntry(
       kind: RecentActivityKind.loyalty,
@@ -222,7 +246,7 @@ class RecentActivityEntry {
     final no = r['voucherNo']?.toString() ?? '#$id';
     final vType = r['voucherType']?.toString() ?? '';
     final raw = r['createdAt']?.toString();
-    final date = DateTime.tryParse(raw ?? '') ?? DateTime.now();
+    final date = parseActivityTimestamp(raw);
     final typeLabel = stockVoucherTypeLabelAr(vType);
     final note = r['notes']?.toString().trim();
     return RecentActivityEntry(
@@ -247,7 +271,7 @@ class RecentActivityEntry {
     final id = r['id'] as int;
     final name = r['name']?.toString().trim() ?? 'عميل #$id';
     final raw = r['createdAt']?.toString();
-    final date = DateTime.tryParse(raw ?? '') ?? DateTime.now();
+    final date = parseActivityTimestamp(raw);
     return RecentActivityEntry(
       kind: RecentActivityKind.customerCreated,
       at: date,
@@ -270,7 +294,7 @@ class RecentActivityEntry {
     final id = r['id'] as int;
     final name = r['name']?.toString().trim() ?? 'صنف #$id';
     final raw = r['createdAt']?.toString();
-    final date = DateTime.tryParse(raw ?? '') ?? DateTime.now();
+    final date = parseActivityTimestamp(raw);
     return RecentActivityEntry(
       kind: RecentActivityKind.productCreated,
       at: date,
@@ -296,10 +320,11 @@ class RecentActivityEntry {
   }) {
     final id = r['id'] as int;
     final name = r['shiftStaffName']?.toString().trim() ?? '';
+    final staffUserId = (r['shiftStaffUserId'] as num?)?.toInt();
     final rawAt = isClose
         ? r['closedAt']?.toString()
         : r['openedAt']?.toString();
-    final date = DateTime.tryParse(rawAt ?? '') ?? DateTime.now();
+    final date = parseActivityTimestamp(rawAt);
     final title = isClose ? 'إغلاق وردية' : 'فتح وردية';
     final sub = name.isNotEmpty ? name : 'وردية #$id';
     return RecentActivityEntry(
@@ -307,6 +332,8 @@ class RecentActivityEntry {
       at: date,
       title: title,
       subtitle: sub,
+      actorName: name.isNotEmpty ? name : null,
+      actorUserId: staffUserId != null && staffUserId > 0 ? staffUserId : null,
       amountIqd: null,
       invoiceId: null,
       cashLedgerId: null,

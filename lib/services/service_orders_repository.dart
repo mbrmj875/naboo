@@ -2,10 +2,13 @@ import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 
 import '../utils/app_logger.dart';
+import '../verticals/oil_change/utils/oil_change_order_status.dart';
 import 'database_helper.dart';
 import 'service_orders_sql_ops.dart';
 import 'sync_entity_types.dart';
 import 'tenant_context_service.dart';
+import 'service_order_kinds.dart';
+import 'cloud_sync_service.dart';
 import 'sync_queue_service.dart';
 
 class ServiceOrdersRepository {
@@ -21,6 +24,10 @@ class ServiceOrdersRepository {
       await t.load();
     }
     return t.requireActiveTenantId();
+  }
+
+  void _scheduleCloudSync() {
+    CloudSyncService.instance.scheduleSyncSoon();
   }
 
   /// قائمة تذاكر الصيانة، مع فلتر حالة اختياري لتغذية التبويبات.
@@ -114,6 +121,81 @@ class ServiceOrdersRepository {
     return ServiceOrdersSqlOps.getServiceOrderByGlobalId(db, tid, globalId);
   }
 
+  Future<Map<String, dynamic>?> getServiceOrderById(int id) async {
+    final tid = await _tenantId();
+    final db = await _db;
+    await _dbHelper.ensureServiceOrdersReadRepair();
+    return ServiceOrdersSqlOps.getServiceOrderById(db, tid, id);
+  }
+
+  /// آخر بطاقة غيار زيت لرقم اللوحة — لمزامنة حقول السيارة في النموذج.
+  Future<Map<String, dynamic>?> getLatestOilChangeByPlate(
+    String deviceSerial, {
+    int? excludeOrderId,
+  }) async {
+    final tid = await _tenantId();
+    final db = await _db;
+    await _dbHelper.ensureServiceOrdersReadRepair();
+    return ServiceOrdersSqlOps.getLatestOilChangeByPlate(
+      db,
+      tid,
+      deviceSerial: deviceSerial,
+      excludeOrderId: excludeOrderId,
+    );
+  }
+
+  /// آخر بطاقة غيار زيت للعميل — لمزامنة حقول السيارة عند اختيار العميل.
+  Future<Map<String, dynamic>?> getLatestOilChangeByCustomerId(
+    int customerId, {
+    int? excludeOrderId,
+  }) async {
+    final tid = await _tenantId();
+    final db = await _db;
+    await _dbHelper.ensureServiceOrdersReadRepair();
+    return ServiceOrdersSqlOps.getLatestOilChangeByCustomerId(
+      db,
+      tid,
+      customerId: customerId,
+      excludeOrderId: excludeOrderId,
+    );
+  }
+
+  /// آخر بطاقة غيار زيت لنفس اسم العميل (مطابقة الاسم).
+  Future<Map<String, dynamic>?> getLatestOilChangeByCustomerName(
+    String customerName, {
+    int? excludeOrderId,
+  }) async {
+    final tid = await _tenantId();
+    final db = await _db;
+    await _dbHelper.ensureServiceOrdersReadRepair();
+    return ServiceOrdersSqlOps.getLatestOilChangeByCustomerName(
+      db,
+      tid,
+      customerName: customerName,
+      excludeOrderId: excludeOrderId,
+    );
+  }
+
+  /// صفحة سجل غيار الزيت (مؤشر id تنازلي).
+  Future<List<Map<String, dynamic>>> getOilChangeLogPage({
+    String? searchQuery,
+    int? afterId,
+    int limit = 40,
+    OilChangeLogStatusFilter? statusFilter,
+  }) async {
+    final tid = await _tenantId();
+    final db = await _db;
+    await _dbHelper.ensureServiceOrdersReadRepair();
+    return ServiceOrdersSqlOps.listOilChangeLogPage(
+      db,
+      tid,
+      searchQuery: searchQuery,
+      afterId: afterId,
+      limit: limit,
+      statusFilter: statusFilter,
+    );
+  }
+
   /// إنشاء تذكرة صيانة جديدة.
   ///
   /// ملاحظة: الأسعار تحفظ بالفلس (INTEGER).
@@ -134,14 +216,55 @@ class ServiceOrdersRepository {
     int? expectedDurationMinutes,
     /// موعد التسليم المتوقع (UTC ISO8601) — يُشتق غالباً من تاريخ فتح التذكرة + المدة.
     String? promisedDeliveryAt,
+    String? carModel,
+    String? engineSize,
+    String? odometerCurrent,
+    String? odometerNext,
+    String? oilType,
+    String? oilViscosity,
+    String? oilSize,
+    String? filterType,
+    String? engineFilterName,
+    int? engineFilterPriceFils,
+    String? airFilterName,
+    int? airFilterPriceFils,
+    String? gearFilterName,
+    int? gearFilterPriceFils,
+    String? requestedServices,
+    String? customerPhone,
+    String orderKind = ServiceOrderKinds.repair,
+    int? oilProductId,
+    double? oilLitersUsed,
+    bool oilCustomerProvided = false,
+    int? oilWarehouseId,
+    int? stockVoucherId,
+    int? oilSellPerLiterFils,
+    String? hydraulicType,
+    String? hydraulicGrade,
+    String? hydraulicSize,
+    int? hydraulicProductId,
+    double? hydraulicLitersUsed,
+    bool hydraulicCustomerProvided = false,
+    int? hydraulicWarehouseId,
+    int? hydraulicStockVoucherId,
+    String? powerHydraulicType,
+    String? powerHydraulicGrade,
+    String? powerHydraulicSize,
+    int? powerHydraulicProductId,
+    double? powerHydraulicLitersUsed,
+    bool powerHydraulicCustomerProvided = false,
+    int? powerHydraulicWarehouseId,
+    int? powerHydraulicStockVoucherId,
   }) async {
     final tid = await _tenantId();
     final db = await _db;
 
     final now = DateTime.now().toUtc().toIso8601String();
     final gid = const Uuid().v4();
+    final kind = orderKind.trim().isEmpty ? ServiceOrderKinds.repair : orderKind.trim();
     final payload = <String, dynamic>{
       'global_id': gid,
+      'orderKind': kind,
       'customerId': customerId,
       'customerNameSnapshot': customerNameSnapshot.trim(),
       'deviceName': deviceName.trim(),
@@ -158,14 +281,74 @@ class ServiceOrdersRepository {
         'expectedDurationMinutes': expectedDurationMinutes,
       if (promisedDeliveryAt != null && promisedDeliveryAt.trim().isNotEmpty)
         'promisedDeliveryAt': promisedDeliveryAt.trim(),
+      'carModel': carModel?.trim(),
+      'engineSize': engineSize?.trim(),
+      'odometerCurrent': odometerCurrent?.trim(),
+      'odometerNext': odometerNext?.trim(),
+      'oilType': oilType?.trim(),
+      'oilViscosity': oilViscosity?.trim(),
+      'oilSize': oilSize?.trim(),
+      'filterType': filterType?.trim(),
+      if (engineFilterName != null && engineFilterName.trim().isNotEmpty)
+        'engineFilterName': engineFilterName.trim(),
+      if (engineFilterPriceFils != null && engineFilterPriceFils > 0)
+        'engineFilterPriceFils': engineFilterPriceFils,
+      if (airFilterName != null && airFilterName.trim().isNotEmpty)
+        'airFilterName': airFilterName.trim(),
+      if (airFilterPriceFils != null && airFilterPriceFils > 0)
+        'airFilterPriceFils': airFilterPriceFils,
+      if (gearFilterName != null && gearFilterName.trim().isNotEmpty)
+        'gearFilterName': gearFilterName.trim(),
+      if (gearFilterPriceFils != null && gearFilterPriceFils > 0)
+        'gearFilterPriceFils': gearFilterPriceFils,
+      'requestedServices': requestedServices?.trim(),
+      'customerPhone': customerPhone?.trim(),
+      if (oilProductId != null && oilProductId > 0) 'oilProductId': oilProductId,
+      if (oilLitersUsed != null && oilLitersUsed > 0) 'oilLitersUsed': oilLitersUsed,
+      'oilCustomerProvided': oilCustomerProvided ? 1 : 0,
+      if (oilWarehouseId != null && oilWarehouseId > 0) 'oilWarehouseId': oilWarehouseId,
+      if (stockVoucherId != null && stockVoucherId > 0) 'stockVoucherId': stockVoucherId,
+      if (oilSellPerLiterFils != null && oilSellPerLiterFils > 0)
+        'oilSellPerLiterFils': oilSellPerLiterFils,
+      if (hydraulicType != null && hydraulicType.trim().isNotEmpty)
+        'hydraulicType': hydraulicType.trim(),
+      if (hydraulicGrade != null && hydraulicGrade.trim().isNotEmpty)
+        'hydraulicGrade': hydraulicGrade.trim(),
+      if (hydraulicSize != null && hydraulicSize.trim().isNotEmpty)
+        'hydraulicSize': hydraulicSize.trim(),
+      if (hydraulicProductId != null && hydraulicProductId > 0)
+        'hydraulicProductId': hydraulicProductId,
+      if (hydraulicLitersUsed != null && hydraulicLitersUsed > 0)
+        'hydraulicLitersUsed': hydraulicLitersUsed,
+      'hydraulicCustomerProvided': hydraulicCustomerProvided ? 1 : 0,
+      if (hydraulicWarehouseId != null && hydraulicWarehouseId > 0)
+        'hydraulicWarehouseId': hydraulicWarehouseId,
+      if (hydraulicStockVoucherId != null && hydraulicStockVoucherId > 0)
+        'hydraulicStockVoucherId': hydraulicStockVoucherId,
+      if (powerHydraulicType != null && powerHydraulicType.trim().isNotEmpty)
+        'powerHydraulicType': powerHydraulicType.trim(),
+      if (powerHydraulicGrade != null && powerHydraulicGrade.trim().isNotEmpty)
+        'powerHydraulicGrade': powerHydraulicGrade.trim(),
+      if (powerHydraulicSize != null && powerHydraulicSize.trim().isNotEmpty)
+        'powerHydraulicSize': powerHydraulicSize.trim(),
+      if (powerHydraulicProductId != null && powerHydraulicProductId > 0)
+        'powerHydraulicProductId': powerHydraulicProductId,
+      if (powerHydraulicLitersUsed != null && powerHydraulicLitersUsed > 0)
+        'powerHydraulicLitersUsed': powerHydraulicLitersUsed,
+      'powerHydraulicCustomerProvided': powerHydraulicCustomerProvided ? 1 : 0,
+      if (powerHydraulicWarehouseId != null && powerHydraulicWarehouseId > 0)
+        'powerHydraulicWarehouseId': powerHydraulicWarehouseId,
+      if (powerHydraulicStockVoucherId != null &&
+          powerHydraulicStockVoucherId > 0)
+        'powerHydraulicStockVoucherId': powerHydraulicStockVoucherId,
       'workStartedAt': null,
       'createdAt': now,
       'updatedAt': now,
       'deletedAt': null,
     };
 
-    return db.transaction((txn) async {
-      final id = await ServiceOrdersSqlOps.insertServiceOrder(txn, tid, payload);
+    final id = await db.transaction((txn) async {
+      final newId = await ServiceOrdersSqlOps.insertServiceOrder(txn, tid, payload);
       await SyncQueueService.instance.enqueueMutation(
         txn,
         entityType: SyncEntityTypes.serviceOrder,
@@ -173,8 +356,10 @@ class ServiceOrdersRepository {
         operation: 'INSERT',
         payload: Map<String, dynamic>.from(payload),
       );
-      return id;
+      return newId;
     });
+    _scheduleCloudSync();
+    return id;
   }
 
   Future<int> updateServiceOrderById(
@@ -201,6 +386,47 @@ class ServiceOrdersRepository {
     String? promisedDeliveryAt,
     bool patchWorkStartedAt = false,
     String? workStartedAt,
+    String? carModel,
+    String? engineSize,
+    String? odometerCurrent,
+    String? odometerNext,
+    String? oilType,
+    String? oilViscosity,
+    String? oilSize,
+    String? filterType,
+    String? engineFilterName,
+    int? engineFilterPriceFils,
+    String? airFilterName,
+    int? airFilterPriceFils,
+    String? gearFilterName,
+    int? gearFilterPriceFils,
+    String? requestedServices,
+    String? customerPhone,
+    bool patchOilStockFields = false,
+    int? oilProductId,
+    double? oilLitersUsed,
+    bool? oilCustomerProvided,
+    int? oilWarehouseId,
+    int? stockVoucherId,
+    int? oilSellPerLiterFils,
+    bool patchHydraulicStockFields = false,
+    String? hydraulicType,
+    String? hydraulicGrade,
+    String? hydraulicSize,
+    int? hydraulicProductId,
+    double? hydraulicLitersUsed,
+    bool? hydraulicCustomerProvided,
+    int? hydraulicWarehouseId,
+    int? hydraulicStockVoucherId,
+    bool patchPowerHydraulicStockFields = false,
+    String? powerHydraulicType,
+    String? powerHydraulicGrade,
+    String? powerHydraulicSize,
+    int? powerHydraulicProductId,
+    double? powerHydraulicLitersUsed,
+    bool? powerHydraulicCustomerProvided,
+    int? powerHydraulicWarehouseId,
+    int? powerHydraulicStockVoucherId,
   }) async {
     final tid = await _tenantId();
     final db = await _db;
@@ -221,8 +447,125 @@ class ServiceOrdersRepository {
       if (issueDescription != null) 'issueDescription': issueDescription.trim(),
       if (completionNotes != null) 'completionNotes': completionNotes.trim(),
       if (invoiceId != null) 'invoiceId': invoiceId,
+      if (carModel != null) 'carModel': carModel.trim(),
+      if (engineSize != null) 'engineSize': engineSize.trim(),
+      if (odometerCurrent != null) 'odometerCurrent': odometerCurrent.trim(),
+      if (odometerNext != null) 'odometerNext': odometerNext.trim(),
+      if (oilType != null) 'oilType': oilType.trim(),
+      if (oilViscosity != null) 'oilViscosity': oilViscosity.trim(),
+      if (oilSize != null) 'oilSize': oilSize.trim(),
+      if (filterType != null) 'filterType': filterType.trim(),
+      if (engineFilterName != null)
+        'engineFilterName': engineFilterName.trim().isEmpty
+            ? null
+            : engineFilterName.trim(),
+      if (engineFilterPriceFils != null)
+        'engineFilterPriceFils':
+            engineFilterPriceFils > 0 ? engineFilterPriceFils : null,
+      if (airFilterName != null)
+        'airFilterName':
+            airFilterName.trim().isEmpty ? null : airFilterName.trim(),
+      if (airFilterPriceFils != null)
+        'airFilterPriceFils': airFilterPriceFils > 0 ? airFilterPriceFils : null,
+      if (gearFilterName != null)
+        'gearFilterName':
+            gearFilterName.trim().isEmpty ? null : gearFilterName.trim(),
+      if (gearFilterPriceFils != null)
+        'gearFilterPriceFils': gearFilterPriceFils > 0 ? gearFilterPriceFils : null,
+      if (requestedServices != null) 'requestedServices': requestedServices.trim(),
+      if (customerPhone != null) 'customerPhone': customerPhone.trim(),
       'updatedAt': now,
     };
+
+    if (patchOilStockFields) {
+      payload['oilProductId'] =
+          oilProductId != null && oilProductId > 0 ? oilProductId : null;
+      payload['oilLitersUsed'] =
+          oilLitersUsed != null && oilLitersUsed > 0 ? oilLitersUsed : null;
+      if (oilCustomerProvided != null) {
+        payload['oilCustomerProvided'] = oilCustomerProvided ? 1 : 0;
+      }
+      payload['oilWarehouseId'] =
+          oilWarehouseId != null && oilWarehouseId > 0 ? oilWarehouseId : null;
+      if (stockVoucherId != null) {
+        payload['stockVoucherId'] =
+            stockVoucherId > 0 ? stockVoucherId : null;
+      }
+      if (oilSellPerLiterFils != null) {
+        payload['oilSellPerLiterFils'] =
+            oilSellPerLiterFils > 0 ? oilSellPerLiterFils : null;
+      }
+    }
+
+    if (patchHydraulicStockFields) {
+      payload['hydraulicProductId'] = hydraulicProductId != null &&
+              hydraulicProductId > 0
+          ? hydraulicProductId
+          : null;
+      payload['hydraulicLitersUsed'] = hydraulicLitersUsed != null &&
+              hydraulicLitersUsed > 0
+          ? hydraulicLitersUsed
+          : null;
+      if (hydraulicCustomerProvided != null) {
+        payload['hydraulicCustomerProvided'] =
+            hydraulicCustomerProvided ? 1 : 0;
+      }
+      payload['hydraulicWarehouseId'] = hydraulicWarehouseId != null &&
+              hydraulicWarehouseId > 0
+          ? hydraulicWarehouseId
+          : null;
+      if (hydraulicStockVoucherId != null) {
+        payload['hydraulicStockVoucherId'] =
+            hydraulicStockVoucherId > 0 ? hydraulicStockVoucherId : null;
+      }
+    }
+    if (hydraulicType != null) {
+      payload['hydraulicType'] =
+          hydraulicType.trim().isEmpty ? null : hydraulicType.trim();
+    }
+    if (hydraulicGrade != null) {
+      payload['hydraulicGrade'] =
+          hydraulicGrade.trim().isEmpty ? null : hydraulicGrade.trim();
+    }
+    if (hydraulicSize != null) {
+      payload['hydraulicSize'] =
+          hydraulicSize.trim().isEmpty ? null : hydraulicSize.trim();
+    }
+
+    if (patchPowerHydraulicStockFields) {
+      payload['powerHydraulicProductId'] = powerHydraulicProductId != null &&
+              powerHydraulicProductId > 0
+          ? powerHydraulicProductId
+          : null;
+      payload['powerHydraulicLitersUsed'] = powerHydraulicLitersUsed != null &&
+              powerHydraulicLitersUsed > 0
+          ? powerHydraulicLitersUsed
+          : null;
+      if (powerHydraulicCustomerProvided != null) {
+        payload['powerHydraulicCustomerProvided'] =
+            powerHydraulicCustomerProvided ? 1 : 0;
+      }
+      payload['powerHydraulicWarehouseId'] = powerHydraulicWarehouseId != null &&
+              powerHydraulicWarehouseId > 0
+          ? powerHydraulicWarehouseId
+          : null;
+      if (powerHydraulicStockVoucherId != null) {
+        payload['powerHydraulicStockVoucherId'] =
+            powerHydraulicStockVoucherId > 0 ? powerHydraulicStockVoucherId : null;
+      }
+    }
+    if (powerHydraulicType != null) {
+      payload['powerHydraulicType'] =
+          powerHydraulicType.trim().isEmpty ? null : powerHydraulicType.trim();
+    }
+    if (powerHydraulicGrade != null) {
+      payload['powerHydraulicGrade'] =
+          powerHydraulicGrade.trim().isEmpty ? null : powerHydraulicGrade.trim();
+    }
+    if (powerHydraulicSize != null) {
+      payload['powerHydraulicSize'] =
+          powerHydraulicSize.trim().isEmpty ? null : powerHydraulicSize.trim();
+    }
 
     if (patchCustomerIdField) {
       payload['customerId'] = customerId;
@@ -243,14 +586,14 @@ class ServiceOrdersRepository {
       payload['workStartedAt'] = w != null && w.isNotEmpty ? w : null;
     }
 
-    return db.transaction((txn) async {
-      final affected = await ServiceOrdersSqlOps.updateServiceOrderById(
+    final affected = await db.transaction((txn) async {
+      final n = await ServiceOrdersSqlOps.updateServiceOrderById(
         txn,
         tid,
         id: id,
         values: payload,
       );
-      if (affected > 0) {
+      if (n > 0) {
         // أفضل محاولة لالتقاط global_id للسطر لأجل المزامنة.
         final rows = await txn.query(
           'service_orders',
@@ -274,8 +617,10 @@ class ServiceOrdersRepository {
           );
         }
       }
-      return affected;
+      return n;
     });
+    if (affected > 0) _scheduleCloudSync();
+    return affected;
   }
 
   /// معلّقة → قيد العمل: يبدأ احتساب موعد التسليم من وقت البدء + المدة المحفوظة.
@@ -332,6 +677,7 @@ class ServiceOrdersRepository {
         );
       }
     });
+    _scheduleCloudSync();
   }
 
   /// قيد العمل → جاهزة للتسليم (يدوياً من البطاقة).
@@ -373,6 +719,7 @@ class ServiceOrdersRepository {
         );
       }
     });
+    _scheduleCloudSync();
   }
 
   /// جاهزة للتسليم → مسلّمة إذا لم يبقَ مبلغ (خدمة + قطع − العربون).
@@ -434,6 +781,7 @@ class ServiceOrdersRepository {
       }
       out = true;
     });
+    if (out) _scheduleCloudSync();
     return out;
   }
 
@@ -441,14 +789,14 @@ class ServiceOrdersRepository {
     final tid = await _tenantId();
     final db = await _db;
     final now = DateTime.now().toUtc().toIso8601String();
-    return db.transaction((txn) async {
-      final affected = await ServiceOrdersSqlOps.softDeleteServiceOrderById(
+    final affected = await db.transaction((txn) async {
+      final n = await ServiceOrdersSqlOps.softDeleteServiceOrderById(
         txn,
         tid,
         id: id,
         nowIso: now,
       );
-      if (affected > 0) {
+      if (n > 0) {
         final rows = await txn.query(
           'service_orders',
           columns: ['global_id'],
@@ -468,8 +816,10 @@ class ServiceOrdersRepository {
           );
         }
       }
-      return affected;
+      return n;
     });
+    if (affected > 0) _scheduleCloudSync();
+    return affected;
   }
 
   Future<List<Map<String, dynamic>>> getItemsForOrderGlobalId(
@@ -492,7 +842,7 @@ class ServiceOrdersRepository {
     required int quantity,
     required int priceFils,
   }) async {
-    final tid = TenantContextService.instance.requireActiveTenantId();
+    final tid = await _tenantId();
     final db = await _db;
     final now = DateTime.now().toUtc().toIso8601String();
     final q = quantity <= 0 ? 1 : quantity;
@@ -511,8 +861,9 @@ class ServiceOrdersRepository {
       'updatedAt': now,
       'deletedAt': null,
     };
-    return db.transaction((txn) async {
-      final id = await ServiceOrdersSqlOps.insertServiceOrderItem(txn, tid, payload);
+    final id = await db.transaction((txn) async {
+      final newId =
+          await ServiceOrdersSqlOps.insertServiceOrderItem(txn, tid, payload);
       await SyncQueueService.instance.enqueueMutation(
         txn,
         entityType: SyncEntityTypes.serviceOrderItem,
@@ -520,22 +871,99 @@ class ServiceOrdersRepository {
         operation: 'INSERT',
         payload: Map<String, dynamic>.from(payload),
       );
-      return id;
+      return newId;
     });
+    _scheduleCloudSync();
+    return id;
+  }
+
+  /// استبدال كل أصناف البطاقة (حذف ناعم ثم إدراج من جديد).
+  Future<void> replaceItemsForOrderGlobalId({
+    required String orderGlobalId,
+    required List<({
+      int productId,
+      String productName,
+      int quantity,
+      int priceFils,
+    })> lines,
+  }) async {
+    final og = orderGlobalId.trim();
+    if (og.isEmpty) return;
+
+    final tid = await _tenantId();
+    final db = await _db;
+    final now = DateTime.now().toUtc().toIso8601String();
+
+    await db.transaction((txn) async {
+      final existing = await ServiceOrdersSqlOps.listItemsForOrderGlobalId(
+        txn,
+        tid,
+        orderGlobalId: og,
+      );
+      for (final row in existing) {
+        final id = (row['id'] as num?)?.toInt();
+        if (id == null || id <= 0) continue;
+        await ServiceOrdersSqlOps.softDeleteServiceOrderItemById(
+          txn,
+          tid,
+          id: id,
+          nowIso: now,
+        );
+        final gid = (row['global_id'] ?? '').toString().trim();
+        if (gid.isNotEmpty) {
+          await SyncQueueService.instance.enqueueMutation(
+            txn,
+            entityType: SyncEntityTypes.serviceOrderItem,
+            globalId: gid,
+            operation: 'DELETE',
+            payload: {'id': gid, 'deletedAt': now, 'updatedAt': now},
+          );
+        }
+      }
+
+      for (final line in lines) {
+        if (line.productId <= 0) continue;
+        final q = line.quantity <= 0 ? 1 : line.quantity;
+        final p = line.priceFils < 0 ? 0 : line.priceFils;
+        final total = q * p;
+        final itemGid = const Uuid().v4();
+        final payload = <String, dynamic>{
+          'global_id': itemGid,
+          'orderGlobalId': og,
+          'productId': line.productId,
+          'productName': line.productName.trim(),
+          'quantity': q,
+          'priceFils': p,
+          'totalFils': total,
+          'createdAt': now,
+          'updatedAt': now,
+          'deletedAt': null,
+        };
+        await ServiceOrdersSqlOps.insertServiceOrderItem(txn, tid, payload);
+        await SyncQueueService.instance.enqueueMutation(
+          txn,
+          entityType: SyncEntityTypes.serviceOrderItem,
+          globalId: itemGid,
+          operation: 'INSERT',
+          payload: Map<String, dynamic>.from(payload),
+        );
+      }
+    });
+    _scheduleCloudSync();
   }
 
   Future<int> softDeleteItemById(int id) async {
-    final tid = TenantContextService.instance.requireActiveTenantId();
+    final tid = await _tenantId();
     final db = await _db;
     final now = DateTime.now().toUtc().toIso8601String();
-    return db.transaction((txn) async {
-      final affected = await ServiceOrdersSqlOps.softDeleteServiceOrderItemById(
+    final affected = await db.transaction((txn) async {
+      final n = await ServiceOrdersSqlOps.softDeleteServiceOrderItemById(
         txn,
         tid,
         id: id,
         nowIso: now,
       );
-      if (affected > 0) {
+      if (n > 0) {
         final rows = await txn.query(
           'service_order_items',
           columns: ['global_id'],
@@ -555,8 +983,10 @@ class ServiceOrdersRepository {
           );
         }
       }
-      return affected;
+      return n;
     });
+    if (affected > 0) _scheduleCloudSync();
+    return affected;
   }
 }
 

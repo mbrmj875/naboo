@@ -60,8 +60,8 @@ class AppBrandMark extends StatelessWidget {
             child: Image.asset(logoAssetPath, fit: BoxFit.cover),
           ),
         ),
-        SizedBox(width: gap),
-        if (showTitle)
+        if (showTitle) ...[
+          SizedBox(width: gap),
           (useGoldGradient
               ? ShaderMask(
                   blendMode: BlendMode.srcIn,
@@ -119,6 +119,7 @@ class AppBrandMark extends StatelessWidget {
                     ),
                   ],
                 )),
+        ],
       ],
     );
   }

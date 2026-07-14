@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/notification_provider.dart';
+import '../theme/design_tokens.dart';
 import 'notification_navigation.dart';
 
 Future<bool> _confirmDismissImportant(
@@ -29,10 +30,12 @@ Future<bool> _confirmDismissImportant(
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(dCtx, false),
+          style: TextButton.styleFrom(foregroundColor: AppColors.accentGold),
           child: const Text('إلغاء'),
         ),
         TextButton(
           onPressed: () => Navigator.pop(dCtx, true),
+          style: TextButton.styleFrom(foregroundColor: AppColors.accentGold),
           child: const Text('تأكيد'),
         ),
       ],
@@ -42,17 +45,7 @@ Future<bool> _confirmDismissImportant(
 }
 
 Color _badgeBackground(AppNotification item) {
-  switch (item.type) {
-    case NotificationType.newReport:
-      return const Color(0xFF6366F1);
-    case NotificationType.lowInventory:
-    case NotificationType.negativeStockSale:
-      return const Color(0xFFF97316);
-    case NotificationType.cashAlert:
-      return const Color(0xFF0D9488);
-    default:
-      return item.color.withValues(alpha: 0.92);
-  }
+  return AppColors.accentGold;
 }
 
 /// يعرض تنبيهات مبنية على قاعدة البيانات (مخزون، أقساط، صلاحية، مرتجعات، …).
@@ -143,17 +136,20 @@ class _NotificationsSheetState extends State<_NotificationsSheet> {
                                 'التنبيهات',
                                 style: theme.textTheme.titleMedium?.copyWith(
                                   fontWeight: FontWeight.w800,
+                                  color: AppColors.accentGold,
                                 ),
                               ),
                             ),
                           ),
                           TextButton(
                             onPressed: n.isLoading ? null : () => n.refresh(),
+                            style: TextButton.styleFrom(foregroundColor: AppColors.accentGold),
                             child: const Text('تحديث'),
                           ),
                           if (n.unreadCount > 0)
                             TextButton(
                               onPressed: () => n.markAllAsRead(),
+                              style: TextButton.styleFrom(foregroundColor: AppColors.accentGold),
                               child: const Text('تعليم الكل مقروءاً'),
                             ),
                         ],
@@ -165,7 +161,7 @@ class _NotificationsSheetState extends State<_NotificationsSheet> {
                       minHeight: 2,
                       backgroundColor: theme.colorScheme.surfaceContainerHighest
                           .withValues(alpha: 0.45),
-                      color: theme.colorScheme.primary,
+                      color: AppColors.accentGold,
                     ),
                   if (n.lastError != null)
                     Padding(
@@ -237,7 +233,10 @@ class _NotificationsSheetState extends State<_NotificationsSheet> {
                                   },
                                   child: Material(
                                     color: bg,
-                                    borderRadius: BorderRadius.circular(12),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                      side: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.5)),
+                                    ),
                                     clipBehavior: Clip.antiAlias,
                                     child: InkWell(
                                       onTap: () {
@@ -276,7 +275,7 @@ class _NotificationsSheetState extends State<_NotificationsSheet> {
                                                 children: [
                                                   Icon(
                                                     item.icon,
-                                                    color: item.color,
+                                                    color: AppColors.accentGold,
                                                     size: 26,
                                                   ),
                                                   const SizedBox(width: 10),
@@ -356,8 +355,7 @@ class _NotificationsSheetState extends State<_NotificationsSheet> {
                                                       fontSize: 11,
                                                       fontWeight:
                                                           FontWeight.w700,
-                                                      color: Colors.white
-                                                          .withValues(alpha: 1),
+                                                      color: Colors.white,
                                                     ),
                                                   ),
                                                 ),

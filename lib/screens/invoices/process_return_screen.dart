@@ -9,12 +9,14 @@ import '../../providers/auth_provider.dart';
 import '../../providers/invoice_provider.dart';
 import '../../providers/notification_provider.dart';
 import '../../providers/product_provider.dart';
+import '../../providers/shift_provider.dart';
 import '../../services/database_helper.dart';
 import '../../theme/app_corner_style.dart';
 import '../../theme/design_tokens.dart';
 import '../../utils/invoice_barcode.dart';
 import '../../utils/iraqi_currency_format.dart';
 import '../../utils/screen_layout.dart';
+import '../../utils/shift_actor_conflict_guard.dart';
 
 /// واجهة مرتجع مخصّصة: قائمة منتجات فقط + ملخص مالي يظهر عند اختيار الكميات.
 /// الربط الصريح: [Invoice.originalInvoiceId] = رقم الفاتورة الأصلية المفتوحة.
@@ -333,6 +335,20 @@ class _ProcessReturnScreenState extends State<ProcessReturnScreen> {
     if (_refundTotal <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('اختر كمية إرجاع واحدة على الأقل')),
+      );
+      return;
+    }
+    final conflict = ShiftActorConflictGuard.evaluate(
+      sessionUserId: context.read<AuthProvider>().userId,
+      activeShift: context.read<ShiftProvider>().activeShift,
+    );
+    if (conflict.hasConflict) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'لا يمكن تسجيل المرتجع من هذه الجلسة: الوردية المفتوحة باسم ${conflict.shiftStaffName}.',
+          ),
+        ),
       );
       return;
     }

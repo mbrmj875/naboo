@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../../services/app_settings_repository.dart';
+import '../../services/business_setup_settings.dart';
 import '../../services/market_pos_import_service.dart';
 
 class MarketPosImportScreen extends StatefulWidget {
@@ -16,6 +18,27 @@ class _MarketPosImportScreenState extends State<MarketPosImportScreen> {
   bool _busy = false;
   String? _error;
   MarketPosImportResult? _last;
+  bool _showBundledImport = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadBusinessVerticalGate();
+  }
+
+  Future<void> _loadBusinessVerticalGate() async {
+    try {
+      final setup = await BusinessSetupSettingsData.load(
+        AppSettingsRepository.instance,
+      );
+      if (!mounted) return;
+      setState(() {
+        _showBundledImport = setup.businessVertical != BusinessVertical.oilChange;
+      });
+    } catch (_) {
+      // عند أي فشل قراءة إعدادات النشاط: نبقي السلوك الافتراضي كما هو.
+    }
+  }
 
   Future<String?> _searchFileInDir(
     Directory dir,
@@ -188,61 +211,63 @@ class _MarketPosImportScreenState extends State<MarketPosImportScreen> {
         body: ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            Text(
-              'يستورد هذا الخيار قاعدة مواد جاهزة مضمّنة داخل التطبيق (≈ 3500 صنف من أشهر منتجات السوق مع أسعارها). '
-              'يفضل مراجعة الأسعار بعد الاستيراد لأن أسعار السوق تتغير.',
-              style: TextStyle(color: cs.onSurfaceVariant, height: 1.35),
-            ),
-            const SizedBox(height: 14),
-            Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: cs.primary.withValues(alpha: 0.08),
-                border: Border.all(color: cs.primary.withValues(alpha: 0.35)),
+            if (_showBundledImport) ...[
+              Text(
+                'يستورد هذا الخيار قاعدة مواد جاهزة مضمّنة داخل التطبيق (≈ 3500 صنف من أشهر منتجات السوق مع أسعارها). '
+                'يفضل مراجعة الأسعار بعد الاستيراد لأن أسعار السوق تتغير.',
+                style: TextStyle(color: cs.onSurfaceVariant, height: 1.35),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Row(
-                    children: [
-                      Icon(Icons.inventory_2_rounded, color: cs.primary),
-                      const SizedBox(width: 8),
-                      const Expanded(
-                        child: Text(
-                          'استعادة قاعدة المواد المضمّنة',
-                          style: TextStyle(fontWeight: FontWeight.bold),
+              const SizedBox(height: 14),
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: cs.primary.withValues(alpha: 0.08),
+                  border: Border.all(color: cs.primary.withValues(alpha: 0.35)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.inventory_2_rounded, color: cs.primary),
+                        const SizedBox(width: 8),
+                        const Expanded(
+                          child: Text(
+                            'استعادة قاعدة المواد المضمّنة',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
                         ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'بضغطة واحدة: يقوم التطبيق بفك ضغط الملف المضمّن وإضافة المواد إلى مخزنك. '
+                      'إذا كان أحد الأصناف موجوداً مسبقاً بنفس الباركود، سيتم تحديث اسمه/سعره/تصنيفه فقط (بدون تكرار).',
+                      style: TextStyle(
+                        color: cs.onSurfaceVariant,
+                        fontSize: 12,
+                        height: 1.4,
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'بضغطة واحدة: يقوم التطبيق بفك ضغط الملف المضمّن وإضافة المواد إلى مخزنك. '
-                    'إذا كان أحد الأصناف موجوداً مسبقاً بنفس الباركود، سيتم تحديث اسمه/سعره/تصنيفه فقط (بدون تكرار).',
-                    style: TextStyle(
-                      color: cs.onSurfaceVariant,
-                      fontSize: 12,
-                      height: 1.4,
                     ),
-                  ),
-                  const SizedBox(height: 10),
-                  FilledButton.icon(
-                    onPressed: _busy ? null : _runBundledImport,
-                    icon: _busy
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.cloud_download_rounded),
-                    label: Text(
-                      _busy ? 'جاري الاستيراد…' : 'استيراد المواد المضمّنة',
+                    const SizedBox(height: 10),
+                    FilledButton.icon(
+                      onPressed: _busy ? null : _runBundledImport,
+                      icon: _busy
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.cloud_download_rounded),
+                      label: Text(
+                        _busy ? 'جاري الاستيراد…' : 'استيراد المواد المضمّنة',
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(height: 18),
+              const SizedBox(height: 18),
+            ],
             ExpansionTile(
               tilePadding: EdgeInsets.zero,
               childrenPadding: const EdgeInsets.symmetric(vertical: 6),

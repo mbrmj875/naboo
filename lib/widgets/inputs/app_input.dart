@@ -221,8 +221,9 @@ class _AppInputState extends State<AppInput> {
     final hasWarn =
         widget.warningText != null && widget.warningText!.trim().isNotEmpty;
 
-    Color borderLine = cs.outline;
-    Color focusLine = cs.primary;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    Color borderLine = isDark ? AppColors.accentGold.withValues(alpha: 0.35) : AppColors.accentGold.withValues(alpha: 0.5);
+    Color focusLine = AppColors.accentGold;
     double wDef = ErpInputConstants.borderWidthDefault;
     double wFocus = ErpInputConstants.borderWidthFocus;
 

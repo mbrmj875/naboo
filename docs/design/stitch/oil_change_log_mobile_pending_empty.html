@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+
+<html dir="rtl" lang="ar"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>سجل غيارات الزيت - نابو ERP</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "surface-container-low": "#f6f2f7",
+                        "secondary-fixed": "#ffe081",
+                        "error": "#ba1a1a",
+                        "surface-tint": "#4e5f7e",
+                        "on-surface-variant": "#44474d",
+                        "secondary-fixed-dim": "#e9c340",
+                        "on-tertiary-fixed-variant": "#564500",
+                        "surface-container-lowest": "#ffffff",
+                        "surface-container-highest": "#e4e1e5",
+                        "tertiary-fixed-dim": "#e9c340",
+                        "on-primary-fixed": "#081b37",
+                        "background": "#fbf8fc",
+                        "surface-bright": "#fbf8fc",
+                        "on-secondary-fixed-variant": "#564500",
+                        "inverse-on-surface": "#f3f0f4",
+                        "on-secondary-fixed": "#231b00",
+                        "outline": "#75777e",
+                        "on-primary-container": "#7484a5",
+                        "secondary-container": "#fed752",
+                        "surface-dim": "#dcd9dd",
+                        "on-background": "#1b1b1e",
+                        "primary": "#000000",
+                        "tertiary-fixed": "#ffe082",
+                        "on-primary-fixed-variant": "#374765",
+                        "surface-container": "#f0edf1",
+                        "inverse-primary": "#b6c7eb",
+                        "surface-container-high": "#eae7eb",
+                        "secondary": "#725c00",
+                        "outline-variant": "#c5c6ce",
+                        "primary-fixed": "#d7e3ff",
+                        "inverse-surface": "#303033",
+                        "primary-container": "#081b37",
+                        "on-secondary": "#ffffff",
+                        "on-primary": "#ffffff",
+                        "primary-fixed-dim": "#b6c7eb",
+                        "on-tertiary": "#ffffff",
+                        "on-error-container": "#93000a",
+                        "tertiary": "#725c00",
+                        "surface-variant": "#e4e1e5",
+                        "on-secondary-container": "#735d00",
+                        "on-error": "#ffffff",
+                        "on-tertiary-container": "#4e3e00",
+                        "surface": "#fbf8fc",
+                        "on-tertiary-fixed": "#231b00",
+                        "on-surface": "#1b1b1e",
+                        "error-container": "#ffdad6",
+                        "tertiary-container": "#cca825"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "sm": "8px",
+                        "lg": "16px",
+                        "gutter": "12px",
+                        "xs": "4px",
+                        "xl": "24px",
+                        "margin-mobile": "16px",
+                        "md": "12px",
+                        "base": "4px"
+                    },
+                    "fontFamily": {
+                        "label-sm": ["IBM Plex Sans Arabic"],
+                        "body-lg": ["IBM Plex Sans Arabic"],
+                        "headline-lg": ["IBM Plex Sans Arabic"],
+                        "body-md": ["IBM Plex Sans Arabic"],
+                        "label-md": ["IBM Plex Sans Arabic"],
+                        "headline-md": ["IBM Plex Sans Arabic"],
+                        "display-price-sm": ["IBM Plex Sans Arabic"],
+                        "display-price": ["IBM Plex Sans Arabic"]
+                    },
+                    "fontSize": {
+                        "label-sm": ["10px", {"lineHeight": "14px", "fontWeight": "500"}],
+                        "body-lg": ["16px", {"lineHeight": "24px", "fontWeight": "400"}],
+                        "headline-lg": ["20px", {"lineHeight": "28px", "fontWeight": "600"}],
+                        "body-md": ["14px", {"lineHeight": "20px", "fontWeight": "400"}],
+                        "label-md": ["12px", {"lineHeight": "16px", "fontWeight": "500"}],
+                        "headline-md": ["18px", {"lineHeight": "24px", "fontWeight": "600"}],
+                        "display-price-sm": ["18px", {"lineHeight": "24px", "fontWeight": "700"}],
+                        "display-price": ["22px", {"lineHeight": "28px", "fontWeight": "700"}]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        body {
+            font-family: 'IBM Plex Sans Arabic', sans-serif;
+            background-color: #fbf8fc;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.7);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="flex flex-col min-h-screen text-on-surface">
+<!-- Top App Bar -->
+<header class="w-full sticky top-0 z-50 bg-surface/80 dark:bg-surface-dim/80 backdrop-blur-md shadow-sm">
+<div class="flex flex-row-reverse justify-between items-center px-margin-mobile py-sm w-full">
+<div class="flex items-center gap-sm">
+<span class="font-headline-lg text-headline-lg-mobile font-bold text-primary dark:text-primary-fixed-dim">نابو ERP</span>
+</div>
+<div class="flex items-center gap-lg">
+<button class="transition-all duration-300 ease-in-out active:scale-95 text-primary">
+<span class="material-symbols-outlined">menu</span>
+</button>
+<div class="w-8 h-8 rounded-full bg-primary-container flex items-center justify-center overflow-hidden">
+<img class="w-full h-full object-cover" data-alt="A professional headshot of a business manager for a technical platform, wearing a modern suit, set against a clean, soft-lit corporate office background. The lighting is bright and professional, following a premium business aesthetic with high-quality resolution and a neutral color palette of greys and whites." src="https://lh3.googleusercontent.com/aida-public/AB6AXuDlu4LXwnEtBc8Q-M5-_8eLf8FeBb6ZPdZSNIQVgHrXOB96XwCIcdTwroGlfWq8qtDp_x54w0NzRiD7c91eWKbsDcdUJyM66wt6kuIlwDeLphFegADf_xBnKVzlvDMc1OWMX9veQFZlVWCcarE6oIvEfk9Noe6qiKJvNnSiKAJiGc0vsvfMgX72BSLHmJKLTjjD5XWQ7DGVm68wP8pHh4ifHhLfzczuuaNJEfBfQm6F3z2wqfLJy39eujnmaVUwb2lulLJiFdJe7Ckv"/>
+</div>
+</div>
+</div>
+</header>
+<!-- Sub-Header / Segmented Control Tabs -->
+<div class="bg-surface px-margin-mobile py-md">
+<div class="flex items-center justify-between mb-lg">
+<h1 class="font-headline-md text-headline-md text-on-surface">سجل غيارات الزيت</h1>
+<span class="material-symbols-outlined text-outline">oil_barrel</span>
+</div>
+<div class="flex bg-surface-container p-xs rounded-xl">
+<button class="flex-1 py-sm px-lg rounded-lg font-label-md text-label-md text-on-surface-variant transition-all duration-200">
+                السجل
+            </button>
+<button class="flex-1 py-sm px-lg rounded-lg font-label-md text-label-md bg-white text-primary shadow-sm font-bold transition-all duration-200 border border-outline-variant/30">
+                المعلّقة
+            </button>
+</div>
+</div>
+<!-- Main Content Canvas -->
+<main class="flex-grow flex flex-col items-center justify-center px-margin-mobile py-xl">
+<!-- Empty State Bento-style Centerpiece -->
+<div class="w-full max-w-sm flex flex-col items-center animate-in fade-in slide-in-from-bottom-4 duration-700">
+<!-- Dynamic Oil Icon Container -->
+<div class="relative w-48 h-48 mb-xl flex items-center justify-center">
+<div class="absolute inset-0 bg-secondary-container/20 rounded-full blur-3xl"></div>
+<div class="relative z-10 w-32 h-32 bg-white rounded-full shadow-xl flex items-center justify-center border border-secondary-container/30">
+<span class="material-symbols-outlined text-[64px] text-tertiary-container" style="font-variation-settings: 'FILL' 1;">
+                        water_drop
+                    </span>
+<!-- Floating Accent Icons -->
+<span class="material-symbols-outlined absolute -top-2 -right-2 text-secondary-fixed-dim bg-primary-container p-xs rounded-full shadow-lg">
+                        hourglass_empty
+                    </span>
+</div>
+<!-- Animated Rings (Pulse effect) -->
+<div class="absolute inset-0 border-2 border-secondary-container/30 rounded-full animate-ping opacity-20"></div>
+</div>
+<!-- Content Group -->
+<div class="text-center space-y-sm">
+<h2 class="font-headline-lg text-headline-lg-mobile text-on-surface">لا توجد فواتير معلّقة</h2>
+<p class="font-body-md text-body-md text-on-surface-variant max-w-[280px] mx-auto leading-relaxed">
+                    عند تعليق الفاتورة من بطاقة جديدة تظهر هنا لمتابعة الإجراءات اللاحقة.
+                </p>
+</div>
+<!-- Primary Action -->
+<div class="mt-xl w-full">
+<button class="w-full h-14 bg-secondary-container text-on-primary-fixed rounded-full flex items-center justify-center gap-sm font-headline-md text-headline-md shadow-lg shadow-secondary-container/30 active:scale-95 transition-all duration-300">
+<span class="material-symbols-outlined">add_circle</span>
+<span>بطاقة غيار زيت جديدة</span>
+</button>
+</div>
+</div>
+<!-- Secondary Info Card (Subtle hint) -->
+<div class="mt-12 w-full glass-panel p-lg rounded-xl flex items-start gap-lg border border-outline-variant/20">
+<div class="bg-primary-container/10 p-sm rounded-lg">
+<span class="material-symbols-outlined text-primary-container">lightbulb</span>
+</div>
+<div>
+<h4 class="font-label-md text-label-md text-primary-container font-bold mb-xs">نصيحة سريعة</h4>
+<p class="font-label-sm text-label-sm text-on-surface-variant">يمكنك الوصول لتقارير الزيوت السابقة من خلال تبويب "السجل" في أي وقت.</p>
+</div>
+</div>
+</main>
+<!-- Bottom Nav Dock -->
+<nav class="fixed bottom-4 left-4 right-4 z-50 h-16 bg-primary-container/95 backdrop-blur-xl rounded-full shadow-xl shadow-primary/20 flex flex-row-reverse justify-around items-center px-4">
+<!-- Dashboard/Log - Inactive -->
+<button class="flex flex-col items-center justify-center text-on-primary/70 active:scale-90 transition-transform duration-200">
+<span class="material-symbols-outlined">history</span>
+<span class="font-label-md text-[10px] mt-1">السجل</span>
+</button>
+<!-- Wallet - Inactive -->
+<button class="flex flex-col items-center justify-center text-on-primary/70 active:scale-90 transition-transform duration-200">
+<span class="material-symbols-outlined">account_balance_wallet</span>
+<span class="font-label-md text-[10px] mt-1">الصندوق</span>
+</button>
+<!-- Active Indication - Expenditures/Actions -->
+<div class="flex flex-col items-center justify-center bg-secondary-container text-on-secondary-container rounded-full px-4 py-1.5 transition-all duration-300 active:scale-90">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">payments</span>
+<span class="font-label-md text-label-md font-bold">المصروفات</span>
+</div>
+<!-- Users - Inactive -->
+<button class="flex flex-col items-center justify-center text-on-primary/70 active:scale-90 transition-transform duration-200">
+<span class="material-symbols-outlined">group</span>
+<span class="font-label-md text-[10px] mt-1">المستخدمين</span>
+</button>
+</nav>
+<script>
+        // Simple Micro-interactions
+        document.querySelectorAll('button').forEach(btn => {
+            btn.addEventListener('touchstart', () => {
+                btn.classList.add('opacity-80');
+            });
+            btn.addEventListener('touchend', () => {
+                btn.classList.remove('opacity-80');
+            });
+        });
+
+        // Tab Switching Simulation (Visual Only)
+        const tabs = document.querySelectorAll('.flex.bg-surface-container button');
+        tabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                tabs.forEach(t => {
+                    t.classList.remove('bg-white', 'text-primary', 'shadow-sm', 'font-bold', 'border', 'border-outline-variant/30');
+                    t.classList.add('text-on-surface-variant');
+                });
+                tab.classList.remove('text-on-surface-variant');
+                tab.classList.add('bg-white', 'text-primary', 'shadow-sm', 'font-bold', 'border', 'border-outline-variant/30');
+            });
+        });
+    </script>
+</body></html>

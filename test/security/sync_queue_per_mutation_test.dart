@@ -75,7 +75,9 @@ void main() {
     service = SyncQueueService.instance
       ..databaseProviderForTesting = (() async => db)
       ..authCheckForTesting = (() => true)
-      ..deviceIdProviderForTesting = (() async => 'device-test');
+      ..deviceIdProviderForTesting = (() async => 'device-test')
+      ..serverUtcProviderForTesting = null
+      ..rpcOverrideForTesting = null;
   });
 
   tearDown(() async {
@@ -83,6 +85,7 @@ void main() {
       ..databaseProviderForTesting = null
       ..authCheckForTesting = null
       ..deviceIdProviderForTesting = null
+      ..serverUtcProviderForTesting = null
       ..rpcOverrideForTesting = null;
     await db.close();
   });
@@ -300,6 +303,149 @@ void main() {
       expect(SyncMutationResult.tryParse('not a map'), isNull);
       expect(SyncMutationResult.tryParse({'status': 'ok'}), isNull,
           reason: 'missing mutation_id');
+    });
+
+    test('sanitizePayloadTimestamps clamps far-future stamps', () {
+      final now = DateTime.utc(2026, 7, 14, 12, 0, 0);
+      final payload = <String, dynamic>{
+        'updatedAt': now.add(const Duration(minutes: 10)).toIso8601String(),
+        'createdAt': now.subtract(const Duration(days: 1)).toIso8601String(),
+        'name': 'علي',
+      };
+      final changed = SyncQueueService.sanitizePayloadTimestamps(
+        payload,
+        referenceUtc: now,
+      );
+      expect(changed, isTrue);
+      expect(payload['updatedAt'], now.toIso8601String());
+      expect(
+        payload['createdAt'],
+        now.subtract(const Duration(days: 1)).toIso8601String(),
+      );
+    });
+
+    test('tryParseServerNowFromClockSkewError parses postgres style', () {
+      const err =
+          'clock_skew_rejected: client timestamp 2026-07-14 12:10:00+00 '
+          'is >= server now()+5min (server now=2026-07-14 12:00:00.123456+00, '
+          'threshold=2026-07-14 12:05:00.123456+00)';
+      final parsed = SyncQueueService.tryParseServerNowFromClockSkewError(err);
+      expect(parsed, isNotNull);
+      expect(parsed!.year, 2026);
+      expect(parsed.month, 7);
+      expect(parsed.day, 14);
+      expect(parsed.hour, 12);
+      expect(parsed.minute, 0);
+    });
+
+    test(
+        'clock_skew with server now heals payload and stays pending without burning retry',
+        () async {
+      final futureTs =
+          DateTime.now().toUtc().add(const Duration(hours: 2)).toIso8601String();
+      await _seed(
+        db,
+        mutationId: 'm-skew',
+        payload: {
+          'global_id': 'g1',
+          'updatedAt': futureTs,
+          'createdAt': futureTs,
+        },
+      );
+
+      const serverNowRaw = '2026-07-14 09:00:00+00';
+      service.rpcOverrideForTesting = (_) async => [
+            SyncMutationResult(
+              mutationId: 'm-skew',
+              ok: false,
+              error:
+                  'clock_skew_rejected: client timestamp $futureTs is >= '
+                  'server now()+5min (server now=$serverNowRaw, '
+                  'threshold=2026-07-14 09:05:00+00)',
+            ),
+          ];
+
+      await service.processQueue();
+
+      final r = await _readRow(db, 'm-skew');
+      expect(r['status'], 'pending');
+      expect(r['retry_count'], 0);
+      final payload =
+          jsonDecode(r['payload'] as String) as Map<String, dynamic>;
+      final updatedAt = DateTime.parse(payload['updatedAt'] as String).toUtc();
+      expect(updatedAt.year, 2026);
+      expect(updatedAt.month, 7);
+      expect(updatedAt.day, 14);
+      expect(updatedAt.hour, 9);
+    });
+
+    test(
+        'retryAllFailedAndDead force-aligns timestamps to injected server time',
+        () async {
+      final futureTs =
+          DateTime.utc(2026, 7, 14, 12, 0).toIso8601String();
+      await _seed(
+        db,
+        mutationId: 'm-retry',
+        status: 'failed',
+        retryCount: 1,
+        payload: {
+          'global_id': 'g2',
+          'updatedAt': futureTs,
+          'createdAt': futureTs,
+        },
+      );
+      await db.update(
+        'sync_queue',
+        {
+          'last_error':
+              'clock_skew_rejected: client timestamp $futureTs is >= '
+              'server now()+5min (server now=2026-07-14 09:24:06.521242+00, '
+              'threshold=2026-07-14 09:29:06.521242+00)',
+        },
+        where: 'mutation_id = ?',
+        whereArgs: ['m-retry'],
+      );
+
+      service.serverUtcProviderForTesting =
+          () async => DateTime.utc(2026, 7, 14, 9, 24, 6);
+
+      final count = await service.retryAllFailedAndDead();
+      expect(count, 1);
+
+      final r = await _readRow(db, 'm-retry');
+      expect(r['status'], 'pending');
+      expect(r['retry_count'], 0);
+      final payload =
+          jsonDecode(r['payload'] as String) as Map<String, dynamic>;
+      final updatedAt = DateTime.parse(payload['updatedAt'] as String).toUtc();
+      expect(updatedAt.hour, 9);
+      expect(updatedAt.minute, 24);
+    });
+  });
+
+  group('getRecentBlockingMutations', () {
+    test('orders by mutation_id without referencing missing id column', () async {
+      await _seed(
+        db,
+        mutationId: 'dead-1',
+        status: 'dead',
+        retryCount: 5,
+        lastAttemptAt: '2026-06-01T10:00:00.000Z',
+      );
+      await _seed(
+        db,
+        mutationId: 'fail-1',
+        status: 'failed',
+        retryCount: 2,
+        lastAttemptAt: '2026-06-02T10:00:00.000Z',
+      );
+
+      final rows = await service.getRecentBlockingMutations(limit: 10);
+
+      expect(rows, hasLength(2));
+      expect(rows.first['mutation_id'], 'dead-1');
+      expect(rows.last['mutation_id'], 'fail-1');
     });
   });
 

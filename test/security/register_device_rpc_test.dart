@@ -108,13 +108,17 @@ class RegisterDeviceSimulator {
     }
 
     if (existing != null && existing.accessStatus == 'revoked') {
-      return {
-        'access_status': 'revoked',
-        'is_over_limit': false,
-        'active_devices': 0,
-        'max_devices': max,
-        'already_registered': true,
-      };
+      final active = activeCount(tenantId);
+      if (active > 0) {
+        return {
+          'access_status': 'revoked',
+          'is_over_limit': false,
+          'active_devices': active,
+          'max_devices': max,
+          'already_registered': true,
+        };
+      }
+      // orphan recovery — fall through to reactivate
     }
 
     final wasKnown = existing != null;
@@ -271,16 +275,9 @@ void main() {
       expect(sqlLower, contains('do update set'));
     });
 
-    test('keeps revoked rows revoked (admin-only reactivation)', () {
-      // الإعادة من revoked إلى active لا تتمّ من العميل — يجب أن يُرجع
-      // revoked ولا ينفّذ INSERT/UPDATE.
-      expect(
-        RegExp(
-          r"if\s+v_was_known\s+and\s+lower\(\s*coalesce\(\s*v_existing\.access_status,\s*'active'\s*\)\s*\)\s*=\s*'revoked'\s+then",
-          caseSensitive: false,
-        ).hasMatch(sql),
-        isTrue,
-      );
+    test('orphan recovery when all devices revoked (SQL)', () {
+      expect(sql, contains('orphan recovery'));
+      expect(sql, contains('if v_active > 0 then'));
     });
 
     test('drops old function before recreating (return type changes)', () {
@@ -418,17 +415,39 @@ void main() {
       expect(res['active_devices'], 2);
     });
 
-    test('revoked row stays revoked (admin-only reactivation)', () {
+    test('revoked row stays revoked when another device is active', () {
       final sim = RegisterDeviceSimulator();
       sim.setMaxDevices(tenantA, 2);
       sim.register(tenantId: tenantA, deviceId: 'dev-1', now: fixedNow);
+      sim.register(tenantId: tenantA, deviceId: 'dev-2', now: fixedNow);
       sim.revoke(tenantA, 'dev-1');
 
       final res = sim.register(
-        tenantId: tenantA, deviceId: 'dev-1', now: fixedNow);
+        tenantId: tenantA,
+        deviceId: 'dev-1',
+        now: fixedNow,
+      );
       expect(res['access_status'], 'revoked');
       expect(res['already_registered'], true);
-      expect(sim.activeCount(tenantA), 0);
+      expect(sim.activeCount(tenantA), 1);
+    });
+
+    test('orphan recovery reactivates when all devices revoked', () {
+      final sim = RegisterDeviceSimulator();
+      sim.setMaxDevices(tenantA, 2);
+      sim.register(tenantId: tenantA, deviceId: 'dev-1', now: fixedNow);
+      sim.register(tenantId: tenantA, deviceId: 'dev-2', now: fixedNow);
+      sim.revoke(tenantA, 'dev-1');
+      sim.revoke(tenantA, 'dev-2');
+
+      final res = sim.register(
+        tenantId: tenantA,
+        deviceId: 'dev-1',
+        now: fixedNow,
+      );
+      expect(res['access_status'], 'active');
+      expect(res['already_registered'], true);
+      expect(sim.activeCount(tenantA), 1);
     });
 
     test('different tenants are isolated (limit per-tenant)', () {

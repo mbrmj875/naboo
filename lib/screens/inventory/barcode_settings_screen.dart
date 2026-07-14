@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../services/app_settings_repository.dart';
+import '../../theme/design_tokens.dart';
 
 /// تهيئة الباركود — إعدادات حقيقية في [app_settings].
 class BarcodeSettingsScreen extends StatefulWidget {
@@ -137,57 +138,68 @@ class _BarcodeSettingsScreenState extends State<BarcodeSettingsScreen> {
 
     return Directionality(
       textDirection: TextDirection.rtl,
-      child: Scaffold(
-        backgroundColor: theme.scaffoldBackgroundColor,
-        appBar: AppBar(
-          backgroundColor: cs.primary,
-          foregroundColor: cs.onPrimary,
-          elevation: 0,
-          title: Text(
-            'تهيئة الباركود',
-            style: theme.textTheme.titleMedium?.copyWith(
-              color: cs.onPrimary,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          leading: IconButton(
-            icon: const Icon(Icons.arrow_back_ios_new, size: 18),
-            onPressed: _saving ? null : () => Navigator.pop(context),
+      child: Theme(
+        data: Theme.of(context).copyWith(
+          switchTheme: SwitchThemeData(
+            thumbColor: WidgetStateProperty.resolveWith((states) {
+              if (states.contains(WidgetState.selected)) {
+                return Colors.white;
+              }
+              return null;
+            }),
+            trackColor: WidgetStateProperty.resolveWith((states) {
+              if (states.contains(WidgetState.selected)) {
+                return AppColors.accentGold;
+              }
+              return null;
+            }),
           ),
         ),
-        body: _loading
-            ? const Center(child: CircularProgressIndicator())
-            : ListView(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
-                children: [
-                  Text(
-                    'حدد تفضيلات وصيغ الباركود لمسح دقيق وضبط التسعير حسب الوزن.',
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: cs.onSurfaceVariant,
-                      height: 1.55,
+        child: Scaffold(
+          backgroundColor: cs.surface,
+          appBar: AppBar(
+            backgroundColor: cs.surfaceContainerHighest,
+            foregroundColor: cs.onSurface,
+            iconTheme: IconThemeData(color: cs.onSurface),
+            title: Text(
+              'إعدادات الباركود والموازين',
+              style: TextStyle(
+                  color: cs.onSurface, fontWeight: FontWeight.bold, fontSize: 17),
+            ),
+          ),
+          body: _loading
+              ? const Center(child: CircularProgressIndicator())
+              : ListView(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+                  children: [
+                    Text(
+                      'حدد تفضيلات وصيغ الباركود لمسح دقيق وضبط التسعير حسب الوزن.',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: cs.onSurfaceVariant,
+                        height: 1.55,
+                      ),
+                      textAlign: TextAlign.right,
                     ),
-                    textAlign: TextAlign.right,
-                  ),
-                  const SizedBox(height: 24),
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: Text(
-                      'نوع الباركود',
-                      style: theme.textTheme.titleSmall?.copyWith(
-                        fontWeight: FontWeight.w700,
+                    const SizedBox(height: 24),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: Text(
+                        'نوع الباركود',
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
                     ),
-                  ),
-                  const SizedBox(height: 12),
-                  LayoutBuilder(
-                    builder: (_, c) {
-                      final row = c.maxWidth >= 560;
-                      final c128 = _FormatCard(
-                        selected: _standard == 'code128',
-                        title: 'Code 128',
-                        description:
-                            'باركود مرن يدعم ترميز الأرقام والحروف والرموز، ويُستخدم على نطاق واسع في التوصيل والمستودعات وتتبع المنتجات لقدرته على استيعاب الأكواد الطويلة.',
+                    const SizedBox(height: 12),
+                    LayoutBuilder(
+                      builder: (_, c) {
+                        final row = c.maxWidth >= 560;
+                        final c128 = _FormatCard(
+                          selected: _standard == 'code128',
+                          title: 'Code 128',
+                          description:
+                              'باركود مرن يدعم ترميز الأرقام والحروف والرموز، ويُستخدم على نطاق واسع في التوصيل والمستودعات وتتبع المنتجات لقدرته على استيعاب الأكواد الطويلة.',
                         onTap: () => setState(() => _standard = 'code128'),
                       );
                       final ean = _FormatCard(
@@ -246,8 +258,6 @@ class _BarcodeSettingsScreenState extends State<BarcodeSettingsScreen> {
                               value: _weightEmbed,
                               onChanged: (v) =>
                                   setState(() => _weightEmbed = v),
-                              activeThumbColor: Colors.green.shade600,
-                              activeTrackColor: Colors.green.shade200,
                             ),
                             const SizedBox(width: 8),
                             Text(
@@ -255,7 +265,7 @@ class _BarcodeSettingsScreenState extends State<BarcodeSettingsScreen> {
                               style: TextStyle(
                                 fontWeight: FontWeight.w600,
                                 color: _weightEmbed
-                                    ? Colors.green.shade700
+                                    ? AppColors.accentGold
                                     : cs.onSurfaceVariant,
                               ),
                             ),
@@ -292,12 +302,10 @@ class _BarcodeSettingsScreenState extends State<BarcodeSettingsScreen> {
                       FilteringTextInputFormatter.allow(RegExp(r'[XWPNxwpn]')),
                     ],
                     onChanged: (_) => setState(() {}),
-                    decoration: const InputDecoration(
+                    style: TextStyle(color: cs.onSurface),
+                    decoration: _inputDec(cs).copyWith(
                       hintText: 'XXXXXXXXWWWWWWPPPPN',
-                      filled: true,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.zero,
-                      ),
+                      hintStyle: TextStyle(color: cs.onSurfaceVariant),
                     ),
                   ),
                   const SizedBox(height: 10),
@@ -334,12 +342,10 @@ class _BarcodeSettingsScreenState extends State<BarcodeSettingsScreen> {
                     textAlign: TextAlign.right,
                     keyboardType: const TextInputType.numberWithOptions(
                         decimal: true),
-                    decoration: const InputDecoration(
+                    style: TextStyle(color: cs.onSurface),
+                    decoration: _inputDec(cs).copyWith(
                       hintText: 'مثال: 1000',
-                      filled: true,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.zero,
-                      ),
+                      hintStyle: TextStyle(color: cs.onSurfaceVariant),
                     ),
                   ),
                   const SizedBox(height: 8),
@@ -367,12 +373,10 @@ class _BarcodeSettingsScreenState extends State<BarcodeSettingsScreen> {
                     textAlign: TextAlign.right,
                     keyboardType: const TextInputType.numberWithOptions(
                         decimal: true),
-                    decoration: const InputDecoration(
+                    style: TextStyle(color: cs.onSurface),
+                    decoration: _inputDec(cs).copyWith(
                       hintText: 'مثال: 100',
-                      filled: true,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.zero,
-                      ),
+                      hintStyle: TextStyle(color: cs.onSurfaceVariant),
                     ),
                   ),
                   const SizedBox(height: 8),
@@ -402,15 +406,35 @@ class _BarcodeSettingsScreenState extends State<BarcodeSettingsScreen> {
                       label: Text(_saving ? 'جاري الحفظ…' : 'حفظ الإعدادات'),
                       style: FilledButton.styleFrom(
                         padding: const EdgeInsets.symmetric(vertical: 14),
-                        backgroundColor: cs.primary,
-                        foregroundColor: cs.onPrimary,
+                        backgroundColor: AppColors.accentGold.withValues(alpha: 0.2),
+                        foregroundColor: AppColors.accentGold,
                       ),
                     ),
                   ),
                   const SizedBox(height: 24),
                 ],
               ),
+              ),
       ),
+    );
+  }
+
+  InputDecoration _inputDec(ColorScheme cs, {String? label}) {
+    return InputDecoration(
+      labelText: label,
+      labelStyle: TextStyle(color: AppColors.accentGold),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.5)),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: AppColors.accentGold, width: 2),
+      ),
+      isDense: true,
+      filled: true,
+      fillColor: cs.surface,
     );
   }
 }
@@ -427,9 +451,9 @@ class _Panel extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: cs.surface,
-        borderRadius: BorderRadius.zero,
-        border: Border.all(color: cs.outlineVariant),
+        color: cs.surfaceContainerHighest.withValues(alpha: 0.3),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.accentGold.withValues(alpha: 0.5)),
       ),
       child: child,
     );
@@ -458,21 +482,21 @@ class _FormatCard extends StatelessWidget {
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.zero,
+        borderRadius: BorderRadius.circular(12),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 200),
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: cs.surface,
-            borderRadius: BorderRadius.zero,
+            color: selected ? AppColors.accentGold.withValues(alpha: 0.1) : cs.surfaceContainerHighest.withValues(alpha: 0.3),
+            borderRadius: BorderRadius.circular(12),
             border: Border.all(
-              color: selected ? primary : cs.outlineVariant,
+              color: selected ? AppColors.accentGold : cs.outlineVariant,
               width: selected ? 2 : 1,
             ),
             boxShadow: selected
                 ? [
                     BoxShadow(
-                      color: primary.withValues(alpha: 0.12),
+                      color: AppColors.accentGold.withValues(alpha: 0.12),
                       blurRadius: 12,
                       offset: const Offset(0, 4),
                     ),
@@ -490,7 +514,7 @@ class _FormatCard extends StatelessWidget {
                       style: TextStyle(
                         fontWeight: FontWeight.w800,
                         fontSize: 16,
-                        color: selected ? primary : cs.onSurface,
+                        color: selected ? AppColors.accentGold : cs.onSurface,
                       ),
                       textAlign: TextAlign.right,
                     ),
@@ -500,7 +524,7 @@ class _FormatCard extends StatelessWidget {
                     selected
                         ? Icons.radio_button_checked
                         : Icons.radio_button_off,
-                    color: selected ? primary : cs.outline,
+                    color: selected ? AppColors.accentGold : cs.outline,
                     size: 22,
                   ),
                 ],

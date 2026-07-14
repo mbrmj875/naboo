@@ -59,8 +59,13 @@ app.*.map.json
 .env
 .env.*
 !.env.example
+env/*.env
+!env/*.env.example
 *.pem
 secrets/
+
+# Cursor MCP — قد يحتوي مفاتيح Stitch وغيرها
+.cursor/mcp.json
 
 # Local backup snapshots (do not push to GitHub)
 *.backup

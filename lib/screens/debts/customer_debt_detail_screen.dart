@@ -9,9 +9,11 @@ import '../../models/customer_debt_models.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/invoice_provider.dart';
 import '../../providers/notification_provider.dart';
+import '../../providers/shift_provider.dart';
 import '../../services/database_helper.dart';
 import '../../theme/design_tokens.dart';
 import '../../utils/sale_receipt_pdf.dart';
+import '../../utils/shift_actor_conflict_guard.dart';
 import '../../utils/customer_phone_launch.dart';
 import '../../widgets/customer_contact_bar.dart';
 import '../../widgets/invoice_detail_sheet.dart';
@@ -47,6 +49,7 @@ class _CustomerDebtDetailScreenState extends State<CustomerDebtDetailScreen> {
   List<CustomerDebtLineItem> _lines = [];
   List<CreditDebtInvoice> _invoices = [];
   double _openTotal = 0;
+  int _openTotalFils = 0;
   List<String> _contactPhones = [];
   bool _loading = true;
   String? _resolveError;
@@ -89,7 +92,9 @@ class _CustomerDebtDetailScreenState extends State<CustomerDebtDetailScreen> {
     try {
       final lines = await _db.getCustomerDebtLineItems(p);
       final inv = await _db.getCreditDebtInvoicesForParty(p);
-      final open = await _db.sumOpenCreditDebtForParty(p);
+      final openFilsFromInvoices =
+          inv.fold<int>(0, (s, x) => s + x.remainingFils);
+      final open = openFilsFromInvoices / 1000.0;
       var contactPhones = <String>[];
       final cid = p.customerId;
       if (cid != null) {
@@ -106,6 +111,7 @@ class _CustomerDebtDetailScreenState extends State<CustomerDebtDetailScreen> {
         _lines = lines;
         _invoices = inv;
         _openTotal = open;
+        _openTotalFils = openFilsFromInvoices;
         _contactPhones = contactPhones;
         _loading = false;
         _resolveError = null;
@@ -121,9 +127,19 @@ class _CustomerDebtDetailScreenState extends State<CustomerDebtDetailScreen> {
 
   Future<void> _openPayDialog() async {
     final p = _party;
-    if (p == null || _openTotal < 0.009) return;
+    if (p == null || _openTotalFils <= 0) return;
+    if (p.customerId == null || p.customerId! <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'لا يمكن تسديد الدين لهذا السجل لأنه غير مربوط ببطاقة عميل. اربط العميل أولاً ثم أعد المحاولة.',
+          ),
+        ),
+      );
+      return;
+    }
     final ctrl = TextEditingController(
-      text: _openTotal.toStringAsFixed(0),
+      text: (_openTotalFils / 1000.0).toStringAsFixed(0),
     );
     final submitted = await showDialog<String>(
       context: context,
@@ -137,7 +153,7 @@ class _CustomerDebtDetailScreenState extends State<CustomerDebtDetailScreen> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Text(
-                'المتبقي الحالي: ${_numFmt.format(_openTotal)} د.ع',
+                'المتبقي الحالي: ${_numFmt.format(_openTotalFils / 1000.0)} د.ع',
                 style: const TextStyle(fontWeight: FontWeight.w600),
               ),
               const SizedBox(height: 12),
@@ -176,6 +192,20 @@ class _CustomerDebtDetailScreenState extends State<CustomerDebtDetailScreen> {
     if (amt <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('أدخل مبلغاً صالحاً')),
+      );
+      return;
+    }
+    final conflict = ShiftActorConflictGuard.evaluate(
+      sessionUserId: context.read<AuthProvider>().userId,
+      activeShift: context.read<ShiftProvider>().activeShift,
+    );
+    if (conflict.hasConflict) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'لا يمكن تسجيل تسديد الدين من هذه الجلسة: الوردية المفتوحة باسم ${conflict.shiftStaffName}.',
+          ),
+        ),
       );
       return;
     }
@@ -317,7 +347,7 @@ class _CustomerDebtDetailScreenState extends State<CustomerDebtDetailScreen> {
                   ),
                   CustomerContactBar(phones: _contactPhones),
                   _PayBar(
-                    enabled: _openTotal >= 0.009,
+                    enabled: _openTotalFils > 0 && (_party?.customerId ?? 0) > 0,
                     openTotal: _openTotal,
                     onPay: _openPayDialog,
                   ),
@@ -372,7 +402,7 @@ class _SummaryHeader extends StatelessWidget {
             style: TextStyle(
               fontSize: 28,
               fontWeight: FontWeight.w800,
-              color: openTotal >= 0.009
+              color: openTotal > 0
                   ? const Color(0xFF0EA5E9)
                   : const Color(0xFF22C55E),
             ),

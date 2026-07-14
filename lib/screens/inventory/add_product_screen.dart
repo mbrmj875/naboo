@@ -23,7 +23,10 @@ import '../../services/product_repository.dart';
 import '../../services/product_variants_repository.dart';
 import '../../services/tenant_context_service.dart';
 import '../../services/business_setup_settings.dart';
+import '../../verticals/_contract/vertical_manifest.dart';
+import '../../verticals/_contract/vertical_registry.dart';
 import '../../theme/app_corner_style.dart';
+import '../../theme/design_tokens.dart';
 import '../../widgets/app_color_picker_dialog.dart';
 import '../../widgets/barcode_input_launcher.dart';
 import '../../utils/app_logger.dart';
@@ -31,9 +34,11 @@ import '../../utils/debug_ndjson_logger.dart';
 import '../../utils/barcode_prefill.dart';
 import '../../utils/color_name_ar.dart';
 import '../../utils/iraqi_currency_format.dart';
+import '../../utils/iqd_money.dart';
 import '../../utils/numeric_format.dart';
 import '../../utils/screen_layout.dart';
 import '../../widgets/inputs/app_input.dart';
+import '../../widgets/inputs/arabic_speech_mic_button.dart';
 import '../../widgets/inputs/app_price_input.dart';
 import '../../widgets/variants/variant_size_picker_sheet.dart';
 import '../../navigation/app_route_observer.dart';
@@ -161,8 +166,36 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
   InventoryPolicySettingsData _policy = InventoryPolicySettingsData.defaults();
 
   int? _warehouseId;
-  int _stockBaseKind = 0; // 0 عدد (قطعة) | 1 وزن (كيلوغرام أساس المخزون)
-  int _stockTypeUi = 0; // 0 عدد | 1 وزن | 2 ملابس (ألوان ومقاسات)
+  int _stockBaseKind = 0; // 0 قطعة | 1 كغم | 3 لتر
+  int _stockTypeUi = 0; // 0 عدد | 1 وزن | 2 ملابس | 3 زيت مفرد | 4 هيدروليك عائلة | 5 زيت عائلة
+  final List<Object> _hydraulicGradeDrafts = [];
+  final List<Object> _oilFamilyGradeDrafts = [];
+
+  bool get _isDark => Theme.of(context).brightness == Brightness.dark;
+
+  VerticalFluidInventoryEditor? get _fluidInventoryEditor =>
+      VerticalRegistry.instance
+          .manifestFor(BusinessVertical.oilChange)
+          ?.fluidInventoryEditor;
+
+  VerticalPharmacyProductEditor? get _pharmacyEditor {
+    try {
+      return VerticalRegistry.instance.activeManifest.pharmacyProductEditor;
+    } on StateError {
+      return null;
+    }
+  }
+
+  VerticalPharmacyProductEditorSession? _pharmacySession;
+  RouteObserver<PageRoute<dynamic>>? _homeInnerRouteObserver;
+
+  bool get _hasPharmacyExtension => _pharmacySession != null;
+
+  bool get _isFluidFamilyUi => _stockTypeUi == 4 || _stockTypeUi == 5;
+
+  List<Object> get _activeFluidGradeDrafts => _stockTypeUi == 5
+      ? _oilFamilyGradeDrafts
+      : _hydraulicGradeDrafts;
   String _discountType = '%';
   String _taxMode = 'معفى';
 
@@ -229,6 +262,12 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
     if (_grade != null && _grade!.trim().isNotEmpty) return true;
     if (_warehouseId != null) return true;
     if (_stockBaseKind != 0) return true;
+    if (_isFluidFamilyUi) {
+      if (_fluidInventoryEditor?.hasDirtyGradeDrafts(_activeFluidGradeDrafts) ==
+          true) {
+        return true;
+      }
+    }
     if (_stockTypeUi != 0) return true;
     if (_discountType != '%') return true;
     if (_taxMode != 'معفى') return true;
@@ -271,29 +310,55 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
       context: context,
       builder: (ctx) {
         return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          backgroundColor: cs.surface,
           title: Row(
             children: [
-              CircleAvatar(
-                backgroundColor: cs.primary.withValues(alpha: 0.12),
-                child: Icon(Icons.save_outlined, color: cs.primary),
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: AppColors.accentGold.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.save_outlined, color: AppColors.accentGold),
               ),
-              const SizedBox(width: 10),
-              const Expanded(child: Text('تغييرات غير محفوظة')),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'تغييرات غير محفوظة',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: cs.onSurface,
+                  ),
+                ),
+              ),
             ],
           ),
-          content: const Text('لم تقم بحفظ المنتج. هل تريد الحفظ قبل المغادرة؟'),
+          content: Text(
+            'لم تقم بحفظ المنتج. هل تريد الحفظ قبل المغادرة؟',
+            style: TextStyle(color: cs.onSurfaceVariant, fontSize: 15),
+          ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx, 0),
+              style: TextButton.styleFrom(foregroundColor: cs.onSurface),
               child: const Text('إلغاء'),
             ),
             TextButton(
               onPressed: () => Navigator.pop(ctx, 1),
+              style: TextButton.styleFrom(foregroundColor: cs.error),
               child: const Text('مغادرة بدون حفظ'),
             ),
             FilledButton(
               onPressed: () => Navigator.pop(ctx, 2),
-              child: const Text('حفظ المنتج'),
+              style: FilledButton.styleFrom(
+                backgroundColor: AppColors.accentGold,
+                foregroundColor: AppColors.primaryDark,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              child: const Text('حفظ المنتج', style: TextStyle(fontWeight: FontWeight.bold)),
             ),
           ],
         );
@@ -629,6 +694,19 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
     }
   }
 
+  void _reconcilePharmacySession() {
+    final pharmacyEditor = _pharmacyEditor;
+    if (pharmacyEditor == null) {
+      _pharmacySession?.dispose();
+      _pharmacySession = null;
+      return;
+    }
+    if (_pharmacySession != null) return;
+    _pharmacySession = pharmacyEditor.createSession(
+      tenantId: TenantContextService.instance.activeTenantId,
+    );
+  }
+
   @override
   void initState() {
     super.initState();
@@ -639,6 +717,7 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
     _buyPriceCtrl.addListener(_onBuyPriceChangedForCostSuggest);
     _sellPriceCtrl.addListener(_onSellOrMinManualEdit);
     _minSellPriceCtrl.addListener(_onSellOrMinManualEdit);
+    _reconcilePharmacySession();
     _loadRefs();
   }
 
@@ -669,6 +748,7 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
       final bizSettings = await BusinessSetupSettingsData.load(
         AppSettingsRepository.instance,
       );
+      VerticalRegistry.instance.syncActiveVertical(bizSettings);
       if (!mounted) return;
       setState(() {
         _productCodeHint = data.productCodeHint;
@@ -685,6 +765,7 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
         _trackInventory = uiSettings.addDefaultTrackInventory;
         _costDrivesSuggestedPrices = uiSettings.advancedPricing;
         _applyBarcodeScanPrefill(bcSettings);
+        _reconcilePharmacySession();
       });
       final defWhStr = await AppSettingsRepository.instance.get(
         InventoryProductSettingsKeys.defWarehouseId,
@@ -823,7 +904,8 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
 
   @override
   void dispose() {
-    homeInnerRouteObserver.unsubscribe(this);
+    _homeInnerRouteObserver?.unsubscribe(this);
+    _pharmacySession?.dispose();
     _buyPriceCtrl.removeListener(_onBuyPriceChangedForCostSuggest);
     _sellPriceCtrl.removeListener(_onSellOrMinManualEdit);
     _minSellPriceCtrl.removeListener(_onSellOrMinManualEdit);
@@ -868,6 +950,12 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
     for (final c in _colorDrafts) {
       c.dispose();
     }
+    for (final g in _hydraulicGradeDrafts) {
+      _fluidInventoryEditor?.disposeGradeDraft(g);
+    }
+    for (final g in _oilFamilyGradeDrafts) {
+      _fluidInventoryEditor?.disposeGradeDraft(g);
+    }
     super.dispose();
     // _grade is a String? — no dispose needed
   }
@@ -883,11 +971,44 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
 
   Future<void> _pickImage() async {
     try {
+      ImageSource source = ImageSource.gallery;
+      
+      final pfm = Theme.of(context).platform;
+      if (!kIsWeb && (pfm == TargetPlatform.android || pfm == TargetPlatform.iOS)) {
+        final choice = await showModalBottomSheet<ImageSource>(
+          context: context,
+          shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+          ),
+          builder: (ctx) => SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              child: Wrap(
+                children: [
+                  ListTile(
+                    leading: const Icon(Icons.camera_alt_outlined, color: AppColors.accentGold),
+                    title: const Text('التقاط صورة (الكاميرا)'),
+                    onTap: () => Navigator.pop(ctx, ImageSource.camera),
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.photo_library_outlined, color: AppColors.accentGold),
+                    title: const Text('اختيار من المعرض'),
+                    onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+        if (choice == null) return;
+        source = choice;
+      }
+
       final x = ImagePicker();
       final file = await x.pickImage(
-        source: ImageSource.gallery,
-        maxWidth: 1600,
-        imageQuality: 85,
+        source: source,
+        maxWidth: 1200,
+        imageQuality: 72,
       );
       if (file == null) return;
       if (kIsWeb) {
@@ -905,7 +1026,7 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('تعذر اختيار الصورة: $e'),
+          content: Text('تعذر اختيار أو التقاط الصورة: $e'),
           behavior: SnackBarBehavior.floating,
         ),
       );
@@ -935,13 +1056,13 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
       }
     }
 
-    final buy = _parseIqdMoney(_buyPriceCtrl.text);
-    final sell = _parseIqdMoney(_sellPriceCtrl.text);
+    var buy = _parseIqdMoney(_buyPriceCtrl.text);
+    var sell = _parseIqdMoney(_sellPriceCtrl.text);
     final minSellRaw = _minSellPriceCtrl.text.trim();
     final double? minSell =
         minSellRaw.isEmpty ? null : _parseIqdMoney(_minSellPriceCtrl.text);
 
-    double qty = 0;
+    var qty = 0.0;
     double low = 0;
     if (_trackInventory) {
       qty = _parseQuantity(_qtyCtrl.text);
@@ -1127,6 +1248,79 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
       return;
     }
 
+    if (_isFluidFamilyUi) {
+      final editor = _fluidInventoryEditor;
+      if (editor == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('محرّر عائلات السوائل غير متاح.'),
+            backgroundColor: Colors.red,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+      final validationErr = editor.validateFluidFamilyDrafts(
+        isOilFamily: _stockTypeUi == 5,
+        familyName: _nameCtrl.text.trim(),
+        gradeDrafts: _activeFluidGradeDrafts,
+      );
+      if (validationErr != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(validationErr),
+            backgroundColor: Colors.red,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+    }
+
+    if (_pharmacySession != null) {
+      final resolveErr = await _pharmacySession!.resolveReferenceBeforeSave();
+      if (resolveErr != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(resolveErr),
+            backgroundColor: Colors.red.shade700,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+      final pharmacyErr = _pharmacySession!.validateForSave();
+      if (pharmacyErr != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(pharmacyErr),
+            backgroundColor: Colors.red.shade700,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+      final suggestedQty = _pharmacySession!.suggestedQty();
+      if (suggestedQty != null) {
+        qty = suggestedQty;
+      }
+      final suggestedCostFils = _pharmacySession!.suggestedCostFils();
+      if (suggestedCostFils != null) {
+        buy = IqdMoney.fromFils(suggestedCostFils);
+        if (sell <= 0) {
+          sell = buy;
+        }
+      }
+      final suggestedName = _pharmacySession!.suggestedProductName();
+      if (_nameCtrl.text.trim().isEmpty && suggestedName != null) {
+        _nameCtrl.text = suggestedName;
+      }
+      final suggestedExpiry = _pharmacySession!.suggestedExpiryIso();
+      if (_expDateCtrl.text.trim().isEmpty && suggestedExpiry != null) {
+        _expDateCtrl.text = _displayDateFromIso(suggestedExpiry);
+      }
+    }
+
     final extraUnits = <NewProductExtraUnit>[];
     for (final row in _extraUnitVariants) {
       final unit = row.unitName.text.trim();
@@ -1158,7 +1352,29 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
     String? err;
     int? createdProductId;
     try {
-      if (_multiVariantEnabled) {
+      if (_isFluidFamilyUi) {
+        int? categoryId;
+        int? brandId;
+        if (category.isNotEmpty) {
+          categoryId = await _productRepo.getOrCreateCategoryId(category);
+        }
+        if (brand.isNotEmpty) {
+          brandId = await _productRepo.getOrCreateBrandId(brand);
+        }
+        final editor = _fluidInventoryEditor;
+        if (editor == null) {
+          throw StateError('fluid_inventory_editor_unavailable');
+        }
+        createdProductId = await editor.createFluidFamily(
+          isOilFamily: _stockTypeUi == 5,
+          familyName: _nameCtrl.text.trim(),
+          gradeDrafts: _activeFluidGradeDrafts,
+          categoryId: categoryId,
+          brandId: brandId,
+          warehouseId: _warehouseId,
+          lowStockThreshold: low,
+        );
+      } else if (_multiVariantEnabled) {
         for (final c in _colorDrafts) {
           for (final s in c.sizes) {
             final bc = s.barcodeCtrl.text.trim().toUpperCase();
@@ -1261,6 +1477,73 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
             );
           }
         }
+      } else if (_pharmacySession != null) {
+        int? categoryId;
+        int? brandId;
+        if (category.isNotEmpty) {
+          categoryId = await _productRepo.getOrCreateCategoryId(category);
+        }
+        if (brand.isNotEmpty) {
+          brandId = await _productRepo.getOrCreateBrandId(brand);
+        }
+        final ti = _trackInventory ? 1 : 0;
+        createdProductId = await _productRepo.insertProductComplete(
+          name: _nameCtrl.text.trim(),
+          barcode: (_uiSettings.addShowBarcodeField && barcode.isNotEmpty)
+              ? barcode
+              : null,
+          categoryId: categoryId,
+          brandId: brandId,
+          tenantId: TenantContextService.instance.activeTenantId,
+          buyPrice: buy,
+          sellPrice: sell,
+          minSellPrice: minSell,
+          qty: qty,
+          lowStockThreshold: low,
+          warehouseId: _warehouseId,
+          description: _descCtrl.text.trim().isEmpty ? null : _descCtrl.text,
+          imagePath: _uiSettings.addShowImageField ? _imagePath : null,
+          internalNotes:
+              _uiSettings.addShowExtraFields &&
+                      _internalNotesCtrl.text.trim().isNotEmpty
+                  ? _internalNotesCtrl.text
+                  : null,
+          tags: _uiSettings.addShowExtraFields && _tagsCtrl.text.trim().isNotEmpty
+              ? _tagsCtrl.text
+              : null,
+          taxPercent:
+              (_uiSettings.addShowAdvancedPricing && _uiSettings.addShowTaxField)
+                  ? _effectiveTaxPercent
+                  : 0,
+          discountPercent: (_uiSettings.addShowAdvancedPricing &&
+                  _uiSettings.addShowDiscountFields &&
+                  _discountType == '%')
+              ? disc
+              : 0,
+          discountAmount: (_uiSettings.addShowAdvancedPricing &&
+                  _uiSettings.addShowDiscountFields &&
+                  _discountType != '%')
+              ? disc
+              : 0,
+          trackInventory: ti,
+          allowNegativeStock: 0,
+          supplierItemCode: _supplierCodeCtrl.text.trim().isEmpty
+              ? null
+              : _supplierCodeCtrl.text.trim(),
+          stockBaseKind: _stockBaseKind,
+          supplierName: supplier.isEmpty ? null : supplier,
+          netWeightGrams: _uiSettings.addShowExtraFields ? netWeightGrams : null,
+          manufacturingDate: _uiSettings.addShowExtraFields
+              ? _isoFromDateField(_mfgDateCtrl.text)
+              : null,
+          expiryDate: _pharmacySession!.suggestedExpiryIso() ??
+              (_uiSettings.addShowExtraFields
+                  ? _isoFromDateField(_expDateCtrl.text)
+                  : null),
+          grade: _policy.enableProductGrade ? _grade : null,
+          expiryAlertDaysBefore: expiryAlertDaysBefore,
+          extraUnits: extraUnits,
+        );
       } else {
         err = await context.read<ProductProvider>().addProduct(
           name: _nameCtrl.text.trim(),
@@ -1313,6 +1596,19 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
           extraUnits: extraUnits,
         );
       }
+
+      if (err == null &&
+          _pharmacySession != null &&
+          createdProductId != null) {
+        try {
+          await _pharmacySession!.save(
+            tenantId: TenantContextService.instance.activeTenantId,
+            productId: createdProductId,
+          );
+        } catch (e) {
+          err = 'تم حفظ المنتج لكن فشل ربط بيانات الصيدلية';
+        }
+      }
     } on StateError catch (e) {
       if (e.message == 'duplicate_barcode') {
         err = 'هذا الباركود مستخدم لمنتج آخر.';
@@ -1328,6 +1624,12 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
         err = 'الكمية يجب أن تكون أكبر أو تساوي 0.';
       } else if (e.message == 'duplicate_barcode') {
         err = 'الباركود مستخدم مسبقاً.';
+      } else if (e.message == 'family_name_required') {
+        err = 'اسم العائلة مطلوب.';
+      } else if (e.message == 'oil_grade_required') {
+        err = 'أضف لزوجة أو درجة واحدة على الأقل.';
+      } else if (e.message == 'viscosity_required') {
+        err = 'اسم اللزوجة/الدرجة مطلوب لكل صف.';
       } else {
         err = e.message;
       }
@@ -1350,7 +1652,7 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
       return;
     }
 
-    if (_multiVariantEnabled) {
+    if (_multiVariantEnabled || _isFluidFamilyUi || _hasPharmacyExtension) {
       unawaited(context.read<ProductProvider>().loadProducts());
     }
 
@@ -1401,6 +1703,14 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
     _extraUnitVariants.clear();
     _stockBaseKind = 0;
     _stockTypeUi = 0;
+    for (final g in _hydraulicGradeDrafts) {
+      _fluidInventoryEditor?.disposeGradeDraft(g);
+    }
+    _hydraulicGradeDrafts.clear();
+    for (final g in _oilFamilyGradeDrafts) {
+      _fluidInventoryEditor?.disposeGradeDraft(g);
+    }
+    _oilFamilyGradeDrafts.clear();
     _taxMode = 'معفى';
     _discountType = '%';
     _trackInventory = _uiSettings.addDefaultTrackInventory;
@@ -1416,6 +1726,7 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
       _warehouseId = null;
     }
     _regenerateBarcode();
+    _pharmacySession?.resetForm();
     setState(() => _loadingRefs = true);
     try {
       final data = await context
@@ -1876,9 +2187,10 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    _homeInnerRouteObserver ??= HomeInnerRouteObserverScope.maybeOf(context);
     final route = ModalRoute.of(context);
-    if (route is PageRoute) {
-      homeInnerRouteObserver.subscribe(this, route);
+    if (route is PageRoute && _homeInnerRouteObserver != null) {
+      _homeInnerRouteObserver!.subscribe(this, route);
     }
   }
 
@@ -1917,16 +2229,18 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
       child: Directionality(
         textDirection: TextDirection.rtl,
         child: Scaffold(
-          backgroundColor: theme.scaffoldBackgroundColor,
+          backgroundColor: _isDark ? AppColors.primaryDark : const Color(0xFFF1F5F9),
           appBar: AppBar(
-            backgroundColor: cs.primary,
-            foregroundColor: cs.onPrimary,
+            backgroundColor: _isDark ? AppColors.primaryDark : const Color(0xFFF1F5F9),
+            foregroundColor: _isDark ? Colors.white : AppColors.primaryDark,
             elevation: 0,
+            iconTheme: IconThemeData(color: _isDark ? Colors.white : AppColors.primaryDark),
             title: Text(
               'إضافة منتج جديد',
               style: theme.textTheme.titleMedium?.copyWith(
-                color: cs.onPrimary,
-                fontWeight: FontWeight.w600,
+                color: _isDark ? Colors.white : AppColors.primaryDark,
+                fontWeight: FontWeight.w700,
+                fontSize: 18,
               ),
             ),
             leading: IconButton(
@@ -1953,36 +2267,9 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
                             constraints: const BoxConstraints(maxWidth: 1200),
                             child: LayoutBuilder(
                               builder: (_, c) {
-                                final wide = c.maxWidth >= 720;
-                                if (wide) {
-                                  return Column(
-                                    children: [
-                                      Row(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Expanded(
-                                            child: _buildIdentityCard(context),
-                                          ),
-                                          const SizedBox(width: 16),
-                                          Expanded(
-                                            child: _buildPricingCard(context),
-                                          ),
-                                        ],
-                                      ),
-                                      const SizedBox(height: 16),
-                                      _buildInventoryCard(context),
-                                    ],
-                                  );
-                                }
-                                return Column(
-                                  children: [
-                                    _buildIdentityCard(context),
-                                    const SizedBox(height: 16),
-                                    _buildPricingCard(context),
-                                    const SizedBox(height: 16),
-                                    _buildInventoryCard(context),
-                                  ],
+                                return _buildProductFormLayout(
+                                  context,
+                                  maxWidth: c.maxWidth,
                                 );
                               },
                             ),
@@ -2025,9 +2312,131 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
   }
 
   Widget _buildToolbar(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
+    final layout = context.screenLayout;
+    if (layout.isHandsetForLayout) {
+      return _buildHandsetToolbar(context);
+    }
+    return _buildWideToolbar(context);
+  }
+
+  /// شريط أزرار مضغوط — صف واحد على الهاتف لتقليل الارتفاع.
+  Widget _buildHandsetToolbar(BuildContext context) {
+    final layout = context.screenLayout;
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final isDark = theme.brightness == Brightness.dark;
+    final surfaceColor = isDark ? AppColors.primary : Colors.white;
+    final narrow = layout.isNarrowWidth;
+    final saveLabel = _saving ? 'جاري…' : (narrow ? 'حفظ' : 'حفظ المنتج');
+    final saveNewLabel = narrow ? 'حفظ+' : 'حفظ وجديد';
+
+    final compactShape = RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(10),
+    );
+    final compactPadding = const EdgeInsets.symmetric(horizontal: 6, vertical: 6);
+    final compactText = const TextStyle(fontSize: 12, fontWeight: FontWeight.w600);
+
     return Material(
-      color: cs.surface,
+      color: surfaceColor,
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(
+          layout.pageHorizontalGap,
+          6,
+          layout.pageHorizontalGap,
+          6,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'رمز المنتج: $_productCodeHint',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.labelSmall?.copyWith(
+                fontWeight: FontWeight.w600,
+                color: cs.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: _saving ? null : () => Navigator.pop(context),
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: AppColors.accentGold, width: 1.2),
+                      foregroundColor: AppColors.accentGold,
+                      padding: compactPadding,
+                      minimumSize: const Size(0, 34),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      visualDensity: VisualDensity.compact,
+                      shape: compactShape,
+                      textStyle: compactText,
+                    ),
+                    child: const Text('إلغاء'),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  flex: 2,
+                  child: FilledButton(
+                    onPressed: _saving ? null : () => _submit(popAfter: true),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: _kGreen,
+                      foregroundColor: Colors.white,
+                      padding: compactPadding,
+                      minimumSize: const Size(0, 34),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      visualDensity: VisualDensity.compact,
+                      shape: compactShape,
+                      textStyle: compactText,
+                    ),
+                    child: _saving
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : Text(saveLabel),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  flex: 2,
+                  child: FilledButton(
+                    onPressed: _saving ? null : () => _submit(popAfter: false),
+                    style: FilledButton.styleFrom(
+                      backgroundColor:
+                          isDark ? AppColors.primaryDark : AppColors.primary,
+                      foregroundColor: Colors.white,
+                      padding: compactPadding,
+                      minimumSize: const Size(0, 34),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      visualDensity: VisualDensity.compact,
+                      shape: compactShape,
+                      textStyle: compactText,
+                    ),
+                    child: Text(saveNewLabel),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildWideToolbar(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final surfaceColor = isDark ? AppColors.primary : Colors.white;
+    return Material(
+      color: surfaceColor,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         child: Wrap(
@@ -2050,6 +2459,11 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
               children: [
                 OutlinedButton(
                   onPressed: _saving ? null : () => Navigator.pop(context),
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: AppColors.accentGold, width: 1.5),
+                    foregroundColor: AppColors.accentGold,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
                   child: const Text('إلغاء'),
                 ),
                 FilledButton.icon(
@@ -2057,6 +2471,7 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
                   style: FilledButton.styleFrom(
                     backgroundColor: _kGreen,
                     foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     padding: const EdgeInsets.symmetric(
                       horizontal: 16,
                       vertical: 12,
@@ -2077,13 +2492,18 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
                 FilledButton.tonalIcon(
                   onPressed: _saving ? null : () => _submit(popAfter: false),
                   style: FilledButton.styleFrom(
+                    backgroundColor: isDark ? AppColors.primaryDark : AppColors.primary,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
                     padding: const EdgeInsets.symmetric(
                       horizontal: 14,
                       vertical: 12,
                     ),
                   ),
-                  icon: const Icon(Icons.add_circle_outline_rounded, size: 20),
-                  label: const Text('حفظ وإضافة جديد'),
+                  icon: const Icon(Icons.add_circle_outline_rounded, size: 20, color: Colors.white),
+                  label: const Text('حفظ وإضافة جديد', style: TextStyle(color: Colors.white)),
                 ),
               ],
             ),
@@ -2094,6 +2514,91 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
   }
 
   // ── البطاقات ───────────────────────────────────────────────────────────
+
+  /// تخطيط النموذج: على الشاشات العريضة تُوضَع «إدارة المخزون» تحت التسعير
+  /// في العمود الجانبي (المساحة الفارغة يساراً في RTL) بدل أسفل الصفحة كاملة.
+  Widget _buildProductFormLayout(BuildContext context, {required double maxWidth}) {
+    if (maxWidth >= 720) {
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            flex: 11,
+            child: _buildIdentityCard(context),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            flex: 9,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _buildPricingCard(context),
+                const SizedBox(height: 16),
+                _buildInventoryCard(context),
+                if (_hasPharmacyExtension) ...[
+                  const SizedBox(height: 16),
+                  _buildPharmacyExtensionCard(context),
+                ],
+              ],
+            ),
+          ),
+        ],
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildIdentityCard(context),
+        const SizedBox(height: 16),
+        _buildPricingCard(context),
+        const SizedBox(height: 16),
+        _buildInventoryCard(context),
+        if (_hasPharmacyExtension) ...[
+          const SizedBox(height: 16),
+          _buildPharmacyExtensionCard(context),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildPharmacyExtensionCard(BuildContext context) {
+    final session = _pharmacySession;
+    if (session == null) return const SizedBox.shrink();
+    return _sectionCard(
+      context,
+      title: 'بيانات الدواء',
+      child: session.buildAddProductSection(
+        context: context,
+        onChanged: () => setState(() {}),
+        onDrugReferenceSelected: (reference) {
+          if (_nameCtrl.text.trim().isEmpty) {
+            _nameCtrl.text = reference.nameAr.isNotEmpty
+                ? reference.nameAr
+                : reference.nameEn;
+          }
+          setState(() {});
+        },
+        onBatchDraftChanged: (batch) {
+          _qtyCtrl.text = batch.qty % 1 == 0
+              ? batch.qty.toInt().toString()
+              : batch.qty.toString();
+          _buyPriceCtrl.text =
+              IraqiCurrencyFormat.formatIqd(IqdMoney.fromFils(batch.costFils));
+          if (_sellPriceCtrl.text.trim().isEmpty) {
+            _sellPriceCtrl.text = _buyPriceCtrl.text;
+          }
+          _expDateCtrl.text = _displayDateFromIso(
+            DateTime(
+              batch.expiryDate.year,
+              batch.expiryDate.month,
+              batch.expiryDate.day,
+            ).toIso8601String(),
+          );
+          setState(() {});
+        },
+      ),
+    );
+  }
 
   Widget _buildIdentityCard(BuildContext context) {
     return _sectionCard(
@@ -2163,6 +2668,10 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
             textAlign: TextAlign.right,
             minLines: 2,
             maxLines: 4,
+            suffixIcon: ArabicSpeechMicButton(
+              controller: _descCtrl,
+              onTextUpdated: () => setState(() {}),
+            ),
           ),
           const SizedBox(height: 14),
           if (_uiSettings.addShowImageField) ...[
@@ -2176,7 +2685,9 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
           ],
           LayoutBuilder(
             builder: (_, c) {
-              final row = c.maxWidth >= 520;
+              final pairRow =
+                  context.screenLayout.isHandsetForLayout || c.maxWidth >= 520;
+              final gap = context.screenLayout.isHandsetForLayout ? 8.0 : 12.0;
               final cat = _comboField(
                 context,
                 label: 'التصنيف',
@@ -2195,12 +2706,12 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
                 focusNode: _focusBrand,
                 onFieldSubmitted: (_) => _focusSupplier.requestFocus(),
               );
-              if (row) {
+              if (pairRow) {
                 return Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Expanded(child: cat),
-                    const SizedBox(width: 12),
+                    SizedBox(width: gap),
                     Expanded(child: br),
                   ],
                 );
@@ -2249,81 +2760,146 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
             ),
           ],
           const SizedBox(height: 14),
-          _labeledField(
-            context,
-            label: 'المخزن',
-            requiredField: _uiSettings.addRequireWarehouse,
-            child: DropdownButtonFormField<int?>(
-              value: _warehouseId,
-              isExpanded: true,
-              decoration: _inputDecOf(context, hint: ''),
-              hint: Text(
-                _warehouseRows.isEmpty
-                    ? 'لا توجد مستودعات في قاعدة البيانات'
-                    : 'اختر المخزن',
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  fontSize: 13,
-                ),
-              ),
-              items: [
-                const DropdownMenuItem<int?>(
-                  value: null,
-                  child: Text(
-                    '— بدون ربط بمخزن —',
-                    style: TextStyle(fontSize: 13),
-                  ),
-                ),
-                ..._warehouseRows.map(
-                  (w) => DropdownMenuItem<int?>(
-                    value: (w['id'] as num).toInt(),
-                    child: Text(
-                      w['name'] as String,
-                      style: const TextStyle(fontSize: 13),
+          LayoutBuilder(
+            builder: (_, c) {
+              final pairRow =
+                  context.screenLayout.isHandsetForLayout || c.maxWidth >= 520;
+              final gap = context.screenLayout.isHandsetForLayout ? 8.0 : 12.0;
+              final warehouse = _labeledField(
+                context,
+                label: 'المخزن',
+                requiredField: _uiSettings.addRequireWarehouse,
+                child: DropdownButtonFormField<int?>(
+                  value: _warehouseId,
+                  isExpanded: true,
+                  decoration: _inputDecOf(context, hint: ''),
+                  hint: Text(
+                    _warehouseRows.isEmpty
+                        ? 'لا توجد مستودعات في قاعدة البيانات'
+                        : 'اختر المخزن',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      fontSize: 13,
                     ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
+                  items: [
+                    const DropdownMenuItem<int?>(
+                      value: null,
+                      child: Text(
+                        '— بدون ربط بمخزن —',
+                        style: TextStyle(fontSize: 13),
+                      ),
+                    ),
+                    ..._warehouseRows.map(
+                      (w) => DropdownMenuItem<int?>(
+                        value: (w['id'] as num).toInt(),
+                        child: Text(
+                          w['name'] as String,
+                          style: const TextStyle(fontSize: 13),
+                        ),
+                      ),
+                    ),
+                  ],
+                  onChanged: _warehouseRows.isEmpty
+                      ? null
+                      : (v) => setState(() => _warehouseId = v),
                 ),
-              ],
-              onChanged: _warehouseRows.isEmpty
-                  ? null
-                  : (v) => setState(() => _warehouseId = v),
-            ),
-          ),
-          const SizedBox(height: 14),
-          _labeledField(
-            context,
-            label: 'نوع المخزون الأساسي',
-            child: DropdownButtonFormField<int>(
-              value: _stockTypeUi,
-              isExpanded: true,
-              decoration: _inputDecOf(context, hint: ''),
-              items: [
-                const DropdownMenuItem(value: 0, child: Text('عدد (قطعة كأساس)')),
-                if (_enableWeightSales)
-                  const DropdownMenuItem(value: 1, child: Text('وزن (كيلوغرام كأساس)')),
-                if (_enableClothingVariants)
-                  const DropdownMenuItem(value: 2, child: Text('ملابس (ألوان ومقاسات)')),
-              ],
-              onChanged: (v) {
-                final next = v ?? 0;
-                setState(() {
-                  _stockTypeUi = next;
-                  if (next == 2) {
-                    _multiVariantEnabled = true;
-                    _trackInventory = true;
-                    _stockBaseKind = 0;
-                    if (_colorDrafts.isEmpty) {
-                      final c = _VariantColorDraft();
-                      c.sizes.add(_VariantSizeDraft());
-                      _colorDrafts.add(c);
-                    }
-                  } else {
-                    _multiVariantEnabled = false;
-                    _stockBaseKind = next;
-                  }
-                });
-              },
-            ),
+              );
+              final stockType = _labeledField(
+                context,
+                label: 'نوع المخزون الأساسي',
+                child: DropdownButtonFormField<int>(
+                  value: _stockTypeUi,
+                  isExpanded: true,
+                  decoration: _inputDecOf(context, hint: ''),
+                  items: [
+                    const DropdownMenuItem(
+                      value: 0,
+                      child: Text('عدد (قطعة كأساس)'),
+                    ),
+                    if (_enableWeightSales)
+                      const DropdownMenuItem(
+                        value: 1,
+                        child: Text('وزن (كيلوغرام كأساس)'),
+                      ),
+                    if (_enableClothingVariants)
+                      const DropdownMenuItem(
+                        value: 2,
+                        child: Text('ملابس (ألوان ومقاسات)'),
+                      ),
+                    const DropdownMenuItem(
+                      value: 3,
+                      child: Text('حجم (لتر كأساس — زيت مفرد)'),
+                    ),
+                    if (_fluidInventoryEditor != null) ...[
+                      const DropdownMenuItem(
+                        value: 4,
+                        child: Text('هيدروليك — عائلة (ماركة + درجات وعبوات)'),
+                      ),
+                      const DropdownMenuItem(
+                        value: 5,
+                        child: Text('زيت — عائلة (ماركة + لزوجات وعبوات)'),
+                      ),
+                    ],
+                  ],
+                  onChanged: (v) {
+                    final next = v ?? 0;
+                    setState(() {
+                      _stockTypeUi = next;
+                      if (next == 2) {
+                        _multiVariantEnabled = true;
+                        _trackInventory = true;
+                        _stockBaseKind = 0;
+                        if (_colorDrafts.isEmpty) {
+                          final c = _VariantColorDraft();
+                          c.sizes.add(_VariantSizeDraft());
+                          _colorDrafts.add(c);
+                        }
+                      } else if (next == 4) {
+                        _multiVariantEnabled = false;
+                        _trackInventory = true;
+                        _stockBaseKind = 3;
+                        if (_hydraulicGradeDrafts.isEmpty) {
+                          final draft = _fluidInventoryEditor?.newGradeDraft();
+                          if (draft != null) _hydraulicGradeDrafts.add(draft);
+                        }
+                      } else if (next == 5) {
+                        _multiVariantEnabled = false;
+                        _trackInventory = true;
+                        _stockBaseKind = 3;
+                        if (_oilFamilyGradeDrafts.isEmpty) {
+                          final draft = _fluidInventoryEditor?.newGradeDraft();
+                          if (draft != null) _oilFamilyGradeDrafts.add(draft);
+                        }
+                      } else {
+                        _multiVariantEnabled = false;
+                        _stockBaseKind = next == 3 ? 3 : next;
+                      }
+                    });
+                  },
+                ),
+              );
+              if (pairRow) {
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(child: warehouse),
+                    SizedBox(width: gap),
+                    Expanded(child: stockType),
+                  ],
+                );
+              }
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  warehouse,
+                  const SizedBox(height: 14),
+                  stockType,
+                ],
+              );
+            },
           ),
           if (_stockTypeUi == 2) ...[
             const SizedBox(height: 10),
@@ -2371,7 +2947,33 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
             ),
           ],
           const SizedBox(height: 14),
-          if (_stockTypeUi != 2) _saleExtraUnitsEditor(context),
+          if (_isFluidFamilyUi && _fluidInventoryEditor != null) ...[
+            const SizedBox(height: 10),
+            _fluidInventoryEditor!.buildGradesEditor(
+              context: context,
+              isOilFamily: _stockTypeUi == 5,
+              grades: _activeFluidGradeDrafts,
+              onChanged: () => setState(() {}),
+            ),
+          ],
+          if (_stockTypeUi != 2 &&
+              _stockTypeUi != 3 &&
+              !_isFluidFamilyUi)
+            _saleExtraUnitsEditor(context),
+          if (_stockTypeUi == 3) ...[
+            const SizedBox(height: 8),
+            Text(
+              'أضف وحدات البيع من «وحدات إضافية»: أساسي لتر (معامل 1) وعلبة (مثال: معامل 5). '
+              'مناسب لزيت مفرد — سعر اللتر وسعر العلبة لكل وحدة.',
+              style: TextStyle(
+                fontSize: 12,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+              textAlign: TextAlign.start,
+            ),
+            const SizedBox(height: 8),
+            _saleExtraUnitsEditor(context),
+          ],
           const SizedBox(height: 14),
           Text(
             'معلومات المورد',
@@ -2382,29 +2984,53 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
             textAlign: TextAlign.right,
           ),
           const SizedBox(height: 8),
-          _comboField(
-            context,
-            label: 'المورد',
-            controller: _supplierCtrl,
-            options: _supplierOptions,
-            hint: 'اكتب أو اختر من السجل',
-            requiredField: _uiSettings.addRequireSupplier,
-            focusNode: _focusSupplier,
-            onFieldSubmitted: (_) => _focusSupplierCode.requestFocus(),
-          ),
-          const SizedBox(height: 14),
-          _labeledField(
-            context,
-            label: 'كود المورد (اختياري)',
-            child: AppInput(
-              label: '',
-              showLabel: false,
-              controller: _supplierCodeCtrl,
-              focusNode: _focusSupplierCode,
-              textAlign: TextAlign.right,
-              textInputAction: TextInputAction.next,
-              onFieldSubmitted: (_) => _goAfterSupplierCode(),
-            ),
+          LayoutBuilder(
+            builder: (_, c) {
+              final pairRow =
+                  context.screenLayout.isHandsetForLayout || c.maxWidth >= 520;
+              final gap = context.screenLayout.isHandsetForLayout ? 8.0 : 12.0;
+              final supplier = _comboField(
+                context,
+                label: 'المورد',
+                controller: _supplierCtrl,
+                options: _supplierOptions,
+                hint: 'اكتب أو اختر من السجل',
+                requiredField: _uiSettings.addRequireSupplier,
+                focusNode: _focusSupplier,
+                onFieldSubmitted: (_) => _focusSupplierCode.requestFocus(),
+              );
+              final supplierCode = _labeledField(
+                context,
+                label: 'كود المورد (اختياري)',
+                child: AppInput(
+                  label: '',
+                  showLabel: false,
+                  controller: _supplierCodeCtrl,
+                  focusNode: _focusSupplierCode,
+                  textAlign: TextAlign.right,
+                  textInputAction: TextInputAction.next,
+                  onFieldSubmitted: (_) => _goAfterSupplierCode(),
+                ),
+              );
+              if (pairRow) {
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(child: supplier),
+                    SizedBox(width: gap),
+                    Expanded(child: supplierCode),
+                  ],
+                );
+              }
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  supplier,
+                  const SizedBox(height: 14),
+                  supplierCode,
+                ],
+              );
+            },
           ),
           const SizedBox(height: 18),
           if (_uiSettings.addShowBarcodeField) _barcodeBlock(context),
@@ -2416,12 +3042,14 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
   Widget _saleExtraUnitsEditor(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final ac = context.appCorners;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final borderColor = isDark ? AppColors.accentGold.withValues(alpha: 0.35) : AppColors.accentGold.withValues(alpha: 0.5);
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: cs.surface,
-        borderRadius: ac.md,
-        border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.65)),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: borderColor, width: 1.5),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2445,6 +3073,11 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
             child: OutlinedButton.icon(
               onPressed: () => setState(
                 () => _extraUnitVariants.add(_ExtraUnitVariantDraft()),
+              ),
+              style: OutlinedButton.styleFrom(
+                side: const BorderSide(color: AppColors.accentGold, width: 1.5),
+                foregroundColor: AppColors.accentGold,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               ),
               icon: const Icon(Icons.add, size: 18),
               label: const Text('إضافة وحدة'),
@@ -2750,11 +3383,380 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
     );
   }
 
+  Widget _pricingFieldsRow(
+    BuildContext context, {
+    required List<Widget> fields,
+    List<int>? flex,
+    double gap = 8,
+  }) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (var i = 0; i < fields.length; i++) ...[
+          if (i > 0) SizedBox(width: gap),
+          Expanded(
+            flex: flex != null && i < flex.length ? flex[i] : 1,
+            child: fields[i],
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildTaxDropdown(BuildContext context) {
+    return DropdownButtonFormField<String>(
+      value: _taxMode,
+      isExpanded: true,
+      decoration: _inputDecOf(context, hint: ''),
+      items: const [
+        DropdownMenuItem(value: 'معفى', child: Text('معفى')),
+        DropdownMenuItem(value: '5', child: Text('5٪')),
+        DropdownMenuItem(value: '10', child: Text('10٪')),
+        DropdownMenuItem(value: '15', child: Text('15٪')),
+        DropdownMenuItem(value: 'مخصص', child: Text('مخصص')),
+      ],
+      onChanged: (v) {
+        setState(() => _taxMode = v ?? 'معفى');
+      },
+    );
+  }
+
+  Widget _buildDiscountTypeDropdown(BuildContext context, ColorScheme cs) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          'نوع الخصم',
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w500,
+            color: cs.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 6),
+        DropdownButtonFormField<String>(
+          value: _discountType,
+          isExpanded: true,
+          decoration: _inputDecOf(context, hint: ''),
+          selectedItemBuilder: (context) => const [
+            Align(
+              alignment: Alignment.centerRight,
+              child: Text(
+                'نسبة (٪)',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            Align(
+              alignment: Alignment.centerRight,
+              child: Text(
+                'مبلغ (د.ع)',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+          items: const [
+            DropdownMenuItem(
+              value: '%',
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: Text(
+                  'نسبة مئوية (٪)',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ),
+            DropdownMenuItem(
+              value: 'د.ع',
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: Text(
+                  'عمولة / مبلغ (د.ع)',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ),
+          ],
+          onChanged: (v) {
+            setState(() {
+              final next = v ?? '%';
+              if (next != _discountType) {
+                _discountCtrl.clear();
+              }
+              _discountType = next;
+            });
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _buildProfitMarginReadout(BuildContext context) {
+    final buyN = NumericFormat.parseNumber(_buyPriceCtrl.text);
+    final cs2 = Theme.of(context).colorScheme;
+    Color tone;
+    if (buyN <= 0) {
+      tone = cs2.onSurfaceVariant;
+    } else if (_profitMarginPct < 0) {
+      tone = Colors.red.shade700;
+    } else if (_profitMarginPct < 5) {
+      tone = const Color(0xFFF59E0B);
+    } else {
+      tone = _kGreen;
+    }
+    return Container(
+      height: 42,
+      alignment: AlignmentDirectional.centerEnd,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      decoration: BoxDecoration(
+        color: cs2.surfaceContainerHighest.withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: cs2.outlineVariant),
+      ),
+      child: Text(
+        buyN > 0 ? '${_profitMarginPct.toStringAsFixed(1)}٪' : '—',
+        style: TextStyle(
+          fontWeight: FontWeight.w700,
+          fontSize: 14,
+          color: tone,
+        ),
+      ),
+    );
+  }
+
+  /// تخطيط التسعير المضغوط للهاتف — صفوف أفقية لتوفير المساحة.
+  Widget _buildHandsetPricingLayout(
+    BuildContext context, {
+    required String? perKgHint,
+  }) {
+    final cs = Theme.of(context).colorScheme;
+    final showTax =
+        _uiSettings.addShowAdvancedPricing && _uiSettings.addShowTaxField;
+    final showDiscount =
+        _uiSettings.addShowAdvancedPricing && _uiSettings.addShowDiscountFields;
+
+    final buyPrice = _labeledField(
+      context,
+      label: 'سعر الشراء',
+      subtitle: perKgHint,
+      child: AppPriceInput(
+        label: '',
+        paddingZeroOverride: true,
+        hint: _hintIqd,
+        controller: _buyPriceCtrl,
+        focusNode: _focusBuy,
+        textInputAction: TextInputAction.next,
+        onFieldSubmitted: (_) => _focusSell.requestFocus(),
+        onParsedChanged: (_) => setState(() {}),
+      ),
+    );
+    final sellPrice = _labeledField(
+      context,
+      label: 'سعر البيع',
+      subtitle: perKgHint,
+      child: AppPriceInput(
+        label: '',
+        paddingZeroOverride: true,
+        hint: _hintIqd,
+        controller: _sellPriceCtrl,
+        focusNode: _focusSell,
+        textInputAction: TextInputAction.next,
+        onFieldSubmitted: (_) => _goAfterSell(),
+        warningText: _sellBelowBuy
+            ? 'تحذير: سعر البيع أقل من سعر الشراء (يمكن الإكمال).'
+            : null,
+        onParsedChanged: (_) => setState(() {}),
+      ),
+    );
+    final taxField = _labeledField(
+      context,
+      label: 'الضريبة',
+      child: _buildTaxDropdown(context),
+    );
+    final discountType = _buildDiscountTypeDropdown(context, cs);
+    final discountValue = _labeledField(
+      context,
+      label: 'قيمة الخصم',
+      child: AppInput(
+        label: '',
+        showLabel: false,
+        controller: _discountCtrl,
+        focusNode: _focusDiscount,
+        textAlign: TextAlign.end,
+        textDirection: TextDirection.ltr,
+        textInputAction: TextInputAction.next,
+        selectAllOnFocus: true,
+        onFieldSubmitted: (_) => _goAfterDiscount(),
+        keyboardType: _discountType == '%'
+            ? const TextInputType.numberWithOptions(decimal: true)
+            : const TextInputType.numberWithOptions(decimal: false),
+        inputFormatters: _discountType == '%'
+            ? [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))]
+            : [IraqiCurrencyFormat.moneyInputFormatter()],
+        hint: _discountType == '%' ? 'مثال: 15' : _hintIqd,
+        suffixText: _discountType == '%' ? '٪' : 'د.ع',
+      ),
+    );
+    final minSell = _labeledField(
+      context,
+      label: 'أقل سعر بيع',
+      subtitle: perKgHint,
+      child: AppPriceInput(
+        label: '',
+        paddingZeroOverride: true,
+        hint: 'اختياري',
+        controller: _minSellPriceCtrl,
+        focusNode: _focusMin,
+        isOptional: true,
+        textInputAction: TextInputAction.next,
+        onFieldSubmitted: (_) => _goAfterMin(),
+        onParsedChanged: (_) => setState(() {}),
+      ),
+    );
+    final profitMargin = _labeledField(
+      context,
+      label: 'هامش الربح',
+      child: _buildProfitMarginReadout(context),
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (_uiSettings.advancedPricing) ...[
+          Material(
+            color: cs.primaryContainer.withValues(alpha: 0.28),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.zero,
+              side: BorderSide(color: cs.outlineVariant),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.auto_awesome_rounded, size: 18, color: cs.primary),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _costDrivesSuggestedPrices
+                          ? 'هامش ${_marginPercentUiLabel()}٪ على التكلفة'
+                          : 'التعديل اليدوي نشط',
+                      style: TextStyle(
+                        fontSize: 11,
+                        height: 1.3,
+                        color: cs.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (!_costDrivesSuggestedPrices) ...[
+            const SizedBox(height: 6),
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: TextButton.icon(
+                onPressed: _relinkSuggestedPricesToCost,
+                icon: const Icon(Icons.link_rounded, size: 16),
+                label: const Text('إعادة الربط بتكلفة الشراء'),
+                style: TextButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                ),
+              ),
+            ),
+          ],
+          const SizedBox(height: 10),
+        ],
+        _pricingFieldsRow(context, fields: [buyPrice, sellPrice]),
+        if (showTax || showDiscount) ...[
+          const SizedBox(height: 12),
+          if (showTax && showDiscount)
+            _pricingFieldsRow(
+              context,
+              flex: const [2, 2, 2],
+              fields: [taxField, discountType, discountValue],
+            )
+          else if (showTax)
+            taxField
+          else
+            _pricingFieldsRow(
+              context,
+              fields: [discountType, discountValue],
+            ),
+          if (showTax && _taxMode == 'مخصص') ...[
+            const SizedBox(height: 8),
+            AppInput(
+              label: '',
+              showLabel: false,
+              controller: _customTaxCtrl,
+              focusNode: _focusCustomTax,
+              textAlign: TextAlign.end,
+              textDirection: TextDirection.ltr,
+              textInputAction: TextInputAction.next,
+              onFieldSubmitted: (_) => _goAfterCustomTax(),
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: [
+                FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+              ],
+              hint: 'نسبة الضريبة %',
+              onChanged: (_) => setState(() {}),
+            ),
+          ],
+          if (showTax && _effectiveTaxPercent > 0) ...[
+            const SizedBox(height: 6),
+            Text(
+              'شاملاً الضريبة: ${IraqiCurrencyFormat.formatIqd(_sellAfterTaxApprox)}',
+              textAlign: TextAlign.start,
+              style: TextStyle(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w600,
+                color: cs.primary,
+              ),
+            ),
+          ],
+        ],
+        const SizedBox(height: 12),
+        if (_uiSettings.addShowAdvancedPricing)
+          _pricingFieldsRow(context, fields: [minSell, profitMargin])
+        else
+          minSell,
+      ],
+    );
+  }
+
   Widget _buildPricingCard(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    if (_isFluidFamilyUi) {
+      final labels = _fluidInventoryEditor?.labels(
+        isOilFamily: _stockTypeUi == 5,
+      );
+      return _sectionCard(
+        context,
+        title: 'التسعير',
+        child: Text(
+          labels?.pricingHint ??
+              'سعر الشراء والبيع يُحدَّد في جدول اللزوجات/الدرجات أعلاه.',
+          style: TextStyle(color: cs.onSurfaceVariant, height: 1.4),
+          textAlign: TextAlign.start,
+        ),
+      );
+    }
     final perKgHint = _stockBaseKind == 1
         ? 'يُحسب لكل كيلوغرام واحد (أساس المخزون بالوزن).'
         : null;
+    final isHandset = context.screenLayout.isHandsetForLayout;
+    if (isHandset) {
+      return _sectionCard(
+        context,
+        title: 'التسعير',
+        child: _buildHandsetPricingLayout(context, perKgHint: perKgHint),
+      );
+    }
     return _sectionCard(
       context,
       title: 'التسعير',
@@ -2874,6 +3876,15 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
                     builder: (_, c) {
                       if (c.maxWidth >= 520) {
                         return SegmentedButton<String>(
+                          style: SegmentedButton.styleFrom(
+                            side: BorderSide(
+                              color: _isDark ? AppColors.accentGold.withValues(alpha: 0.35) : AppColors.accentGold.withValues(alpha: 0.5),
+                              width: 1.5,
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
                           segments: const [
                             ButtonSegment(value: 'معفى', label: Text('معفى')),
                             ButtonSegment(value: '5', label: Text('5٪')),
@@ -3142,8 +4153,141 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
     );
   }
 
+  Widget _buildHandsetInventorySixFieldGrid(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final qtyHint = _stockBaseKind == 1 ? 'كغ' : null;
+    final lowHint = _stockBaseKind == 1 ? 'كغ' : null;
+
+    final qty = _labeledField(
+      context,
+      label: 'الكمية',
+      subtitle: qtyHint,
+      child: AppInput(
+        label: '',
+        showLabel: false,
+        controller: _qtyCtrl,
+        focusNode: _focusQty,
+        textAlign: TextAlign.end,
+        textDirection: TextDirection.ltr,
+        textInputAction: TextInputAction.next,
+        selectAllOnFocus: true,
+        onFieldSubmitted: (_) => _focusLow.requestFocus(),
+        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        hint: '0',
+      ),
+    );
+    final low = _labeledField(
+      context,
+      label: 'تنبيه المخزون',
+      subtitle: lowHint,
+      child: AppInput(
+        label: '',
+        showLabel: false,
+        controller: _lowStockCtrl,
+        focusNode: _focusLow,
+        textAlign: TextAlign.end,
+        textDirection: TextDirection.ltr,
+        selectAllOnFocus: true,
+        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        hint: '0',
+      ),
+    );
+    final weight = _labeledField(
+      context,
+      label: 'الوزن (غ)',
+      child: AppInput(
+        label: '',
+        showLabel: false,
+        controller: _netWeightGramsCtrl,
+        textAlign: TextAlign.right,
+        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        hint: 'اختياري',
+      ),
+    );
+    final mfg = _labeledField(
+      context,
+      label: 'تاريخ الإنتاج',
+      child: AppInput(
+        label: '',
+        showLabel: false,
+        controller: _mfgDateCtrl,
+        textAlign: TextAlign.right,
+        suffixIcon: IconButton(
+          icon: const Icon(Icons.calendar_today_outlined, size: 18),
+          onPressed: () => _pickProductDate(_mfgDateCtrl),
+          tooltip: 'اختر من التقويم',
+          visualDensity: VisualDensity.compact,
+        ),
+        hint: 'يوم/شهر/سنة',
+      ),
+    );
+    final exp = _labeledField(
+      context,
+      label: 'تاريخ الانتهاء',
+      child: AppInput(
+        label: '',
+        showLabel: false,
+        controller: _expDateCtrl,
+        textAlign: TextAlign.right,
+        suffixIcon: IconButton(
+          icon: const Icon(Icons.calendar_today_outlined, size: 18),
+          onPressed: () => _pickProductDate(_expDateCtrl),
+          tooltip: 'اختر من التقويم',
+          visualDensity: VisualDensity.compact,
+        ),
+        hint: 'يوم/شهر/سنة',
+      ),
+    );
+    final expiryAlert = _labeledField(
+      context,
+      label: 'تنبيه الصلاحية',
+      child: AppInput(
+        label: '',
+        showLabel: false,
+        controller: _expiryAlertDaysCtrl,
+        textAlign: TextAlign.right,
+        keyboardType: const TextInputType.numberWithOptions(decimal: false),
+        hint: '14',
+      ),
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _pricingFieldsRow(
+          context,
+          flex: const [1, 1, 1],
+          fields: [qty, low, weight],
+        ),
+        const SizedBox(height: 12),
+        _pricingFieldsRow(
+          context,
+          flex: const [1, 1, 1],
+          fields: [mfg, exp, expiryAlert],
+        ),
+        Padding(
+          padding: const EdgeInsets.only(top: 6, bottom: 4),
+          child: Text(
+            'يُستخدم مع «تاريخ الانتهاء» فقط؛ يظهر التنبيه في لوحة الإشعارات خلال هذه المدة قبل التاريخ.',
+            style: TextStyle(
+              fontSize: 10.5,
+              height: 1.35,
+              color: cs.onSurfaceVariant,
+            ),
+            textAlign: TextAlign.start,
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildInventoryCard(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final isHandset = context.screenLayout.isHandsetForLayout;
+    final showQtyLow =
+        _trackInventory && !_multiVariantEnabled && !_isFluidFamilyUi;
+    final showExtra = _uiSettings.addShowExtraFields;
+    final handsetSixGrid = isHandset && showQtyLow && showExtra;
     return _sectionCard(
       context,
       title: 'إدارة المخزون',
@@ -3165,11 +4309,12 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
             onChanged:
                 _multiVariantEnabled ? null : (v) => setState(() => _trackInventory = v),
           ),
-          if (_trackInventory && !_multiVariantEnabled) ...[
+          if (showQtyLow && !handsetSixGrid) ...[
             const SizedBox(height: 8),
             LayoutBuilder(
               builder: (_, c) {
-                final row = c.maxWidth >= 480;
+                final row =
+                    context.screenLayout.isHandsetForLayout || c.maxWidth >= 480;
                 final qtyHint = _stockBaseKind == 1
                     ? 'بالكيلوغرام — يدعم الكسور (0.25، 0.5، 1.5…)'
                     : null;
@@ -3218,7 +4363,9 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
                   return Row(
                     children: [
                       Expanded(child: q),
-                      const SizedBox(width: 12),
+                      SizedBox(
+                        width: context.screenLayout.isHandsetForLayout ? 8 : 12,
+                      ),
                       Expanded(child: low),
                     ],
                   );
@@ -3226,6 +4373,10 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
                 return Column(children: [q, const SizedBox(height: 12), low]);
               },
             ),
+          ],
+          if (handsetSixGrid) ...[
+            const SizedBox(height: 8),
+            _buildHandsetInventorySixFieldGrid(context),
           ],
           if (_trackInventory && _multiVariantEnabled) ...[
             const SizedBox(height: 8),
@@ -3235,110 +4386,117 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
               style: TextStyle(color: cs.onSurfaceVariant),
             ),
           ],
-          if (_uiSettings.addShowExtraFields) ...[
-            const SizedBox(height: 12),
-            _labeledField(
-              context,
-              label: 'الوزن الصافي (غرام) — اختياري',
-              child: AppInput(
-                label: '',
-                showLabel: false,
-                controller: _netWeightGramsCtrl,
-                textAlign: TextAlign.right,
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
-                hint: 'يُملأ تلقائياً من باركود GS1 أو الوزن المدمج',
+          if (showExtra) ...[
+            if (!handsetSixGrid) ...[
+              const SizedBox(height: 12),
+              _labeledField(
+                context,
+                label: 'الوزن الصافي (غرام) — اختياري',
+                child: AppInput(
+                  label: '',
+                  showLabel: false,
+                  controller: _netWeightGramsCtrl,
+                  textAlign: TextAlign.right,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  hint: 'يُملأ تلقائياً من باركود GS1 أو الوزن المدمج',
+                ),
               ),
-            ),
-            const SizedBox(height: 12),
-            LayoutBuilder(
-              builder: (_, c) {
-                final row = c.maxWidth >= 480;
-                Widget mfgField() => _labeledField(
-                  context,
-                  label: 'تاريخ الإنتاج — اختياري',
-                  child: AppInput(
-                    label: '',
-                    showLabel: false,
-                    controller: _mfgDateCtrl,
-                    textAlign: TextAlign.right,
-                    suffixIcon: IconButton(
-                      icon: const Icon(
-                        Icons.calendar_today_outlined,
-                        size: 20,
+              const SizedBox(height: 12),
+              LayoutBuilder(
+                builder: (_, c) {
+                  final row =
+                      context.screenLayout.isHandsetForLayout ||
+                      c.maxWidth >= 480;
+                  Widget mfgField() => _labeledField(
+                    context,
+                    label: 'تاريخ الإنتاج — اختياري',
+                    child: AppInput(
+                      label: '',
+                      showLabel: false,
+                      controller: _mfgDateCtrl,
+                      textAlign: TextAlign.right,
+                      suffixIcon: IconButton(
+                        icon: const Icon(
+                          Icons.calendar_today_outlined,
+                          size: 20,
+                        ),
+                        onPressed: () => _pickProductDate(_mfgDateCtrl),
+                        tooltip: 'اختر من التقويم',
                       ),
-                      onPressed: () => _pickProductDate(_mfgDateCtrl),
-                      tooltip: 'اختر من التقويم',
+                      hint: 'يوم/شهر/سنة',
                     ),
-                    hint: 'يوم/شهر/سنة',
-                  ),
-                );
-                Widget expField() => _labeledField(
-                  context,
-                  label: 'تاريخ الانتهاء — اختياري',
-                  child: AppInput(
-                    label: '',
-                    showLabel: false,
-                    controller: _expDateCtrl,
-                    textAlign: TextAlign.right,
-                    suffixIcon: IconButton(
-                      icon: const Icon(
-                        Icons.calendar_today_outlined,
-                        size: 20,
+                  );
+                  Widget expField() => _labeledField(
+                    context,
+                    label: 'تاريخ الانتهاء — اختياري',
+                    child: AppInput(
+                      label: '',
+                      showLabel: false,
+                      controller: _expDateCtrl,
+                      textAlign: TextAlign.right,
+                      suffixIcon: IconButton(
+                        icon: const Icon(
+                          Icons.calendar_today_outlined,
+                          size: 20,
+                        ),
+                        onPressed: () => _pickProductDate(_expDateCtrl),
+                        tooltip: 'اختر من التقويم',
                       ),
-                      onPressed: () => _pickProductDate(_expDateCtrl),
-                      tooltip: 'اختر من التقويم',
+                      hint: 'يوم/شهر/سنة',
                     ),
-                    hint: 'يوم/شهر/سنة',
-                  ),
-                );
-                if (row) {
-                  return Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                  );
+                  if (row) {
+                    return Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(child: mfgField()),
+                        SizedBox(
+                          width:
+                              context.screenLayout.isHandsetForLayout ? 8 : 12,
+                        ),
+                        Expanded(child: expField()),
+                      ],
+                    );
+                  }
+                  return Column(
                     children: [
-                      Expanded(child: mfgField()),
-                      const SizedBox(width: 12),
-                      Expanded(child: expField()),
+                      mfgField(),
+                      const SizedBox(height: 12),
+                      expField(),
                     ],
                   );
-                }
-                return Column(
-                  children: [
-                    mfgField(),
-                    const SizedBox(height: 12),
-                    expField(),
-                  ],
-                );
-              },
-            ),
-            const SizedBox(height: 12),
-            _labeledField(
-              context,
-              label: 'تنبيه قبل انتهاء الصلاحية (عدد الأيام)',
-              child: AppInput(
-                label: '',
-                showLabel: false,
-                controller: _expiryAlertDaysCtrl,
-                textAlign: TextAlign.right,
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: false),
-                hint:
-                    'عند تسجيل تاريخ انتهاء: 1–365 (فارغ = الافتراضي من الإعدادات)',
+                },
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.only(top: 6, bottom: 4),
-              child: Text(
-                'يُستخدم مع «تاريخ الانتهاء» فقط؛ يظهر التنبيه في لوحة الإشعارات خلال هذه المدة قبل التاريخ.',
-                style: TextStyle(
-                  fontSize: 11,
-                  height: 1.35,
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+              const SizedBox(height: 12),
+              _labeledField(
+                context,
+                label: 'تنبيه قبل انتهاء الصلاحية (عدد الأيام)',
+                child: AppInput(
+                  label: '',
+                  showLabel: false,
+                  controller: _expiryAlertDaysCtrl,
+                  textAlign: TextAlign.right,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: false),
+                  hint:
+                      'عند تسجيل تاريخ انتهاء: 1–365 (فارغ = الافتراضي من الإعدادات)',
                 ),
-                textAlign: TextAlign.right,
               ),
-            ),
-            const SizedBox(height: 12),
+              Padding(
+                padding: const EdgeInsets.only(top: 6, bottom: 4),
+                child: Text(
+                  'يُستخدم مع «تاريخ الانتهاء» فقط؛ يظهر التنبيه في لوحة الإشعارات خلال هذه المدة قبل التاريخ.',
+                  style: TextStyle(
+                    fontSize: 11,
+                    height: 1.35,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                  textAlign: TextAlign.right,
+                ),
+              ),
+            ],
+            if (handsetSixGrid) const SizedBox(height: 8),
             _labeledField(
               context,
               label: 'ملاحظات داخلية',
@@ -3350,6 +4508,10 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
                 minLines: 2,
                 maxLines: 4,
                 hint: 'لا تظهر للعميل — للفريق فقط',
+                suffixIcon: ArabicSpeechMicButton(
+                  controller: _internalNotesCtrl,
+                  onTextUpdated: () => setState(() {}),
+                ),
               ),
             ),
             const SizedBox(height: 14),
@@ -3375,13 +4537,16 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
     required String title,
     required Widget child,
   }) {
-    final cs = Theme.of(context).colorScheme;
-    return Card(
-      elevation: 0,
-      color: cs.surface,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.zero,
-        side: BorderSide(color: cs.outlineVariant),
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final surface = isDark ? AppColors.primary : Colors.white;
+    return Container(
+      decoration: BoxDecoration(
+        color: surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isDark ? AppColors.accentGold.withValues(alpha: 0.45) : AppColors.accentGold.withValues(alpha: 0.8),
+          width: 1.5,
+        ),
       ),
       child: Padding(
         padding: const EdgeInsets.all(18),
@@ -3392,14 +4557,14 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
               title,
               style: Theme.of(context).textTheme.titleSmall?.copyWith(
                 fontWeight: FontWeight.w700,
-                color: cs.primary,
+                color: isDark ? Colors.white : AppColors.primaryDark,
               ),
             ),
             const SizedBox(height: 4),
             Container(
               height: 2,
               width: 40,
-              color: cs.primary.withValues(alpha: 0.35),
+              color: AppColors.accentGold,
             ),
             const SizedBox(height: 16),
             child,
@@ -3499,23 +4664,25 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
 
   Widget _imageTile(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final borderColor = isDark ? AppColors.accentGold.withValues(alpha: 0.35) : AppColors.accentGold.withValues(alpha: 0.5);
     return Material(
       color: cs.surfaceContainerHighest.withValues(alpha: 0.4),
-      borderRadius: BorderRadius.zero,
+      borderRadius: BorderRadius.circular(12),
       child: InkWell(
         onTap: _pickImage,
-        borderRadius: BorderRadius.zero,
+        borderRadius: BorderRadius.circular(12),
         child: Container(
           height: 120,
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.zero,
-            border: Border.all(color: cs.outlineVariant),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: borderColor, width: 1.5),
           ),
           child:
               _imagePath != null &&
                   ((kIsWeb) || (!kIsWeb && File(_imagePath!).existsSync()))
               ? ClipRRect(
-                  borderRadius: BorderRadius.zero,
+                  borderRadius: BorderRadius.circular(10),
                   child: kIsWeb
                       ? Center(
                           child: Padding(
@@ -3540,15 +4707,15 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
               : Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Icon(
+                    const Icon(
                       Icons.add_photo_alternate_outlined,
                       size: 32,
-                      color: cs.primary,
+                      color: AppColors.accentGold,
                     ),
                     const SizedBox(width: 12),
                     Flexible(
                       child: Text(
-                        'اضغط لإضافة صورة من المعرض',
+                        'اضغط لإضافة صورة أو التقاطها بالكاميرا',
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           fontSize: 13,
@@ -3565,7 +4732,9 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
 
   InputDecoration _inputDecOf(BuildContext context, {required String hint}) {
     final cs = Theme.of(context).colorScheme;
-    const r = BorderRadius.all(Radius.circular(8));
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final borderColor = isDark ? AppColors.accentGold.withValues(alpha: 0.35) : AppColors.accentGold.withValues(alpha: 0.5);
+    const r = BorderRadius.all(Radius.circular(12));
     return InputDecoration(
       hintText: hint.isEmpty ? null : hint,
       hintStyle: TextStyle(
@@ -3579,15 +4748,15 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
           const EdgeInsetsDirectional.symmetric(horizontal: 14, vertical: 10),
       border: OutlineInputBorder(
         borderRadius: r,
-        borderSide: BorderSide(color: cs.outlineVariant, width: 1.5),
+        borderSide: BorderSide(color: borderColor, width: 1.5),
       ),
       enabledBorder: OutlineInputBorder(
         borderRadius: r,
-        borderSide: BorderSide(color: cs.outlineVariant, width: 1.5),
+        borderSide: BorderSide(color: borderColor, width: 1.5),
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: r,
-        borderSide: BorderSide(color: cs.primary, width: 2),
+        borderSide: const BorderSide(color: AppColors.accentGold, width: 2),
       ),
     );
   }

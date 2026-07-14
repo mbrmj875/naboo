@@ -88,7 +88,9 @@ Future<void> ensureExpensesSchema(Database db) async {
     if (!exists) {
       try {
         await db.execute('ALTER TABLE sync_queue ADD COLUMN $col $type');
-      } catch (_) {}
+      } catch (e, st) {
+        AppLogger.error('DBMigrate', 'فشل sync_queue ADD $col', e, st);
+      }
     }
   }
 
@@ -193,6 +195,23 @@ Future<void> ensureExpensesSchema(Database db) async {
   // existing on-disk DBs gain the column (idempotent ALTER) and a partial
   // index so the filter stays cheap.
   await addExpenseColumn('deleted_at', 'TEXT');
+  await addExpenseColumn('amountFils', 'INTEGER NOT NULL DEFAULT 0');
+  if (await tableHasColumn('expenses', 'amountFils')) {
+    try {
+      await db.execute(
+        "UPDATE expenses SET "
+        "amountFils = CAST(ROUND(IFNULL(amount, 0) * 1000) AS INTEGER) "
+        "WHERE IFNULL(amountFils, 0) = 0 AND IFNULL(amount, 0) > 0",
+      );
+    } catch (e, st) {
+      AppLogger.error(
+        'ensureExpensesSchema',
+        'backfill expenses.amountFils',
+        e,
+        st,
+      );
+    }
+  }
   try {
     await db.execute(
       'CREATE INDEX IF NOT EXISTS idx_expenses_deleted_at ON expenses(deleted_at)',
@@ -847,6 +866,16 @@ extension DbExpenses on DatabaseHelper {
       final day = ((t['recurringDay'] as num?)?.toInt() ?? 1).clamp(1, 28);
       final targetDate = DateTime(now.year, now.month, day);
       if (targetDate.isAfter(now)) continue;
+
+      // إذا كان المصدر الأصلي في الشهر الحالي فهو يُمثّل دفعة هذا الشهر —
+      // لا نُنشئ نسخة مكررة عند إعادة فتح الشاشة.
+      final originOccurredRaw = (t['occurredAt'] as String?) ?? '';
+      final originOccurred = DateTime.tryParse(originOccurredRaw);
+      if (originOccurred != null &&
+          originOccurred.year == now.year &&
+          originOccurred.month == now.month) {
+        continue;
+      }
 
       // هل توجد نسخة هذا الشهر بالفعل؟
       final dupes = await db.query(

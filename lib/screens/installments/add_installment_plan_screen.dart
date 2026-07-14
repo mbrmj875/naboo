@@ -2,12 +2,16 @@ import 'dart:async' show Timer;
 
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' hide TextDirection;
+import 'package:provider/provider.dart';
 
 import '../../models/installment.dart';
 import '../../models/installment_settings_data.dart';
+import '../../providers/auth_provider.dart';
+import '../../providers/shift_provider.dart';
 import '../../services/database_helper.dart';
 import '../../theme/design_tokens.dart';
 import '../../utils/screen_layout.dart';
+import '../../utils/shift_actor_conflict_guard.dart';
 import '../../widgets/adaptive/adaptive_form_container.dart';
 
 final _numFmt = NumberFormat('#,##0', 'en');
@@ -172,6 +176,20 @@ class _AddInstallmentPlanScreenState extends State<AddInstallmentPlanScreen> {
 
   Future<void> _save() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
+    final conflict = ShiftActorConflictGuard.evaluate(
+      sessionUserId: context.read<AuthProvider>().userId,
+      activeShift: context.read<ShiftProvider>().activeShift,
+    );
+    if (conflict.hasConflict) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'لا يمكن حفظ خطة التقسيط من هذه الجلسة: الوردية المفتوحة باسم ${conflict.shiftStaffName}.',
+          ),
+        ),
+      );
+      return;
+    }
     final n = int.tryParse(_countCtrl.text.trim()) ?? 0;
     if (n < 1) {
       ScaffoldMessenger.of(context).showSnackBar(

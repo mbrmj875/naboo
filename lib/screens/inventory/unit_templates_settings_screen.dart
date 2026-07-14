@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../services/product_repository.dart';
+import '../../theme/design_tokens.dart';
 import 'unit_template_editor_screen.dart';
 
 /// قوالب الوحدات — بحث، نتائج، ربط بقاعدة البيانات (مرجع لوحدات البيع على المنتج).
@@ -147,15 +148,15 @@ class _UnitTemplatesSettingsScreenState
       child: Scaffold(
         backgroundColor: bg,
         appBar: AppBar(
-          backgroundColor: const Color(0xFF1E3A5F),
-          foregroundColor: Colors.white,
+          backgroundColor: cs.surfaceContainerHighest,
+          foregroundColor: cs.onSurface,
           elevation: 0,
-          title: const Text(
+          title: Text(
             'قوالب الوحدات',
-            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17),
+            style: TextStyle(color: cs.onSurface, fontWeight: FontWeight.bold, fontSize: 17),
           ),
           leading: IconButton(
-            icon: const Icon(Icons.arrow_back_ios_new, size: 18),
+            icon: Icon(Icons.arrow_back_ios_new, size: 18, color: cs.onSurface),
             onPressed: () => Navigator.pop(context),
           ),
         ),
@@ -183,6 +184,8 @@ class _UnitTemplatesSettingsScreenState
                         icon: const Icon(Icons.add_rounded, size: 20),
                         label: const Text('قالب جديد'),
                         style: FilledButton.styleFrom(
+                          backgroundColor: AppColors.accentGold.withValues(alpha: 0.2),
+                          foregroundColor: AppColors.accentGold,
                           padding: const EdgeInsets.symmetric(
                             horizontal: 18,
                             vertical: 12,
@@ -238,9 +241,9 @@ class _SearchCard extends StatelessWidget {
 
     return Container(
       decoration: BoxDecoration(
-        color: surface,
-        borderRadius: BorderRadius.zero,
-        border: Border.all(color: border),
+        color: cs.surfaceContainerHighest.withValues(alpha: 0.3),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.accentGold.withValues(alpha: 0.5)),
       ),
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -266,16 +269,20 @@ class _SearchCard extends StatelessWidget {
           Row(
             children: [
               const Spacer(),
-              TextButton(
+              OutlinedButton(
                 onPressed: onCancelFilter,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppColors.accentGold,
+                  side: const BorderSide(color: AppColors.accentGold),
+                ),
                 child: const Text('إلغاء الفلتر'),
               ),
               const SizedBox(width: 10),
-              FilledButton.tonal(
+              FilledButton(
                 onPressed: onSearch,
                 style: FilledButton.styleFrom(
-                  backgroundColor: cs.primaryContainer,
-                  foregroundColor: cs.onPrimaryContainer,
+                  backgroundColor: AppColors.accentGold.withValues(alpha: 0.2),
+                  foregroundColor: AppColors.accentGold,
                 ),
                 child: const Text('بحث'),
               ),
@@ -317,9 +324,9 @@ class _ResultsCard extends StatelessWidget {
 
     return Container(
       decoration: BoxDecoration(
-        color: surface,
-        borderRadius: BorderRadius.zero,
-        border: Border.all(color: border),
+        color: cs.surfaceContainerHighest.withValues(alpha: 0.3),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.accentGold.withValues(alpha: 0.5)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -342,14 +349,14 @@ class _ResultsCard extends StatelessWidget {
                               ? Icons.arrow_upward_rounded
                               : Icons.arrow_downward_rounded,
                           size: 18,
-                          color: cs.primary,
+                          color: AppColors.accentGold,
                         ),
                         const SizedBox(width: 4),
-                        Text(
+                        const Text(
                           'الترتيب حسب',
                           style: TextStyle(
                             fontWeight: FontWeight.w600,
-                            color: cs.primary,
+                            color: AppColors.accentGold,
                           ),
                         ),
                       ],
@@ -397,12 +404,12 @@ class _ResultsCard extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Material(
-                        color: cs.primaryContainer.withValues(alpha: 0.35),
-                        borderRadius: BorderRadius.zero,
+                        color: cs.surfaceContainerHighest.withValues(alpha: 0.5),
+                        borderRadius: BorderRadius.circular(8),
                         child: PopupMenuButton<String>(
                           padding: const EdgeInsets.all(8),
-                          child: Icon(Icons.more_horiz,
-                              color: cs.primary, size: 22),
+                          child: const Icon(Icons.more_horiz,
+                              color: AppColors.accentGold, size: 22),
                           onSelected: (v) {
                             if (v == 'edit') onEdit(row);
                             if (v == 'delete') onDelete(row);
@@ -427,7 +434,7 @@ class _ResultsCard extends StatelessWidget {
                           color: active
                               ? const Color(0xFF15803D)
                               : cs.surfaceContainerHighest,
-                          borderRadius: BorderRadius.zero,
+                          borderRadius: BorderRadius.circular(6),
                         ),
                         child: Text(
                           active ? 'نشط' : 'غير نشط',
@@ -489,11 +496,22 @@ class _OutlineLabeledDropdown<T> extends StatelessWidget {
     return InputDecorator(
       decoration: InputDecoration(
         labelText: label,
-        border: const OutlineInputBorder(),
+        labelStyle: const TextStyle(color: AppColors.accentGold),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.5)),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: AppColors.accentGold, width: 2),
+        ),
         isDense: true,
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<T>(
+          dropdownColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+          style: TextStyle(color: Theme.of(context).colorScheme.onSurface),
           isExpanded: true,
           value: value,
           items: items,

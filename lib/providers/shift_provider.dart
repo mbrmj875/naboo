@@ -15,8 +15,12 @@ class ShiftProvider extends ChangeNotifier {
 
   bool get hasOpenShift => _active != null;
 
-  Future<void> refresh() async {
-    _active = await _db.getOpenWorkShift();
+  Future<void> refresh({int? forStaffUserId}) async {
+    if (forStaffUserId != null && forStaffUserId > 0) {
+      _active = await _db.getOpenWorkShiftForStaff(forStaffUserId);
+    } else {
+      _active = await _db.getOpenWorkShift();
+    }
     notifyListeners();
   }
 
@@ -38,7 +42,7 @@ class ShiftProvider extends ChangeNotifier {
       shiftStaffName: shiftStaffName,
       shiftStaffPin: shiftStaffPin,
     );
-    await refresh();
+    await refresh(forStaffUserId: shiftStaffUserId);
     return id;
   }
 
@@ -49,6 +53,7 @@ class ShiftProvider extends ChangeNotifier {
     required double withdrawnAmount,
     required double declaredClosingCash,
   }) async {
+    final staffId = (_active?['shiftStaffUserId'] as num?)?.toInt();
     await _db.closeWorkShift(
       shiftId: shiftId,
       systemBalanceAtCloseMoment: systemBalanceAtCloseMoment,
@@ -56,7 +61,10 @@ class ShiftProvider extends ChangeNotifier {
       withdrawnAmount: withdrawnAmount,
       declaredClosingCash: declaredClosingCash,
     );
-    await refresh();
+    await refresh(forStaffUserId: staffId);
+    if (_active != null) {
+      throw StateError('تعذّر إغلاق الوردية — ما زالت وردية مفتوحة');
+    }
   }
 
   Future<Map<String, int>> invoiceCountsForShift(int shiftId) =>

@@ -8,6 +8,7 @@ import 'package:sqflite/sqflite.dart' show Database;
 import '../../providers/notification_provider.dart';
 import '../../services/database_helper.dart';
 import '../../services/tenant_context_service.dart';
+import '../../utils/app_logger.dart';
 
 const Color _kAccent = Color(0xFF1E3A5F);
 const Color _kGreen  = Color(0xFF15803D);
@@ -108,11 +109,15 @@ class _AddPurchaseOrderScreenState extends State<AddPurchaseOrderScreen> {
     _notesCtrl.text    = (po['notes'] as String? ?? '');
     try {
       _orderDate = DateTime.parse(po['orderDate'] as String? ?? '');
-    } catch (_) {}
+    } catch (e, st) {
+      AppLogger.error('PurchaseOrder', 'تاريخ أمر الشراء غير صالح', e, st);
+    }
     try {
       final exp = po['expectedDate'] as String?;
       if (exp != null && exp.isNotEmpty) _expectedDate = DateTime.parse(exp);
-    } catch (_) {}
+    } catch (e, st) {
+      AppLogger.error('PurchaseOrder', 'تاريخ التسليم المتوقع غير صالح', e, st);
+    }
 
     final items = await db.query(
       'purchase_order_items',
@@ -213,7 +218,8 @@ class _AddPurchaseOrderScreenState extends State<AddPurchaseOrderScreen> {
         ''',
         [tid, _kMaxAutoPoLines + 1],
       );
-    } catch (_) {
+    } catch (e, st) {
+      AppLogger.error('PurchaseOrder', 'فشل جلب الأصناف المنخفضة', e, st);
       _snack('تعذر جلب الأصناف المنخفضة. تأكد من تحديث قاعدة البيانات.', error: true);
       return;
     }
@@ -387,7 +393,9 @@ class _AddPurchaseOrderScreenState extends State<AddPurchaseOrderScreen> {
       if (!mounted) return;
       try {
         unawaited(context.read<NotificationProvider>().refresh());
-      } catch (_) {}
+      } catch (e, st) {
+        AppLogger.error('PurchaseOrder', 'فشل refresh الإشعارات بعد الحفظ', e, st);
+      }
       Navigator.pop(context, true);
     } catch (e) {
       if (!mounted) return;

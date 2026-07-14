@@ -1,26 +1,51 @@
 {
   "project_info": {
-    "project_number": "201331038467",
-    "project_id": "naboo-m",
-    "storage_bucket": "naboo-m.firebasestorage.app"
+    "project_number": "281392172783",
+    "project_id": "naboo-93580",
+    "storage_bucket": "naboo-93580.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:201331038467:android:d59414d912d42bb8703136",
+        "mobilesdk_app_id": "1:281392172783:android:86018c680e01403a18151a",
         "android_client_info": {
           "package_name": "com.basra.storemanager"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "281392172783-t4urj8tpd85sig8osv2te2aefvk18stb.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.basra.storemanager",
+            "certificate_hash": "052edaa5bc2dc1b9fff4d6359b77686c7fa8b6f8"
+          }
+        },
+        {
+          "client_id": "281392172783-s4hvsidll33hgvt75tilm0okg5epb0ep.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
-          "current_key": "AIzaSyBJb21mA_icY3P0ykAhajKcfiLBRapgpYE"
+          "current_key": "AIzaSyCzHzbSN54H4ou58XAh-Yv2kW_ADsct9L4"
         }
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "281392172783-5ca8bv3d1t9ggb7lulrkfun5nojogeuq.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "281392172783-rpnh4q1n0vuvjb3lv96sl48rkg1iu8ld.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.basra.storemanager"
+              }
+            }
+          ]
         }
       }
     }

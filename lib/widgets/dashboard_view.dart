@@ -9,6 +9,8 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../home/specs/home_dashboard_spec.dart';
+import '../verticals/oil_change/home/oil_change_home_dashboard.dart';
 import '../providers/auth_provider.dart';
 
 import '../models/recent_activity_entry.dart';
@@ -20,20 +22,29 @@ import '../utils/iraqi_currency_format.dart';
 import '../utils/screen_layout.dart';
 import 'dashboard_recent_activity.dart';
 import 'home_glance_orbit.dart';
+import '../theme/design_tokens.dart';
 
 // ── Design Tokens ─────────────────────────────────────────────────────────────
 const _kTeal = Color(0xFF0D9488);
 const _kExpense = Color(0xFF7C3AED);
 const _kExpenseDark = Color(0xFFA78BFA);
 const _kBg = Color(0xFFF9FAFB);
-const _kText1 = Color(0xFF111827);
-const _kText2 = Color(0xFF6B7280);
-const _kText3 = Color(0xFF9CA3AF);
 const _kDockOrderPref = 'dashboard_dock_order_v1';
 const _kDockSizePref = 'dashboard_dock_sizes_v1';
 const _kDockPosPref = 'dashboard_dock_positions_v1';
 const _kPinnedGridHeightPref = 'dashboard_pinned_products_grid_height_v1';
 const _kPinnedQuickGroupsPref = 'dashboard_pinned_quick_groups_v1';
+
+Color _dashTextPrimary(bool isDark) =>
+    isDark ? Colors.white : AppColors.primaryDark;
+
+Color _dashTextSecondary(bool isDark) => isDark
+    ? Colors.white60
+    : AppColors.primaryDark.withValues(alpha: 0.75);
+
+Color _dashTextMuted(bool isDark) => isDark
+    ? Colors.white54
+    : AppColors.primaryDark.withValues(alpha: 0.55);
 
 // ══════════════════════════════════════════════════════════════════════════════
 /// DashboardView — المدخل الرئيسي (يُستدعى من home_screen)
@@ -47,6 +58,8 @@ class DashboardView extends StatelessWidget {
   /// فتح بيع جديد مع سطر منتج مسبق (من بطاقة المنتجات المثبّتة).
   final void Function(Map<String, dynamic> presetProductLine)?
       onPinnedProductQuickSale;
+  final HomeDashboardSpec? dashboardSpec;
+  final void Function(HomeDashboardAction action)? onDashboardAction;
 
   const DashboardView({
     super.key,
@@ -56,6 +69,8 @@ class DashboardView extends StatelessWidget {
     this.onOpenInvoicesFromActivity,
     this.onOpenCashFromActivity,
     this.onPinnedProductQuickSale,
+    this.dashboardSpec,
+    this.onDashboardAction,
   });
 
   @override
@@ -67,6 +82,8 @@ class DashboardView extends StatelessWidget {
       onOpenInvoicesFromActivity: onOpenInvoicesFromActivity,
       onOpenCashFromActivity: onOpenCashFromActivity,
       onPinnedProductQuickSale: onPinnedProductQuickSale,
+      dashboardSpec: dashboardSpec,
+      onDashboardAction: onDashboardAction,
     );
   }
 }
@@ -80,6 +97,8 @@ class _ModernDashboard extends StatelessWidget {
   final VoidCallback? onOpenCashFromActivity;
   final void Function(Map<String, dynamic> presetProductLine)?
       onPinnedProductQuickSale;
+  final HomeDashboardSpec? dashboardSpec;
+  final void Function(HomeDashboardAction action)? onDashboardAction;
 
   const _ModernDashboard({
     required this.isDark,
@@ -88,6 +107,8 @@ class _ModernDashboard extends StatelessWidget {
     this.onOpenInvoicesFromActivity,
     this.onOpenCashFromActivity,
     this.onPinnedProductQuickSale,
+    this.dashboardSpec,
+    this.onDashboardAction,
   });
 
   @override
@@ -105,15 +126,36 @@ class _ModernDashboard extends StatelessWidget {
     final maxContent = math.min(sl.size.width, 1400.0);
     final layout = context.watch<DashboardLayoutProvider>();
 
+    final spec = dashboardSpec;
+    final useOilGrid =
+        spec != null && spec.showOilKpiGrid && onDashboardAction != null;
+
     Widget sectionWidget(String id) {
       switch (id) {
         case 'header':
-          return _DashHeader(isDark: isDark);
+          return _DashHeader(
+            isDark: isDark,
+            subtitle: spec?.greetingSubtitle,
+            trailingEmoji: spec?.greetingEmoji,
+          );
         case 'orbit':
+          if (useOilGrid) {
+            return OilChangeHomeDashboard(
+              spec: spec,
+              onAction: onDashboardAction!,
+            );
+          }
           return onGlanceAction != null
-              ? HomeGlanceOrbit(onAction: onGlanceAction!)
+              ? HomeGlanceOrbit(
+                  onAction: onGlanceAction!,
+                  hideGlanceIds: spec?.hideGlanceIds ?? const {},
+                  extraGlanceIds: spec?.extraHybridGlanceIds ?? const {},
+                )
               : const SizedBox.shrink();
         case 'pinned':
+          if (spec != null && !spec.showPinnedProducts) {
+            return const SizedBox.shrink();
+          }
           return onPinnedProductQuickSale != null
               ? _PinnedProductsRail(
                   isDark: isDark,
@@ -174,12 +216,19 @@ class _ModernDashboard extends StatelessWidget {
 // ══════════════════════════════════════════════════════════════════════════════
 class _DashHeader extends StatelessWidget {
   final bool isDark;
-  const _DashHeader({required this.isDark});
+  final String? subtitle;
+  final String? trailingEmoji;
+
+  const _DashHeader({
+    required this.isDark,
+    this.subtitle,
+    this.trailingEmoji,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final text1 = isDark ? Colors.white : _kText1;
-    final text2 = isDark ? Colors.white60 : _kText2;
+    final text1 = _dashTextPrimary(isDark);
+    final text2 = _dashTextSecondary(isDark);
     final sl = ScreenLayout.of(context);
     final auth = context.watch<AuthProvider>();
     final who = _greetingDisplayName(auth);
@@ -225,12 +274,15 @@ class _DashHeader extends StatelessWidget {
                               height: 1.2,
                             ),
                           ),
-                          Text('👋', style: TextStyle(fontSize: titleSize * 0.85)),
+                          Text(
+                            trailingEmoji ?? '👋',
+                            style: TextStyle(fontSize: titleSize * 0.85),
+                          ),
                         ],
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        "إليك ملخص أعمال اليوم",
+                        subtitle ?? 'إليك ملخص أعمال اليوم',
                         style: GoogleFonts.tajawal(
                           fontSize: stackActions ? 13.0 : 14.0,
                           color: text2,
@@ -396,7 +448,7 @@ class _ChartsRowState extends State<_ChartsRow> {
             padding: const EdgeInsets.all(16),
             child: Text(
               'تعذر تحميل بيانات الرسوم البيانية.',
-              style: TextStyle(color: widget.isDark ? Colors.white70 : _kText2),
+              style: TextStyle(color: _dashTextSecondary(widget.isDark)),
             ),
           );
         }
@@ -1322,7 +1374,7 @@ class _LineChartTooltipLayer extends StatelessWidget {
                   style: TextStyle(
                     fontSize: 11,
                     fontWeight: FontWeight.w700,
-                    color: isDark ? Colors.white : _kText1,
+                    color: _dashTextPrimary(isDark),
                   ),
                 ),
                 const SizedBox(height: 4),
@@ -1383,9 +1435,9 @@ class _LineChartCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final text1 = isDark ? Colors.white : _kText1;
-    final text2 = isDark ? Colors.white60 : _kText2;
-    final tickColor = isDark ? Colors.white54 : _kText3;
+    final text1 = _dashTextPrimary(isDark);
+    final text2 = _dashTextSecondary(isDark);
+    final tickColor = _dashTextMuted(isDark);
     final yTicks = _buildYAxisTicks(data.maxAxisValue);
 
     return Container(
@@ -1515,9 +1567,9 @@ class _BarChartCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final text1 = isDark ? Colors.white : _kText1;
-    final text2 = isDark ? Colors.white60 : _kText2;
-    final tickColor = isDark ? Colors.white54 : _kText3;
+    final text1 = _dashTextPrimary(isDark);
+    final text2 = _dashTextSecondary(isDark);
+    final tickColor = _dashTextMuted(isDark);
     final yTicks = _buildYAxisTicks(data.maxAxisValue);
     final expLeg = isDark ? _kExpenseDark : _kExpense;
 
@@ -1671,8 +1723,10 @@ class _DropBtn extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
           color: cs.surfaceContainerHighest.withValues(alpha: 0.35),
-          border: Border.all(color: cs.outline.withValues(alpha: 0.35)),
-          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: AppColors.accentGold.withValues(alpha: isDark ? 0.4 : 0.28),
+          ),
+          borderRadius: BorderRadius.circular(12),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -1730,7 +1784,7 @@ class _LegDot extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final sub = isDark ? Colors.white70 : _kText2;
+    final sub = _dashTextSecondary(isDark);
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -2275,7 +2329,7 @@ class _PinnedProductsRailState extends State<_PinnedProductsRail> {
         child: Icon(
           Icons.inventory_2_outlined,
           size: 44,
-          color: widget.isDark ? Colors.white38 : _kText3,
+          color: _dashTextMuted(widget.isDark),
         ),
       ),
     );
@@ -2283,8 +2337,8 @@ class _PinnedProductsRailState extends State<_PinnedProductsRail> {
 
   @override
   Widget build(BuildContext context) {
-    final text1 = widget.isDark ? Colors.white : _kText1;
-    final text2 = widget.isDark ? Colors.white60 : _kText2;
+    final text1 = _dashTextPrimary(widget.isDark);
+    final text2 = _dashTextSecondary(widget.isDark);
     final border = Theme.of(context).colorScheme.outline.withValues(alpha: 0.45);
 
     if (_loading) {
@@ -2297,7 +2351,7 @@ class _PinnedProductsRailState extends State<_PinnedProductsRail> {
           height: 22,
           child: CircularProgressIndicator(
             strokeWidth: 2,
-            color: widget.isDark ? Colors.white54 : _kTeal,
+            color: widget.isDark ? Colors.white54 : AppColors.accentGold,
           ),
         ),
       );
@@ -2610,9 +2664,9 @@ BoxDecoration _cardDecor(BuildContext context, bool isDark) {
   final cs = Theme.of(context).colorScheme;
   return BoxDecoration(
     color: cs.surface,
-    borderRadius: BorderRadius.circular(14),
+    borderRadius: BorderRadius.circular(12),
     border: Border.all(
-      color: cs.outlineVariant.withValues(alpha: isDark ? 0.45 : 0.6),
+      color: AppColors.accentGold.withValues(alpha: isDark ? 0.4 : 0.28),
       width: 1,
     ),
     boxShadow: [

@@ -11,6 +11,7 @@ import '../../providers/theme_provider.dart';
 import '../../providers/inventory_products_provider.dart';
 import '../../services/product_repository.dart';
 import '../../services/product_variants_repository.dart';
+import '../../theme/design_tokens.dart';
 import '../../utils/iraqi_currency_format.dart';
 import '../../utils/screen_layout.dart';
 import 'add_product_screen.dart';
@@ -273,33 +274,38 @@ class _InventoryProductsScreenState extends State<InventoryProductsScreen>
     });
   }
 
-  bool get _isDark =>
-      Provider.of<ThemeProvider>(context, listen: false).isDarkMode;
+  bool get _isDark => Theme.of(context).brightness == Brightness.dark;
 
   @override
   Widget build(BuildContext context) {
     final layout = context.screenLayout;
-    final bg = _isDark ? const Color(0xFF0F172A) : _kBg;
-    final surface = _isDark ? const Color(0xFF1E293B) : _kCard;
+    final bg = _isDark ? AppColors.primaryDark : _kBg;
+    final surface = _isDark ? AppColors.primary : _kCard;
     final text1 = _isDark ? Colors.white : _kText1;
-    final text2 = _isDark ? Colors.white60 : _kText2;
-    final border = _isDark ? Colors.white12 : _kBorder;
+    final text2 = _isDark ? Colors.white70 : _kText2;
+    final border = _isDark ? AppGlass.stroke : _kBorder;
 
     return Directionality(
       textDirection: TextDirection.rtl,
       child: Scaffold(
         backgroundColor: bg,
         appBar: AppBar(
-          backgroundColor: _kNavy,
-          foregroundColor: Colors.white,
+          backgroundColor: bg,
+          foregroundColor: text1,
           elevation: 0,
-          title: const Text(
+          iconTheme: IconThemeData(color: text1),
+          actionsIconTheme: const IconThemeData(color: AppColors.accentGold),
+          title: Text(
             'إدارة المنتجات',
-            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17),
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              fontSize: 17,
+              color: text1,
+            ),
           ),
           actions: [
             IconButton(
-              icon: const Icon(Icons.settings_outlined, size: 22),
+              icon: const Icon(Icons.settings_outlined, size: 22, color: AppColors.accentGold),
               tooltip: 'الإعدادات',
               onPressed: () => Navigator.push(
                 context,
@@ -310,6 +316,7 @@ class _InventoryProductsScreenState extends State<InventoryProductsScreen>
             ),
             PopupMenuButton<String>(
               tooltip: 'المزيد',
+              icon: const Icon(Icons.more_horiz_rounded, color: AppColors.accentGold),
               onSelected: (v) async {
                 if (v == 'print_barcodes') {
                   await Navigator.push<void>(
@@ -370,14 +377,14 @@ class _InventoryProductsScreenState extends State<InventoryProductsScreen>
                     style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
                   ),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: _kGreen,
+                    backgroundColor: AppColors.accentGold,
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(
                       horizontal: 14,
                       vertical: 8,
                     ),
-                    shape: const RoundedRectangleBorder(
-                      borderRadius: BorderRadius.zero,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
                     ),
                     elevation: 0,
                   ),
@@ -737,13 +744,22 @@ class _SearchCard extends StatelessWidget {
       ),
       decoration: BoxDecoration(
         color: surface,
-        borderRadius: BorderRadius.zero,
-        border: Border.all(color: border),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isDark ? AppColors.accentGold.withValues(alpha: 0.3) : AppColors.accentGold.withValues(alpha: 0.5),
+          width: 1.5,
+        ),
         boxShadow: isDark
-            ? null
+            ? [
+                BoxShadow(
+                  color: AppGlass.goldGlow,
+                  blurRadius: 12,
+                  spreadRadius: -2,
+                )
+              ]
             : [
                 BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.05),
+                  color: AppColors.accentGold.withValues(alpha: 0.1),
                   blurRadius: 8,
                   offset: const Offset(0, 2),
                 ),
@@ -1067,12 +1083,12 @@ class _SearchCard extends StatelessWidget {
                     end: 8,
                   ),
                   enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.zero,
-                    borderSide: BorderSide(color: border),
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: isDark ? AppColors.accentGold.withValues(alpha: 0.1) : border),
                   ),
-                  focusedBorder: const OutlineInputBorder(
-                    borderRadius: BorderRadius.zero,
-                    borderSide: BorderSide(color: _kNavy, width: 1.5),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: const BorderSide(color: AppColors.accentGold, width: 1.5),
                   ),
                 ),
               ),
@@ -1142,8 +1158,8 @@ class _SearchCard extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 10),
           decoration: BoxDecoration(
             color: fill,
-            border: Border.all(color: border),
-            borderRadius: BorderRadius.zero,
+            border: Border.all(color: isDark ? AppColors.accentGold.withValues(alpha: 0.2) : border),
+            borderRadius: BorderRadius.circular(12),
           ),
           child: DropdownButtonHideUnderline(
             child: DropdownButton<String>(
@@ -1254,12 +1270,12 @@ class _SearchCard extends StatelessWidget {
                 color: text2.withValues(alpha: 0.8),
               ),
               enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.zero,
-                borderSide: BorderSide(color: border),
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: isDark ? AppColors.accentGold.withValues(alpha: 0.2) : border),
               ),
-              focusedBorder: const OutlineInputBorder(
-                borderRadius: BorderRadius.zero,
-                borderSide: BorderSide(color: _kNavy, width: 1.5),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: AppColors.accentGold, width: 1.5),
               ),
             ),
           ),
@@ -1396,16 +1412,16 @@ class _SearchFieldCore extends StatelessWidget {
                 vertical: 10,
               ),
               border: OutlineInputBorder(
-                borderRadius: BorderRadius.zero,
-                borderSide: BorderSide(color: border),
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: isDark ? AppColors.accentGold.withValues(alpha: 0.2) : border),
               ),
               enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.zero,
-                borderSide: BorderSide(color: border),
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: isDark ? AppColors.accentGold.withValues(alpha: 0.2) : border),
               ),
-              focusedBorder: const OutlineInputBorder(
-                borderRadius: BorderRadius.zero,
-                borderSide: BorderSide(color: _kNavy, width: 1.5),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: AppColors.accentGold, width: 1.5),
               ),
             ),
           ),
@@ -1460,8 +1476,8 @@ class _SearchDropdownCore extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 10),
           decoration: BoxDecoration(
             color: fill,
-            border: Border.all(color: border),
-            borderRadius: BorderRadius.zero,
+            border: Border.all(color: isDark ? AppColors.accentGold.withValues(alpha: 0.2) : border),
+            borderRadius: BorderRadius.circular(12),
           ),
           child: DropdownButtonHideUnderline(
             child: DropdownButton<String>(
@@ -1553,8 +1569,8 @@ class _AutocompletePick extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 8),
           decoration: BoxDecoration(
             color: fill,
-            border: Border.all(color: border),
-            borderRadius: BorderRadius.zero,
+            border: Border.all(color: isDark ? AppColors.accentGold.withValues(alpha: 0.2) : border),
+            borderRadius: BorderRadius.circular(12),
           ),
           alignment: AlignmentDirectional.centerEnd,
           child: Theme(
@@ -1650,8 +1666,8 @@ class _ResultsHeader extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
         color: surface,
-        borderRadius: BorderRadius.zero,
-        border: Border.all(color: border),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: isDark ? AppColors.accentGold.withValues(alpha: 0.3) : border),
       ),
       child: LayoutBuilder(
         builder: (context, c) {
@@ -1665,11 +1681,11 @@ class _ResultsHeader extends StatelessWidget {
                 height: 32,
                 padding: const EdgeInsets.symmetric(horizontal: 10),
                 decoration: BoxDecoration(
-                  border: Border.all(color: border),
+                  border: Border.all(color: isDark ? AppColors.accentGold.withValues(alpha: 0.2) : border),
                   color: isDark
                       ? Colors.white.withValues(alpha: 0.06)
                       : const Color(0xFFF8FAFC),
-                  borderRadius: BorderRadius.zero,
+                  borderRadius: BorderRadius.circular(12),
                 ),
                 alignment: AlignmentDirectional.centerEnd,
                 child: DropdownButtonHideUnderline(
@@ -1784,8 +1800,8 @@ class _ProductCardSkeleton extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         color: surface,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: border.withValues(alpha: 0.5)),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.accentGold.withValues(alpha: 0.15)),
       ),
       child: Stack(
         children: [
@@ -2363,14 +2379,21 @@ class _ProductCardState extends State<_ProductCard> {
                             ? const Color(0xFFF8FAFC)
                             : const Color(0xFFF8FAFF)))
                     : cardFill,
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: BorderRadius.circular(16),
                 border: Border.all(
                   color: _hover
-                      ? _kNavy.withValues(alpha: 0.25)
-                      : widget.border,
+                      ? AppColors.accentGold
+                      : widget.isDark ? AppColors.accentGold.withValues(alpha: 0.15) : widget.border,
                 ),
                 boxShadow: widget.isDark
-                    ? null
+                    ? (_hover
+                        ? [
+                            BoxShadow(
+                              color: AppGlass.goldGlow,
+                              blurRadius: 16,
+                            )
+                          ]
+                        : null)
                     : [
                         BoxShadow(
                           color: Colors.black.withValues(
@@ -2575,8 +2598,8 @@ class _OptionsBtn extends StatelessWidget {
       width: 34,
       height: 34,
       decoration: BoxDecoration(
-        border: Border.all(color: border),
-        borderRadius: BorderRadius.zero,
+        border: Border.all(color: isDark ? AppColors.accentGold.withValues(alpha: 0.2) : border),
+        borderRadius: BorderRadius.circular(8),
         color: isDark
             ? Colors.white.withValues(alpha: 0.05)
             : const Color(0xFFF8FAFC),

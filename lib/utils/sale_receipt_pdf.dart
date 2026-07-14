@@ -16,6 +16,9 @@ import '../models/invoice.dart';
 import '../models/print_settings_data.dart';
 import '../services/database_helper.dart';
 import '../services/print_settings_repository.dart';
+import '../services/thermal_esc_pos_service.dart';
+import '../services/thermal_network_printer_service.dart';
+import 'app_logger.dart';
 import 'theme.dart';
 import 'customer_debt_deep_link.dart';
 import 'invoice_deep_link.dart';
@@ -31,6 +34,43 @@ String _receiptSafe(String? raw) {
   var s = raw.replaceAll('\uFFFD', '').trim();
   s = s.replaceAll(RegExp(r'[\u200B-\u200D\uFEFF]'), '');
   return s;
+}
+
+List<pw.Widget> _receiptStoreHeaderBlock(
+  PrintSettingsData s, {
+  required pw.Font font,
+  required pw.Font fontBold,
+}) {
+  final out = <pw.Widget>[];
+  final title = _receiptSafe(s.storeTitleLine);
+  if (title.isNotEmpty) {
+    out.add(
+      pw.Center(
+        child: pw.Text(
+          title,
+          style: pw.TextStyle(font: fontBold, fontSize: 14),
+          textDirection: pw.TextDirection.rtl,
+        ),
+      ),
+    );
+    out.add(pw.SizedBox(height: 4));
+  }
+  for (final line in s.receiptStoreContactLines) {
+    out.add(
+      pw.Center(
+        child: pw.Text(
+          line,
+          style: pw.TextStyle(font: font, fontSize: 10),
+          textDirection: pw.TextDirection.rtl,
+        ),
+      ),
+    );
+    out.add(pw.SizedBox(height: 2));
+  }
+  if (out.isNotEmpty) {
+    out.add(pw.SizedBox(height: 4));
+  }
+  return out;
 }
 
 String _itemNameForReceipt(InvoiceItem e) {
@@ -259,7 +299,7 @@ List<pw.Widget> _receiptInstallmentFinanceWidgets(
       textDirection: pw.TextDirection.rtl,
     ),
     pw.Text(
-      'المبلغ بعد المقدّم (أساس الفائدة): ${financed.toStringAsFixed(0)} د.ع',
+      'المبلغ بعد المقدّم (متبقٍ للتقسيط): ${financed.toStringAsFixed(0)} د.ع',
       style: pw.TextStyle(font: font, fontSize: 11),
       textAlign: pw.TextAlign.right,
       textDirection: pw.TextDirection.rtl,
@@ -655,16 +695,11 @@ class SaleReceiptPdf {
             child: pw.Column(
               crossAxisAlignment: pw.CrossAxisAlignment.stretch,
               children: [
-                if (_receiptSafe(s.storeTitleLine).isNotEmpty) ...[
-                  pw.Center(
-                    child: pw.Text(
-                      _receiptSafe(s.storeTitleLine),
-                      style: pw.TextStyle(font: fontBold, fontSize: 14),
-                      textDirection: pw.TextDirection.rtl,
-                    ),
-                  ),
-                  pw.SizedBox(height: 6),
-                ],
+                ..._receiptStoreHeaderBlock(
+                  s,
+                  font: font,
+                  fontBold: fontBold,
+                ),
                 pw.Center(
                   child: pw.Text(
                     'إيصال بيع',
@@ -1087,16 +1122,11 @@ class SaleReceiptPdf {
             child: pw.Column(
               crossAxisAlignment: pw.CrossAxisAlignment.stretch,
               children: [
-                if (_receiptSafe(s.storeTitleLine).isNotEmpty) ...[
-                  pw.Center(
-                    child: pw.Text(
-                      _receiptSafe(s.storeTitleLine),
-                      style: pw.TextStyle(font: fontBold, fontSize: 14),
-                      textDirection: pw.TextDirection.rtl,
-                    ),
-                  ),
-                  pw.SizedBox(height: 6),
-                ],
+                ..._receiptStoreHeaderBlock(
+                  s,
+                  font: font,
+                  fontBold: fontBold,
+                ),
                 pw.Center(
                   child: pw.Text(
                     'إيصال تسديد قسط',
@@ -1336,16 +1366,11 @@ class SaleReceiptPdf {
             child: pw.Column(
               crossAxisAlignment: pw.CrossAxisAlignment.stretch,
               children: [
-                if (_receiptSafe(s.storeTitleLine).isNotEmpty) ...[
-                  pw.Center(
-                    child: pw.Text(
-                      _receiptSafe(s.storeTitleLine),
-                      style: pw.TextStyle(font: fontBold, fontSize: 14),
-                      textDirection: pw.TextDirection.rtl,
-                    ),
-                  ),
-                  pw.SizedBox(height: 6),
-                ],
+                ..._receiptStoreHeaderBlock(
+                  s,
+                  font: font,
+                  fontBold: fontBold,
+                ),
                 pw.Center(
                   child: pw.Text(
                     'إيصال تسديد دين آجل',
@@ -1561,6 +1586,68 @@ class SaleReceiptPdf {
     );
   }
 
+  /// طباعة تلقائية صامتة عند النجاح — thermal LAN أو طابعة النظام.
+  ///
+  /// يُرجع `null` عند النجاح أو عند عدم وجود طابعة مُعدّة (تخطّي بدون خطأ).
+  /// يُرجع رسالة عربية عند فشل الطباعة.
+  static Future<String?> tryAutoPrintReceipt({
+    required Invoice invoice,
+    required double subtotalBeforeDiscount,
+    PrintSettingsData? printSettings,
+  }) async {
+    final settings =
+        printSettings ?? await PrintSettingsRepository.instance.load();
+    final isThermalPaper = settings.paperFormat == PrintPaperFormat.thermal58 ||
+        settings.paperFormat == PrintPaperFormat.thermal80;
+
+    if (settings.thermalEscPosEnabled &&
+        isThermalPaper &&
+        settings.thermalLanHost.trim().isNotEmpty) {
+      try {
+        final payload = ThermalEscPosService.instance.buildReceiptBytes(
+          invoice: invoice,
+          subtotalBeforeDiscount: subtotalBeforeDiscount,
+          settings: settings,
+        );
+        await ThermalNetworkPrinterService.instance.sendBytes(
+          host: settings.thermalLanHost,
+          port: settings.thermalLanPort,
+          timeoutMs: settings.thermalLanTimeoutMs,
+          payload: payload,
+        );
+        return null;
+      } catch (e, st) {
+        AppLogger.error('SaleReceiptPdf', 'silent thermal print failed', e, st);
+        return 'تعذرت الطباعة الحرارية — تحقق من اتصال الطابعة بالشبكة.';
+      }
+    }
+
+    try {
+      final printers = await printing.Printing.listPrinters();
+      if (printers.isEmpty) return null;
+
+      final printer = printers.firstWhere(
+        (p) => p.isDefault,
+        orElse: () => printers.first,
+      );
+      final bytes = await buildPdfBytes(
+        invoice: invoice,
+        subtotalBeforeDiscount: subtotalBeforeDiscount,
+        pageFormat: settings.pdfPageFormat,
+        settings: settings,
+      );
+      await printing.Printing.directPrintPdf(
+        printer: printer,
+        onLayout: (_) => bytes,
+        format: settings.pdfPageFormat,
+      );
+      return null;
+    } catch (e, st) {
+      AppLogger.error('SaleReceiptPdf', 'silent direct print failed', e, st);
+      return 'تعذرت الطباعة المباشرة — راجع إعدادات الطابعة.';
+    }
+  }
+
   /// معاينة الإيصال مع طباعة ومشاركة.
   ///
   /// [fullScreen] عند `true`: صفحة كاملة (كالمعتاد بعد البيع) — يُفضَّل مع [BuildContext]
@@ -1579,6 +1666,41 @@ class SaleReceiptPdf {
     final settings =
         printSettings ?? await PrintSettingsRepository.instance.load();
     if (!context.mounted) return;
+    final isThermalPaper = settings.paperFormat == PrintPaperFormat.thermal58 ||
+        settings.paperFormat == PrintPaperFormat.thermal80;
+    if (settings.thermalEscPosEnabled && isThermalPaper) {
+      try {
+        final payload = ThermalEscPosService.instance.buildReceiptBytes(
+          invoice: invoice,
+          subtotalBeforeDiscount: subtotalBeforeDiscount,
+          settings: settings,
+        );
+        await ThermalNetworkPrinterService.instance.sendBytes(
+          host: settings.thermalLanHost,
+          port: settings.thermalLanPort,
+          timeoutMs: settings.thermalLanTimeoutMs,
+          payload: payload,
+        );
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('تمت الطباعة الحرارية عبر الشبكة بنجاح'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      } catch (e) {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'تعذر الطباعة الحرارية عبر الشبكة: $e — سيتم فتح PDF كبديل.',
+            ),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
 
     if (fullScreen) {
       final openDetails = onOpenDetailsFromPdf;
@@ -1808,16 +1930,11 @@ class SaleReceiptPdf {
             child: pw.Column(
               crossAxisAlignment: pw.CrossAxisAlignment.stretch,
               children: [
-                if (_receiptSafe(s.storeTitleLine).isNotEmpty) ...[
-                  pw.Center(
-                    child: pw.Text(
-                      _receiptSafe(s.storeTitleLine),
-                      style: pw.TextStyle(font: fontBold, fontSize: 14),
-                      textDirection: pw.TextDirection.rtl,
-                    ),
-                  ),
-                  pw.SizedBox(height: 6),
-                ],
+                ..._receiptStoreHeaderBlock(
+                  s,
+                  font: font,
+                  fontBold: fontBold,
+                ),
                 pw.Center(
                   child: pw.Text(
                     'إيصال دفع مورد',

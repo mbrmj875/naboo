@@ -4,15 +4,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
+import '../../config/otp_config.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/business_features_provider.dart';
 import '../../theme/design_tokens.dart';
-import '../../services/app_settings_repository.dart';
-import '../../services/business_setup_settings.dart';
-import '../../services/license_service.dart';
 import '../../widgets/glass/glass_background.dart';
 import '../../widgets/glass/glass_surface.dart';
 import '../../widgets/secure_screen.dart';
-import '../license/subscription_plans_screen.dart';
 
 class EmailOtpScreen extends StatefulWidget {
   const EmailOtpScreen({
@@ -20,21 +18,21 @@ class EmailOtpScreen extends StatefulWidget {
     required this.email,
     required this.displayName,
     required this.phone,
-    required this.password,
+    required this.pin,
   });
 
   final String email;
   final String displayName;
   final String phone;
-  final String password;
+  final String pin;
 
   @override
   State<EmailOtpScreen> createState() => _EmailOtpScreenState();
 }
 
 class _EmailOtpScreenState extends State<EmailOtpScreen> {
-  /// يطابق إعداد Supabase الافتراضي لقوالب البريد (غالباً 8 أرقام).
-  static const int _digits = 8;
+  /// يطابق إعداد Supabase لقوالب البريد (قابل للضبط عبر EMAIL_OTP_LENGTH).
+  static const int _digits = OtpConfig.emailOtpLength;
 
   final _controllers = List.generate(_digits, (_) => TextEditingController());
   final _focusNodes = List.generate(_digits, (_) => FocusNode());
@@ -101,7 +99,9 @@ class _EmailOtpScreenState extends State<EmailOtpScreen> {
   Future<void> _verify() async {
     final otp = _otp.trim();
     if (otp.length < _digits) {
-      setState(() => _error = 'أدخل الرمز كاملاً ($_digits أرقام كما في البريد)');
+      setState(
+        () => _error = 'أدخل الرمز كاملاً ($_digits أرقام كما في البريد)',
+      );
       return;
     }
     setState(() {
@@ -110,34 +110,111 @@ class _EmailOtpScreenState extends State<EmailOtpScreen> {
     });
     final auth = context.read<AuthProvider>();
     final nav = Navigator.of(context);
+    final pendingPassword =
+        await auth.readPendingRegistrationSupabasePassword(widget.email);
+    if (!mounted) return;
+    if (pendingPassword == null || pendingPassword.isEmpty) {
+      setState(() {
+        _busy = false;
+        _error = 'انتهت جلسة التسجيل. ارجع وأعد «إنشاء حساب».';
+      });
+      return;
+    }
     final err = await auth.verifyOtpAndRegister(
       email: widget.email,
       otp: otp,
       displayName: widget.displayName,
       phone: widget.phone,
-      password: widget.password,
+      password: pendingPassword,
     );
     if (!mounted) return;
-    setState(() => _busy = false);
     if (err != null) {
-      setState(() => _error = err);
+      setState(() {
+        _busy = false;
+        _error = err;
+      });
       return;
     }
-    var target = '/open-shift';
+
+    final localUserId = auth.userId;
+    if (localUserId == null) {
+      await auth.clearPendingRegistrationSupabasePassword(widget.email);
+      setState(() {
+        _busy = false;
+        _error = 'تعذر إكمال الحساب. أعد المحاولة.';
+      });
+      return;
+    }
+
+    final pinErr = await auth.finalizeOwnerPin(
+      localUserId: localUserId,
+      pin: widget.pin,
+      phone: widget.phone,
+    );
+    if (!mounted) return;
+    if (pinErr != null) {
+      setState(() {
+        _busy = false;
+        _error = pinErr;
+      });
+      return;
+    }
+    await auth.clearPendingRegistrationSupabasePassword(widget.email);
     try {
-      final completed = await BusinessSetupSettingsData.isCompleted(
-        AppSettingsRepository.instance,
+      final target = await _withWorkspaceBootstrapOverlay(
+        () => auth.resolveRouteAfterAuthenticatedSession(),
       );
-      if (!completed) target = '/onboarding';
-    } catch (_) {}
-    unawaited(nav.pushReplacement<void, void>(
-      MaterialPageRoute<void>(
-        builder: (_) => SubscriptionPlansScreen(
-          currentPlan: LicenseService.instance.state.plan,
-          nextRouteName: target,
+      if (!mounted) return;
+      try {
+        await context.read<BusinessFeaturesProvider>().refresh();
+      } catch (_) {}
+      if (!mounted) return;
+      unawaited(nav.pushReplacementNamed(target));
+    } on TimeoutException {
+      if (!mounted) return;
+      setState(() =>
+          _error = 'استغرقت تهيئة مساحة العمل وقتاً طويلاً. تحقق من الإنترنت وأعد المحاولة.');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<T> _withWorkspaceBootstrapOverlay<T>(
+    Future<T> Function() task, {
+    Duration timeout = const Duration(seconds: 30),
+  }) async {
+    if (!mounted) return task();
+    unawaited(
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => PopScope(
+          canPop: false,
+          child: AlertDialog(
+            content: const Row(
+              children: [
+                SizedBox(
+                  width: 28,
+                  height: 28,
+                  child: CircularProgressIndicator(strokeWidth: 2.5),
+                ),
+                SizedBox(width: 16),
+                Expanded(
+                  child: Text('جاري تهيئة مساحة العمل…'),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
-    ));
+    );
+    try {
+      return await task().timeout(timeout);
+    } finally {
+      if (mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+    }
   }
 
   Future<void> _resend() async {
@@ -147,7 +224,20 @@ class _EmailOtpScreenState extends State<EmailOtpScreen> {
       _error = null;
     });
     final auth = context.read<AuthProvider>();
-    final err = await auth.sendEmailOtp(widget.email);
+    final pendingPassword =
+        await auth.readPendingRegistrationSupabasePassword(widget.email);
+    if (!mounted) return;
+    if (pendingPassword == null || pendingPassword.isEmpty) {
+      setState(() {
+        _busy = false;
+        _error = 'انتهت جلسة التسجيل. ارجع وأعد «إنشاء حساب».';
+      });
+      return;
+    }
+    final err = await auth.sendRegistrationOtp(
+      email: widget.email,
+      password: pendingPassword,
+    );
     if (!mounted) return;
     setState(() => _busy = false);
     if (err != null) {
@@ -202,58 +292,60 @@ class _EmailOtpScreenState extends State<EmailOtpScreen> {
 
     return SecureScreen(
       child: Theme(
-      data: glassAuthTheme,
-      child: Scaffold(
-        backgroundColor: Colors.transparent,
-        body: GlassBackground(
-          backgroundImage: const AssetImage('assets/images/splash_bg.png'),
-          child: SafeArea(
-            child: Stack(
-              children: [
-                isWide
-                    ? Row(
-                        textDirection: TextDirection.rtl,
-                        children: [
-                          Expanded(
-                            flex: 5,
-                            child: _headerSide(
-                              collapsed: false,
-                              isNarrow: false,
+        data: glassAuthTheme,
+        child: Scaffold(
+          backgroundColor: Colors.transparent,
+          body: GlassBackground(
+            backgroundImage: const AssetImage('assets/images/splash_bg.png'),
+            child: SafeArea(
+              child: Stack(
+                children: [
+                  isWide
+                      ? Row(
+                          textDirection: TextDirection.rtl,
+                          children: [
+                            Expanded(
+                              flex: 5,
+                              child: _headerSide(
+                                collapsed: false,
+                                isNarrow: false,
+                              ),
                             ),
-                          ),
-                          Expanded(flex: 6, child: card),
-                        ],
-                      )
-                    : Column(
-                        children: [
-                          AnimatedContainer(
-                            duration: const Duration(milliseconds: 220),
-                            curve: Curves.easeOutCubic,
-                            height: keyboardVisible ? 120 : 210,
-                            width: double.infinity,
-                            child: _headerSide(
-                              collapsed: keyboardVisible,
-                              isNarrow: true,
+                            Expanded(flex: 6, child: card),
+                          ],
+                        )
+                      : Column(
+                          children: [
+                            AnimatedContainer(
+                              duration: const Duration(milliseconds: 220),
+                              curve: Curves.easeOutCubic,
+                              height: keyboardVisible ? 120 : 210,
+                              width: double.infinity,
+                              child: _headerSide(
+                                collapsed: keyboardVisible,
+                                isNarrow: true,
+                              ),
                             ),
-                          ),
-                          Expanded(child: card),
-                        ],
-                      ),
-                PositionedDirectional(
-                  top: 8,
-                  start: 8,
-                  child: IconButton(
-                    tooltip: 'رجوع',
-                    onPressed: _busy ? null : () => Navigator.of(context).maybePop(),
-                    icon: const Icon(Icons.arrow_back),
-                    color: Colors.white.withValues(alpha: 0.92),
+                            Expanded(child: card),
+                          ],
+                        ),
+                  PositionedDirectional(
+                    top: 8,
+                    start: 8,
+                    child: IconButton(
+                      tooltip: 'رجوع',
+                      onPressed: _busy
+                          ? null
+                          : () => Navigator.of(context).maybePop(),
+                      icon: const Icon(Icons.arrow_back),
+                      color: Colors.white.withValues(alpha: 0.92),
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
-      ),
       ),
     );
   }
@@ -312,12 +404,7 @@ class _EmailOtpScreenState extends State<EmailOtpScreen> {
     final cs = Theme.of(context).colorScheme;
     return Center(
       child: SingleChildScrollView(
-        padding: EdgeInsetsDirectional.fromSTEB(
-          20,
-          18,
-          20,
-          24 + bottomInset,
-        ),
+        padding: EdgeInsetsDirectional.fromSTEB(20, 18, 20, 24 + bottomInset),
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 560),
           child: GlassSurface(
@@ -348,6 +435,18 @@ class _EmailOtpScreenState extends State<EmailOtpScreen> {
                       height: 1.5,
                     ),
                   ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'ابحث عن بريد بعنوان «تأكيد التسجيل — naboo». '
+                    'الرمز صالح 60 دقيقة — يمكنك استخدام آخر بريد وصل '
+                    'دون انتظار جديد. راجع مجلد «البريد غير المرغوب» أيضاً.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.white.withValues(alpha: 0.55),
+                      height: 1.45,
+                    ),
+                  ),
                   const SizedBox(height: 20),
                 ],
                 Directionality(
@@ -359,8 +458,7 @@ class _EmailOtpScreenState extends State<EmailOtpScreen> {
 
                       // Try single-row first.
                       final maxW = constraints.maxWidth;
-                      final cellW1 =
-                          (maxW - spacing * (_digits - 1)) / _digits;
+                      final cellW1 = (maxW - spacing * (_digits - 1)) / _digits;
                       final canFitOneRow = cellW1 >= 34;
 
                       if (canFitOneRow) {
@@ -380,8 +478,7 @@ class _EmailOtpScreenState extends State<EmailOtpScreen> {
 
                       // Fallback: 2 rows (4 + 4) — always balanced.
                       const perRow = 4;
-                      final cellW2 =
-                          (maxW - spacing * (perRow - 1)) / perRow;
+                      final cellW2 = (maxW - spacing * (perRow - 1)) / perRow;
                       final cellW = cellW2.clamp(34.0, 54.0);
 
                       Widget rowOf(int start) {
@@ -413,7 +510,12 @@ class _EmailOtpScreenState extends State<EmailOtpScreen> {
                 if (_error != null) ...[
                   const SizedBox(height: 14),
                   Container(
-                    padding: const EdgeInsetsDirectional.fromSTEB(12, 10, 12, 10),
+                    padding: const EdgeInsetsDirectional.fromSTEB(
+                      12,
+                      10,
+                      12,
+                      10,
+                    ),
                     decoration: BoxDecoration(
                       color: const Color(0x33EF4444),
                       borderRadius: BorderRadius.circular(12),
@@ -517,7 +619,9 @@ class _EmailOtpScreenState extends State<EmailOtpScreen> {
                   ),
                   label: Text(
                     'تعديل البيانات',
-                    style: TextStyle(color: cs.onSurface.withValues(alpha: 0.80)),
+                    style: TextStyle(
+                      color: cs.onSurface.withValues(alpha: 0.80),
+                    ),
                   ),
                 ),
               ],
@@ -534,16 +638,17 @@ class _EmailOtpScreenState extends State<EmailOtpScreen> {
     return SizedBox(
       width: width,
       height: height,
-      child: RawKeyboardListener(
-        focusNode: FocusNode(),
-        onKey: (event) {
-          if (event is RawKeyDownEvent &&
+      child: Focus(
+        canRequestFocus: false,
+        onKeyEvent: (node, event) {
+          if (event is KeyDownEvent &&
               event.logicalKey == LogicalKeyboardKey.backspace) {
             if (_controllers[index].text.isEmpty && index > 0) {
               _controllers[index - 1].clear();
               _focusNodes[index - 1].requestFocus();
             }
           }
+          return KeyEventResult.ignored;
         },
         child: TextField(
           controller: _controllers[index],
@@ -561,8 +666,9 @@ class _EmailOtpScreenState extends State<EmailOtpScreen> {
           ),
           decoration: InputDecoration(
             filled: true,
-            fillColor:
-                hasFill ? Colors.white.withValues(alpha: 0.10) : Colors.white.withValues(alpha: 0.06),
+            fillColor: hasFill
+                ? Colors.white.withValues(alpha: 0.10)
+                : Colors.white.withValues(alpha: 0.06),
             contentPadding: EdgeInsets.zero,
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(10),

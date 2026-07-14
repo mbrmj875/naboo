@@ -86,9 +86,11 @@ export async function POST(req: Request) {
     const startsAt = body.starts_at?.trim()
       ? new Date(body.starts_at.trim())
       : now;
+    const defaultEndOffsetMs =
+      plan === "annual" ? 365 * 24 * 60 * 60 * 1000 : 30 * 24 * 60 * 60 * 1000;
     const endsAt = body.ends_at?.trim()
       ? new Date(body.ends_at.trim())
-      : new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+      : new Date(now.getTime() + defaultEndOffsetMs);
 
     if (Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime())) {
       return NextResponse.json(

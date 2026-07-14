@@ -1,33 +1,69 @@
 part of 'database_helper.dart';
 
 // ── إشعارات لوحة التحكم (استعلامات مباشرة من القاعدة) ─────────────────
+int _notifToFils(double value) => (value * 1000).round();
 
 extension DbNotifications on DatabaseHelper {
+  static const String _lowStockProductsWhere = '''
+    tenantId = ? AND isActive = 1 AND IFNULL(trackInventory, 1) = 1
+      AND (
+        qty <= 0
+        OR (IFNULL(lowStockThreshold, 0) > 0 AND qty <= lowStockThreshold)
+        OR (
+          IFNULL(stockBaseKind, 0) = 1
+          AND IFNULL(lowStockThreshold, 0) <= 0
+          AND qty > 0
+          AND qty < 1
+        )
+      )
+  ''';
+
+  /// عدد الأصناف الناقصة — COUNT كامل دون حد [LIMIT].
+  Future<int> countProductsForLowStockNotifications({
+    required int tenantId,
+    int? stockBaseKind,
+  }) async {
+    final db = await database;
+    final args = <Object?>[tenantId];
+    var extra = '';
+    if (stockBaseKind != null) {
+      extra = ' AND IFNULL(stockBaseKind, 0) = ?';
+      args.add(stockBaseKind);
+    }
+    final rows = await db.rawQuery(
+      '''
+      SELECT COUNT(*) AS c
+      FROM products
+      WHERE $_lowStockProductsWhere$extra
+      ''',
+      args,
+    );
+    return (rows.first['c'] as num?)?.toInt() ?? 0;
+  }
+
   /// منتجات نشطة بمخزون منخفض أو منفد (مع تتبع مخزون).
   Future<List<Map<String, dynamic>>> getProductsForLowStockNotifications({
     required int tenantId,
     int limit = 100,
+    int? stockBaseKind,
   }) async {
     final db = await database;
+    final args = <Object?>[tenantId];
+    var extra = '';
+    if (stockBaseKind != null) {
+      extra = ' AND IFNULL(stockBaseKind, 0) = ?';
+      args.add(stockBaseKind);
+    }
+    args.add(limit);
     return db.rawQuery(
       '''
       SELECT id, name, qty, lowStockThreshold, stockBaseKind
       FROM products
-      WHERE tenantId = ? AND isActive = 1 AND IFNULL(trackInventory, 1) = 1
-        AND (
-          qty <= 0
-          OR (IFNULL(lowStockThreshold, 0) > 0 AND qty <= lowStockThreshold)
-          OR (
-            IFNULL(stockBaseKind, 0) = 1
-            AND IFNULL(lowStockThreshold, 0) <= 0
-            AND qty > 0
-            AND qty < 1
-          )
-        )
+      WHERE $_lowStockProductsWhere$extra
       ORDER BY qty ASC, name COLLATE NOCASE ASC
       LIMIT ?
     ''',
-      [tenantId, limit],
+      args,
     );
   }
 
@@ -113,7 +149,7 @@ extension DbNotifications on DatabaseHelper {
       '''
       SELECT id, name, phone, balance
       FROM customers
-      WHERE tenantId = ? AND balance > 1e-6
+      WHERE tenantId = ? AND ROUND(balance * 1000) > 0
       ORDER BY balance DESC, name COLLATE NOCASE ASC
       LIMIT ?
       ''',
@@ -164,7 +200,7 @@ extension DbNotifications on DatabaseHelper {
       WHERE i.tenantId = ?
         AND i.type = ?
         AND IFNULL(i.isReturned, 0) = 0
-        AND (i.total - IFNULL(i.advancePayment, 0)) > 0.009
+        AND ${MoneySql.invoiceOpenRemainingFilsOf('i')} > 0
         AND CAST(
           (julianday(date('now', 'localtime')) - julianday(date(trim(i.date))))
           AS INTEGER
@@ -182,26 +218,27 @@ extension DbNotifications on DatabaseHelper {
     required double customerCap,
     int limit = 40,
   }) async {
-    if (customerCap <= 1e-9) return [];
+    final customerCapFils = _notifToFils(customerCap);
+    if (customerCapFils <= 0) return [];
     final db = await database;
     final t = InvoiceType.credit.index;
     return db.rawQuery(
       '''
       SELECT i.customerId AS customerId,
              MAX(i.customerName) AS customerName,
-             SUM(i.total - IFNULL(i.advancePayment, 0)) AS openTotal
+             SUM(${MoneySql.invoiceOpenRemainingFilsOf('i')}) AS openTotalFils
       FROM invoices i
       WHERE i.tenantId = ?
         AND i.type = ?
         AND IFNULL(i.isReturned, 0) = 0
         AND i.customerId IS NOT NULL
-        AND (i.total - IFNULL(i.advancePayment, 0)) > 0.009
+        AND ${MoneySql.invoiceOpenRemainingFilsOf('i')} > 0
       GROUP BY i.customerId
-      HAVING SUM(i.total - IFNULL(i.advancePayment, 0)) >= ?
-      ORDER BY openTotal DESC
+      HAVING SUM(${MoneySql.invoiceOpenRemainingFilsOf('i')}) >= ?
+      ORDER BY openTotalFils DESC
       LIMIT ?
       ''',
-      [tenantId, t, customerCap, limit],
+      [tenantId, t, customerCapFils, limit],
     );
   }
 
@@ -211,27 +248,28 @@ extension DbNotifications on DatabaseHelper {
     required double customerCap,
     int limit = 40,
   }) async {
-    if (customerCap <= 1e-9) return [];
+    final customerCapFils = _notifToFils(customerCap);
+    if (customerCapFils <= 0) return [];
     final db = await database;
     final t = InvoiceType.credit.index;
     return db.rawQuery(
       '''
       SELECT LOWER(TRIM(i.customerName)) AS nameKey,
              MIN(i.customerName) AS customerName,
-             SUM(i.total - IFNULL(i.advancePayment, 0)) AS openTotal
+             SUM(${MoneySql.invoiceOpenRemainingFilsOf('i')}) AS openTotalFils
       FROM invoices i
       WHERE i.tenantId = ?
         AND i.type = ?
         AND IFNULL(i.isReturned, 0) = 0
         AND i.customerId IS NULL
         AND LENGTH(TRIM(IFNULL(i.customerName, ''))) > 0
-        AND (i.total - IFNULL(i.advancePayment, 0)) > 0.009
+        AND ${MoneySql.invoiceOpenRemainingFilsOf('i')} > 0
       GROUP BY LOWER(TRIM(i.customerName))
-      HAVING SUM(i.total - IFNULL(i.advancePayment, 0)) >= ?
-      ORDER BY openTotal DESC
+      HAVING SUM(${MoneySql.invoiceOpenRemainingFilsOf('i')}) >= ?
+      ORDER BY openTotalFils DESC
       LIMIT ?
       ''',
-      [tenantId, t, customerCap, limit],
+      [tenantId, t, customerCapFils, limit],
     );
   }
 
@@ -241,7 +279,8 @@ extension DbNotifications on DatabaseHelper {
     required double perInvoiceCap,
     int limit = 60,
   }) async {
-    if (perInvoiceCap <= 1e-9) return [];
+    final perInvoiceCapFils = _notifToFils(perInvoiceCap);
+    if (perInvoiceCapFils <= 0) return [];
     final db = await database;
     final t = InvoiceType.credit.index;
     return db.rawQuery(
@@ -249,17 +288,17 @@ extension DbNotifications on DatabaseHelper {
       SELECT i.id,
              IFNULL(i.customerName, '') AS customerName,
              i.date,
-             (i.total - IFNULL(i.advancePayment, 0)) AS remaining
+             CAST(${MoneySql.invoiceOpenRemainingFilsOf('i')} AS REAL) / 1000.0 AS remaining
       FROM invoices i
       WHERE i.tenantId = ?
         AND i.type = ?
         AND IFNULL(i.isReturned, 0) = 0
-        AND (i.total - IFNULL(i.advancePayment, 0)) > 0.009
-        AND (i.total - IFNULL(i.advancePayment, 0)) >= ?
+        AND ${MoneySql.invoiceOpenRemainingFilsOf('i')} > 0
+        AND ${MoneySql.invoiceOpenRemainingFilsOf('i')} >= ?
       ORDER BY remaining DESC, i.date ASC
       LIMIT ?
       ''',
-      [tenantId, t, perInvoiceCap, limit],
+      [tenantId, t, perInvoiceCapFils, limit],
     );
   }
 
@@ -281,13 +320,16 @@ extension DbNotifications on DatabaseHelper {
     ).toIso8601String();
     final rows = await db.rawQuery(
       '''
-      SELECT IFNULL(SUM(total), 0) AS s FROM invoices
+      SELECT COALESCE(SUM(${MoneySql.invoiceTotalFils}), 0) AS s_fils
+      FROM invoices
       WHERE tenantId = ?
-        AND IFNULL(isReturned, 0) = 0 AND date >= ? AND date <= ?
+        AND deleted_at IS NULL
+        AND IFNULL(isReturned, 0) = 0
+        AND date >= ? AND date <= ?
       ''',
       [tenantId, start, end],
     );
     if (rows.isEmpty) return 0;
-    return (rows.first['s'] as num?)?.toDouble() ?? 0;
+    return ((rows.first['s_fils'] as num?)?.toInt() ?? 0) / 1000.0;
   }
 }

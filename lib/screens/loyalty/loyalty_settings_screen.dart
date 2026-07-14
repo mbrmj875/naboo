@@ -89,12 +89,34 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final primaryText = isDark ? Colors.white : AppColors.primaryDark;
+    final secondaryText = isDark
+        ? Colors.grey.shade400
+        : AppColors.primaryDark.withValues(alpha: 0.75);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('إعدادات ولاء العملاء'),
+        backgroundColor: isDark ? AppColors.primary : Colors.white,
+        foregroundColor: primaryText,
+        iconTheme: const IconThemeData(color: AppColors.accentGold),
+        actionsIconTheme: const IconThemeData(color: AppColors.accentGold),
+        title: Text(
+          'إعدادات ولاء العملاء',
+          style: TextStyle(fontWeight: FontWeight.w700, color: primaryText),
+        ),
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(1.2),
+          child: Container(
+            height: 1.2,
+            color: AppColors.accentGold.withValues(alpha: 0.55),
+          ),
+        ),
         actions: [
           FilledButton(
             onPressed: _dirty ? _save : null,
+            style: FilledButton.styleFrom(
+              backgroundColor: AppColors.accentGold,
+              foregroundColor: AppColors.primaryDark,
+            ),
             child: const Text('حفظ'),
           ),
           const SizedBox(width: 8),
@@ -106,9 +128,9 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen> {
           Card(
             elevation: 0,
             shape: RoundedRectangleBorder(
-              borderRadius: AppShape.none,
+              borderRadius: BorderRadius.circular(12),
               side: BorderSide(
-                color: isDark ? AppColors.borderDark : AppColors.borderLight,
+                color: AppColors.accentGold.withValues(alpha: isDark ? 0.35 : 0.3),
               ),
             ),
             child: Padding(
@@ -120,6 +142,7 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen> {
                     'لماذا لا «يُفسد» الأرباح؟',
                     style: Theme.of(context).textTheme.titleSmall?.copyWith(
                           fontWeight: FontWeight.bold,
+                          color: primaryText,
                         ),
                   ),
                   const SizedBox(height: 8),
@@ -128,7 +151,7 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen> {
                     'منح النقاط لا يغيّر تكلفة الشراء؛ الاستبدال يقلّل ما يدفعه العميل نقداً وفق قواعدك.',
                     style: TextStyle(
                       fontSize: 13,
-                      color: isDark ? Colors.grey.shade400 : Colors.grey.shade700,
+                      color: secondaryText,
                       height: 1.35,
                     ),
                   ),
@@ -138,10 +161,16 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen> {
           ),
           const SizedBox(height: 16),
           SwitchListTile(
-            title: const Text('تفعيل برنامج النقاط'),
-            subtitle: const Text('عند الإيقاف تُحفظ الفواتير دون جمع أو استبدال'),
+            title: Text(
+              'تفعيل برنامج النقاط',
+              style: TextStyle(color: primaryText, fontWeight: FontWeight.w600),
+            ),
+            subtitle: Text(
+              'عند الإيقاف تُحفظ الفواتير دون جمع أو استبدال',
+              style: TextStyle(color: secondaryText),
+            ),
             value: _enabled,
-            activeThumbColor: AppColors.primary,
+            activeThumbColor: AppColors.accentGold,
             onChanged: (v) => setState(() {
               _enabled = v;
               _dirty = true;
@@ -155,9 +184,22 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen> {
               FilteringTextInputFormatter.allow(RegExp(r'[\d.]')),
             ],
             onChanged: (_) => setState(() => _dirty = true),
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               labelText: 'نقاط لكل 1000 د.ع من صافي الفاتورة المؤهّل',
-              border: OutlineInputBorder(borderRadius: AppShape.none),
+              labelStyle: TextStyle(color: secondaryText),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(
+                  color: AppColors.accentGold.withValues(alpha: isDark ? 0.4 : 0.28),
+                ),
+              ),
+              focusedBorder: const OutlineInputBorder(
+                borderRadius: BorderRadius.all(Radius.circular(12)),
+                borderSide: BorderSide(color: AppColors.accentGold, width: 1.4),
+              ),
             ),
           ),
           const SizedBox(height: 12),
@@ -168,9 +210,22 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen> {
               FilteringTextInputFormatter.allow(RegExp(r'[\d.]')),
             ],
             onChanged: (_) => setState(() => _dirty = true),
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               labelText: 'قيمة الخصم بالدينار لكل نقطة عند الاستبدال',
-              border: OutlineInputBorder(borderRadius: AppShape.none),
+              labelStyle: TextStyle(color: secondaryText),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(
+                  color: AppColors.accentGold.withValues(alpha: isDark ? 0.4 : 0.28),
+                ),
+              ),
+              focusedBorder: const OutlineInputBorder(
+                borderRadius: BorderRadius.all(Radius.circular(12)),
+                borderSide: BorderSide(color: AppColors.accentGold, width: 1.4),
+              ),
             ),
           ),
           const SizedBox(height: 12),
@@ -179,9 +234,22 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen> {
             keyboardType: TextInputType.number,
             inputFormatters: [FilteringTextInputFormatter.digitsOnly],
             onChanged: (_) => setState(() => _dirty = true),
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               labelText: 'أقل عدد نقاط لعملية استبدال واحدة (0 = بدون حد)',
-              border: OutlineInputBorder(borderRadius: AppShape.none),
+              labelStyle: TextStyle(color: secondaryText),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(
+                  color: AppColors.accentGold.withValues(alpha: isDark ? 0.4 : 0.28),
+                ),
+              ),
+              focusedBorder: const OutlineInputBorder(
+                borderRadius: BorderRadius.all(Radius.circular(12)),
+                borderSide: BorderSide(color: AppColors.accentGold, width: 1.4),
+              ),
             ),
           ),
           const SizedBox(height: 12),
@@ -192,47 +260,63 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen> {
               FilteringTextInputFormatter.allow(RegExp(r'[\d.]')),
             ],
             onChanged: (_) => setState(() => _dirty = true),
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               labelText: 'أقصى % من صافي الفاتورة يُغطّى بالنقاط',
-              border: OutlineInputBorder(borderRadius: AppShape.none),
+              labelStyle: TextStyle(color: secondaryText),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(
+                  color: AppColors.accentGold.withValues(alpha: isDark ? 0.4 : 0.28),
+                ),
+              ),
+              focusedBorder: const OutlineInputBorder(
+                borderRadius: BorderRadius.all(Radius.circular(12)),
+                borderSide: BorderSide(color: AppColors.accentGold, width: 1.4),
+              ),
             ),
           ),
           const SizedBox(height: 8),
-          const Text(
+          Text(
             'متى تُمنح النقاط؟',
-            style: TextStyle(fontWeight: FontWeight.w600),
+            style: TextStyle(fontWeight: FontWeight.w700, color: primaryText),
           ),
           SwitchListTile(
-            title: const Text('البيع النقدي'),
+            title: Text('البيع النقدي', style: TextStyle(color: primaryText)),
             value: _earnCash,
-            activeThumbColor: AppColors.primary,
+            activeThumbColor: AppColors.accentGold,
             onChanged: (v) => setState(() {
               _earnCash = v;
               _dirty = true;
             }),
           ),
           SwitchListTile(
-            title: const Text('التوصيل'),
+            title: Text('التوصيل', style: TextStyle(color: primaryText)),
             value: _earnDelivery,
-            activeThumbColor: AppColors.primary,
+            activeThumbColor: AppColors.accentGold,
             onChanged: (v) => setState(() {
               _earnDelivery = v;
               _dirty = true;
             }),
           ),
           SwitchListTile(
-            title: const Text('التقسيط'),
+            title: Text('التقسيط', style: TextStyle(color: primaryText)),
             value: _earnInstallment,
-            activeThumbColor: AppColors.primary,
+            activeThumbColor: AppColors.accentGold,
             onChanged: (v) => setState(() {
               _earnInstallment = v;
               _dirty = true;
             }),
           ),
           SwitchListTile(
-            title: const Text('البيع الآجل عند وجود مقدّم دفع'),
+            title: Text(
+              'البيع الآجل عند وجود مقدّم دفع',
+              style: TextStyle(color: primaryText),
+            ),
             value: _earnCreditDown,
-            activeThumbColor: AppColors.primary,
+            activeThumbColor: AppColors.accentGold,
             onChanged: (v) => setState(() {
               _earnCreditDown = v;
               _dirty = true;

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../theme/app_spacing.dart';
+import '../../theme/design_tokens.dart';
 import '../../utils/screen_layout.dart';
 
 /// قائمة المستخدم المنسدلة في الـ AppBar للشاشة الرئيسية.
@@ -9,13 +10,8 @@ import '../../utils/screen_layout.dart';
 /// - تبديل المظهر (Theme Toggle)
 /// - الإعدادات
 /// - الحاسبة
-/// - تبديل لوحة Mac (Desktop فقط — onToggleMacPanel == null في الباقي)
 /// - تبديل وضع التحرير (tabletLG+ فقط — يظهر فقط حين `showEditMode == true`)
-/// - تسجيل الخروج
-///
-/// **مظهر الزر**:
-/// - `phoneXS`, `phoneSM`, `tabletSM`: أيقونة دائرية فقط (28dp) بحرف من الاسم.
-/// - `tabletLG`, `desktopSM`, `desktopLG`: أيقونة + اسم المستخدم + سهم.
+/// - قفل الجلسة (العودة لبوابة الموظفين — لا فصل من السيرفر)
 class HomeUserMenu extends StatelessWidget {
   const HomeUserMenu({
     super.key,
@@ -23,54 +19,25 @@ class HomeUserMenu extends StatelessWidget {
     required this.userRole,
     required this.isDarkMode,
     required this.isEditMode,
-    required this.macPanelEnabled,
     required this.onShowUserInfo,
     required this.onToggleTheme,
     required this.onOpenSettings,
     required this.onShowCalculator,
     required this.onToggleEditMode,
     required this.onLogout,
-    this.onToggleMacPanel,
     this.showEditMode = false,
   });
 
-  /// اسم المستخدم الفعّال (للعرض في tabletLG+ والـ tooltip).
   final String userName;
-
-  /// دور المستخدم (مدير/كاشير/إلخ).
   final String userRole;
-
-  /// الحالة الحالية للوضع الليلي — لاختيار التسمية والأيقونة.
   final bool isDarkMode;
-
-  /// الحالة الحالية لوضع تحرير الوحدات.
   final bool isEditMode;
-
-  /// الحالة الحالية للوحة Mac (مفعّلة/معطّلة).
-  final bool macPanelEnabled;
-
-  /// عند الضغط على معلومات المستخدم — يفتح Dialog التفاصيل.
   final VoidCallback onShowUserInfo;
-
-  /// تبديل الوضع الليلي/النهاري.
   final VoidCallback onToggleTheme;
-
-  /// فتح شاشة الإعدادات.
   final VoidCallback onOpenSettings;
-
-  /// عرض الحاسبة العائمة.
   final VoidCallback onShowCalculator;
-
-  /// تبديل وضع تحرير الوحدات (إعادة الترتيب).
   final VoidCallback onToggleEditMode;
-
-  /// تسجيل الخروج.
   final VoidCallback onLogout;
-
-  /// تبديل لوحة Mac الجانبية. **null على غير الديسكتوب** ⇒ الخيار يختفي تماماً.
-  final VoidCallback? onToggleMacPanel;
-
-  /// هل يظهر خيار "وضع التحرير"؟ true فقط في tabletLG+ (Home يتحكم به).
   final bool showEditMode;
 
   @override
@@ -81,7 +48,11 @@ class HomeUserMenu extends StatelessWidget {
 
     return PopupMenuButton<_HomeUserMenuAction>(
       tooltip: userName.isNotEmpty ? userName : 'الحساب',
-      color: cs.surface,
+      color: isDarkMode ? const Color(0xFF1E293B) : cs.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.5)),
+      ),
       surfaceTintColor: Colors.transparent,
       offset: const Offset(0, 44),
       onSelected: (action) => _handle(action),
@@ -100,18 +71,18 @@ class HomeUserMenu extends StatelessWidget {
       height: 28,
       alignment: Alignment.center,
       decoration: BoxDecoration(
-        color: onPrimary.withValues(alpha: 0.18),
+        color: AppColors.accentGold.withValues(alpha: 0.18),
         shape: BoxShape.circle,
         border: Border.all(
-          color: onPrimary.withValues(alpha: 0.35),
+          color: AppColors.accentGold.withValues(alpha: 0.5),
           width: 1,
         ),
       ),
       child: Text(
         initial,
         style: TextStyle(
-          color: onPrimary,
-          fontSize: 13,
+          color: AppColors.accentGold,
+          fontSize: initial.length > 1 ? 11 : 13,
           fontWeight: FontWeight.w700,
         ),
       ),
@@ -162,8 +133,12 @@ class HomeUserMenu extends StatelessWidget {
   String _initial() {
     final name = userName.trim();
     if (name.isEmpty) return '?';
-    final firstChar = name.characters.first;
-    return firstChar.toUpperCase();
+    final parts = name.split(RegExp(r'\s+'));
+    if (parts.length >= 2) {
+      return '${parts[0].characters.first}${parts[1].characters.first}'.toUpperCase();
+    }
+    final chars = name.characters;
+    return chars.take(chars.length >= 2 ? 2 : 1).toString().toUpperCase();
   }
 
   void _handle(_HomeUserMenuAction action) {
@@ -176,8 +151,6 @@ class HomeUserMenu extends StatelessWidget {
         onOpenSettings();
       case _HomeUserMenuAction.calculator:
         onShowCalculator();
-      case _HomeUserMenuAction.macPanel:
-        onToggleMacPanel?.call();
       case _HomeUserMenuAction.editMode:
         onToggleEditMode();
       case _HomeUserMenuAction.logout:
@@ -188,18 +161,16 @@ class HomeUserMenu extends StatelessWidget {
   List<PopupMenuEntry<_HomeUserMenuAction>> _items(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final entries = <PopupMenuEntry<_HomeUserMenuAction>>[
-      // معلومات المستخدم (Header)
       PopupMenuItem<_HomeUserMenuAction>(
         value: _HomeUserMenuAction.profile,
         child: _MenuRow(
           icon: Icons.person_outline_rounded,
           title: userName.isEmpty ? 'الحساب' : userName,
           subtitle: userRole.isEmpty ? null : userRole,
-          color: cs.primary,
+          color: AppColors.accentGold,
         ),
       ),
       const PopupMenuDivider(),
-      // تبديل المظهر
       PopupMenuItem<_HomeUserMenuAction>(
         value: _HomeUserMenuAction.theme,
         child: _MenuRow(
@@ -225,24 +196,6 @@ class HomeUserMenu extends StatelessWidget {
       ),
     ];
 
-    // لوحة Mac — على الديسكتوب فقط (onToggleMacPanel == null في الباقي)
-    if (onToggleMacPanel != null) {
-      entries.add(
-        PopupMenuItem<_HomeUserMenuAction>(
-          value: _HomeUserMenuAction.macPanel,
-          child: _MenuRow(
-            icon: macPanelEnabled
-                ? Icons.dashboard_customize_rounded
-                : Icons.dashboard_customize_outlined,
-            title: macPanelEnabled
-                ? 'إخفاء لوحة Mac'
-                : 'إظهار لوحة Mac',
-          ),
-        ),
-      );
-    }
-
-    // وضع التحرير — على tabletLG+ فقط (Home يمرر showEditMode = true)
     if (showEditMode) {
       entries.add(
         PopupMenuItem<_HomeUserMenuAction>(
@@ -261,7 +214,7 @@ class HomeUserMenu extends StatelessWidget {
         value: _HomeUserMenuAction.logout,
         child: _MenuRow(
           icon: Icons.logout_rounded,
-          title: 'تسجيل الخروج',
+          title: 'قفل الجلسة',
           color: cs.error,
         ),
       ),
@@ -276,7 +229,6 @@ enum _HomeUserMenuAction {
   theme,
   settings,
   calculator,
-  macPanel,
   editMode,
   logout,
 }
@@ -297,7 +249,7 @@ class _MenuRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final effectiveColor = color ?? cs.onSurface;
+    final effectiveColor = color ?? AppColors.accentGold;
     return Row(
       textDirection: TextDirection.rtl,
       children: [
@@ -313,7 +265,7 @@ class _MenuRow extends StatelessWidget {
                 style: TextStyle(
                   color: effectiveColor,
                   fontSize: 13,
-                  fontWeight: FontWeight.w500,
+                  fontWeight: FontWeight.w600,
                 ),
               ),
               if (subtitle != null) ...[

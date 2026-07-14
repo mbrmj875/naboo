@@ -11,7 +11,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../navigation/app_root_navigator_key.dart';
 import '../../models/customer_record.dart';
 import '../../models/installment_settings_data.dart';
+import '../../models/fluid_grade_sale_option.dart';
 import '../../models/invoice.dart';
+import '../../models/product_variant_kind.dart';
 import '../../models/sale_pos_settings_data.dart';
 import '../../models/loyalty_settings_data.dart';
 import '../../providers/auth_provider.dart';
@@ -22,10 +24,17 @@ import '../../providers/print_settings_provider.dart';
 import '../../providers/parked_sales_provider.dart';
 import '../../providers/product_provider.dart';
 import '../../providers/sale_pos_settings_provider.dart';
+import '../../providers/shift_provider.dart';
 import '../../providers/ui_feedback_settings_provider.dart';
 import '../../providers/sale_draft_provider.dart';
 import '../../services/cloud_sync_service.dart';
 import '../../services/database_helper.dart';
+import '../../services/price_list_repository.dart';
+import '../../services/tenant_context_service.dart';
+import '../../owner/owner_command_center_refresh_bridge.dart';
+import '../../owner/services/business_audit_log_service.dart';
+import '../../verticals/_contract/vertical_manifest.dart';
+import '../../verticals/_contract/vertical_registry.dart';
 import '../../services/product_variants_repository.dart';
 import '../../services/service_orders_repository.dart';
 import '../../services/app_settings_repository.dart';
@@ -36,14 +45,15 @@ import '../../utils/app_logger.dart';
 import '../../utils/invoice_barcode.dart';
 import '../../utils/invoice_validation.dart';
 import '../../utils/iraqi_currency_format.dart';
+import '../../utils/shift_actor_conflict_guard.dart';
+import '../../utils/stock_quantity_kind.dart';
 import '../../utils/loyalty_math.dart';
 import '../../utils/screen_layout.dart';
 import '../../utils/sale_receipt_pdf.dart';
 import '../../utils/theme.dart';
-import '../../navigation/content_navigation.dart';
 import '../../widgets/barcode_input_launcher.dart';
 import '../../widgets/app_color_picker_dialog.dart';
-import '../../widgets/mac_style_settings_panel.dart';
+import '../../widgets/fluid_variants/inline_fluid_family_sale_picker.dart';
 import '../../widgets/wide_home_product_rail.dart';
 import '../installments/add_installment_plan_screen.dart';
 import '../inventory/add_product_screen.dart';
@@ -114,7 +124,12 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
   final Map<int, bool> _hasClothingVariantsByProductId = {};
   final Set<int> _clothingVariantsLoading = {};
   final Map<int, List<Map<String, dynamic>>> _clothingVariantsByProductId = {};
+  final Map<int, List<FluidGradeSaleOption>> _fluidSaleOptionsByParentId = {};
+  final Map<int, bool> _fluidFamilyParentByProductId = {};
+  final Map<int, int> _fluidFamilyVariantKindByParentId = {};
+  final Set<int> _fluidSaleOptionsLoading = {};
   final Set<int> _expandedLineIds = {};
+  final Map<int, int> _pharmacyBatchIdByLineId = {};
   bool _enableClothingVariants = false;
   int _lineIdSeq = 0;
 
@@ -137,10 +152,21 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
   /// عميل مرتبط من القائمة — مطلوب لاستخدام نقاط الولاء بدقة.
   int? _linkedCustomerId;
   int? _linkedServiceOrderId;
+
+  /// قائمة أسعار خاصة بالعميل المختار (إن وُجدت).
+  int? _customerPriceListId;
+
+  /// قائمة الأسعار الافتراضية للنظام (إن وُجدت).
+  int? _defaultPriceListId;
+  final PriceListRepository _priceListRepo = PriceListRepository();
   int _customerLoyaltyBalance = 0;
   final _loyaltyRedeemController = TextEditingController(text: '0');
 
-  /// مساعد عرض التقسيط: فائدة % على المبلغ بعد المقدّم، وعدد أشهر، والقسط الشهري المقترح.
+  /// حساسيات العميل من امتداد الصيدلية — للعرض في POS.
+  List<String> _pharmacyCustomerAllergies = const [];
+  String? _pharmacyCustomerPhone;
+
+  /// مساعد عرض التقسيط: فائدة % على إجمالي الفاتورة، وعدد أشهر، والقسط الشهري المقترح.
   final _instInterestPct = TextEditingController(text: '0');
   final _instMonths = TextEditingController(text: '6');
 
@@ -182,7 +208,13 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
           .listActiveUnitVariantsForProduct(productId);
       if (!mounted) return;
       setState(() => _variantsByProductId[productId] = rows);
-    } catch (_) {
+    } catch (e, st) {
+      AppLogger.error(
+        'SalePOS',
+        'فشل تحميل وحدات المنتج productId=$productId',
+        e,
+        st,
+      );
       if (!mounted) return;
       setState(() => _variantsByProductId[productId] = const []);
     } finally {
@@ -205,7 +237,13 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
         _clothingVariantsByProductId[productId] = rows;
         _hasClothingVariantsByProductId[productId] = rows.isNotEmpty;
       });
-    } catch (_) {
+    } catch (e, st) {
+      AppLogger.error(
+        'SalePOS',
+        'فشل تحميل متغيرات الملابس productId=$productId',
+        e,
+        st,
+      );
       if (!mounted) return;
       setState(() {
         _clothingVariantsByProductId[productId] = const [];
@@ -214,6 +252,176 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     } finally {
       _clothingVariantsLoading.remove(productId);
     }
+  }
+
+  Future<void> _ensureFluidSaleOptionsLoadedForParent(int parentProductId) async {
+    if (_fluidSaleOptionsByParentId.containsKey(parentProductId)) return;
+    if (_fluidSaleOptionsLoading.contains(parentProductId)) return;
+    _fluidSaleOptionsLoading.add(parentProductId);
+    try {
+      final editor = VerticalRegistry.instance
+          .manifestFor(BusinessVertical.oilChange)
+          ?.fluidInventoryEditor;
+      final opts = editor == null
+          ? const <FluidGradeSaleOption>[]
+          : await editor.listSaleOptionsForParent(parentProductId);
+      final row =
+          await context.read<ProductProvider>().getProductById(parentProductId);
+      if (!mounted) return;
+      setState(() {
+        _fluidSaleOptionsByParentId[parentProductId] = opts;
+        _fluidFamilyParentByProductId[parentProductId] = true;
+        final k = (row?['variantKind'] as num?)?.toInt();
+        if (k != null) _fluidFamilyVariantKindByParentId[parentProductId] = k;
+      });
+    } catch (e, st) {
+      AppLogger.error(
+        'SalePOS',
+        'فشل تحميل درجات الزيت parentProductId=$parentProductId',
+        e,
+        st,
+      );
+      if (!mounted) return;
+      setState(() {
+        _fluidSaleOptionsByParentId[parentProductId] = const [];
+        _fluidFamilyParentByProductId[parentProductId] = true;
+      });
+    } finally {
+      _fluidSaleOptionsLoading.remove(parentProductId);
+    }
+  }
+
+  Future<bool> _isFluidFamilyParentProduct(int productId) async {
+    final cached = _fluidFamilyParentByProductId[productId];
+    if (cached != null) return cached;
+    final row = await context.read<ProductProvider>().getProductById(productId);
+    if (!mounted) return false;
+    final k = (row?['variantKind'] as num?)?.toInt() ?? 0;
+    final isParent = ProductVariantKind.isFluidFamilyParent(
+      row ?? const <String, dynamic>{},
+    );
+    setState(() {
+      _fluidFamilyParentByProductId[productId] = isParent;
+      if (isParent) _fluidFamilyVariantKindByParentId[productId] = k;
+    });
+    return isParent;
+  }
+
+  Widget? _buildPharmacyPosDrugPanelForLine(
+    BuildContext context,
+    _InvoiceLineState line,
+  ) {
+    if (line.productId == null) return null;
+    try {
+      return VerticalRegistry.instance.activeManifest.buildPosDrugPanel(
+        context,
+        PosDrugPanelArgs(
+          productId: line.productId!,
+          customerId: _linkedCustomerId,
+          productName: line.productName,
+          selectedBatchId: _pharmacyBatchIdByLineId[line.lineId],
+          onBatchChanged: (batchId) {
+            setState(() => _pharmacyBatchIdByLineId[line.lineId] = batchId);
+          },
+        ),
+      );
+    } on StateError {
+      return null;
+    }
+  }
+
+  String _fluidFamilyKindLabel(int parentProductId) {
+    final k = _fluidFamilyVariantKindByParentId[parentProductId];
+    if (k == ProductVariantKind.oilFamily) return 'زيت';
+    return 'هيدروليك';
+  }
+
+  double? _fluidPackFactorFromKey(String key, int? parentProductId) {
+    final parsed = parseFluidSalePackKey(key);
+    if (parsed == null) return null;
+    final opts = _fluidSaleOptionsByParentId[parentProductId] ?? const [];
+    for (final g in opts) {
+      if (g.linkedProductId != parsed.linkedProductId) continue;
+      for (final p in g.packs) {
+        if (p.unitVariantId == parsed.unitVariantId) return p.factorToBase;
+      }
+    }
+    return 1;
+  }
+
+  double _usedBaseLitersForLinked(
+    int linkedProductId, {
+    int? excludeLineId,
+  }) {
+    var sum = 0.0;
+    for (final x in _lines) {
+      if (excludeLineId != null && x.lineId == excludeLineId) continue;
+      if (x.fluidPackQty.isEmpty &&
+          x.productId == linkedProductId &&
+          !x.isFluidPending) {
+        sum += _lineBaseForMath(x);
+      }
+      for (final e in x.fluidPackQty.entries) {
+        final parsed = parseFluidSalePackKey(e.key);
+        if (parsed == null || parsed.linkedProductId != linkedProductId) continue;
+        final f = _fluidPackFactorFromKey(e.key, x.productId) ?? 1;
+        sum += e.value * f;
+      }
+    }
+    return sum;
+  }
+
+  void _syncFluidLineFromSelections(_InvoiceLineState line) {
+    final opts = _fluidSaleOptionsByParentId[line.productId] ?? const [];
+    var totalBase = 0.0;
+    var totalMoney = 0.0;
+    for (final e in line.fluidPackQty.entries) {
+      if (e.value <= 1e-9) continue;
+      final parsed = parseFluidSalePackKey(e.key);
+      if (parsed == null) continue;
+      FluidGradeSaleOption? grade;
+      FluidPackSaleOption? pack;
+      for (final g in opts) {
+        if (g.linkedProductId != parsed.linkedProductId) continue;
+        grade = g;
+        for (final p in g.packs) {
+          if (p.unitVariantId == parsed.unitVariantId) {
+            pack = p;
+            break;
+          }
+        }
+        break;
+      }
+      if (grade == null || pack == null) continue;
+      final base = e.value * pack.factorToBase;
+      totalBase += base;
+      totalMoney += e.value * pack.sellPerUnit(grade.sellPerLiter);
+    }
+    line.quantity = totalBase;
+    line.unitFactor = 1;
+    line.unitLabel = 'لتر';
+    line.unitPrice = totalBase > 1e-9 ? totalMoney / totalBase : line.sellPrice;
+    line.isFluidPending = totalBase <= 1e-9;
+    line.unitVariantId = null;
+    line.productVariantId = null;
+  }
+
+  double _fluidSelectionGross(_InvoiceLineState line) {
+    final opts = _fluidSaleOptionsByParentId[line.productId] ?? const [];
+    var total = 0.0;
+    for (final e in line.fluidPackQty.entries) {
+      if (e.value <= 1e-9) continue;
+      final parsed = parseFluidSalePackKey(e.key);
+      if (parsed == null) continue;
+      for (final g in opts) {
+        if (g.linkedProductId != parsed.linkedProductId) continue;
+        for (final p in g.packs) {
+          if (p.unitVariantId != parsed.unitVariantId) continue;
+          total += e.value * p.sellPerUnit(g.sellPerLiter);
+        }
+      }
+    }
+    return total;
   }
 
   Future<bool> _hasClothingVariants(int productId) async {
@@ -432,7 +640,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
   }
 
   double _saleQtyStep(_InvoiceLineState l) {
-    if (l.stockBaseKind == 1) {
+    if (StockBaseKind.allowsFractional(l.stockBaseKind)) {
       final q = l.quantity;
       if (q >= 10) return 1.0;
       if (q >= 2) return 0.5;
@@ -444,7 +652,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
   String _formatSaleQty(_InvoiceLineState l) {
     final q = l.quantity;
     if (!q.isFinite) return '0';
-    if (l.stockBaseKind != 1 && (q % 1).abs() < 1e-9) {
+    if (!StockBaseKind.allowsFractional(l.stockBaseKind) && (q % 1).abs() < 1e-9) {
       return IraqiCurrencyFormat.formatInt(q);
     }
     return IraqiCurrencyFormat.formatDecimal2(q);
@@ -601,14 +809,12 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     messenger.showSnackBar(_floatedSnackBar(snackBar, bottomMargin));
   }
 
-  /// إغلاق شاشة البيع: [Navigator.pop] للمسار الداخلي، أو إغلاق نافذة mac عائمة عندما لا يوجد سوى مسار واحد.
+  /// إغلاق شاشة البيع.
   void _leaveSaleScreen() {
     if (!mounted) return;
     final nav = Navigator.of(context);
     if (nav.canPop()) {
       nav.pop();
-    } else {
-      closeMacFloatingPanelByRouteId(AppContentRoutes.addInvoice);
     }
   }
 
@@ -623,7 +829,12 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       _clothingVariantsByProductId.clear();
       _clothingVariantsLoading.clear();
       _hasClothingVariantsByProductId.clear();
+      _fluidSaleOptionsByParentId.clear();
+      _fluidFamilyParentByProductId.clear();
+      _fluidFamilyVariantKindByParentId.clear();
+      _fluidSaleOptionsLoading.clear();
       _expandedLineIds.clear();
+      _pharmacyBatchIdByLineId.clear();
       _lineIdSeq = 0;
       _customerController.clear();
       _deliveryAddressController.clear();
@@ -636,6 +847,8 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       _linkedCustomerId = null;
       _linkedServiceOrderId = null;
       _customerLoyaltyBalance = 0;
+      _pharmacyCustomerAllergies = const [];
+      _pharmacyCustomerPhone = null;
       _customerHits = [];
       type = InvoiceType.cash;
       _activeParkedSaleId = null;
@@ -725,13 +938,145 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
   Future<void> _refreshLoyaltyBalance() async {
     final id = _linkedCustomerId;
     if (id == null) {
-      if (mounted) setState(() => _customerLoyaltyBalance = 0);
+      if (mounted) {
+        setState(() {
+          _customerLoyaltyBalance = 0;
+          _customerPriceListId = null;
+          _pharmacyCustomerAllergies = const [];
+          _pharmacyCustomerPhone = null;
+        });
+      }
       return;
     }
     final row = await _parkDb.getCustomerById(id);
     if (!mounted) return;
     setState(() {
       _customerLoyaltyBalance = (row?['loyaltyPoints'] as num?)?.toInt() ?? 0;
+      _customerPriceListId = (row?['priceListId'] as num?)?.toInt();
+      final phone = row?['phone']?.toString().trim();
+      _pharmacyCustomerPhone =
+          phone == null || phone.isEmpty ? null : phone;
+    });
+    await _refreshPharmacyCustomerAllergies();
+  }
+
+  Future<void> _refreshPharmacyCustomerAllergies() async {
+    final id = _linkedCustomerId;
+    if (id == null) {
+      if (mounted) {
+        setState(() => _pharmacyCustomerAllergies = const []);
+      }
+      return;
+    }
+    try {
+      final tenant = TenantContextService.instance;
+      if (!tenant.loaded) await tenant.load();
+      final tenantId = tenant.requireActiveTenantId();
+      final snapshot = await VerticalRegistry.instance.activeManifest
+          .loadCustomerPharmacySnapshot(
+        tenantId: tenantId,
+        customerId: id,
+      );
+      if (!mounted) return;
+      setState(
+        () => _pharmacyCustomerAllergies =
+            List<String>.from(snapshot?.allergies ?? const []),
+      );
+    } catch (e, st) {
+      AppLogger.error('AddInvoice', 'pharmacy customer ext load failed', e, st);
+    }
+  }
+
+  Future<void> _openPharmacyCustomerDetailSheet() async {
+    final id = _linkedCustomerId;
+    if (id == null) return;
+    try {
+      final tenant = TenantContextService.instance;
+      if (!tenant.loaded) await tenant.load();
+      final tenantId = tenant.requireActiveTenantId();
+      await VerticalRegistry.instance.activeManifest.openCustomerPharmacyDetailSheet(
+        context: context,
+        tenantId: tenantId,
+        customerId: id,
+        customerName: _customerController.text.trim(),
+        customerPhone: _pharmacyCustomerPhone,
+        onUpdated: () {
+          unawaited(_refreshPharmacyCustomerAllergies());
+        },
+      );
+    } catch (e, st) {
+      AppLogger.error('AddInvoice', 'pharmacy customer sheet failed', e, st);
+    }
+  }
+
+  Widget? _buildPharmacyCustomerAllergiesBanner() {
+    if (_pharmacyCustomerAllergies.isEmpty) return null;
+    return VerticalRegistry.instance.activeManifest.buildCustomerAllergiesBanner(
+      _pharmacyCustomerAllergies,
+    );
+  }
+
+  Future<void> _loadDefaultPriceList() async {
+    try {
+      final id = await _priceListRepo.getDefaultPriceListId();
+      if (!mounted) return;
+      setState(() => _defaultPriceListId = id);
+    } catch (e, st) {
+      AppLogger.error('AddInvoice', 'failed to load default price list', e, st);
+    }
+  }
+
+  /// يطبّق هرم الأسعار (عميل → افتراضي → بطاقة) إذا توفّر `productId`.
+  /// يعيد `(price, priceListId?)` حيث `priceListId` غير-`null` عندما يكون
+  /// السعر من قائمة أسعار مخصصة (لإظهار مؤشر بصري).
+  Future<({double price, int? priceListId})> _resolveSellForProduct({
+    required int? productId,
+    required double cardSellPrice,
+  }) async {
+    if (productId == null || productId <= 0) {
+      return (price: cardSellPrice, priceListId: null);
+    }
+    try {
+      final r = await _priceListRepo.resolveUnitPrice(
+        productId: productId,
+        cardSellPrice: cardSellPrice,
+        customerPriceListId: _customerPriceListId,
+        defaultPriceListId: _defaultPriceListId,
+      );
+      return (price: r.price, priceListId: r.priceListId);
+    } catch (e, st) {
+      AppLogger.warn('AddInvoice', 'resolveUnitPrice failed: $e');
+      AppLogger.error('AddInvoice', 'resolveUnitPrice', e, st);
+      return (price: cardSellPrice, priceListId: null);
+    }
+  }
+
+  /// يعيد احتساب أسعار السطور غير-المُحرَّرة يدوياً بعد تغيير العميل أو
+  /// تغيير قائمة الأسعار الافتراضية. السطر "غير مُحرَّر" إذا كان
+  /// `unitPrice == sellPrice` (لم يلمسه المستخدم).
+  Future<void> _reapplyPriceListToLines() async {
+    if (_lines.isEmpty) return;
+    final updates = <int, ({double price, int? priceListId})>{};
+    for (final l in _lines) {
+      if (l.productId == null) continue;
+      if (l.productVariantId != null) continue;
+      if (l.isClothingPending || l.isFluidPending) continue;
+      if ((l.unitPrice - l.sellPrice).abs() > 0.001) continue;
+      final r = await _resolveSellForProduct(
+        productId: l.productId,
+        cardSellPrice: l.sellPrice,
+      );
+      updates[l.lineId] = r;
+    }
+    if (!mounted || updates.isEmpty) return;
+    setState(() {
+      for (final l in _lines) {
+        final u = updates[l.lineId];
+        if (u == null) continue;
+        l.sellPrice = u.price;
+        l.unitPrice = u.price;
+        l.appliedPriceListId = u.priceListId;
+      }
     });
   }
 
@@ -748,6 +1093,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     });
     CloudSyncService.instance.scheduleSyncSoon();
     await _refreshLoyaltyBalance();
+    await _reapplyPriceListToLines();
   }
 
   void _onCustomerInputChanged() {
@@ -770,8 +1116,10 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
   /// مجموع البنود بعد خصم الفاتورة وقبل الضريبة.
   double get _subtotalAfterDiscount => subtotal - discountValue;
 
-  double _lineGross(_InvoiceLineState l) =>
-      _lineEnteredForMath(l) * l.unitPrice;
+  double _lineGross(_InvoiceLineState l) {
+    if (l.fluidPackQty.isNotEmpty) return _fluidSelectionGross(l);
+    return _lineEnteredForMath(l) * l.unitPrice;
+  }
 
   /// حصة خصم الفاتورة (النسبة على الإجمالي) الموزّعة على هذا السطر.
   double _lineBasketDiscountShare(_InvoiceLineState l) {
@@ -993,13 +1341,33 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     String? variantSizeSnapshot,
     bool clothingPending = false,
     int? pendingColorId,
+    bool fluidPending = false,
   }) async {
     if (!mounted) return;
     final f = unitFactor <= 0 ? 1.0 : unitFactor;
     final dq = isService ? 1.0 : (addQuantity.isFinite && addQuantity > 0 ? addQuantity : 1.0);
 
-    // الملابس: كل إضافة سطر مستقل (لا دمج)، سواء مكتمل variant أو ما زال pending.
-    if (productVariantId == null && !clothingPending) {
+    // ── P3b: تطبيق هرم الأسعار (عميل → افتراضي → بطاقة) للمنتجات الأساسية ─
+    // لا نُطبّقه على المنتجات ذات المتغيّرات (variantId/clothing/fluid) لأنها
+    // تستخدم تسعيراً خاصاً بالمتغيّر — قائمة الأسعار حالياً مفتاحها productId فقط.
+    int? appliedPriceListId;
+    if (productId != null &&
+        productVariantId == null &&
+        !clothingPending &&
+        !fluidPending) {
+      final resolved = await _resolveSellForProduct(
+        productId: productId,
+        cardSellPrice: sellPrice,
+      );
+      if (!mounted) return;
+      if ((resolved.price - sellPrice).abs() > 0.001) {
+        sellPrice = resolved.price;
+      }
+      appliedPriceListId = resolved.priceListId;
+    }
+
+    // الملابس / عائلة السوائل: كل إضافة سطر مستقل (لا دمج).
+    if (productVariantId == null && !clothingPending && !fluidPending) {
       if (productId != null) {
       final existing = _findMergeTargetForProduct(
         productId,
@@ -1060,7 +1428,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
         _InvoiceLineState(
           lineId: lid,
           productName: productName,
-          quantity: clothingPending ? 0.0 : dq,
+          quantity: (clothingPending || fluidPending) ? 0.0 : dq,
           unitPrice: sellPrice,
           sellPrice: sellPrice,
           minSellPrice: minSellPrice,
@@ -1077,11 +1445,19 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
           variantSizeSnapshot: variantSizeSnapshot,
           isClothingPending: clothingPending,
           pendingColorId: pendingColorId,
+          isFluidPending: fluidPending,
+          appliedPriceListId: appliedPriceListId,
         ),
       );
+      if (fluidPending) {
+        _expandedLineIds.add(lid);
+      }
       _saleCartKeyboardIndex = _lines.length - 1;
       if (productId != null) {
         unawaited(_ensureVariantsLoadedForProduct(productId));
+        if (fluidPending) {
+          unawaited(_ensureFluidSaleOptionsLoadedForParent(productId));
+        }
       }
     });
     if (!mounted) return;
@@ -1224,13 +1600,16 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
           _enableClothingVariants = biz.enableClothingVariants;
         });
       }
-    } catch (_) {}
+    } catch (e, st) {
+      AppLogger.error('SalePOS', 'فشل تحميل إعداد الملابس', e, st);
+    }
   }
 
   @override
   void initState() {
     super.initState();
     _loadClothingSetting();
+    _loadDefaultPriceList();
     _loyaltyRedeemController.addListener(() {
       if (mounted) setState(() {});
     });
@@ -1320,7 +1699,9 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       final st = await _parkDb.getInstallmentSettings();
       if (!mounted) return;
       setState(() => _instSaleSettings = st);
-    } catch (_) {}
+    } catch (e, st) {
+      AppLogger.error('SalePOS', 'فشل تحميل إعدادات التقسيط', e, st);
+    }
   }
 
   @override
@@ -1414,7 +1795,9 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
             ? '${st.saleDefaultInterestPercent.toInt()}'
             : st.saleDefaultInterestPercent.toStringAsFixed(2);
       });
-    } catch (_) {}
+    } catch (e, st) {
+      AppLogger.error('SalePOS', 'فشل تعبئة حقول التقسيط', e, st);
+    }
   }
 
   /// المبلغ المتبقي للتقسيط بعد المقدّم (على أساس إجمالي الفاتورة الحالي).
@@ -1437,10 +1820,11 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     required double interestPct,
     required int months,
   }) {
+    final invoiceTotal = saleTotal(loyalty);
     final financed = _installmentFinancedAmount(loyalty);
     final interestPctClamped = interestPct.clamp(0.0, 100.0);
     final monthsClamped = months.clamp(1, 120);
-    final interestAmt = financed * (interestPctClamped / 100.0);
+    final interestAmt = invoiceTotal * (interestPctClamped / 100.0);
     final totalWithInterest = financed + interestAmt;
     final monthly = monthsClamped > 0
         ? totalWithInterest / monthsClamped
@@ -1519,7 +1903,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
               ),
               const SizedBox(height: 4),
               Text(
-                'يُحسب على «الإجمالي بعد المقدّم». للمراجعة مع العميل — لا يُضاف للفاتورة إلا إذا رفعت الأسعار يدوياً.',
+                'الفائدة على إجمالي الفاتورة (السعر الأصلي). للمراجعة مع العميل — لا تُضاف للفاتورة إلا إذا رفعت الأسعار يدوياً.',
                 style: TextStyle(
                   fontSize: 11,
                   height: 1.35,
@@ -1532,7 +1916,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
                 decoration: const InputDecoration(
                   isDense: true,
                   labelText: 'المقدّم / الدفعة الأولى (د.ع)',
-                  helperText: 'يُخصم من الإجمالي قبل حساب الفائدة والقسط',
+                  helperText: 'يُخصم من الإجمالي قبل توزيع الأقساط',
                   helperMaxLines: 2,
                 ),
                 keyboardType: TextInputType.number,
@@ -1551,9 +1935,9 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
                       ),
                       decoration: const InputDecoration(
                         isDense: true,
-                        labelText: 'فائدة على المبلغ المراد تقسيطه',
+                        labelText: 'فائدة على السعر الأصلي',
                         suffixText: '%',
-                        helperText: 'نسبة من المبلغ بعد المقدّم',
+                        helperText: 'نسبة من إجمالي الفاتورة',
                       ),
                     ),
                   ),
@@ -1574,12 +1958,12 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
               ),
               const SizedBox(height: 12),
               _instSumRow(
-                'المبلغ بعد المقدّم (أساس التقسيط)',
+                'المبلغ بعد المقدّم (متبقٍ للتقسيط)',
                 IraqiCurrencyFormat.formatIqd(c.financed),
                 scheme,
               ),
               _instSumRow(
-                'قيمة الفائدة (${c.interestPct.toStringAsFixed(1)}٪)',
+                'قيمة الفائدة (${c.interestPct.toStringAsFixed(1)}٪ من الإجمالي)',
                 IraqiCurrencyFormat.formatIqd(c.interestAmt),
                 scheme,
               ),
@@ -1841,6 +2225,27 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     final allowNeg = _anFromProductRow(p);
     final isService = ((p['isService'] as num?)?.toInt() ?? 0) == 1;
     if (pid != null && pid > 0) {
+      if (await _isFluidFamilyParentProduct(pid)) {
+        if (!mounted) return;
+        await _addOrMergeCatalogProductLine(
+          productName: display,
+          productId: pid,
+          sellPrice: baseSell,
+          minSellPrice: baseMin,
+          trackInventory: _tiFromProductRow(p),
+          allowNegativeStock: allowNeg,
+          isService: isService,
+          knownOnHandQty: null,
+          stockBaseKind: 3,
+          unitVariantId: null,
+          unitLabel: 'لتر',
+          unitFactor: 1.0,
+          addQuantity: addQuantity,
+          suppressLineSnacks: true,
+          fluidPending: true,
+        );
+        return;
+      }
       final hasClothing = await _hasClothingVariants(pid);
       if (!mounted) return;
       if (hasClothing) {
@@ -2998,8 +3403,12 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
                           hintText: 'ابحث من أول حرف…',
                         ),
                         onChanged: (_) {
-                          setState(() => _linkedCustomerId = null);
+                          setState(() {
+                            _linkedCustomerId = null;
+                            _customerPriceListId = null;
+                          });
                           _onCustomerInputChanged();
+                          unawaited(_reapplyPriceListToLines());
                         },
                         validator: (v) {
                           if (_needsCustomerNameFor &&
@@ -3013,6 +3422,32 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
                       ),
                     ),
                     const SizedBox(width: 8),
+                    if (_linkedCustomerId != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 6),
+                        child: Tooltip(
+                          message: 'البيانات الصيدلانية للعميل',
+                          child: Material(
+                            color: scheme.surfaceContainerHighest.withValues(
+                              alpha: 0.95,
+                            ),
+                            shape: const RoundedRectangleBorder(
+                              borderRadius: AppShape.none,
+                            ),
+                            child: InkWell(
+                              onTap: _openPharmacyCustomerDetailSheet,
+                              child: Padding(
+                                padding: const EdgeInsets.all(12),
+                                child: Icon(
+                                  Icons.medical_information_outlined,
+                                  size: 22,
+                                  color: scheme.error,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
                     Padding(
                       padding: const EdgeInsets.only(top: 6),
                       child: Tooltip(
@@ -3080,7 +3515,9 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
                                   _customerHits = [];
                                 });
                                 FocusScope.of(context).unfocus();
-                                unawaited(_refreshLoyaltyBalance());
+                                unawaited(_refreshLoyaltyBalance().then(
+                                  (_) => _reapplyPriceListToLines(),
+                                ));
                               },
                             );
                           },
@@ -3088,6 +3525,11 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
                       ),
                     ),
                   ),
+                if (_linkedCustomerId != null) ...[
+                  const SizedBox(height: 8),
+                  if (_buildPharmacyCustomerAllergiesBanner() case final banner?)
+                    banner,
+                ],
                 if (type == InvoiceType.installment &&
                     _instSaleSettings.showInstallmentCalculatorOnSale)
                   _buildInstallmentAssistCard(loyaltyCfg, salePos),
@@ -3256,6 +3698,8 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     final isClothingProduct = item.productId != null &&
         _enableClothingVariants &&
         (_hasClothingVariantsByProductId[item.productId!] ?? false);
+    final isFluidFamilyProduct = item.productId != null &&
+        (_fluidFamilyParentByProductId[item.productId!] ?? false);
     final gross = _lineGross(item);
     final share = _lineBasketDiscountShare(item);
     final net = _lineNetAfterBasketDiscount(item);
@@ -3269,9 +3713,12 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
         ? const <Map<String, dynamic>>[]
         : (_variantsByProductId[item.productId!] ??
               const <Map<String, dynamic>>[]);
-    final showVariantChips = item.productId != null && variants.length > 1;
+    final showVariantChips = item.productId != null &&
+        variants.length > 1 &&
+        !item.isFluidPending &&
+        !isFluidFamilyProduct;
     final qtyStep = _saleQtyStep(item);
-    final lockQty = item.isService;
+    final lockQty = item.isService || item.isFluidPending;
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
@@ -3288,7 +3735,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               InkWell(
-                onTap: !isClothingProduct
+                onTap: (!isClothingProduct && !isFluidFamilyProduct)
                     ? null
                     : () {
                         setState(() {
@@ -3337,12 +3784,27 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            item.productName,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w600,
-                              fontSize: 14,
-                            ),
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  item.productName,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 14,
+                                  ),
+                                ),
+                              ),
+                              if (item.appliedPriceListId != null) ...[
+                                const SizedBox(width: 6),
+                                _PriceListBadge(
+                                  isCustomerList: _customerPriceListId != null &&
+                                      _customerPriceListId ==
+                                          item.appliedPriceListId,
+                                ),
+                              ],
+                            ],
                           ),
                           const SizedBox(height: 4),
                           if (showVariantChips) ...[
@@ -3377,7 +3839,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
                             ),
                             const SizedBox(height: 6),
                           ],
-                          if (item.stockBaseKind == 1) ...[
+                          if (StockBaseKind.allowsFractional(item.stockBaseKind)) ...[
                             Wrap(
                               spacing: 6,
                               runSpacing: 6,
@@ -3439,12 +3901,16 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
                         IconButton(
                           visualDensity: VisualDensity.compact,
                           icon: const Icon(Icons.remove_circle_outline),
-                          onPressed: (item.isClothingPending || lockQty)
+                          onPressed: (item.isClothingPending ||
+                                  item.isFluidPending ||
+                                  lockQty)
                               ? null
                               : () {
                             setState(() {
                               final next = item.quantity - qtyStep;
-                              final minQ = item.stockBaseKind == 1 ? 1e-6 : 1.0;
+                              final minQ = StockBaseKind.allowsFractional(item.stockBaseKind)
+                                  ? 1e-6
+                                  : 1.0;
                               if (next + 1e-12 >= minQ) {
                                 item.quantity = next;
                               }
@@ -3458,7 +3924,9 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
                           ),
                           borderRadius: BorderRadius.circular(4),
                           child: InkWell(
-                            onTap: (item.isClothingPending || lockQty)
+                            onTap: (item.isClothingPending ||
+                                    item.isFluidPending ||
+                                    lockQty)
                                 ? null
                                 : () => _promptEditQuantity(item),
                             borderRadius: BorderRadius.circular(4),
@@ -3480,7 +3948,9 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
                         IconButton(
                           visualDensity: VisualDensity.compact,
                           icon: const Icon(Icons.add_circle_outline),
-                          onPressed: (item.isClothingPending || lockQty)
+                          onPressed: (item.isClothingPending ||
+                                  item.isFluidPending ||
+                                  lockQty)
                               ? null
                               : () async {
                             await _trySetLineQuantity(
@@ -3498,6 +3968,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
                           onPressed: () {
                             setState(() {
                               _expandedLineIds.remove(item.lineId);
+                              _pharmacyBatchIdByLineId.remove(item.lineId);
                               _lines.removeAt(idx);
                             });
                             _syncAdvanceAfterCartChange();
@@ -3515,6 +3986,42 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
                   context,
                   line: item,
                   productId: item.productId!,
+                ),
+              if ((item.isFluidPending || (expanded && isFluidFamilyProduct)) &&
+                  item.productId != null)
+                InlineFluidFamilySalePicker(
+                  familyKindLabel: _fluidFamilyKindLabel(item.productId!),
+                  options:
+                      _fluidSaleOptionsByParentId[item.productId!] ?? const [],
+                  selectedGradeLinkedId: item.pendingFluidGradeLinkedId,
+                  onGradeSelected: (id) {
+                    setState(() => item.pendingFluidGradeLinkedId = id);
+                  },
+                  packQty: item.fluidPackQty,
+                  onSelectionsChanged: () {
+                    setState(() {
+                      _syncFluidLineFromSelections(item);
+                      _syncAdvanceAfterCartChange();
+                    });
+                  },
+                  usedBaseLiters: (linked, factor, {excludeLineId}) {
+                    return _usedBaseLitersForLinked(
+                      linked,
+                      excludeLineId: excludeLineId ?? item.lineId,
+                    );
+                  },
+                  excludeLineId: item.lineId,
+                ),
+              if (expanded && item.productId != null)
+                Builder(
+                  builder: (ctx) {
+                    final panel = _buildPharmacyPosDrugPanelForLine(ctx, item);
+                    if (panel == null) return const SizedBox.shrink();
+                    return Padding(
+                      padding: const EdgeInsetsDirectional.fromSTEB(12, 0, 12, 8),
+                      child: panel,
+                    );
+                  },
                 ),
               if (expanded)
                 Container(
@@ -3602,7 +4109,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       return;
     }
     final ctrl = TextEditingController(text: _formatSaleQty(item));
-    final isWeight = item.stockBaseKind == 1;
+    final isWeight = StockBaseKind.allowsFractional(item.stockBaseKind);
     showDialog<void>(
       context: context,
       builder: (ctx) {
@@ -3649,12 +4156,12 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     String raw,
   ) async {
     final v = double.tryParse(raw.trim().replaceAll(',', '.'));
-    final minQ = item.stockBaseKind == 1 ? 1e-6 : 1.0;
+    final minQ = StockBaseKind.allowsFractional(item.stockBaseKind) ? 1e-6 : 1.0;
     if (v == null || v < minQ) {
       _showSaleSnackBar(
         SnackBar(
           content: Text(
-            item.stockBaseKind == 1
+            StockBaseKind.allowsFractional(item.stockBaseKind)
                 ? 'أدخل كمية أكبر من 0 (يمكن كسور للوزن).'
                 : 'أدخل عدداً صحيحاً 1 فما فوق',
           ),
@@ -3737,8 +4244,9 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       final raw = rawLines[i];
       if (raw is! Map) {
         skipped++;
-        debugPrint(
-          '[ParkedSale] Skipping non-map line at index $i: ${raw.runtimeType}',
+        AppLogger.warn(
+          'AddInvoice',
+          'ParkedSale skipping non-map line at index $i: ${raw.runtimeType}',
         );
         continue;
       }
@@ -3777,9 +4285,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
         );
       } catch (e, st) {
         skipped++;
-        debugPrint(
-          '[ParkedSale] Failed to parse line $i: $e\n$st',
-        );
+        AppLogger.error('AddInvoice', 'ParkedSale failed to parse line $i', e, st);
       }
     }
     return (
@@ -3826,9 +4332,10 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
 
     // ── المرحلة 4: تشخيص لو سَقطت بنود (للـ logs فقط) ────────────────
     if (built.skippedCount > 0) {
-      debugPrint(
-        '[ParkedSale] Restored ${built.parsedCount} lines, '
-        'skipped ${built.skippedCount} corrupted lines.',
+      AppLogger.warn(
+        'AddInvoice',
+        'ParkedSale restored ${built.parsedCount} lines, '
+        'skipped ${built.skippedCount} corrupted lines',
       );
     }
   }
@@ -3870,13 +4377,13 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       }
     } catch (e, st) {
       failureReason = 'خطأ في فك التشفير: $e';
-      debugPrint('[ParkedSale] JSON decode failed: $e\n$st');
+      AppLogger.error('AddInvoice', 'ParkedSale JSON decode failed', e, st);
     }
 
     if (parsedMap == null || failureReason != null) {
       if (!mounted) return;
       setState(() => _blockSaleDraftUntilResumeApplied = false);
-      debugPrint('[ParkedSale] Cannot load id=$id: $failureReason');
+      AppLogger.warn('AddInvoice', 'ParkedSale cannot load id=$id: $failureReason');
       _showSaleSnackBar(
         SnackBar(
           content: Text(
@@ -3901,7 +4408,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       });
     } catch (e, st) {
       if (!mounted) return;
-      debugPrint('[ParkedSale] Apply failed for id=$id: $e\n$st');
+      AppLogger.error('AddInvoice', 'ParkedSale apply failed id=$id', e, st);
       setState(() => _blockSaleDraftUntilResumeApplied = false);
       _showSaleSnackBar(
         SnackBar(
@@ -3981,7 +4488,8 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
         ),
         useCompactSnackOverride: snackCompact,
       );
-    } catch (_) {
+    } catch (e, st) {
+      AppLogger.error('SalePOS', 'فشل حفظ الفاتورة المعلّقة', e, st);
       if (!mounted) return;
       _showSaleSnackBar(
         const SnackBar(content: Text('تعذر حفظ الفاتورة المعلّقة')),
@@ -4073,11 +4581,145 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     );
   }
 
+  Future<bool> _evaluatePharmacySaleAlertsGate({
+    required int? customerId,
+  }) async {
+    try {
+      final tenant = TenantContextService.instance;
+      if (!tenant.loaded) await tenant.load();
+      final tenantId = tenant.requireActiveTenantId();
+
+      final saleLines = <SaleAlertLine>[];
+      for (final l in _lines) {
+        if (l.productId == null) continue;
+        if (l.isFluidPending || l.isClothingPending) continue;
+        saleLines.add(
+          SaleAlertLine(
+            productId: l.productId!,
+            qty: _lineEnteredForMath(l),
+            batchId: _pharmacyBatchIdByLineId[l.lineId],
+            productName: l.productName,
+          ),
+        );
+      }
+      if (saleLines.isEmpty) return true;
+
+      final alerts =
+          await VerticalRegistry.instance.activeManifest.evaluateSaleAlerts(
+        SaleAlertContext(
+          tenantId: tenantId,
+          customerId: customerId,
+          lines: saleLines,
+          saleDateTime: DateTime.now(),
+        ),
+      );
+      if (alerts.isEmpty) return true;
+
+      for (final alert in alerts) {
+        if (alert.isError) {
+          if (!mounted) return false;
+          await _showPharmacyBlockingAlert(alert);
+          return false;
+        }
+      }
+
+      for (final alert in alerts) {
+        if (alert.severity == PharmacyAlertSeverity.warning) {
+          if (!mounted) return false;
+          final proceed = await _confirmPharmacyWarningOverride(alert);
+          if (!proceed) return false;
+          await _logPharmacyAlertOverride(alert, tenantId: tenantId);
+        }
+      }
+
+      for (final alert in alerts) {
+        if (alert.severity == PharmacyAlertSeverity.info && mounted) {
+          _showSaleSnackBar(SnackBar(content: Text(alert.messageAr)));
+        }
+      }
+      return true;
+    } catch (e, st) {
+      AppLogger.error('AddInvoice', 'pharmacy sale alerts failed', e, st);
+      return true;
+    }
+  }
+
+  Future<void> _showPharmacyBlockingAlert(PharmacyAlert alert) async {
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(alert.titleAr ?? 'تنبيه صيدلاني'),
+        content: Text(alert.descriptionAr ?? alert.messageAr),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('حسناً'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<bool> _confirmPharmacyWarningOverride(PharmacyAlert alert) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(alert.titleAr ?? 'تحذير صيدلاني'),
+        content: Text(alert.descriptionAr ?? alert.messageAr),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('تجاوز بموافقة الصيدلي'),
+          ),
+        ],
+      ),
+    );
+    return ok == true;
+  }
+
+  Future<void> _logPharmacyAlertOverride(
+    PharmacyAlert alert, {
+    required int tenantId,
+  }) async {
+    final auth = context.read<AuthProvider>();
+    await BusinessAuditLogService.instance.record(
+      eventType: 'pharmacy_alert_override',
+      entityType: 'sale_alert',
+      entityId: alert.code,
+      newValueJson: jsonEncode({
+        'title': alert.titleAr,
+        'message': alert.messageAr,
+      }),
+      userId: auth.userId,
+      username: auth.username,
+      tenantId: tenantId,
+    );
+  }
+
   Future<void> _saveInvoice() async {
     if (_lines.isEmpty) {
       _showSaleSnackBar(
         const SnackBar(
           content: Text('أضف صنفاً واحداً على الأقل لإتمام البيع'),
+        ),
+      );
+      return;
+    }
+
+    final conflict = ShiftActorConflictGuard.evaluate(
+      sessionUserId: context.read<AuthProvider>().userId,
+      activeShift: context.read<ShiftProvider>().activeShift,
+    );
+    if (conflict.hasConflict) {
+      _showSaleSnackBar(
+        SnackBar(
+          content: Text(
+            'لا يمكن حفظ الفاتورة من هذه الجلسة: الوردية المفتوحة باسم ${conflict.shiftStaffName}.',
+          ),
         ),
       );
       return;
@@ -4170,6 +4812,54 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     }
     final items = <InvoiceItem>[];
     for (final l in _lines) {
+      // عائلة زيت/هيدروليك: سطر واحد في الواجهة → عدة بنود عند الحفظ.
+      if (l.productId != null && l.fluidPackQty.isNotEmpty) {
+        final opts =
+            _fluidSaleOptionsByParentId[l.productId!] ?? const <FluidGradeSaleOption>[];
+        for (final e in l.fluidPackQty.entries) {
+          if (e.value <= 1e-9) continue;
+          final parsed = parseFluidSalePackKey(e.key);
+          if (parsed == null) continue;
+          FluidGradeSaleOption? grade;
+          FluidPackSaleOption? pack;
+          for (final g in opts) {
+            if (g.linkedProductId != parsed.linkedProductId) continue;
+            grade = g;
+            for (final p in g.packs) {
+              if (p.unitVariantId == parsed.unitVariantId) {
+                pack = p;
+                break;
+              }
+            }
+            break;
+          }
+          if (grade == null || pack == null) continue;
+          final entered = e.value;
+          final factor = pack.factorToBase <= 0 ? 1.0 : pack.factorToBase;
+          final base = entered * factor;
+          final unitPrice = pack.sellPerUnit(grade.sellPerLiter);
+          final label = pack.unitSymbol.isEmpty
+              ? pack.unitName
+              : '${pack.unitName} (${pack.unitSymbol})';
+          items.add(
+            InvoiceItem(
+              productName: '${l.productName} — ${grade.gradeLabel}',
+              quantity: base,
+              price: unitPrice,
+              total: entered * unitPrice,
+              productId: parsed.linkedProductId,
+              unitVariantId: parsed.unitVariantId,
+              unitLabel: label,
+              unitFactor: factor,
+              enteredQty: entered,
+              baseQty: base,
+              variantSizeSnapshot: grade.gradeLabel,
+            ),
+          );
+        }
+        continue;
+      }
+
       // الملابس: سطر واحد في الواجهة، لكن يتحول لأسطر متعددة عند الحفظ.
       if (l.productId != null && l.clothingVariantQty.isNotEmpty) {
         final variants =
@@ -4354,6 +5044,10 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       installmentSuggestedMonthly: instCalc?.monthly ?? 0,
     );
 
+    if (!await _evaluatePharmacySaleAlertsGate(customerId: customerId)) {
+      return;
+    }
+
     // Step 14 — فحص توازن الفاتورة قبل أي مكالمة DB.
     final balance = validateInvoiceBalance(invoice);
     if (!balance.isValid) {
@@ -4388,6 +5082,39 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       return;
     }
     if (!mounted || !context.mounted) return;
+
+    VerticalRegistry.instance.activeManifest.invalidateOwnerDashboardCache();
+    if (VerticalRegistry.instance.activeManifest.id ==
+        BusinessVertical.pharmacy) {
+      OwnerCommandCenterRefreshBridge.instance
+          .invalidateSection('pharmacy_owner_dashboard');
+    }
+
+    if (customerId != null) {
+      try {
+        final tenant = TenantContextService.instance;
+        if (!tenant.loaded) await tenant.load();
+        final tenantId = tenant.requireActiveTenantId();
+        final productIds = items
+            .map((it) => it.productId)
+            .whereType<int>()
+            .toList(growable: false);
+        await VerticalRegistry.instance.activeManifest
+            .recordPharmacySaleCustomerExt(
+          tenantId: tenantId,
+          customerId: customerId,
+          productIds: productIds,
+          purchasedAt: now,
+        );
+      } catch (e, st) {
+        AppLogger.error(
+          'AddInvoice',
+          'pharmacy chronic refill update failed',
+          e,
+          st,
+        );
+      }
+    }
 
     // الربط مع تذكرة الصيانة وتحديث حالتها إلى "مسلّمة" إن وجدت
     final sOrderId = _linkedServiceOrderId;
@@ -4811,6 +5538,27 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       if (!mounted) return;
 
       if (clothingVariant == null && pid != null && pid > 0) {
+        if (await _isFluidFamilyParentProduct(pid)) {
+          if (!mounted) return;
+          await _addOrMergeCatalogProductLine(
+            productName: display,
+            productId: pid,
+            sellPrice: baseSell,
+            minSellPrice: baseMin,
+            trackInventory: ti,
+            allowNegativeStock: an,
+            isService: isService,
+            knownOnHandQty: null,
+            stockBaseKind: 3,
+            unitVariantId: null,
+            unitLabel: 'لتر',
+            unitFactor: 1.0,
+            newItemSnackText:
+                'تمت إضافة المنتج: ${name.isEmpty ? barcode : name}',
+            fluidPending: true,
+          );
+          return;
+        }
         final hasClothing = await _hasClothingVariants(pid);
         if (!mounted) return;
         if (hasClothing) {
@@ -4969,6 +5717,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       if (u.wasNewLine) {
         _lines.removeWhere((l) => l.lineId == u.lineId);
         _expandedLineIds.remove(u.lineId);
+        _pharmacyBatchIdByLineId.remove(u.lineId);
       } else {
         for (final l in _lines) {
           if (l.lineId == u.lineId) {
@@ -5025,7 +5774,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
             (colors[selectedColorId]?['colorHex'] ?? '').toString(),
           );
 
-    Color _textOn(Color bg) =>
+    Color textOn(Color bg) =>
         bg.computeLuminance() > 0.55 ? Colors.black : Colors.white;
 
     void syncLineQtyFromSelections() {
@@ -5053,7 +5802,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       bool showOutOfStockX = false,
     }) {
       final bg = fillColor;
-      final onBg = (bg == null) ? cs.onSurface : _textOn(bg);
+      final onBg = (bg == null) ? cs.onSurface : textOn(bg);
       final keepColorBehindX = disabled && showOutOfStockX && bg != null;
       return InkWell(
         onTap: disabled ? null : onTap,
@@ -5483,7 +6232,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
 
   bool _canCompleteSalePayment(LoyaltySettingsData loyalty) {
     if (_lines.isEmpty) return false;
-    if (_lines.any((l) => l.isClothingPending)) return false;
+    if (_lines.any((l) => l.isClothingPending || l.isFluidPending)) return false;
     final pay = saleTotal(loyalty);
     if (type == InvoiceType.cash) {
       if (_advancePayment + 0.5 < pay) return false;
@@ -5525,6 +6274,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
                 setState(() {
                   _lines.clear();
                   _expandedLineIds.clear();
+                  _pharmacyBatchIdByLineId.clear();
                   _lastCartAddUndo = null;
                 });
               },
@@ -5542,6 +6292,14 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       listen: false,
     ).data;
     if (!_canCompleteSalePayment(loyaltyCfg)) {
+      return;
+    }
+    if (_lines.any((l) => l.isFluidPending)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('اختر اللزوجة/الدرجة والعبوة لكل أصناف الزيت والهيدروليك'),
+        ),
+      );
       return;
     }
     if (_lines.any((l) => l.isClothingPending)) {
@@ -5569,7 +6327,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     final item = _lines[hi];
     final step = _saleQtyStep(item);
     final next = item.quantity + delta * step;
-    final minQ = item.stockBaseKind == 1 ? 1e-6 : 1.0;
+    final minQ = StockBaseKind.allowsFractional(item.stockBaseKind) ? 1e-6 : 1.0;
     setState(() {
       if (next + 1e-12 >= minQ) {
         item.quantity = next;
@@ -5584,6 +6342,7 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     setState(() {
       final id = _lines[hi].lineId;
       _expandedLineIds.remove(id);
+      _pharmacyBatchIdByLineId.remove(id);
       _lines.removeAt(hi);
       if (_lines.isEmpty) {
         _saleCartKeyboardIndex = 0;
@@ -5899,10 +6658,14 @@ class _InvoiceLineState {
     this.isClothingPending = false,
     this.pendingColorId,
     Map<int, int>? clothingVariantQty,
+    this.isFluidPending = false,
+    Map<String, double>? fluidPackQty,
+    this.appliedPriceListId,
   }) : unitLabel = (unitLabel == null || unitLabel.trim().isEmpty)
            ? 'قطعة'
            : unitLabel.trim(),
-       clothingVariantQty = clothingVariantQty ?? <int, int>{};
+       clothingVariantQty = clothingVariantQty ?? <int, int>{},
+       fluidPackQty = fluidPackQty ?? <String, double>{};
 
   final int lineId;
   final int? productId;
@@ -5931,6 +6694,61 @@ class _InvoiceLineState {
 
   /// تجميع كميات الملابس داخل نفس البطاقة: variantId -> qty (قطع).
   final Map<int, int> clothingVariantQty;
+
+  bool isFluidPending;
+  int? pendingFluidGradeLinkedId;
+
+  /// كميات العبوات: مفتاح linkedProductId|unitVariantId → عدد وحدات العبوة.
+  final Map<String, double> fluidPackQty;
+
+  /// إذا تم تعيين السعر تلقائيًا من قائمة أسعار مخصصة (للمؤشّر البصري).
+  int? appliedPriceListId;
+}
+
+/// شارة ذهبية صغيرة تظهر بجوار اسم المنتج عندما يُسحَب السعر من قائمة أسعار
+/// مخصصة (سواء كانت قائمة العميل أو القائمة الافتراضية للنظام).
+class _PriceListBadge extends StatelessWidget {
+  const _PriceListBadge({required this.isCustomerList});
+
+  final bool isCustomerList;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: isCustomerList
+          ? 'سعر مخصص لقائمة هذا العميل'
+          : 'سعر من قائمة الأسعار الافتراضية',
+      child: Container(
+        padding: const EdgeInsetsDirectional.fromSTEB(6, 2, 6, 2),
+        decoration: BoxDecoration(
+          color: AppColors.accentGold.withValues(alpha: 0.14),
+          border: Border.all(color: AppColors.accentGold, width: 0.9),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              isCustomerList
+                  ? Icons.person_pin_circle_outlined
+                  : Icons.price_change_outlined,
+              size: 12,
+              color: AppColors.accentGold,
+            ),
+            const SizedBox(width: 3),
+            Text(
+              isCustomerList ? 'قائمة العميل' : 'قائمة افتراضية',
+              style: const TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                color: AppColors.accentGold,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _SaleInlineScannerCard extends StatelessWidget {

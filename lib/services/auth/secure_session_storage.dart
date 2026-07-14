@@ -68,12 +68,40 @@ class SecureLocalStorage extends LocalStorage {
   Future<void> initialize() async {
     try {
       await _secure.containsKey(persistSessionKey);
-      await _migrateLegacyTokenIfNeeded();
-    } catch (e, st) {
-      if (kDebugMode) {
-        debugPrint('[SecureLocalStorage] initialization failed, using fallback: $e\n$st');
+      // Some platforms (notably unsigned macOS debug builds without a
+      // keychain-access-groups entitlement) fail the secure store SILENTLY:
+      // read/write return normally but values never round-trip, so the session
+      // is lost on every relaunch. Probe with a write/read/delete cycle and
+      // fall back to SharedPreferences when the value does not survive.
+      if (!await _secureStoreRoundTrips()) {
+        _useFallback = true;
+        if (kDebugMode) {
+          debugPrint(
+            '[SecureLocalStorage] Keychain did not round-trip — session fallback to SharedPreferences',
+          );
+        }
       }
+      await _migrateLegacyTokenIfNeeded();
+    } on Object catch (e) {
       _useFallback = true;
+      if (kDebugMode) {
+        debugPrint(
+          '[SecureLocalStorage] Keychain unavailable ($e) — session fallback to SharedPreferences',
+        );
+      }
+    }
+  }
+
+  Future<bool> _secureStoreRoundTrips() async {
+    const probeKey = '__secure_local_storage_probe__';
+    final probeValue = DateTime.now().microsecondsSinceEpoch.toString();
+    try {
+      await _secure.write(probeKey, probeValue);
+      final readBack = await _secure.read(probeKey);
+      await _secure.delete(probeKey);
+      return readBack == probeValue;
+    } on Object {
+      return false;
     }
   }
 
@@ -97,12 +125,9 @@ class SecureLocalStorage extends LocalStorage {
       if (legacy == null || legacy.isEmpty) return;
       await _secure.write(persistSessionKey, legacy);
       await prefs.remove(persistSessionKey);
-    } catch (e, st) {
-      if (kDebugMode) {
-        debugPrint('[SecureLocalStorage] migration skipped: $e\n$st');
-      }
-      // Migration is best-effort; if it fails the session may need re-login.
-      rethrow;
+    } on Object catch (_) {
+      // Migration is best-effort; session may need re-login if Keychain fails.
+      _useFallback = true;
     }
   }
 

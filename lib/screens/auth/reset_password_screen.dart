@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../providers/auth_provider.dart';
+import '../../utils/auth_validators.dart';
 
 class ResetPasswordScreen extends StatefulWidget {
   const ResetPasswordScreen({super.key, required this.email});
@@ -24,13 +25,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
   bool _obscure1 = true;
   bool _obscure2 = true;
 
-  bool get _hasMinLength => _passController.text.length >= 8;
-  bool get _hasUppercase => RegExp(r'[A-Z]').hasMatch(_passController.text);
-  bool get _hasLowercase => RegExp(r'[a-z]').hasMatch(_passController.text);
-  bool get _hasDigit => RegExp(r'[0-9]').hasMatch(_passController.text);
-  bool get _hasSpecialChar => RegExp(
-        r'[!@#\$%\^&\*\(\)_\+\-\=\[\]\{\};:,.<>\/\?\\|`~]',
-      ).hasMatch(_passController.text);
+  bool get _isValidPin => AuthValidators.isValidPin(_passController.text);
 
   @override
   void dispose() {
@@ -119,8 +114,9 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                       onChanged: (_) => setState(() {}),
                       style: const TextStyle(color: _navy2, fontSize: 14),
                       cursorColor: _navy2,
+                      keyboardType: TextInputType.number,
                       decoration: _dec(
-                        'أدخل رمز الدخول الجديد',
+                        'أدخل PIN جديد (4 أرقام)',
                         Icons.lock_outline_rounded,
                         suffix: IconButton(
                           icon: Icon(
@@ -134,7 +130,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                       validator: (v) {
                         final t = (v ?? '').trim();
                         if (t.isEmpty) return 'أدخل رمز الدخول';
-                        if (t.length < 8) return 'يجب أن يكون 8 أحرف على الأقل';
+                        if (!AuthValidators.isValidPin(t)) return 'يجب أن يكون 4 أرقام';
                         return null;
                       },
                     ),
@@ -145,6 +141,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                       controller: _confirmController,
                       obscureText: _obscure2,
                       textDirection: TextDirection.ltr,
+                      keyboardType: TextInputType.number,
                       onChanged: (_) => setState(() {}),
                       style: const TextStyle(color: _navy2, fontSize: 14),
                       cursorColor: _navy2,
@@ -259,15 +256,11 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           const Text(
-            'شروط رمز الدخول (اختياري)',
+            'شروط رمز الدخول',
             style: TextStyle(fontWeight: FontWeight.bold, color: _navy2),
           ),
           const SizedBox(height: 8),
-          item('8 أحرف على الأقل', _hasMinLength),
-          item('حرف كبير (A-Z)', _hasUppercase),
-          item('حرف صغير (a-z)', _hasLowercase),
-          item('رقم (0-9)', _hasDigit),
-          item('رمز خاص (!@#...)', _hasSpecialChar),
+          item('يتكون من 4 أرقام', _isValidPin),
         ],
       ),
     );

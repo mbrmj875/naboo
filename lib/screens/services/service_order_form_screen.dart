@@ -1,27 +1,79 @@
-import 'dart:async' show unawaited;
+import 'dart:async';
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 
+import '../../theme/design_tokens.dart';
 import '../../models/customer_record.dart';
+import '../../verticals/oil_change/models/oil_change_hydraulic_card_slot.dart';
+import '../../verticals/oil_change/models/oil_change_filter_catalog_entry.dart';
+import '../../verticals/oil_change/models/oil_change_filter_kind.dart';
+import '../../verticals/oil_change/models/oil_change_hydraulic_catalog_entry.dart';
+import '../../verticals/oil_change/models/oil_change_oil_catalog_entry.dart';
+import '../../verticals/oil_change/models/oil_change_product_line.dart';
+import '../../verticals/oil_change/models/oil_change_service_item.dart';
+import '../../verticals/oil_change/services/oil_change_filter_catalog_repository.dart';
+import '../../verticals/oil_change/services/oil_change_hydraulic_catalog_repository.dart';
+import '../../verticals/oil_change/services/oil_change_oil_catalog_repository.dart';
 import '../../screens/customers/customer_form_screen.dart';
 import '../../services/database_helper.dart';
+import '../../services/tenant_context_service.dart';
 import '../../services/product_repository.dart';
 import '../../services/service_orders_repository.dart';
+import '../../verticals/oil_change/services/oil_change_settings.dart';
+import '../../verticals/oil_change/services/oil_change_services_repository.dart';
+import '../../verticals/oil_change/services/oil_change_stock_service.dart';
+import '../../services/oil_product_grades_repository.dart';
+import '../../utils/app_logger.dart';
+import '../../widgets/milliliter_quantity_stepper.dart';
+import '../../verticals/oil_change/widgets/customer_open_debt_banner.dart';
+import '../../widgets/barcode_input_launcher.dart';
+import '../../verticals/oil_change/widgets/oil_change_products_card.dart';
+import '../../verticals/oil_change/widgets/oil_change_royal_card.dart';
+import '../../verticals/oil_change/widgets/product_picker_dialog.dart';
+import '../../verticals/oil_change/widgets/oil_change_form_theme.dart';
+import '../../theme/sale_brand.dart';
+import '../../verticals/oil_change/widgets/oil_change_filter_catalog_sheet.dart';
+import '../../verticals/oil_change/widgets/oil_change_hydraulic_catalog_sheet.dart';
+import '../../verticals/oil_change/widgets/oil_change_oil_catalog_sheet.dart';
+import '../../verticals/oil_change/utils/oil_change_prefill_guard.dart';
+import '../../verticals/oil_change/utils/oil_change_customer_debt.dart';
+import '../../verticals/oil_change/utils/oil_change_filter_format.dart';
+import '../../verticals/oil_change/utils/oil_change_log_format.dart';
+import '../../utils/shift_actor_conflict_guard.dart';
+import '../../services/service_order_kinds.dart';
+import '../../services/print_settings_repository.dart';
+import '../../models/invoice.dart';
+import '../../providers/auth_provider.dart';
+import '../../providers/global_barcode_route_bridge.dart';
+import '../../providers/shift_provider.dart';
+import '../../verticals/oil_change/services/oil_change_checkout_service.dart';
+import '../../verticals/oil_change/services/oil_change_product_scan.dart';
+import '../../utils/customer_phone_launch.dart';
 import '../../utils/iqd_money.dart';
 import '../../utils/iraqi_currency_format.dart';
+import '../../verticals/oil_change/utils/oil_service_whatsapp_message.dart';
+import '../../utils/screen_layout.dart';
 import '../../widgets/adaptive/adaptive_form_container.dart';
+import '../../navigation/content_navigation.dart';
+import '../../verticals/oil_change/utils/oil_change_order_status.dart';
+
+enum _OilSubmitIntent { complete, suspend }
 
 class ServiceOrderFormScreen extends StatefulWidget {
   const ServiceOrderFormScreen({
     super.key,
     this.editOrderId,
     this.editOrderGlobalId,
+    this.prefillFromOrder,
   });
 
   final int? editOrderId;
   final String? editOrderGlobalId;
+  final Map<String, dynamic>? prefillFromOrder;
 
   bool get isEdit => editOrderId != null && editOrderId! > 0;
 
@@ -31,14 +83,80 @@ class ServiceOrderFormScreen extends StatefulWidget {
 
 class _ServiceOrderFormScreenState extends State<ServiceOrderFormScreen> {
   final _formKey = GlobalKey<FormState>();
+  
+  // Controllers
   final _customerName = TextEditingController();
   final _customerFocus = FocusNode();
-  final _deviceName = TextEditingController();
-  final _deviceSerial = TextEditingController();
+  final _customerPhone = TextEditingController();
+  
+  final _deviceName = TextEditingController(); // اسم السيارة
+  final _carModel = TextEditingController();    // موديل السيارة
+  final _deviceSerial = TextEditingController(); // رقم اللوحة
+  final _engineSize = TextEditingController();   // حجم المحرك
+
+  final _odometerCurrent = TextEditingController(); // القراءة الحالية
+  final _odometerNext = TextEditingController();    // القراءة اللاحقة
+  final _oilType = TextEditingController();         // نوع الزيت
+  
   final _estimated = TextEditingController(text: '0');
   final _agreed = TextEditingController();
   final _advance = TextEditingController(text: '0');
-  final _issue = TextEditingController();
+  final _issue = TextEditingController(); // الملاحظات
+  final _technicianName = TextEditingController(); // اسم الفني
+
+  // Dropdowns Selection
+  String? _selectedViscosity;
+  final _oilSizeAmount = TextEditingController();
+  String _selectedSizeUnit = 'ml';
+  String? _selectedFilterType;
+
+  // Checklist of 8 requested services
+  final Set<String> _selectedServices = {};
+  final Set<int> _selectedOilServiceIds = {};
+  List<OilChangeServiceItem> _oilCatalog = [];
+  int _basePriceFils = 0;
+  bool _agreedTotalManual = false;
+
+  bool _oilCustomerProvided = false;
+  /// إعداد المحل: ربط بطاقة الغيار بأصناف المخزون (زيت المحل).
+  bool _stockFromWarehouseEnabled = true;
+  int? _oilStockProductId;
+  int? _oilWarehouseId;
+  double _oilAvailableLiters = 0;
+  List<Map<String, dynamic>> _oilProducts = const [];
+  List<Map<String, dynamic>> _warehouses = const [];
+  bool _oilStockMetaLoading = false;
+  final _oilLitersStock = TextEditingController();
+  double? _oilPickSellPerLiter;
+  int? _catalogSellPerLiterFils;
+  List<OilChangeOilCatalogEntry> _oilProductCatalog = const [];
+  bool _oilProductCatalogLoading = false;
+  String? _selectedOilBrand;
+  List<OilChangeHydraulicCatalogEntry> _hydraulicProductCatalog = const [];
+  bool _hydraulicProductCatalogLoading = false;
+  List<OilPickLine> _oilStockPickLines = const [];
+  bool _oilStockPickLinesLoading = false;
+  /// مفتاح العائلة: [parentProductId] أو سالب [linkedProductId] للأصناف المفردة.
+  int? _selectedOilFamilyKey;
+
+  bool _hydraulicStockFromWarehouseEnabled = true;
+  final _gearHydraulic = OilChangeHydraulicCardSlot.gear();
+  final _powerHydraulic = OilChangeHydraulicCardSlot.power();
+  List<OilChangeFilterCatalogEntry> _filterProductCatalog = const [];
+  bool _filterProductCatalogLoading = false;
+  final _engineFilter = OilChangeFilterSlot();
+  final _airFilter = OilChangeFilterSlot();
+  final _gearFilter = OilChangeFilterSlot();
+  List<OilPickLine> _hydraulicStockPickLines = const [];
+  bool _hydraulicStockPickLinesLoading = false;
+
+  /// لقطة مخزون عند فتح التعديل — لمزامنة الصرف.
+  int? _editStockVoucherId;
+  double _editOilLitersUsed = 0;
+  int? _editOilProductId;
+  int? _editOilWarehouseId;
+  bool _editOilCustomerProvided = false;
+  int _editInvoiceId = 0;
 
   bool _hydratingEdit = false;
   bool _saving = false;
@@ -47,6 +165,8 @@ class _ServiceOrderFormScreenState extends State<ServiceOrderFormScreen> {
 
   int? _customerId;
   bool _suspendCustomerIdClear = false;
+  /// يمنع مسح الهاتف بعد اختيار العميل من القائمة (سباق RawAutocomplete على التابلت/الحاسوب).
+  String? _linkedCustomerName;
 
   DateTime? _openedAtUtc;
   DateTime? _workStartedAtUtc;
@@ -58,8 +178,48 @@ class _ServiceOrderFormScreenState extends State<ServiceOrderFormScreen> {
   int? _serviceId;
   String? _serviceName;
   String _status = 'pending';
+  bool _odometerNextTouched = false;
+  final List<OilChangeProductLine> _oilProductLines = [];
+  String? _orderGlobalId;
+  GlobalBarcodeRouteBridge? _barcodeBridge;
+  bool _oilBarcodeBusy = false;
+  bool _isProductPickerOpen = false;
+  int _customerOpenDebtFils = 0;
+  bool _customerOpenDebtLoading = false;
+  int _priorOpenDebtFilsAtCheckout = 0;
+  Timer? _plateVehicleSyncDebounce;
+  Timer? _customerNameVisitSyncDebounce;
+  bool _vehicleSyncInFlight = false;
+  /// آخر لوحة جُلب لها سجل تلقائياً — يمنع حلقة إعادة المزامنة عند تعيين نفس اللوحة.
+  String? _lastAutoSyncedPlate;
+  bool _applyingVehicleRecord = false;
+  /// فتح من صف الجدول — لا جلب تلقائي من «آخر زيارة» حتى يغيّر المستخدم اللوحة أو يضغط مزامنة.
+  bool _allowAutoVisitLookup = true;
+  String? _prefillPlateAtOpen;
+  /// منع إعادة تعبئة النموذج من `_prefill` أو مزامنة مخزون متأخرة بعد تعديل المستخدم.
+  bool _initialPrefillApplied = false;
+  bool _oilFluidUserEdited = false;
+  bool _hydraulicGearUserEdited = false;
+  bool _hydraulicPowerUserEdited = false;
+  /// بعد أول مزامنة كتالوج/مخزون لبطاقة مفتوحة من الجدول — لا إعادة كتابة الزيت/الهيدروليك.
+  bool _prefillCatalogSyncedOnce = false;
+  bool _prefillBootstrapInProgress = false;
 
   final DatabaseHelper _customersDb = DatabaseHelper();
+
+  // Static Lists
+  static const _filterOptions = ['كوبي', 'أصلي', 'تجاري'];
+
+  static const _serviceCheckboxes = [
+    'تبديل هيدروليك الكبير بالجهاز',
+    'تبديل هيدروليك الكبير يدوي',
+    'تبديل هيدروليك الباور',
+    'دهن بريك',
+    'تبديل ماء الراديتر بالجهاز',
+    'فلاش / غسل المحرك من الداخل',
+    'تبريد',
+    'شوطة',
+  ];
 
   @override
   void initState() {
@@ -71,11 +231,173 @@ class _ServiceOrderFormScreenState extends State<ServiceOrderFormScreen> {
     }
   }
 
+  void _assignControllerText(TextEditingController controller, String value) {
+    if (controller.text == value) return;
+    controller.text = value;
+  }
+  void _parseOilSize(String? stored) {
+    if (stored == null || stored.trim().isEmpty) {
+      _oilSizeAmount.clear();
+      _selectedSizeUnit = 'ml';
+      return;
+    }
+    final raw = stored.trim();
+    if (raw == 'Q') {
+      _oilSizeAmount.clear();
+      _selectedSizeUnit = 'Q';
+      return;
+    }
+    final ml = oilSizeStoredToMilliliters(raw);
+    if (ml > 0) {
+      _oilSizeAmount.text = formatOilVolumeDisplay(ml);
+      _selectedSizeUnit = 'ml';
+      return;
+    }
+    _oilSizeAmount.clear();
+    _selectedSizeUnit = 'ml';
+  }
+
+void _onPlateFieldChanged() {} // moved: OilChangeOrderFormScreen
+
+  /// يملأ حقول السيارة/الزيت من سجل سابق — [replaceAll] للتعبئة من صف السجل، وإلا الحقول الفارغة فقط.
+  void _applyVehicleRecord(
+    Map<String, dynamic> r, {
+    required bool replaceAll,
+    bool skipOilAndHydraulic = false,
+    bool skipHydraulicGear = false,
+    bool skipHydraulicPower = false,
+  }) {
+    void textCtrl(TextEditingController c, String key) {
+      final v = (r[key] ?? '').toString();
+      if (replaceAll || c.text.trim().isEmpty) {
+        _assignControllerText(c, v);
+      }
+    }
+
+    _applyingVehicleRecord = true;
+    try {
+    if (replaceAll) {
+      _customerId = (r['customerId'] as num?)?.toInt();
+      textCtrl(_customerName, 'customerNameSnapshot');
+      textCtrl(_customerPhone, 'customerPhone');
+    } else {
+      if (_customerId == null) {
+        final cid = (r['customerId'] as num?)?.toInt();
+        if (cid != null && cid > 0) _customerId = cid;
+      }
+      textCtrl(_customerName, 'customerNameSnapshot');
+      textCtrl(_customerPhone, 'customerPhone');
+    }
+
+    textCtrl(_deviceName, 'deviceName');
+    textCtrl(_carModel, 'carModel');
+    textCtrl(_deviceSerial, 'deviceSerial');
+    textCtrl(_engineSize, 'engineSize');
+    textCtrl(_odometerCurrent, 'odometerCurrent');
+    final nextOdo = (r['odometerNext'] ?? '').toString();
+    if (replaceAll || _odometerNext.text.trim().isEmpty) {
+      _odometerNext.text = nextOdo;
+      if (nextOdo.trim().isNotEmpty) _odometerNextTouched = true;
+    }
+    if (!skipOilAndHydraulic) {
+      textCtrl(_oilType, 'oilType');
+      if (replaceAll || _selectedViscosity == null) {
+        final vis = r['oilViscosity']?.toString();
+        _selectedViscosity =
+            vis == null || vis.isEmpty ? null : vis;
+      }
+      if (replaceAll || _oilSizeAmount.text.trim().isEmpty) {
+        _parseOilSize(r['oilSize']?.toString());
+      }
+    }
+    textCtrl(_technicianName, 'technicianName');
+    textCtrl(_issue, 'issueDescription');
+    if (replaceAll || _selectedFilterType == null) {
+      final ft = r['filterType']?.toString();
+      _selectedFilterType =
+          ft == null || ft.isEmpty ? null : ft;
+    }
+
+    if (replaceAll) {
+      _estimated.text = IraqiCurrencyFormat.formatDecimal2(
+        IqdMoney.fromFils((r['estimatedPriceFils'] as num?)?.toInt() ?? 0),
+      );
+      final agreedF = (r['agreedPriceFils'] as num?)?.toInt();
+      _agreed.text = agreedF == null
+          ? ''
+          : IraqiCurrencyFormat.formatDecimal2(IqdMoney.fromFils(agreedF));
+      _advance.text = IraqiCurrencyFormat.formatDecimal2(
+        IqdMoney.fromFils((r['advancePaymentFils'] as num?)?.toInt() ?? 0),
+      );
+      _serviceId = (r['serviceId'] as num?)?.toInt();
+      final req = parseOilRequestedServices(r['requestedServices']?.toString());
+      _selectedServices.clear();
+      if (req.isNotEmpty) {
+        _selectedServices.addAll(req);
+      }
+    } else {
+      if (_agreed.text.trim().isEmpty) {
+        final agreedF = (r['agreedPriceFils'] as num?)?.toInt();
+        if (agreedF != null) {
+          _agreed.text =
+              IraqiCurrencyFormat.formatDecimal2(IqdMoney.fromFils(agreedF));
+        }
+      }
+      if (_selectedServices.isEmpty) {
+        final req = parseOilRequestedServices(r['requestedServices']?.toString());
+        if (req.isNotEmpty) {
+          _selectedServices.addAll(req);
+        }
+      }
+    }
+
+    if (_customerId != null && _customerId! > 0) {
+      _linkedCustomerName = _customerName.text.trim();
+    }
+    } finally {
+      _applyingVehicleRecord = false;
+    }
+  }
+
   void _onCustomerNameTyped() {
     if (_suspendCustomerIdClear) return;
-    if (_customerId != null && mounted) {
-      setState(() => _customerId = null);
+    if (_customerId == null) return;
+    final typed = _customerName.text.trim();
+    if (_linkedCustomerName != null && typed == _linkedCustomerName) {
+      return;
     }
+    if (!mounted) return;
+    setState(() {
+      _customerId = null;
+      _linkedCustomerName = null;
+      _customerPhone.clear();
+    });
+  }
+
+  Future<void> _applyCustomerSelection(CustomerRecord c) async {
+    _suspendCustomerIdClear = true;
+    var phone = c.phone?.trim() ?? '';
+    if (phone.isEmpty) {
+      try {
+        final row = await _customersDb.getCustomerById(c.id);
+        if (row != null) {
+          phone = (row['phone'] ?? '').toString().trim();
+        }
+      } catch (_) {}
+    }
+    if (!mounted) return;
+    final name = c.name.trim();
+    setState(() {
+      _customerId = c.id;
+      _linkedCustomerName = name;
+      _customerName.text = name;
+      if (phone.isNotEmpty) {
+        _customerPhone.text = phone;
+      }
+      _customerName.selection = TextSelection.collapsed(offset: name.length);
+    });
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+    _suspendCustomerIdClear = false;
   }
 
   @override
@@ -83,29 +405,48 @@ class _ServiceOrderFormScreenState extends State<ServiceOrderFormScreen> {
     _customerName.removeListener(_onCustomerNameTyped);
     _customerName.dispose();
     _customerFocus.dispose();
+    _customerPhone.dispose();
+
     _deviceName.dispose();
+    _carModel.dispose();
     _deviceSerial.dispose();
+    _engineSize.dispose();
+
+    _odometerCurrent.dispose();
+    _odometerNext.dispose();
+    _oilType.dispose();
+    _oilLitersStock.dispose();
+    _gearHydraulic.dispose();
+    _powerHydraulic.dispose();
+
     _estimated.dispose();
     _agreed.dispose();
     _advance.dispose();
     _issue.dispose();
+    _technicianName.dispose();
+    _oilSizeAmount.dispose();
     super.dispose();
   }
-
   Future<void> _load() async {
     setState(() {
       _error = null;
       _errorText = null;
     });
     try {
-      final gid = widget.editOrderGlobalId;
-      if (gid == null || gid.trim().isEmpty) {
-        throw StateError('missing_global_id');
+      Map<String, dynamic>? r;
+      final gid = widget.editOrderGlobalId?.trim();
+      if (gid != null && gid.isNotEmpty) {
+        r = await ServiceOrdersRepository.instance.getServiceOrderByGlobalId(gid);
+      } else if (widget.editOrderId != null && widget.editOrderId! > 0) {
+        r = await ServiceOrdersRepository.instance.getServiceOrderById(
+          widget.editOrderId!,
+        );
       }
-      final r = await ServiceOrdersRepository.instance.getServiceOrderByGlobalId(gid);
       if (!mounted) return;
       if (r == null) throw StateError('not_found');
-      final svcId = (r['serviceId'] as num?)?.toInt();
+      final row = r;
+
+      final svcId = (row['serviceId'] as num?)?.toInt();
       String? svcName;
       if (svcId != null && svcId > 0) {
         final row = await ProductRepository().getProductById(svcId);
@@ -114,33 +455,64 @@ class _ServiceOrderFormScreenState extends State<ServiceOrderFormScreen> {
       final edm = (r['expectedDurationMinutes'] as num?)?.toInt() ?? 0;
       final h = edm > 0 ? edm ~/ 60 : 0;
       final m = edm > 0 ? edm % 60 : 0;
+
       setState(() {
-        _customerId = (r['customerId'] as num?)?.toInt();
-        _customerName.text = (r['customerNameSnapshot'] ?? '').toString();
-        _deviceName.text = (r['deviceName'] ?? '').toString();
-        _deviceSerial.text = (r['deviceSerial'] ?? '').toString();
-        _status = (r['status'] ?? 'pending').toString();
+        _customerId = (row['customerId'] as num?)?.toInt();
+        _customerName.text = (row['customerNameSnapshot'] ?? '').toString();
+        _customerPhone.text = (row['customerPhone'] ?? '').toString();
+        
+        _deviceName.text = (row['deviceName'] ?? '').toString();
+        _carModel.text = (row['carModel'] ?? '').toString();
+        _deviceSerial.text = (row['deviceSerial'] ?? '').toString();
+        _engineSize.text = (row['engineSize'] ?? '').toString();
+        
+        _odometerCurrent.text = (row['odometerCurrent'] ?? '').toString();
+        _odometerNext.text = (row['odometerNext'] ?? '').toString();
+        _oilType.text = (row['oilType'] ?? '').toString();
+        _selectedViscosity = row['oilViscosity']?.toString().isEmpty == true
+            ? null
+            : row['oilViscosity']?.toString();
+        final catSell = (row['oilSellPerLiterFils'] as num?)?.toInt();
+        _catalogSellPerLiterFils =
+            catSell != null && catSell > 0 ? catSell : null;
+        _parseOilSize(row['oilSize']?.toString());
+        _selectedFilterType = row['filterType']?.toString().isEmpty == true
+            ? null
+            : row['filterType']?.toString();
+
+        _status = (row['status'] ?? 'pending').toString();
         _serviceId = svcId;
         _serviceName = svcName;
         _estimated.text = IraqiCurrencyFormat.formatDecimal2(
-          IqdMoney.fromFils((r['estimatedPriceFils'] as num?)?.toInt() ?? 0),
+          IqdMoney.fromFils((row['estimatedPriceFils'] as num?)?.toInt() ?? 0),
         );
-        final agreedF = (r['agreedPriceFils'] as num?)?.toInt();
+        final agreedF = (row['agreedPriceFils'] as num?)?.toInt();
         _agreed.text = agreedF == null
             ? ''
             : IraqiCurrencyFormat.formatDecimal2(IqdMoney.fromFils(agreedF));
         _advance.text = IraqiCurrencyFormat.formatDecimal2(
-          IqdMoney.fromFils((r['advancePaymentFils'] as num?)?.toInt() ?? 0),
+          IqdMoney.fromFils((row['advancePaymentFils'] as num?)?.toInt() ?? 0),
         );
-        _issue.text = (r['issueDescription'] ?? '').toString();
+        _issue.text = (row['issueDescription'] ?? '').toString();
+        _technicianName.text = (row['technicianName'] ?? '').toString();
+
         _openedAtUtc =
-            DateTime.tryParse((r['createdAt'] ?? '').toString())?.toUtc();
+            DateTime.tryParse((row['createdAt'] ?? '').toString())?.toUtc();
         _workStartedAtUtc =
-            DateTime.tryParse((r['workStartedAt'] ?? '').toString())?.toUtc();
+            DateTime.tryParse((row['workStartedAt'] ?? '').toString())?.toUtc();
         _etaHours = h;
         _etaMinutes = m;
-        final pd = (r['promisedDeliveryAt'] ?? '').toString().trim();
+        final pd = (row['promisedDeliveryAt'] ?? '').toString().trim();
         _promisedDeliveryStoredIso = pd.isEmpty ? null : pd;
+
+        _selectedServices.clear();
+        final req = parseOilRequestedServices(
+          row['requestedServices']?.toString(),
+        );
+        if (req.isNotEmpty) {
+          _selectedServices.addAll(req);
+        }
+
         _hydratingEdit = false;
       });
     } catch (e) {
@@ -152,16 +524,32 @@ class _ServiceOrderFormScreenState extends State<ServiceOrderFormScreen> {
       });
     }
   }
-
   String _friendlyError(Object e) {
     final raw = e.toString();
-    if (raw.contains('TenantContextService') || raw.contains('tenant')) {
+    if (_isTenantScopeError(raw)) {
       return 'تعذر تحديد بيانات المستأجر. أعد فتح التطبيق ثم حاول مرة أخرى.';
     }
     if (raw.contains('no such table') || raw.contains('no such column')) {
       return 'قاعدة البيانات تحتاج تهيئة/تحديث. أعد فتح التطبيق ثم حاول مرة أخرى.';
     }
+    if (raw.contains('الرصيد غير كافٍ') || raw.contains('رصيد غير كاف')) {
+      return raw.replaceFirst('StateError: ', '').trim();
+    }
+    if (raw.contains('تعذّر صرف الزيت')) {
+      return 'تعذّر صرف الزيت من المخزون. تحقق من الرصيد والمستودع.';
+    }
+    if (raw.contains('CHECK constraint failed') &&
+        raw.toLowerCase().contains('status')) {
+      return 'تعذّر حفظ حالة «معلّقة». أغلق التطبيق وافتحه من جديد لتحديث قاعدة البيانات.';
+    }
     return 'حدث خطأ غير متوقع أثناء الحفظ.';
+  }
+
+  bool _isTenantScopeError(String raw) {
+    return raw.contains('TenantContextService') ||
+        raw.contains('TenantContext غير') ||
+        raw.contains('لا يوجد مستأجر نشط') ||
+        raw.contains('معرّف المستأجر النشط');
   }
 
   int _parseFils(TextEditingController c) {
@@ -170,6 +558,20 @@ class _ServiceOrderFormScreenState extends State<ServiceOrderFormScreen> {
     return IqdMoney.toFils(v);
   }
 
+  String? _filterTypeSummaryForSave() => _selectedFilterType;
+
+  String? _hydraulicSizeValueForSaveFor(OilChangeHydraulicCardSlot slot) =>
+      slot.sizeValueForSave(
+        usesWarehousePicker: false,
+        effectiveCustomerProvided: slot.customerProvided,
+      );
+
+  String? _oilSizeValueForSave() {
+    if (_selectedSizeUnit == 'Q') return 'Q';
+    final stored = oilSizeDisplayToStored(_oilSizeAmount.text);
+    if (stored.isEmpty) return null;
+    return stored;
+  }
   int? _etaTotalMinutes() {
     final t = _etaHours * 60 + _etaMinutes;
     return t > 0 ? t : null;
@@ -183,14 +585,7 @@ class _ServiceOrderFormScreenState extends State<ServiceOrderFormScreen> {
       ),
     );
     if (!mounted || rec == null) return;
-    _suspendCustomerIdClear = true;
-    setState(() {
-      _customerId = rec.id;
-      _customerName.text = rec.name.trim();
-    });
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _suspendCustomerIdClear = false;
-    });
+    await _applyCustomerSelection(rec);
   }
 
   Future<void> _openDurationWheel() async {
@@ -355,6 +750,7 @@ class _ServiceOrderFormScreenState extends State<ServiceOrderFormScreen> {
             : null);
 
     return Container(
+      margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsetsDirectional.fromSTEB(12, 10, 12, 10),
       decoration: BoxDecoration(
         color: overdue
@@ -467,7 +863,7 @@ class _ServiceOrderFormScreenState extends State<ServiceOrderFormScreen> {
                 Padding(
                   padding: const EdgeInsetsDirectional.fromSTEB(12, 10, 12, 8),
                   child: TextField(
-                    controller: search,
+                     controller: search,
                     onChanged: (_) => setModal(() {}),
                     decoration: const InputDecoration(
                       prefixIcon: Icon(Icons.search_rounded),
@@ -513,9 +909,36 @@ class _ServiceOrderFormScreenState extends State<ServiceOrderFormScreen> {
     });
     await _applyServicePricing(pid);
   }
+  Future<void> _afterOilChangeSaved({
+    required Map<String, dynamic>? savedOrder,
+    required int? orderId,
+    required bool openInvoice,
+    bool skipPostSaveActions = false,
+  }) async {}
 
-  Future<void> _submit() async {
+  Future<void> _submit({
+    bool openInvoice = false,
+    _OilSubmitIntent intent = _OilSubmitIntent.complete,
+  }) async {
     if (_hydratingEdit || _saving) return;
+
+    final conflict = ShiftActorConflictGuard.evaluate(
+      sessionUserId: context.read<AuthProvider>().userId,
+      activeShift: context.read<ShiftProvider>().activeShift,
+    );
+    if (conflict.hasConflict) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'لا يمكن حفظ البطاقة/البيع من هذه الجلسة: الوردية المفتوحة باسم ${conflict.shiftStaffName}.',
+            ),
+          ),
+        );
+      }
+      return;
+    }
+
     final ok = _formKey.currentState?.validate() ?? false;
     if (!ok) return;
 
@@ -525,6 +948,13 @@ class _ServiceOrderFormScreenState extends State<ServiceOrderFormScreen> {
           'REF-${DateTime.now().millisecondsSinceEpoch % 100000000}';
       _deviceSerial.text = serialOut;
     }
+
+    final customerNameOut = _customerName.text.trim();
+    final deviceNameOut = _deviceName.text.trim();
+
+    final sizeVal = _oilSizeValueForSave();
+    final hydSizeVal = _hydraulicSizeValueForSaveFor(_gearHydraulic);
+    final powerHydSizeVal = _hydraulicSizeValueForSaveFor(_powerHydraulic);
 
     final estF = _parseFils(_estimated);
     final agreedRaw = _agreed.text.trim().replaceAll(',', '');
@@ -545,13 +975,15 @@ class _ServiceOrderFormScreenState extends State<ServiceOrderFormScreen> {
       _error = null;
     });
     try {
+      int? savedId;
+
       if (widget.isEdit) {
         await ServiceOrdersRepository.instance.updateServiceOrderById(
           widget.editOrderId!,
           patchCustomerIdField: true,
           customerId: _customerId,
-          customerNameSnapshot: _customerName.text.trim(),
-          deviceName: _deviceName.text.trim(),
+          customerNameSnapshot: customerNameOut,
+          deviceName: deviceNameOut,
           deviceSerial: serialOut,
           serviceId: _serviceId,
           estimatedPriceFils: estF,
@@ -562,12 +994,37 @@ class _ServiceOrderFormScreenState extends State<ServiceOrderFormScreen> {
           patchEtaFields: true,
           expectedDurationMinutes: etaMins,
           promisedDeliveryAt: promIso,
+          carModel: _carModel.text.trim(),
+          engineSize: _engineSize.text.trim(),
+          odometerCurrent: _odometerCurrent.text.trim(),
+          odometerNext: _odometerNext.text.trim(),
+          oilType: _oilType.text.trim(),
+          oilViscosity: _selectedViscosity,
+          oilSize: sizeVal,
+          filterType: _filterTypeSummaryForSave(),
+          engineFilterName:
+              _engineFilter.hasSelection ? _engineFilter.name : null,
+          engineFilterPriceFils:
+              _engineFilter.hasSelection ? _engineFilter.priceFils : null,
+          airFilterName: _airFilter.hasSelection ? _airFilter.name : null,
+          airFilterPriceFils:
+              _airFilter.hasSelection ? _airFilter.priceFils : null,
+          gearFilterName: _gearFilter.hasSelection ? _gearFilter.name : null,
+          gearFilterPriceFils:
+              _gearFilter.hasSelection ? _gearFilter.priceFils : null,
+          requestedServices: _selectedServices.join(','),
+          customerPhone: _customerPhone.text.trim(),
+          technicianName: _technicianName.text.trim(),
+          patchOilStockFields: false,
+          patchHydraulicStockFields: false,
+          patchPowerHydraulicStockFields: false,
         );
+        savedId = widget.editOrderId;
       } else {
-        await ServiceOrdersRepository.instance.createServiceOrder(
+        savedId = await ServiceOrdersRepository.instance.createServiceOrder(
           customerId: _customerId,
-          customerNameSnapshot: _customerName.text.trim(),
-          deviceName: _deviceName.text.trim(),
+          customerNameSnapshot: customerNameOut,
+          deviceName: deviceNameOut,
           deviceSerial: serialOut,
           serviceId: _serviceId,
           estimatedPriceFils: estF,
@@ -577,9 +1034,39 @@ class _ServiceOrderFormScreenState extends State<ServiceOrderFormScreen> {
           issueDescription: _issue.text.trim(),
           expectedDurationMinutes: etaMins,
           promisedDeliveryAt: null,
+          carModel: _carModel.text.trim(),
+          engineSize: _engineSize.text.trim(),
+          odometerCurrent: _odometerCurrent.text.trim(),
+          odometerNext: _odometerNext.text.trim(),
+          oilType: _oilType.text.trim(),
+          oilViscosity: _selectedViscosity,
+          oilSize: sizeVal,
+          filterType: _filterTypeSummaryForSave(),
+          engineFilterName:
+              _engineFilter.hasSelection ? _engineFilter.name : null,
+          engineFilterPriceFils:
+              _engineFilter.hasSelection ? _engineFilter.priceFils : null,
+          airFilterName: _airFilter.hasSelection ? _airFilter.name : null,
+          airFilterPriceFils:
+              _airFilter.hasSelection ? _airFilter.priceFils : null,
+          gearFilterName: _gearFilter.hasSelection ? _gearFilter.name : null,
+          gearFilterPriceFils:
+              _gearFilter.hasSelection ? _gearFilter.priceFils : null,
+          requestedServices: _selectedServices.join(','),
+          customerPhone: _customerPhone.text.trim(),
+          technicianName: _technicianName.text.trim(),
+          orderKind: ServiceOrderKinds.repair,
         );
       }
       if (!mounted) return;
+
+      await _afterOilChangeSaved(
+        savedOrder: null,
+        orderId: savedId,
+        openInvoice: openInvoice,
+      );
+      if (!mounted) return;
+
       Navigator.pop(context, true);
     } catch (e) {
       if (!mounted) return;
@@ -589,6 +1076,12 @@ class _ServiceOrderFormScreenState extends State<ServiceOrderFormScreen> {
         _saving = false;
       });
     }
+  }
+
+  @override
+  void didUpdateWidget(covariant ServiceOrderFormScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // لا إعادة تعبئة من prefill عند إعادة بناء الودجت — يحافظ على تعديلات المستخدم.
   }
 
   @override
@@ -603,7 +1096,9 @@ class _ServiceOrderFormScreenState extends State<ServiceOrderFormScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.isEdit ? 'تعديل تذكرة' : 'تذكرة جديدة'),
+        title: Text(
+          widget.isEdit ? 'تعديل تذكرة صيانة' : 'بطاقة صيانة جديدة',
+        ),
         actions: [
           IconButton(
             tooltip: 'حفظ',
@@ -614,312 +1109,303 @@ class _ServiceOrderFormScreenState extends State<ServiceOrderFormScreen> {
       ),
       body: AdaptiveFormContainer(
         child: Form(
-        key: _formKey,
-        child: ListView(
-          padding: const EdgeInsetsDirectional.fromSTEB(14, 14, 14, 22),
-          children: [
-            if (_error != null) ...[
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: cs.errorContainer.withValues(alpha: 0.35),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: cs.error.withValues(alpha: 0.25)),
+          key: _formKey,
+          child: ListView(
+            padding: const EdgeInsetsDirectional.fromSTEB(14, 14, 14, 22),
+            children: [
+              if (_error != null) ...[
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: cs.errorContainer.withValues(alpha: 0.35),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: cs.error.withValues(alpha: 0.25)),
+                  ),
+                  child: Text(
+                    (_errorText ?? 'حدث خطأ أثناء الحفظ. حاول مرة أخرى.'),
+                    style: TextStyle(color: cs.error),
+                  ),
                 ),
-                child: Text(
-                  (_errorText ?? 'حدث خطأ أثناء الحفظ. حاول مرة أخرى.'),
-                  style: TextStyle(color: cs.error),
-                ),
-              ),
-              const SizedBox(height: 12),
-            ],
-            _buildScheduleBanner(cs),
-            if (_etaTotalMinutes() != null || _promisedDeliveryStoredIso != null)
-              const SizedBox(height: 12),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: RawAutocomplete<CustomerRecord>(
-                    textEditingController: _customerName,
-                    focusNode: _customerFocus,
-                    displayStringForOption: (c) => c.name,
-                    optionsBuilder: (tv) async {
-                      final q = tv.text.trim();
-                      if (q.isEmpty) {
-                        return const Iterable<CustomerRecord>.empty();
-                      }
-                      await Future<void>.delayed(
-                        const Duration(milliseconds: 240),
-                      );
-                      if (!mounted || _customerName.text.trim() != q) {
-                        return const Iterable<CustomerRecord>.empty();
-                      }
-                      final rows = await _customersDb.queryCustomersPage(
-                        query: q,
-                        statusArabic: 'الكل',
-                        sortKey: 'name_asc',
-                        limit: 20,
-                        offset: 0,
-                      );
-                      return rows.map(CustomerRecord.fromMap);
-                    },
-                    onSelected: (c) {
-                      _suspendCustomerIdClear = true;
-                      setState(() {
-                        _customerId = c.id;
-                        _customerName.text = c.name.trim();
-                        _customerName.selection = TextSelection.collapsed(
-                          offset: _customerName.text.length,
+                const SizedBox(height: 12),
+              ],
+              _buildScheduleBanner(cs),
+              if (_etaTotalMinutes() != null ||
+                  _promisedDeliveryStoredIso != null)
+                const SizedBox(height: 12),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: RawAutocomplete<CustomerRecord>(
+                      textEditingController: _customerName,
+                      focusNode: _customerFocus,
+                      displayStringForOption: (c) => c.name,
+                      optionsBuilder: (tv) async {
+                        final q = tv.text.trim();
+                        if (q.isEmpty) {
+                          return const Iterable<CustomerRecord>.empty();
+                        }
+                        await Future<void>.delayed(
+                          const Duration(milliseconds: 240),
                         );
-                      });
-                      WidgetsBinding.instance.addPostFrameCallback((_) {
-                        _suspendCustomerIdClear = false;
-                      });
-                    },
-                    fieldViewBuilder: (context, controller, focusNode, onSubmit) {
-                      return TextFormField(
-                        controller: controller,
-                        focusNode: focusNode,
-                        decoration: InputDecoration(
-                          labelText: 'اسم العميل',
-                          border: const OutlineInputBorder(),
-                          hintText: 'ابدأ الكتابة للبحث في العملاء',
-                          suffixIcon: _customerId != null
-                              ? Icon(Icons.link_rounded, color: cs.primary)
-                              : null,
-                        ),
-                        validator: (v) =>
-                            (v == null || v.trim().isEmpty)
-                                ? 'اسم العميل مطلوب'
+                        if (!mounted || _customerName.text.trim() != q) {
+                          return const Iterable<CustomerRecord>.empty();
+                        }
+                        final rows = await _customersDb.queryCustomersPage(
+                          query: q,
+                          statusArabic: 'الكل',
+                          sortKey: 'name_asc',
+                          limit: 20,
+                          offset: 0,
+                        );
+                        return rows.map(CustomerRecord.fromMap);
+                      },
+                      onSelected: (c) => unawaited(_applyCustomerSelection(c)),
+                      fieldViewBuilder:
+                          (context, controller, focusNode, onSubmit) {
+                        return TextFormField(
+                          controller: controller,
+                          focusNode: focusNode,
+                          decoration: InputDecoration(
+                            labelText: 'اسم العميل',
+                            border: const OutlineInputBorder(),
+                            hintText: 'ابدأ الكتابة للبحث في العملاء',
+                            suffixIcon: _customerId != null
+                                ? Icon(Icons.link_rounded, color: cs.primary)
                                 : null,
-                        textAlign: TextAlign.start,
-                        onFieldSubmitted: (_) => onSubmit(),
-                      );
-                    },
-                    optionsViewBuilder: (context, onSelected, options) {
-                      final list = options.toList();
-                      return Align(
-                        alignment: AlignmentDirectional.topStart,
-                        child: Material(
-                          elevation: 6,
-                          borderRadius: BorderRadius.circular(12),
-                          child: ConstrainedBox(
-                            constraints: const BoxConstraints(maxHeight: 220),
-                            child: ListView.builder(
-                              padding: EdgeInsets.zero,
-                              shrinkWrap: true,
-                              itemCount: list.length,
-                              itemBuilder: (ctx, i) {
-                                final c = list[i];
-                                return ListTile(
-                                  dense: true,
-                                  title: Text(
-                                    c.name.trim().isEmpty ? 'عميل' : c.name,
-                                    textAlign: TextAlign.start,
-                                  ),
-                                  subtitle: c.phone == null ||
-                                          c.phone!.trim().isEmpty
-                                      ? null
-                                      : Text(
-                                          c.phone!,
-                                          textDirection: TextDirection.ltr,
-                                          textAlign: TextAlign.start,
-                                        ),
-                                  onTap: () => onSelected(c),
-                                );
-                              },
+                          ),
+                          validator: (v) => (v == null || v.trim().isEmpty)
+                              ? 'اسم العميل مطلوب'
+                              : null,
+                          textAlign: TextAlign.start,
+                          onFieldSubmitted: (_) => onSubmit(),
+                        );
+                      },
+                      optionsViewBuilder: (context, onSelected, options) {
+                        final list = options.toList();
+                        return Align(
+                          alignment: AlignmentDirectional.topStart,
+                          child: Material(
+                            elevation: 6,
+                            borderRadius: BorderRadius.circular(12),
+                            child: ConstrainedBox(
+                              constraints:
+                                  const BoxConstraints(maxHeight: 220),
+                              child: ListView.builder(
+                                padding: EdgeInsets.zero,
+                                shrinkWrap: true,
+                                itemCount: list.length,
+                                itemBuilder: (ctx, i) {
+                                  final c = list[i];
+                                  return ListTile(
+                                    dense: true,
+                                    title: Text(
+                                      c.name.trim().isEmpty ? 'عميل' : c.name,
+                                      textAlign: TextAlign.start,
+                                    ),
+                                    subtitle: c.phone == null ||
+                                            c.phone!.trim().isEmpty
+                                        ? null
+                                        : Text(
+                                            c.phone!,
+                                            textDirection: TextDirection.ltr,
+                                            textAlign: TextAlign.start,
+                                          ),
+                                    onTap: () => onSelected(c),
+                                  );
+                                },
+                              ),
                             ),
                           ),
-                        ),
-                      );
-                    },
+                        );
+                      },
+                    ),
                   ),
-                ),
-                const SizedBox(width: 4),
-                IconButton(
-                  tooltip: 'عميل جديد',
-                  onPressed: busy ? null : _openNewCustomer,
-                  icon: const Icon(Icons.person_add_alt_rounded),
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            TextFormField(
-              controller: _deviceName,
-              decoration: const InputDecoration(
-                labelText: 'اسم الجهاز / السيارة',
-                border: OutlineInputBorder(),
+                  const SizedBox(width: 4),
+                  IconButton(
+                    tooltip: 'عميل جديد',
+                    onPressed: busy ? null : _openNewCustomer,
+                    icon: const Icon(Icons.person_add_alt_rounded),
+                  ),
+                ],
               ),
-              validator: (v) =>
-                  (v == null || v.trim().isEmpty) ? 'اسم الجهاز مطلوب' : null,
-              textAlign: TextAlign.start,
-            ),
-            const SizedBox(height: 10),
-            TextFormField(
-              controller: _deviceSerial,
-              decoration: const InputDecoration(
-                labelText: 'رقم تسلسلي / لوحة (اختياري)',
-                border: OutlineInputBorder(),
-              ),
-              textDirection: TextDirection.ltr,
-              textAlign: TextAlign.start,
-            ),
-            Padding(
-              padding: const EdgeInsetsDirectional.only(start: 4, top: 4),
-              child: Text(
-                'إن تُرك فارغاً يُولَّد تلقائياً رقم مرجعي داخلي للتذكرة (وليس سيريال الجهاز).',
-                style: TextStyle(
-                  fontSize: 12,
-                  height: 1.3,
-                  color: cs.onSurfaceVariant,
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: _deviceName,
+                decoration: const InputDecoration(
+                  labelText: 'اسم الجهاز / السيارة',
+                  border: OutlineInputBorder(),
                 ),
+                validator: (v) => (v == null || v.trim().isEmpty)
+                    ? 'اسم الجهاز مطلوب'
+                    : null,
                 textAlign: TextAlign.start,
               ),
-            ),
-            const SizedBox(height: 10),
-            Material(
-              color: cs.surfaceContainerHighest.withValues(alpha: 0.35),
-              borderRadius: BorderRadius.circular(12),
-              child: InkWell(
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: _deviceSerial,
+                decoration: const InputDecoration(
+                  labelText: 'رقم تسلسلي / لوحة (اختياري)',
+                  border: OutlineInputBorder(),
+                ),
+                textDirection: TextDirection.ltr,
+                textAlign: TextAlign.start,
+              ),
+              Padding(
+                padding: const EdgeInsetsDirectional.only(start: 4, top: 4),
+                child: Text(
+                  'إن تُرك فارغاً يُولَّد تلقائياً رقم مرجعي داخلي للتذكرة (وليس سيريال الجهاز).',
+                  style: TextStyle(
+                    fontSize: 12,
+                    height: 1.3,
+                    color: cs.onSurfaceVariant,
+                  ),
+                  textAlign: TextAlign.start,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Material(
+                color: cs.surfaceContainerHighest.withValues(alpha: 0.35),
                 borderRadius: BorderRadius.circular(12),
-                onTap: busy ? null : _openDurationWheel,
-                child: Padding(
-                  padding: const EdgeInsetsDirectional.fromSTEB(14, 14, 14, 14),
-                  child: Row(
-                    children: [
-                      Icon(Icons.access_time_filled_rounded, color: cs.primary),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'المدة المتوقعة',
-                              style: TextStyle(
-                                fontWeight: FontWeight.w800,
-                                color: cs.onSurface,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(12),
+                  onTap: busy ? null : _openDurationWheel,
+                  child: Padding(
+                    padding:
+                        const EdgeInsetsDirectional.fromSTEB(14, 14, 14, 14),
+                    child: Row(
+                      children: [
+                        Icon(Icons.access_time_filled_rounded,
+                            color: cs.primary),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'المدة المتوقعة',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w800,
+                                  color: cs.onSurface,
+                                ),
+                                textAlign: TextAlign.start,
                               ),
-                              textAlign: TextAlign.start,
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              _durationSummaryLabel(),
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: cs.onSurfaceVariant,
+                              const SizedBox(height: 4),
+                              Text(
+                                _durationSummaryLabel(),
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: cs.onSurfaceVariant,
+                                ),
+                                textAlign: TextAlign.start,
                               ),
-                              textAlign: TextAlign.start,
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
+                        Icon(Icons.chevron_left_rounded,
+                            color: cs.onSurfaceVariant),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('الخدمة'),
+                subtitle: Text(
+                  _serviceName?.trim().isNotEmpty == true
+                      ? _serviceName!
+                      : (_serviceId == null
+                          ? 'غير محددة (اختياري)'
+                          : 'محددة'),
+                ),
+                trailing: OutlinedButton.icon(
+                  onPressed: busy ? null : _pickService,
+                  icon: const Icon(Icons.search_rounded),
+                  label: const Text('اختيار'),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: TextFormField(
+                      controller: _estimated,
+                      readOnly: true,
+                      enableInteractiveSelection: true,
+                      decoration: const InputDecoration(
+                        labelText: 'سعر تقديري (من الخدمة)',
+                        border: OutlineInputBorder(),
+                        helperText: 'يُملأ تلقائياً من سعر الخدمة',
                       ),
-                      Icon(Icons.chevron_left_rounded, color: cs.onSurfaceVariant),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 10),
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('الخدمة'),
-              subtitle: Text(
-                _serviceName?.trim().isNotEmpty == true
-                    ? _serviceName!
-                    : (_serviceId == null ? 'غير محددة (اختياري)' : 'محددة'),
-              ),
-              trailing: OutlinedButton.icon(
-                onPressed: busy ? null : _pickService,
-                icon: const Icon(Icons.search_rounded),
-                label: const Text('اختيار'),
-              ),
-            ),
-            const SizedBox(height: 8),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: TextFormField(
-                    controller: _estimated,
-                    readOnly: true,
-                    enableInteractiveSelection: true,
-                    decoration: const InputDecoration(
-                      labelText: 'سعر تقديري (من الخدمة)',
-                      border: OutlineInputBorder(),
-                      helperText: 'يُملأ تلقائياً من سعر الخدمة',
+                      textDirection: TextDirection.ltr,
+                      textAlign: TextAlign.start,
                     ),
-                    textDirection: TextDirection.ltr,
-                    textAlign: TextAlign.start,
                   ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: TextFormField(
-                    controller: _agreed,
-                    decoration: const InputDecoration(
-                      labelText: 'السعر المتفق عليه (د.ع)',
-                      border: OutlineInputBorder(),
-                      helperText: 'المكان الوحيد لتعديل السعر',
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: TextFormField(
+                      controller: _agreed,
+                      decoration: const InputDecoration(
+                        labelText: 'السعر المتفق عليه (د.ع)',
+                        border: OutlineInputBorder(),
+                        helperText: 'المكان الوحيد لتعديل السعر',
+                      ),
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      validator: (v) {
+                        final s = (v ?? '').trim().replaceAll(',', '');
+                        if (s.isEmpty) return null;
+                        final n = double.tryParse(s);
+                        if (n == null || n < 0) return 'أدخل مبلغاً صحيحاً';
+                        return null;
+                      },
+                      textDirection: TextDirection.ltr,
+                      textAlign: TextAlign.start,
                     ),
-                    keyboardType:
-                        const TextInputType.numberWithOptions(decimal: true),
-                    validator: (v) {
-                      final s = (v ?? '').trim().replaceAll(',', '');
-                      if (s.isEmpty) return null;
-                      final n = double.tryParse(s);
-                      if (n == null || n < 0) return 'أدخل مبلغاً صحيحاً';
-                      return null;
-                    },
-                    textDirection: TextDirection.ltr,
-                    textAlign: TextAlign.start,
                   ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                Expanded(
-                  child: TextFormField(
-                    controller: _advance,
-                    decoration: const InputDecoration(
-                      labelText: 'عربون/دفعة مقدمة (د.ع)',
-                      border: OutlineInputBorder(),
-                    ),
-                    keyboardType:
-                        const TextInputType.numberWithOptions(decimal: true),
-                    validator: (v) {
-                      final n =
-                          double.tryParse((v ?? '').trim().replaceAll(',', ''));
-                      if (n == null || n < 0) return 'أدخل مبلغاً صحيحاً';
-                      return null;
-                    },
-                    textDirection: TextDirection.ltr,
-                    textAlign: TextAlign.start,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            TextFormField(
-              controller: _issue,
-              decoration: const InputDecoration(
-                labelText: 'وصف المشكلة (اختياري)',
-                border: OutlineInputBorder(),
+                ],
               ),
-              minLines: 2,
-              maxLines: 5,
-              textAlign: TextAlign.start,
-            ),
-            const SizedBox(height: 14),
-            FilledButton(
-              onPressed: busy ? null : _submit,
-              child: Text(_saving ? 'جارٍ الحفظ…' : 'حفظ التذكرة'),
-            ),
-          ],
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: _advance,
+                decoration: const InputDecoration(
+                  labelText: 'عربون/دفعة مقدمة (د.ع)',
+                  border: OutlineInputBorder(),
+                ),
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                validator: (v) {
+                  final n =
+                      double.tryParse((v ?? '').trim().replaceAll(',', ''));
+                  if (n == null || n < 0) return 'أدخل مبلغاً صحيحاً';
+                  return null;
+                },
+                textDirection: TextDirection.ltr,
+                textAlign: TextAlign.start,
+              ),
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: _issue,
+                decoration: const InputDecoration(
+                  labelText: 'وصف المشكلة (اختياري)',
+                  border: OutlineInputBorder(),
+                ),
+                minLines: 2,
+                maxLines: 5,
+                textAlign: TextAlign.start,
+              ),
+              const SizedBox(height: 14),
+              FilledButton(
+                onPressed: busy ? null : _submit,
+                child: Text(_saving ? 'جارٍ الحفظ…' : 'حفظ التذكرة'),
+              ),
+            ],
+          ),
         ),
-      ),
       ),
     );
   }

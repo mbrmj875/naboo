@@ -32,7 +32,9 @@ Future<void> ensureProductColorsAndVariantsSchema(Database db) async {
       ON product_colors(tenantId, productId, LOWER(TRIM(name)))
       WHERE deleted_at IS NULL
     ''');
-  } catch (_) {}
+  } catch (e, st) {
+    AppLogger.error('DBMigrate', 'فشل فهرس product_colors name', e, st);
+  }
 
   await db.execute('''
     CREATE TABLE IF NOT EXISTS product_variants(
@@ -72,7 +74,9 @@ Future<void> ensureProductColorsAndVariantsSchema(Database db) async {
       ON product_variants(tenantId, colorId, LOWER(TRIM(size)))
       WHERE deleted_at IS NULL
     ''');
-  } catch (_) {}
+  } catch (e, st) {
+    AppLogger.error('DBMigrate', 'فشل فهرس product_variants size', e, st);
+  }
 
   // Barcode unique per tenant when present; NULL/blank allowed.
   try {
@@ -81,6 +85,8 @@ Future<void> ensureProductColorsAndVariantsSchema(Database db) async {
       ON product_variants(tenantId, UPPER(TRIM(barcode)))
       WHERE barcode IS NOT NULL AND TRIM(barcode) != '' AND deleted_at IS NULL
     ''');
-  } catch (_) {}
+  } catch (e, st) {
+    AppLogger.error('DBMigrate', 'فشل فهرس product_variants barcode', e, st);
+  }
 }
 

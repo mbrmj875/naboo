@@ -4,6 +4,8 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../utils/app_logger.dart';
+
 /// إعدادات من جدول [app_remote_config] (صف واحد id=1).
 /// تُقرأ بدون تسجيل دخول (سياسة RLS للجميع SELECT).
 class AppRemoteConfigData {
@@ -139,8 +141,13 @@ class AppRemoteConfigService {
           _cached = AppRemoteConfigData.fallback;
         }
       }
-    } catch (_) {
-      // بدون شبكة أو الجدول غير منشأ: لا نكسر التطبيق.
+    } catch (e, st) {
+      AppLogger.error(
+        'RemoteConfig',
+        'تعذّر جلب الإعدادات السحابية — استخدام fallback',
+        e,
+        st,
+      );
       _cached = AppRemoteConfigData.fallback;
     }
 

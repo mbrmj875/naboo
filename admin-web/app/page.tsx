@@ -11,7 +11,12 @@ import {
   type ChunkRow,
   type AppRemoteConfigPayload,
 } from "@/lib/dashboard-data";
-import { maxDevicesForPlan, PLAN_KEYS, planLabelAr, type PlanKey } from "@/lib/plan-presets";
+import {
+  annualPriceIqd,
+  monthlyPriceIqd,
+  PLAN_KEYS,
+  planLabelAr,
+} from "@/lib/plan-presets";
 
 type Tab = "licenses" | "users" | "devices" | "sync" | "settings";
 
@@ -43,6 +48,31 @@ function fmtDate(iso: string | null | undefined): string {
 
 function shortId(id: string): string {
   return id.length > 12 ? `${id.slice(0, 8)}…` : id;
+}
+
+function addCalendarDays(base: Date, days: number): Date {
+  const d = new Date(base);
+  d.setDate(d.getDate() + days);
+  return d;
+}
+
+function toDatetimeLocalInputValue(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function defaultEndsAtLocalForPlan(plan: string): string {
+  const days = plan === "annual" ? 365 : 30;
+  return toDatetimeLocalInputValue(addCalendarDays(new Date(), days));
+}
+
+function computersSummaryAr(computers: number): string {
+  const n = Math.max(1, Math.floor(computers));
+  const devices = n + 1;
+  const computerPart =
+    n === 1 ? "حاسوب واحد" : n === 2 ? "حاسوبان" : `${n} حاسبات`;
+  const deviceWord = devices === 2 ? "جهاز" : "أجهزة";
+  return `هاتف واحد + ${computerPart} = ${devices} ${deviceWord}`;
 }
 
 function expireSummaryLine(r: LicenseRow): string {
@@ -80,17 +110,26 @@ export default function DashboardPage() {
   } | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [rcEdit, setRcEdit] = useState<AppRemoteConfigPayload | null>(null);
-  const [issuePlan, setIssuePlan] = useState<string>("pro");
+  const [issuePlan, setIssuePlan] = useState<string>("monthly");
   const [issueBusiness, setIssueBusiness] = useState("");
   const [issueMonths, setIssueMonths] = useState("");
   const [issueAsTrial, setIssueAsTrial] = useState(false);
   const [issueAssignedUserId, setIssueAssignedUserId] = useState("");
   const [issueV2TenantId, setIssueV2TenantId] = useState("");
-  const [issueV2MaxDevices, setIssueV2MaxDevices] = useState("");
+  const [issueV2Computers, setIssueV2Computers] = useState(1);
   const [issueV2Starts, setIssueV2Starts] = useState("");
-  const [issueV2Ends, setIssueV2Ends] = useState("");
+  const [issueV2Ends, setIssueV2Ends] = useState(() =>
+    defaultEndsAtLocalForPlan("monthly"),
+  );
   const [issueV2Trial, setIssueV2Trial] = useState(false);
   const [issuedJwtPreview, setIssuedJwtPreview] = useState<string | null>(null);
+
+  const issueV2MaxDevicesComputed = 1 + issueV2Computers;
+  const issueV2PriceIqd = useMemo(() => {
+    return issuePlan === "annual"
+      ? annualPriceIqd(issueV2Computers)
+      : monthlyPriceIqd(issueV2Computers);
+  }, [issuePlan, issueV2Computers]);
 
   const load = useCallback(async () => {
     setLoadErr("");
@@ -399,20 +438,8 @@ export default function DashboardPage() {
         is_trial: issueV2Trial,
         business_name: issueBusiness.trim() || null,
         assigned_user_id: issueAssignedUserId.trim() === "" ? null : issueAssignedUserId.trim(),
+        max_devices: issueV2MaxDevicesComputed,
       };
-      const md = issueV2MaxDevices.trim();
-      if (md !== "") {
-        const n = parseInt(md, 10);
-        if (!Number.isFinite(n) || n < 0) {
-          setFeedback({
-            kind: "err",
-            text: "حد الأجهزة: رقم صحيح ≥ 0 أو اترك الحقل فارغاً لاستخدام حد الخطة الافتراضي.",
-          });
-          setBusy(false);
-          return;
-        }
-        payload.max_devices = n;
-      }
       if (issueV2Starts.trim() !== "") {
         const d = new Date(issueV2Starts);
         if (Number.isNaN(d.getTime())) {
@@ -1060,8 +1087,9 @@ export default function DashboardPage() {
                   id="issue-plan"
                   value={issuePlan}
                   onChange={(e) => {
-                    setIssuePlan(e.target.value);
-                    setIssueV2MaxDevices("");
+                    const plan = e.target.value;
+                    setIssuePlan(plan);
+                    setIssueV2Ends(defaultEndsAtLocalForPlan(plan));
                   }}
                   disabled={busy}
                 >
@@ -1210,23 +1238,65 @@ export default function DashboardPage() {
               <p className="meta" style={{ margin: "0 0 0.35rem" }}>
                 الخطة المستخدمة: <strong>{issuePlan}</strong> (من حقل «الخطة» في النموذج أعلاه)
               </p>
-              <label htmlFor="issue-v2-max">
-                حد الأجهزة (اختياري — إن تُرك فارغاً يُستخدم افتراضي الخطة: basic=2، pro=3،
-                unlimited=0)
-                <input
-                  id="issue-v2-max"
-                  type="number"
-                  min={0}
-                  placeholder={`افتراضي الخطة: ${maxDevicesForPlan(issuePlan as PlanKey)}`}
-                  value={issueV2MaxDevices}
-                  onChange={(e) => setIssueV2MaxDevices(e.target.value)}
-                  disabled={busy}
-                />
-              </label>
-              <p className="meta" style={{ margin: "0 0 0.5rem" }}>
-                لتطابق بطاقة «الاحترافية» (3 أجهزة) اترك الحقل فارغاً أو اكتب 3 صراحةً — القيمة 2
-                تُسجَّل في JWT كحدّ فعلي حتى مع خطة pro.
-              </p>
+              <div className="rc-form" style={{ marginBottom: "0.5rem" }}>
+                <span style={{ display: "block", marginBottom: "0.35rem", fontWeight: 600 }}>
+                  عدد الحاسبات
+                </span>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: "0.75rem",
+                  }}
+                >
+                  <button
+                    type="button"
+                    className="btn-sm"
+                    disabled={busy || issueV2Computers <= 1}
+                    onClick={() =>
+                      setIssueV2Computers((c) => Math.max(1, c - 1))
+                    }
+                    aria-label="تقليل عدد الحاسبات"
+                  >
+                    −
+                  </button>
+                  <span
+                    className="mono"
+                    style={{
+                      minWidth: "2.5rem",
+                      textAlign: "center",
+                      fontSize: "1.25rem",
+                      fontWeight: 700,
+                    }}
+                  >
+                    {issueV2Computers}
+                  </span>
+                  <button
+                    type="button"
+                    className="btn-sm"
+                    disabled={busy}
+                    onClick={() => setIssueV2Computers((c) => c + 1)}
+                    aria-label="زيادة عدد الحاسبات"
+                  >
+                    +
+                  </button>
+                </div>
+                <p className="meta" style={{ margin: "0.5rem 0 0.25rem" }}>
+                  {computersSummaryAr(issueV2Computers)} —{" "}
+                  <span className="mono">max_devices = {issueV2MaxDevicesComputed}</span>
+                </p>
+                <p className="meta" style={{ margin: "0.25rem 0 0" }}>
+                  <strong>
+                    {issuePlan === "annual"
+                      ? `${issueV2PriceIqd.toLocaleString("ar-IQ")} د.ع / سنة`
+                      : `${issueV2PriceIqd.toLocaleString("ar-IQ")} د.ع / شهر`}
+                  </strong>
+                  {" "}
+                  ({issueV2Computers} ×{" "}
+                  {issuePlan === "annual" ? "150,000" : "15,000"} د.ع)
+                </p>
+              </div>
               <label htmlFor="issue-v2-start">
                 starts_at (اختياري — افتراضي: الآن)
                 <input
@@ -1238,7 +1308,7 @@ export default function DashboardPage() {
                 />
               </label>
               <label htmlFor="issue-v2-end">
-                ends_at (اختياري — افتراضي: بعد 30 يوماً)
+                ends_at (يُضبط تلقائياً عند تغيير الخطة — قابل للتعديل)
                 <input
                   id="issue-v2-end"
                   type="datetime-local"

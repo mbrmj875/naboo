@@ -1,3 +1,5 @@
+import 'dart:ui' show ImageFilter;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -6,6 +8,7 @@ import 'package:intl/intl.dart' hide TextDirection;
 import 'dart:async' show Timer, unawaited;
 
 import '../../models/customer_record.dart';
+import '../../theme/app_corner_style.dart';
 import '../../theme/design_tokens.dart';
 import '../../widgets/app_notifications_sheet.dart';
 import '../../services/cloud_sync_service.dart';
@@ -14,7 +17,6 @@ import '../../providers/customers_provider.dart';
 import '../../utils/iraqi_currency_format.dart';
 import '../../utils/screen_layout.dart';
 import '../../widgets/brand/brand.dart';
-import '../../widgets/inputs/app_input.dart';
 import '../../widgets/adaptive/master_detail_layout.dart';
 import 'package:provider/provider.dart';
 import '../debts/customer_debt_detail_screen.dart';
@@ -69,9 +71,10 @@ class _CustomersScreenState extends State<CustomersScreen> {
   final TextEditingController _searchCtrl = TextEditingController();
   final FocusNode _searchFocus = FocusNode();
   Timer? _searchDebounce;
+  int? _hoveredCustomerId;
 
-  String _filterStatus = 'الكل';
-  _CustomerSort _sort = _CustomerSort.nameAsc;
+  static const String _filterStatus = 'الكل';
+  static const _CustomerSort _sort = _CustomerSort.nameAsc;
 
   /// العميل المختار حالياً للعرض في لوحة التفاصيل (MasterDetail).
   /// تنشط فقط على `isWideVariant`؛ على الموبايل يبقى `null` ويتم النفور
@@ -91,29 +94,32 @@ class _CustomersScreenState extends State<CustomersScreen> {
         }
       });
     });
-    _searchCtrl.addListener(() {
+    _searchCtrl.addListener(_onSearchTextChanged);
+    _searchFocus.addListener(_onSearchFocusChanged);
+  }
+
+  void _onSearchTextChanged() {
+    if (!mounted) return;
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 150), () {
       if (!mounted) return;
-      _searchDebounce?.cancel();
-      _searchDebounce = Timer(const Duration(milliseconds: 300), () {
-        if (!mounted) return;
-        _syncFilters();
-      });
-      setState(() {});
+      _syncFilters();
     });
+    setState(() {});
+  }
+
+  void _onSearchFocusChanged() {
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
     _searchDebounce?.cancel();
-    _searchCtrl.removeListener(() {});
+    _searchCtrl.removeListener(_onSearchTextChanged);
+    _searchFocus.removeListener(_onSearchFocusChanged);
     _searchCtrl.dispose();
     _searchFocus.dispose();
     super.dispose();
-  }
-
-  String _formatMoney(double v) {
-    final fmt = NumberFormat('#,##0.##', 'en');
-    return fmt.format(v);
   }
 
   String _shortDate(DateTime? d) {
@@ -388,34 +394,9 @@ class _CustomersScreenState extends State<CustomersScreen> {
                         // شريط KPIs العام (Golden Pattern §9.2) — يلخّص حالة العملاء
                         // الكلية بصرف النظر عن الفلتر الحالي.
                         SliverPadding(
-                          padding: EdgeInsets.fromLTRB(gap, 12, gap, 8),
+                          padding: EdgeInsets.fromLTRB(gap, 12, gap, 12),
                           sliver: SliverToBoxAdapter(
-                            child: _CustomersStatsBar(
-                              totalAll: prov.totalCustomersInDb,
-                              indebted: prov.tabCounts.indebted,
-                              creditor: prov.tabCounts.creditor,
-                              distinguished: prov.tabCounts.distinguished,
-                            ),
-                          ),
-                        ),
-                        SliverToBoxAdapter(child: _buildToolbar(prov)),
-                        SliverPersistentHeader(
-                          pinned: true,
-                          delegate: _StickyStatusChipsDelegate(
-                            background: _surface,
-                            outline: _outline,
-                            tabCounts: prov.tabCounts,
-                            selectedStatus: _filterStatus,
-                            onSelected: (s) {
-                              setState(() => _filterStatus = s);
-                              _syncFilters();
-                            },
-                          ),
-                        ),
-                        SliverPadding(
-                          padding: EdgeInsets.fromLTRB(gap, 0, gap, 12),
-                          sliver: SliverToBoxAdapter(
-                            child: _buildFiltersCard(),
+                            child: _buildUnifiedSearchDock(),
                           ),
                         ),
                         SliverPadding(
@@ -465,10 +446,7 @@ class _CustomersScreenState extends State<CustomersScreen> {
                                 return Column(
                                   children: [
                                     if (i > 0)
-                                      Divider(
-                                        height: 1,
-                                        color: _outline.withValues(alpha: 0.35),
-                                      ),
+                                      const SizedBox(height: 10),
                                     _tableRow(
                                       visible[i],
                                       finance: prov.financeById,
@@ -530,16 +508,28 @@ class _CustomersScreenState extends State<CustomersScreen> {
   }
 
   AppBar _buildAppBar(CustomersProvider prov) {
+    final cs = Theme.of(context).colorScheme;
     return AppBar(
-      backgroundColor: _primary,
-      foregroundColor: _onPrimary,
+      backgroundColor: cs.surfaceContainerHighest,
+      foregroundColor: cs.onSurface,
       elevation: 0,
       centerTitle: false,
-      title: const Text(
+      title: Text(
         'العملاء',
-        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: cs.onSurface),
       ),
       actions: [
+        if (_selectedIds.isNotEmpty)
+          IconButton(
+            icon: const Icon(Icons.delete_outline),
+            tooltip: 'حذف المحدد',
+            onPressed: _confirmDeleteSelected,
+          ),
+        IconButton(
+          icon: const Icon(Icons.person_add_alt_1_outlined),
+          tooltip: 'إضافة عميل',
+          onPressed: () => unawaited(_openEditor()),
+        ),
         IconButton(
           icon: const Icon(Icons.refresh_rounded),
           tooltip: _refreshHint(prov.lastRefreshedAt),
@@ -571,271 +561,85 @@ class _CustomersScreenState extends State<CustomersScreen> {
     if (await canLaunchUrl(uri)) await launchUrl(uri);
   }
 
-  Widget _buildToolbar(CustomersProvider prov) {
-    final total = prov.items.length;
-    final sel = _selectedIds.length;
+  Widget _buildUnifiedSearchDock() {
     return LayoutBuilder(
       builder: (context, c) {
         final isNarrow = c.maxWidth < 600;
-        return Material(
-          color: _surface,
-          elevation: 1,
-          shadowColor: Colors.black.withValues(alpha: 0.08),
-          child: Padding(
-            padding: EdgeInsets.symmetric(
-              horizontal: isNarrow ? 8 : 12,
-              vertical: 10,
-            ),
-            child: Row(
-              children: [
-                Checkbox(
-                  value: _headerCheckboxValue,
-                  tristate: true,
-                  activeColor: _primary,
-                  onChanged: _toggleSelectAllVisible,
-                ),
-                const SizedBox(width: 4),
-                Expanded(
-                  child: Text(
-                    sel == 0
-                        ? (isNarrow
-                              ? 'إجمالي: ${prov.totalCustomersInDb} · معروض: ${prov.matchingCount}'
-                              : 'إجمالي العملاء: ${prov.totalCustomersInDb} | معروض: ${prov.matchingCount}')
-                        : (isNarrow
-                              ? 'محدد: $sel / $total'
-                              : 'محدد: $sel — المعروض في الصفحة: $total'),
-                    style: TextStyle(fontSize: 13, color: _textSecondary),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                if (sel > 0) ...[
-                  if (isNarrow)
-                    IconButton(
-                      tooltip: 'حذف المحدد',
-                      onPressed: _confirmDeleteSelected,
-                      icon: const Icon(
-                        Icons.delete_outline,
-                        color: AppSemanticColors.danger,
-                      ),
-                    )
-                  else
-                    TextButton.icon(
-                      onPressed: _confirmDeleteSelected,
-                      icon: const Icon(Icons.delete_outline, size: 20),
-                      label: const Text('حذف المحدد'),
-                      style: TextButton.styleFrom(
-                        foregroundColor: AppSemanticColors.danger,
-                      ),
-                    ),
-                  const SizedBox(width: 4),
-                ],
-                if (isNarrow)
-                  FilledButton(
-                    onPressed: () => _openEditor(),
-                    style: FilledButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 12,
-                      ),
-                      shape: const RoundedRectangleBorder(
-                        borderRadius: AppShape.none,
-                      ),
-                    ),
-                    child: const Icon(
-                      Icons.person_add_alt_1_outlined,
-                      size: 20,
-                    ),
-                  )
-                else
-                  FilledButton.icon(
-                    onPressed: () => _openEditor(),
-                    style: FilledButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 12,
-                      ),
-                      shape: const RoundedRectangleBorder(
-                        borderRadius: AppShape.none,
-                      ),
-                    ),
-                    icon: const Icon(Icons.person_add_alt_1_outlined, size: 20),
-                    label: const Text(
-                      'إضافة عميل',
-                      style: TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
+        final useGlassBlur = !ScreenLayout.of(context).isHandsetForLayout;
+        final ac = context.appCorners;
+        final focused = _searchFocus.hasFocus;
+        const royalGold = AppColors.accentGold;
 
-  // ملاحظة: شرائح الحالة تُبنى داخل SliverPersistentHeaderDelegate لتجنب
-  // إعادة استخدام عناصر (Elements) بشكل غير متوقع بعد hot restart.
-
-  Widget _buildFiltersCard() {
-    return LayoutBuilder(
-      builder: (context, c) {
-        final isNarrow = c.maxWidth < 600;
-        final header = Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'بحث وتصفية',
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                fontSize: 15,
-                color: _textPrimary,
-              ),
+        Widget dockBody = Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+          child: TextField(
+            controller: _searchCtrl,
+            focusNode: _searchFocus,
+            textInputAction: TextInputAction.search,
+            style: TextStyle(
+              fontSize: isNarrow ? 14 : 15,
+              color: _textPrimary,
+              fontWeight: FontWeight.w600,
             ),
-            const SizedBox(height: 4),
-            Text(
-              'ابحث بالاسم أو الهاتف أو البريد. مبيعات الدين والتقسيط تُربط بالعميل من شاشة البيع.',
-              style: TextStyle(fontSize: 12.5, color: _textSecondary),
-            ),
-          ],
-        );
-
-        final sortBlock = Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              'ترتيب العرض',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: _textPrimary,
+            decoration: InputDecoration(
+              hintText: 'ابحث بالاسم، الهاتف، أو البريد…',
+              hintStyle: TextStyle(
+                color: _textSecondary.withValues(alpha: 0.75),
+                fontWeight: FontWeight.w500,
               ),
-            ),
-            const SizedBox(height: 6),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              decoration: BoxDecoration(
-                color: _surface,
-                borderRadius: AppShape.none,
-                border: Border.all(color: _outline.withValues(alpha: 0.55)),
+              prefixIcon: Icon(
+                Icons.search_rounded,
+                color: focused ? royalGold : _textSecondary,
               ),
-              child: DropdownButtonHideUnderline(
-                child: DropdownButton<_CustomerSort>(
-                  isExpanded: true,
-                  value: _sort,
-                  items: const [
-                    DropdownMenuItem(
-                      value: _CustomerSort.nameAsc,
-                      child: Text('الاسم (أ-ي)'),
-                    ),
-                    DropdownMenuItem(
-                      value: _CustomerSort.nameDesc,
-                      child: Text('الاسم (ي-أ)'),
-                    ),
-                    DropdownMenuItem(
-                      value: _CustomerSort.totalPurchasesDesc,
-                      child: Text('الأكثر شراءً'),
-                    ),
-                    DropdownMenuItem(
-                      value: _CustomerSort.balanceDesc,
-                      child: Text('الديون الأكبر'),
-                    ),
-                    DropdownMenuItem(
-                      value: _CustomerSort.dateDesc,
-                      child: Text('الأحدث تسجيلاً'),
-                    ),
-                  ],
-                  onChanged: (v) {
-                    if (v == null) return;
-                    setState(() => _sort = v);
-                    _syncFilters();
-                  },
-                ),
-              ),
-            ),
-          ],
-        );
-
-        return Container(
-          padding: EdgeInsets.all(isNarrow ? 12 : 16),
-          decoration: BoxDecoration(
-            color: _filterBg,
-            borderRadius: AppShape.none,
-            border: Border.all(color: _outline.withValues(alpha: 0.45)),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              if (isNarrow) ...[
-                header,
-                const SizedBox(height: 12),
-                sortBlock,
-              ] else
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(child: header),
-                    const SizedBox(width: 12),
-                    SizedBox(width: 220, child: sortBlock),
-                  ],
-                ),
-              const SizedBox(height: 14),
-              AppInput(
-                label: 'البحث',
-                subtitle:
-                    'الإدخال يُطبَّق تلقائياً خلال جزء ثانٍ — Enter أو زر التطبيق لتحسين الوضوح. اختصار: Ctrl+F',
-                hint: 'ابحث بالاسم أو رقم الهاتف أو البريد…',
-                controller: _searchCtrl,
-                focusNode: _searchFocus,
-                prefixIcon: const Icon(Icons.search),
-                suffixIcon: _searchCtrl.text.trim().isEmpty
-                    ? null
-                    : IconButton(
-                        tooltip: 'مسح',
-                        onPressed: () {
-                          _searchCtrl.clear();
-                          _syncFilters();
-                        },
-                        icon: const Icon(Icons.close),
-                      ),
-                onFieldSubmitted: (_) => _syncFilters(),
-                textInputAction: TextInputAction.search,
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  OutlinedButton.icon(
-                    onPressed: () {
-                      FocusManager.instance.primaryFocus?.unfocus();
-                      _syncFilters();
-                    },
-                    icon: const Icon(Icons.search, size: 18),
-                    label: const Text('تطبيق البحث'),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: _textPrimary,
-                      side: BorderSide(color: _outline),
-                      shape: const RoundedRectangleBorder(
-                        borderRadius: AppShape.none,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  TextButton(
-                    onPressed: () {
-                      setState(() {
+              suffixIcon: _searchCtrl.text.trim().isEmpty
+                  ? null
+                  : IconButton(
+                      tooltip: 'مسح البحث',
+                      onPressed: () {
                         _searchCtrl.clear();
-                        _filterStatus = 'الكل';
-                        _sort = _CustomerSort.nameAsc;
-                      });
-                      _syncFilters();
-                    },
-                    child: Text(
-                      'مسح التصفية',
-                      style: TextStyle(color: _primary),
+                        _syncFilters();
+                      },
+                      icon: const Icon(Icons.close_rounded, size: 20),
                     ),
-                  ),
-                ],
+              filled: false,
+              border: InputBorder.none,
+              enabledBorder: InputBorder.none,
+              focusedBorder: InputBorder.none,
+              contentPadding: EdgeInsets.symmetric(
+                horizontal: isNarrow ? 12 : 14,
+                vertical: isNarrow ? 14 : 16,
               ),
-            ],
+            ),
           ),
+        );
+
+        if (useGlassBlur) {
+          dockBody = ClipRRect(
+            borderRadius: ac.md,
+            child: BackdropFilter(
+              filter: ImageFilter.blur(
+                sigmaX: AppGlass.blurSigma * 0.75,
+                sigmaY: AppGlass.blurSigma * 0.75,
+              ),
+              child: dockBody,
+            ),
+          );
+        }
+
+        return AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            color: useGlassBlur
+                ? AppGlass.surfaceTintStrong
+                : _filterBg.withValues(alpha: 0.92),
+            border: Border.all(
+              color: focused ? royalGold : royalGold.withValues(alpha: 0.5),
+              width: focused ? 2.0 : 1.0,
+            ),
+          ),
+          child: dockBody,
         );
       },
     );
@@ -857,7 +661,7 @@ class _CustomersScreenState extends State<CustomersScreen> {
           Text(
             noData
                 ? 'لا يوجد عملاء بعد'
-                : 'لا يوجد عملاء يطابقون البحث أو التصفية',
+                : 'لا يوجد عملاء يطابقون البحث',
             textAlign: TextAlign.center,
             style: TextStyle(color: _textSecondary, fontSize: 15),
           ),
@@ -877,7 +681,15 @@ class _CustomersScreenState extends State<CustomersScreen> {
   Widget _tableHeader() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
-      decoration: BoxDecoration(color: _filterBg),
+      decoration: BoxDecoration(
+        color: _filterBg.withValues(alpha: 0.85),
+        border: Border(
+          bottom: BorderSide(
+            color: _outline.withValues(alpha: 0.35),
+            width: 0.5,
+          ),
+        ),
+      ),
       child: Row(
         children: [
           SizedBox(
@@ -885,7 +697,7 @@ class _CustomersScreenState extends State<CustomersScreen> {
             child: Checkbox(
               value: _headerCheckboxValue,
               tristate: true,
-              activeColor: _primary,
+              activeColor: AppColors.accentGold,
               onChanged: _toggleSelectAllVisible,
             ),
           ),
@@ -965,30 +777,49 @@ class _CustomersScreenState extends State<CustomersScreen> {
     return LayoutBuilder(
       builder: (context, cnst) {
         final isNarrow = cnst.maxWidth < 600;
+        final ac = context.appCorners;
 
         final avatar = Container(
-          width: 40,
-          height: 40,
+          width: 42,
+          height: 42,
           alignment: Alignment.center,
-          decoration: BoxDecoration(color: av, borderRadius: AppShape.none),
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: RadialGradient(
+              center: const Alignment(-0.25, -0.35),
+              radius: 1.1,
+              colors: [
+                Color.lerp(av, Colors.white, 0.42)!,
+                av,
+                Color.lerp(av, Colors.black, 0.28)!,
+              ],
+            ),
+            border: Border.all(
+              color: Colors.white.withValues(alpha: 0.28),
+              width: 0.5,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: av.withValues(alpha: 0.35),
+                blurRadius: 6,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
           child: Text(
             initial,
-            style: TextStyle(
-              color: ThemeData.estimateBrightnessForColor(av) == Brightness.dark
-                  ? Colors.white
-                  : Colors.black87,
-              fontWeight: FontWeight.bold,
+            style: const TextStyle(
+              fontFamily: 'Tajawal',
+              color: Colors.white,
+              fontWeight: FontWeight.w800,
               fontSize: 16,
             ),
           ),
         );
 
-        // Card Action Pills (Golden §9.2.1) — توفّر اختصارات للديون والتقسيط
-        // مع تمييز بصري دلالي. تستبدل ActionChip القديمة الباهتة.
-        final hasPhone = (c.phone?.trim().isNotEmpty == true) &&
-            (CustomerValidation.normalizePhoneDigits(c.phone)?.length ?? 0) >= 7;
+        // اختصارات الديون/التقسيط — للعرض الواسع فقط؛ القائمة الضيقة تبقى نظيفة.
         final financePills = <Widget>[
-          if (fin.creditInvoices > 0)
+          if (!isNarrow && fin.creditInvoices > 0)
             _CustomerActionPill(
               icon: Icons.account_balance_wallet_rounded,
               label: 'ديون ×${fin.creditInvoices}',
@@ -996,21 +827,13 @@ class _CustomersScreenState extends State<CustomersScreen> {
               tooltip: 'فتح ديون الآجل المرتبطة',
               onPressed: () => _openDebtDetail(c),
             ),
-          if (fin.installmentPlans > 0)
+          if (!isNarrow && fin.installmentPlans > 0)
             _CustomerActionPill(
               icon: Icons.event_repeat_rounded,
               label: 'تقسيط ×${fin.installmentPlans}',
               color: AppSemanticColors.info,
               tooltip: 'فتح خطط التقسيط',
               onPressed: () => _openInstallmentsForCustomer(c),
-            ),
-          if (hasPhone)
-            _CustomerActionPill(
-              icon: Icons.call_rounded,
-              label: 'اتصال',
-              color: Theme.of(context).colorScheme.primary,
-              tooltip: 'اتصال بـ ${c.phone}',
-              onPressed: () => unawaited(_dialCustomer(c.phone)),
             ),
         ];
 
@@ -1024,58 +847,71 @@ class _CustomersScreenState extends State<CustomersScreen> {
                     c.name,
                     style: TextStyle(
                       fontWeight: FontWeight.w700,
-                      fontSize: 14,
+                      fontSize: 14.5,
                       color: _textPrimary,
                     ),
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
-                if (isNarrow) ...[
+                if (isNarrow && st != 'مميز') ...[
                   const SizedBox(width: 6),
                   statusBadge(fontSize: 10.5),
                 ],
               ],
             ),
-            const SizedBox(height: 2),
-            Text(
-              '$idStr · ولاء ${c.loyaltyPoints} · ${_shortDate(c.createdAt)}',
-              style: TextStyle(fontSize: 11.5, color: _textSecondary),
-              overflow: TextOverflow.ellipsis,
-            ),
+            const SizedBox(height: 4),
             if (isNarrow) ...[
-              const SizedBox(height: 4),
               Row(
                 children: [
-                  Icon(Icons.phone_rounded, size: 13, color: _textSecondary),
-                  const SizedBox(width: 4),
-                  Expanded(
-                    child: Text(
-                      phone,
-                      style: TextStyle(fontSize: 12, color: _textPrimary),
-                      overflow: TextOverflow.ellipsis,
+                  if (c.phone?.trim().isNotEmpty == true) ...[
+                    Icon(Icons.phone_rounded, size: 12.5, color: _textSecondary),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: Text(
+                        phone,
+                        style: TextStyle(fontSize: 12, color: _textSecondary),
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  Icon(
-                    Icons.account_balance_wallet_outlined,
-                    size: 13,
-                    color: _textSecondary,
-                  ),
-                  const SizedBox(width: 4),
-                  Text(
-                    _formatMoney(c.balance),
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                      color: _textPrimary,
+                  ] else
+                    Text(
+                      'لا يوجد هاتف',
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        color: _textSecondary.withValues(alpha: 0.75),
+                      ),
                     ),
-                  ),
+                  if (c.balance.abs() > 0.01) ...[
+                    const SizedBox(width: 12),
+                    Icon(
+                      Icons.account_balance_wallet_outlined,
+                      size: 12.5,
+                      color: _statusColor(st),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      st == 'مديون'
+                          ? 'دين: ${IraqiCurrencyFormat.formatIqd(c.balance)}'
+                          : 'دائن: ${IraqiCurrencyFormat.formatIqd(c.balance.abs())}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: _statusColor(st),
+                      ),
+                    ),
+                  ],
                 ],
               ),
-            ],
-            if (financePills.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Wrap(spacing: 6, runSpacing: 6, children: financePills),
+            ] else ...[
+              Text(
+                '$idStr · ولاء ${c.loyaltyPoints} · ${_shortDate(c.createdAt)}',
+                style: TextStyle(fontSize: 11.5, color: _textSecondary),
+                overflow: TextOverflow.ellipsis,
+              ),
+              if (financePills.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Wrap(spacing: 6, runSpacing: 6, children: financePills),
+              ],
             ],
           ],
         );
@@ -1113,7 +949,7 @@ class _CustomersScreenState extends State<CustomersScreen> {
           width: 42,
           child: Checkbox(
             value: selected,
-            activeColor: _primary,
+            activeColor: AppColors.accentGold,
             onChanged: (v) {
               setState(() {
                 if (v == true) {
@@ -1129,326 +965,187 @@ class _CustomersScreenState extends State<CustomersScreen> {
         // إبراز البطاقة المختارة في وضع MasterDetail (الديسكتوب) — يميّز البطاقة
         // النشطة في اللوحة اليسرى عن البطاقات الأخرى. يبقى تأثير bulk-select
         // (selected) منفصلاً، فإذا اجتمع الاثنان نُعطي الأولوية للـ MasterDetail.
+        final hovered = _hoveredCustomerId == c.id;
         final isOpenedInPanel =
             _selectedCustomerId != null && _selectedCustomerId == c.id;
         return Material(
-          color: isOpenedInPanel
-              ? _primary.withValues(alpha: 0.14)
-              : (selected ? _primary.withValues(alpha: 0.08) : _surface),
-          child: InkWell(
-            onTap: () => _openCustomerFinancialDetail(c),
-            child: Container(
-              decoration: isOpenedInPanel
-                  ? BoxDecoration(
-                      border: BorderDirectional(
-                        end: BorderSide(color: _primary, width: 3),
-                      ),
-                    )
-                  : null,
-              padding: EdgeInsets.symmetric(
-                horizontal: isNarrow ? 6 : 8,
-                vertical: 10,
+          color: Colors.transparent,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOutCubic,
+            margin: const EdgeInsets.symmetric(vertical: 4),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              color: isOpenedInPanel
+                  ? AppColors.accentGold.withValues(alpha: 0.12)
+                  : (hovered
+                      ? AppColors.accentGold.withValues(alpha: 0.05)
+                      : (selected
+                          ? AppColors.accentGold.withValues(alpha: 0.06)
+                          : _surface)),
+              border: Border.all(
+                color: isOpenedInPanel
+                    ? AppColors.accentGold
+                    : (hovered
+                        ? AppColors.accentGold.withValues(alpha: 0.85)
+                        : AppColors.accentGold.withValues(alpha: 0.35)),
+                width: isOpenedInPanel ? 2.0 : (hovered ? 1.5 : 1.0),
               ),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  checkbox,
-                  if (isNarrow) ...[
-                    avatar,
-                    const SizedBox(width: 10),
-                    Expanded(child: nameBlock),
-                    popup,
-                  ] else ...[
-                    Expanded(
-                      flex: 3,
-                      child: Row(
-                        children: [
-                          avatar,
-                          const SizedBox(width: 10),
-                          Expanded(child: nameBlock),
-                        ],
+              boxShadow: isOpenedInPanel
+                  ? [
+                      BoxShadow(
+                        color: AppColors.accentGold.withValues(alpha: 0.45),
+                        blurRadius: 16,
+                        spreadRadius: 1,
                       ),
-                    ),
-                    Expanded(
-                      flex: 2,
-                      child: Tooltip(
-                        message: 'اتصال',
-                        child: InkWell(
-                          onTap: () => _dialCustomer(c.phone),
-                          borderRadius: AppShape.none,
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(
-                              vertical: 6,
-                              horizontal: 4,
-                            ),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(
-                                  Icons.call_outlined,
-                                  size: 16,
-                                  color: _primary,
+                    ]
+                  : (hovered
+                      ? [
+                          BoxShadow(
+                            color: AppColors.accentGold.withValues(alpha: 0.22),
+                            blurRadius: 10,
+                            spreadRadius: 0,
+                            offset: const Offset(0, 3),
+                          ),
+                        ]
+                      : [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.03),
+                            blurRadius: 4,
+                            offset: const Offset(0, 2),
+                          ),
+                        ]),
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: InkWell(
+                onTap: () => _openCustomerFinancialDetail(c),
+                onHover: (isHovering) {
+                  setState(() {
+                    _hoveredCustomerId = isHovering ? c.id : null;
+                  });
+                },
+                hoverColor: Colors.transparent, // الخلفية مدارة بـ AnimatedContainer
+                child: Padding(
+                  padding: EdgeInsets.symmetric(
+                    horizontal: isNarrow ? 6 : 8,
+                    vertical: 10,
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      checkbox,
+                      if (isNarrow) ...[
+                        avatar,
+                        const SizedBox(width: 10),
+                        Expanded(child: nameBlock),
+                        popup,
+                      ] else ...[
+                        Expanded(
+                          flex: 3,
+                          child: Row(
+                            children: [
+                              avatar,
+                              const SizedBox(width: 10),
+                              Expanded(child: nameBlock),
+                            ],
+                          ),
+                        ),
+                        Expanded(
+                          flex: 2,
+                          child: Tooltip(
+                            message: 'اتصال',
+                            child: InkWell(
+                              onTap: () => _dialCustomer(c.phone),
+                              borderRadius: AppShape.none,
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 6,
+                                  horizontal: 4,
                                 ),
-                                const SizedBox(width: 6),
-                                Expanded(
-                                  child: Text(
-                                    phone,
-                                    textAlign: TextAlign.center,
-                                    style: TextStyle(
-                                      fontSize: 13,
-                                      color: _textPrimary,
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Icon(
+                                      Icons.call_outlined,
+                                      size: 16,
+                                      color: _primary,
                                     ),
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
+                                    const SizedBox(width: 6),
+                                    Expanded(
+                                      child: Text(
+                                        phone,
+                                        textAlign: TextAlign.center,
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          color: _textPrimary,
+                                        ),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                              ],
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                    ),
-                    Expanded(
-                      flex: 2,
-                      child: Text(
-                        IraqiCurrencyFormat.formatIqd(c.purchaseTotalApprox),
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: 12.5,
-                          fontWeight: FontWeight.w700,
-                          color: _textPrimary,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    Expanded(
-                      flex: 2,
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Text(
-                            c.balance.abs() < 0.01
-                                ? 'لا ديون'
-                                : (c.balance > 0.01
-                                      ? 'دين: ${IraqiCurrencyFormat.formatIqd(c.balance)}'
-                                      : 'دائن: ${IraqiCurrencyFormat.formatIqd(-c.balance)}'),
+                        Expanded(
+                          flex: 2,
+                          child: Text(
+                            IraqiCurrencyFormat.formatIqd(c.purchaseTotalApprox),
                             textAlign: TextAlign.center,
                             style: TextStyle(
-                              fontSize: 13,
+                              fontSize: 12.5,
                               fontWeight: FontWeight.w700,
-                              color: c.balance.abs() < 0.01
-                                  ? AppSemanticColors.success
-                                  : (c.balance > 0.01
-                                        ? AppSemanticColors.danger
-                                        : AppSemanticColors.info),
+                              color: _textPrimary,
                             ),
                             overflow: TextOverflow.ellipsis,
                           ),
-                        ],
-                      ),
-                    ),
-                    SizedBox(width: 88, child: Center(child: statusBadge())),
-                    popup,
-                  ],
-                ],
+                        ),
+                        Expanded(
+                          flex: 2,
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Text(
+                                c.balance.abs() < 0.01
+                                    ? 'لا ديون'
+                                    : (c.balance > 0.01
+                                          ? 'دين: ${IraqiCurrencyFormat.formatIqd(c.balance)}'
+                                          : 'دائن: ${IraqiCurrencyFormat.formatIqd(-c.balance)}'),
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w700,
+                                  color: c.balance.abs() < 0.01
+                                      ? AppSemanticColors.success
+                                      : (c.balance > 0.01
+                                            ? AppSemanticColors.danger
+                                            : AppSemanticColors.info),
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ],
+                          ),
+                        ),
+                        SizedBox(
+                          width: 88,
+                          child: Center(
+                            child: st != 'مميز'
+                                ? statusBadge()
+                                : const SizedBox.shrink(),
+                          ),
+                        ),
+                        popup,
+                      ],
+                    ],
+                  ),
+                ),
               ),
             ),
           ),
         );
       },
-    );
-  }
-}
-
-// ── شريحة الحالة Sticky أعلى القائمة ─────────────────────────────────────────
-class _StickyStatusChipsDelegate extends SliverPersistentHeaderDelegate {
-  _StickyStatusChipsDelegate({
-    required this.background,
-    required this.outline,
-    required this.tabCounts,
-    required this.selectedStatus,
-    required this.onSelected,
-  });
-
-  final Color background;
-  final Color outline;
-  final ({int all, int indebted, int creditor, int distinguished}) tabCounts;
-  final String selectedStatus;
-  final ValueChanged<String> onSelected;
-
-  @override
-  double get minExtent => 49;
-
-  @override
-  double get maxExtent => 49;
-
-  @override
-  Widget build(
-    BuildContext context,
-    double shrinkOffset,
-    bool overlapsContent,
-  ) {
-    final cs = Theme.of(context).colorScheme;
-    final primary = cs.primary;
-
-    return SizedBox.expand(
-      child: Material(
-        color: background,
-        elevation: overlapsContent ? 2 : 0,
-        shadowColor: Colors.black.withValues(alpha: 0.1),
-        child: _StatusChipsStrip(
-          background: background,
-          outline: outline,
-          tabCounts: tabCounts,
-          selectedStatus: selectedStatus,
-          onSelected: onSelected,
-          primary: primary,
-        ),
-      ),
-    );
-  }
-
-  @override
-  bool shouldRebuild(covariant _StickyStatusChipsDelegate oldDelegate) {
-    return oldDelegate.background != background ||
-        oldDelegate.outline != outline ||
-        oldDelegate.tabCounts.all != tabCounts.all ||
-        oldDelegate.tabCounts.indebted != tabCounts.indebted ||
-        oldDelegate.tabCounts.creditor != tabCounts.creditor ||
-        oldDelegate.tabCounts.distinguished != tabCounts.distinguished ||
-        oldDelegate.selectedStatus != selectedStatus ||
-        oldDelegate.onSelected != onSelected;
-  }
-}
-
-class _StatusChipsStrip extends StatelessWidget {
-  const _StatusChipsStrip({
-    required this.background,
-    required this.outline,
-    required this.tabCounts,
-    required this.selectedStatus,
-    required this.onSelected,
-    this.primary,
-  });
-
-  final Color background;
-  final Color outline;
-  final ({int all, int indebted, int creditor, int distinguished}) tabCounts;
-  final String selectedStatus;
-  final ValueChanged<String> onSelected;
-  final Color? primary;
-
-  int _badgeForLabel(String label) => switch (label) {
-    'الكل' => tabCounts.all,
-    'مديون' => tabCounts.indebted,
-    'دائن' => tabCounts.creditor,
-    _ => tabCounts.distinguished,
-  };
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final effectivePrimary = primary ?? cs.primary;
-    const statusOptions = ['الكل', 'مديون', 'دائن', 'مميز'];
-
-    return Focus(
-      onKeyEvent: (node, event) {
-        if (event is! KeyDownEvent) return KeyEventResult.ignored;
-        final ix = statusOptions.indexOf(selectedStatus);
-        if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
-          if (ix <= 0) return KeyEventResult.ignored;
-          onSelected(statusOptions[ix - 1]);
-          return KeyEventResult.handled;
-        }
-        if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
-          if (ix < 0 || ix >= statusOptions.length - 1) {
-            return KeyEventResult.ignored;
-          }
-          onSelected(statusOptions[ix + 1]);
-          return KeyEventResult.handled;
-        }
-        return KeyEventResult.ignored;
-      },
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-        decoration: BoxDecoration(
-          color: background,
-          border: Border(
-            bottom: BorderSide(color: outline.withValues(alpha: 0.35)),
-          ),
-        ),
-        child: SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(
-            children: [
-              for (final s in statusOptions) ...[
-                FilterChip(
-                  padding: EdgeInsets.zero,
-                  label: Padding(
-                    padding: const EdgeInsetsDirectional.only(start: 4, end: 4),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(s),
-                        const SizedBox(width: 6),
-                        _TabCountBadge(
-                          count: _badgeForLabel(s),
-                          urgentRed: s == 'مديون',
-                          goldAccent: s == 'مميز',
-                          fallback: effectivePrimary,
-                        ),
-                      ],
-                    ),
-                  ),
-                  selected: selectedStatus == s,
-                  onSelected: (_) => onSelected(s),
-                  selectedColor: effectivePrimary.withValues(alpha: 0.18),
-                  checkmarkColor: effectivePrimary,
-                  shape: const RoundedRectangleBorder(
-                    borderRadius: AppShape.none,
-                  ),
-                ),
-                const SizedBox(width: 8),
-              ],
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _TabCountBadge extends StatelessWidget {
-  const _TabCountBadge({
-    required this.count,
-    required this.fallback,
-    this.urgentRed = false,
-    this.goldAccent = false,
-  });
-
-  final int count;
-  final Color fallback;
-  final bool urgentRed;
-  final bool goldAccent;
-
-  @override
-  Widget build(BuildContext context) {
-    var bg = fallback.withValues(alpha: 0.82);
-    if (urgentRed) bg = AppSemanticColors.danger;
-    if (goldAccent && !urgentRed) bg = AppColors.accentGold;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(9),
-      ),
-      child: Text(
-        '$count',
-        style: const TextStyle(
-          fontSize: 11.5,
-          fontWeight: FontWeight.w800,
-          color: Colors.white,
-        ),
-      ),
     );
   }
 }
@@ -1478,27 +1175,35 @@ class _CustomerActionPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final pill = Material(
-      color: color.withValues(alpha: 0.12),
+      color: Colors.transparent,
       borderRadius: BorderRadius.circular(999),
       child: InkWell(
         borderRadius: BorderRadius.circular(999),
         onTap: onPressed,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, size: 15, color: color),
-              const SizedBox(width: 5),
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w700,
-                  color: color,
+        hoverColor: AppColors.accentGold.withValues(alpha: 0.12),
+        child: Ink(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(999),
+            color: color.withValues(alpha: 0.08),
+            border: Border.all(color: color.withValues(alpha: 0.45), width: 0.5),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, size: 15, color: color),
+                const SizedBox(width: 5),
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w700,
+                    color: color,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -1513,153 +1218,3 @@ class _CustomerActionPill extends StatelessWidget {
 /// يتبع نمط `_StatsBar` في `invoices_screen.dart` (Golden):
 /// - على `phoneVariant` أو `maxWidth < 600`: شبكة 2×2.
 /// - على tabletLG+: صف أفقي بـ 4 chips.
-class _CustomersStatsBar extends StatelessWidget {
-  const _CustomersStatsBar({
-    required this.totalAll,
-    required this.indebted,
-    required this.creditor,
-    required this.distinguished,
-  });
-
-  final int totalAll;
-  final int indebted;
-  final int creditor;
-  final int distinguished;
-
-  @override
-  Widget build(BuildContext context) {
-    final layout = ScreenLayout.of(context);
-    final cs = Theme.of(context).colorScheme;
-    final fmt = NumberFormat.decimalPattern('en');
-
-    final chips = <Widget>[
-      _StatChip(
-        icon: Icons.groups_2_rounded,
-        label: 'إجمالي العملاء',
-        value: fmt.format(totalAll),
-        color: cs.primary,
-      ),
-      _StatChip(
-        icon: Icons.warning_amber_rounded,
-        label: 'مديونون',
-        value: fmt.format(indebted),
-        color: AppSemanticColors.warning,
-      ),
-      _StatChip(
-        icon: Icons.savings_rounded,
-        label: 'دائنون',
-        value: fmt.format(creditor),
-        color: AppSemanticColors.info,
-      ),
-      _StatChip(
-        icon: Icons.workspace_premium_rounded,
-        label: 'مميزون',
-        value: fmt.format(distinguished),
-        color: AppColors.accentGold,
-      ),
-    ];
-
-    return LayoutBuilder(
-      builder: (ctx, c) {
-        final useTwoByTwo = layout.isPhoneVariant || c.maxWidth < 600;
-        if (useTwoByTwo) {
-          return Column(
-            children: [
-              Row(
-                children: [
-                  Expanded(child: chips[0]),
-                  const SizedBox(width: 8),
-                  Expanded(child: chips[1]),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(child: chips[2]),
-                  const SizedBox(width: 8),
-                  Expanded(child: chips[3]),
-                ],
-              ),
-            ],
-          );
-        }
-        return Row(
-          children: [
-            for (int i = 0; i < chips.length; i++) ...[
-              Expanded(child: chips[i]),
-              if (i < chips.length - 1) const SizedBox(width: 10),
-            ],
-          ],
-        );
-      },
-    );
-  }
-}
-
-class _StatChip extends StatelessWidget {
-  const _StatChip({
-    required this.icon,
-    required this.label,
-    required this.value,
-    required this.color,
-  });
-
-  final IconData icon;
-  final String label;
-  final String value;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: cs.surface,
-        borderRadius: AppShape.none,
-        border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.6)),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 36,
-            height: 36,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.12),
-              borderRadius: AppShape.none,
-            ),
-            child: Icon(icon, size: 20, color: color),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  label,
-                  style: TextStyle(
-                    fontSize: 11.5,
-                    color: cs.onSurfaceVariant,
-                  ),
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  value,
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w800,
-                    color: cs.onSurface,
-                  ),
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}

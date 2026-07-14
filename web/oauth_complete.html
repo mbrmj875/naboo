@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#071A36" />
+  <title>NABOO</title>
+  <style>
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #071A36;
+      color: #f5f3ee;
+      font-family: system-ui, -apple-system, sans-serif;
+    }
+  </style>
+</head>
+<body>
+  <p>جاري إكمال تسجيل الدخول…</p>
+  <script>
+    (function () {
+      var href = location.href;
+      if (window.opener && !window.opener.closed) {
+        try {
+          window.opener.postMessage({ type: 'naboo-oauth', href: href }, location.origin);
+          window.close();
+          return;
+        } catch (e) {}
+      }
+      var q = location.search || '';
+      var h = location.hash || '';
+      location.replace('/app/' + q + h);
+    })();
+  </script>
+</body>
+</html>

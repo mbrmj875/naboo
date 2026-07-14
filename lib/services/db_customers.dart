@@ -1,5 +1,9 @@
 part of 'database_helper.dart';
 
+/// Sentinel used to distinguish "field not provided" from "set to null" in
+/// [DatabaseHelper.updateCustomer]'s optional `priceListId` argument.
+const Object _unsetPriceList = Object();
+
 // ── العملاء ───────────────────────────────────────────────────────────────
 
 Future<void> ensureCustomersGlobalIdSchema(Database db) async {
@@ -9,12 +13,15 @@ Future<void> ensureCustomersGlobalIdSchema(Database db) async {
     if (!exists) {
       try {
         await db.execute('ALTER TABLE customers ADD COLUMN $col $type');
-      } catch (_) {}
+      } catch (e, st) {
+        AppLogger.error('DBMigrate', 'فشل customers ADD $col', e, st);
+      }
     }
   }
 
   await addColumn('global_id', 'TEXT');
   await addColumn('tenantId', 'INTEGER NOT NULL DEFAULT 1');
+  await addColumn('priceListId', 'INTEGER');
 
   Future<bool> colExists(String name) async {
     final rows = await db.rawQuery('PRAGMA table_info(customers)');
@@ -28,7 +35,9 @@ Future<void> ensureCustomersGlobalIdSchema(Database db) async {
         ON customers(global_id)
         WHERE global_id IS NOT NULL AND TRIM(global_id) != ''
       ''');
-    } catch (_) {}
+    } catch (e, st) {
+      AppLogger.error('DBMigrate', 'فشل فهرس customers.global_id', e, st);
+    }
   }
 
   if (!await colExists('global_id')) return;
@@ -106,11 +115,13 @@ Future<void> ensureCustomersGlobalIdSchema(Database db) async {
 String? _customerTabBalancePredicate(String statusArabic) {
   final st = statusArabic.trim();
   if (st.isEmpty || st == 'الكل') return null;
-  if (st == 'مديون' || st.contains('مدين')) return 'customers.balance > 0.01';
-  if (st.contains('دائن')) return 'customers.balance < -0.01';
-  if (st.contains('مميز')) return 'ABS(customers.balance) < 1e-6';
+  if (st == 'مديون' || st.contains('مدين')) {
+    return 'ROUND(customers.balance * 1000) > 0';
+  }
+  if (st.contains('دائن')) return 'ROUND(customers.balance * 1000) < 0';
+  if (st.contains('مميز')) return 'ROUND(customers.balance * 1000) = 0';
   if (st.contains('مصفّى') || st.contains('صفر')) {
-    return 'ABS(customers.balance) < 1e-9';
+    return 'ROUND(customers.balance * 1000) = 0';
   }
   return null;
 }
@@ -153,9 +164,9 @@ extension DbCustomers on DatabaseHelper {
     final rows = await db.rawQuery('''
       SELECT
         COUNT(*) AS all_c,
-        SUM(CASE WHEN balance > 0.01 THEN 1 ELSE 0 END) AS ind,
-        SUM(CASE WHEN balance < -0.01 THEN 1 ELSE 0 END) AS cred,
-        SUM(CASE WHEN ABS(balance) < 1e-6 THEN 1 ELSE 0 END) AS dist
+        SUM(CASE WHEN ROUND(balance * 1000) > 0 THEN 1 ELSE 0 END) AS ind,
+        SUM(CASE WHEN ROUND(balance * 1000) < 0 THEN 1 ELSE 0 END) AS cred,
+        SUM(CASE WHEN ROUND(balance * 1000) = 0 THEN 1 ELSE 0 END) AS dist
       FROM customers
       ''');
     int n(Map<String, Object?> row, String k) =>
@@ -474,6 +485,7 @@ LEFT JOIN (
     String? notes,
     List<String> extraPhones = const [],
     int tenantId = 1,
+    int? priceListId,
   }) async {
     final extras = extraPhones
         .map((e) => e.trim())
@@ -500,6 +512,9 @@ LEFT JOIN (
         'notes': notes?.trim().isEmpty == true ? null : notes?.trim(),
         'balance': 0,
         'loyaltyPoints': 0,
+        'priceListId': (priceListId == null || priceListId <= 0)
+            ? null
+            : priceListId,
         'createdAt': now,
         'updatedAt': now,
       };
@@ -526,6 +541,7 @@ LEFT JOIN (
     String? address,
     String? notes,
     List<String> extraPhones = const [],
+    Object? priceListId = _unsetPriceList,
   }) async {
     final extras = extraPhones
         .map((e) => e.trim())
@@ -544,7 +560,7 @@ LEFT JOIN (
 
     await db.transaction((txn) async {
       final nowIso = DateTime.now().toUtc().toIso8601String();
-      final updatedPayload = {
+      final updatedPayload = <String, Object?>{
         'name': name.trim(),
         'phone': phone?.trim().isEmpty == true ? null : phone?.trim(),
         'email': email?.trim().isEmpty == true ? null : email?.trim(),
@@ -552,6 +568,14 @@ LEFT JOIN (
         'notes': notes?.trim().isEmpty == true ? null : notes?.trim(),
         'updatedAt': nowIso,
       };
+
+      if (!identical(priceListId, _unsetPriceList)) {
+        if (priceListId == null) {
+          updatedPayload['priceListId'] = null;
+        } else if (priceListId is int) {
+          updatedPayload['priceListId'] = priceListId <= 0 ? null : priceListId;
+        }
+      }
 
       if (gid.isEmpty) {
         gid = const Uuid().v4();
@@ -584,6 +608,9 @@ LEFT JOIN (
   }
 
   /// حذف عدة عملاء في معاملة واحدة (نفس قواعد الحذف الفردي).
+  ///
+  /// PR-2 (roadmap_phase2_execution_v1 §4): يرفض الحذف إذا كان أي عميل لديه
+  /// فاتورة آجل/تقسيط مفتوحة أو خطة تقسيط نشطة، عبر [assertCustomersHaveNoOpenObligations].
   Future<void> deleteCustomers(Iterable<int> ids) async {
     final list = ids.toSet().toList();
     if (list.isEmpty) return;
@@ -598,7 +625,26 @@ LEFT JOIN (
       whereArgs: list,
     );
 
+    int? activeTenantId;
+    try {
+      activeTenantId = await _resolveActiveTenantIdForLocalDb(db);
+    } catch (e, st) {
+      AppLogger.warn(
+        'DBCustomers',
+        'deleteCustomers: tenant resolution failed → fallback to cross-tenant scan: $e',
+      );
+      AppLogger.error('DBCustomers', 'tenant resolution stack', e, st);
+      activeTenantId = null;
+    }
+
     await db.transaction((txn) async {
+      // PR-2: فحص ديون مفتوحة — يرمي قبل أي تعديل، لذا المعاملة تُلغى تلقائياً.
+      await assertCustomersHaveNoOpenObligations(
+        txn,
+        list,
+        tenantId: activeTenantId,
+      );
+
       for (final id in list) {
         await txn.update(
           'installment_plans',

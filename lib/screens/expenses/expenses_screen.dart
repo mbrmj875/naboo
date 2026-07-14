@@ -18,12 +18,43 @@ import '../../utils/numeric_format.dart';
 import '../../utils/screen_layout.dart';
 import '../../widgets/inputs/app_input.dart';
 import '../../widgets/inputs/app_price_input.dart';
+import '../../verticals/oil_change/widgets/oil_change_form_theme.dart';
+import '../../verticals/oil_change/widgets/oil_change_royal_card.dart';
 import 'expense_receipt_printer.dart';
 import 'expense_report_printer.dart';
+import 'widgets/expenses_stitch_mobile.dart';
 
 final _dateDispFmt = DateFormat('dd/MM/yyyy', 'en');
 
 enum _ExpenseDatePreset { today, thisWeek, thisMonth, thisYear }
+
+_ExpenseDatePreset? _activeDatePreset(DateTime from, DateTime to) {
+  final now = DateTime.now();
+  final today = DateTime(now.year, now.month, now.day);
+  final fromDay = DateTime(from.year, from.month, from.day);
+  final toDay = DateTime(to.year, to.month, to.day);
+  if (fromDay == today && toDay == today) return _ExpenseDatePreset.today;
+  if (fromDay == today.subtract(const Duration(days: 6)) && toDay == today) {
+    return _ExpenseDatePreset.thisWeek;
+  }
+  if (fromDay == DateTime(now.year, now.month, 1) && toDay == today) {
+    return _ExpenseDatePreset.thisMonth;
+  }
+  if (fromDay == DateTime(now.year, 1, 1) && toDay == today) {
+    return _ExpenseDatePreset.thisYear;
+  }
+  return null;
+}
+
+String _datePresetLabel(_ExpenseDatePreset? preset, String rangeLabel) {
+  return switch (preset) {
+    _ExpenseDatePreset.today => 'اليوم',
+    _ExpenseDatePreset.thisWeek => 'هذا الأسبوع',
+    _ExpenseDatePreset.thisMonth => 'هذا الشهر',
+    _ExpenseDatePreset.thisYear => 'هذا العام',
+    null => rangeLabel,
+  };
+}
 
 class _ExpenseShortcutAdd extends Intent {
   const _ExpenseShortcutAdd();
@@ -72,18 +103,28 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   void initState() {
     super.initState();
     _searchCtrl.addListener(_onSearchChanged);
+    _searchFocus.addListener(_onSearchFocusChanged);
     unawaited(_bootstrap());
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _searchFocus.requestFocus();
+      if (!mounted) return;
+      if (ScreenLayout.of(context).isPhoneVariant) return;
+      if (_searchFocus.canRequestFocus) {
+        _searchFocus.requestFocus();
+      }
     });
   }
 
   void _onSearchChanged() {
+    if (mounted) setState(() {});
     _searchDebounce?.cancel();
     _searchDebounce = Timer(const Duration(milliseconds: 300), () {
       if (!mounted) return;
       unawaited(_reload());
     });
+  }
+
+  void _onSearchFocusChanged() {
+    if (mounted) setState(() {});
   }
 
   Future<void> _bootstrap() async {
@@ -97,6 +138,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   @override
   void dispose() {
     _searchDebounce?.cancel();
+    _searchCtrl.removeListener(_onSearchChanged);
+    _searchFocus.removeListener(_onSearchFocusChanged);
     _searchCtrl.dispose();
     _searchFocus.dispose();
     super.dispose();
@@ -269,13 +312,17 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
       useSafeArea: true,
       barrierColor: Colors.black54,
       builder: (ctx) {
-        return Padding(
-          padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(ctx).bottom),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(maxHeight: q.size.height * 0.88),
-            child: _ExpenseEditorSheet(
-              categories: _categories,
-              existing: existing,
+        return Theme(
+          data: OilChangeFormTheme.wrap(ctx, Theme.of(ctx)),
+          child: Padding(
+            padding:
+                EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(ctx).bottom),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: q.size.height * 0.88),
+              child: _ExpenseEditorSheet(
+                categories: _categories,
+                existing: existing,
+              ),
             ),
           ),
         );
@@ -333,15 +380,261 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     await _reload();
   }
 
+  Future<void> _showDatePresetSheet() async {
+    final cs = Theme.of(context).colorScheme;
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                child: Text(
+                  'نطاق التاريخ',
+                  style: Theme.of(ctx).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.today_rounded),
+                title: const Text('اليوم'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  unawaited(_pickPresetAndReload(_ExpenseDatePreset.today));
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.date_range_rounded),
+                title: const Text('هذا الأسبوع'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  unawaited(_pickPresetAndReload(_ExpenseDatePreset.thisWeek));
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.calendar_view_month_rounded),
+                title: const Text('هذا الشهر'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  unawaited(_pickPresetAndReload(_ExpenseDatePreset.thisMonth));
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.calendar_today_rounded),
+                title: const Text('هذا العام'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  unawaited(_pickPresetAndReload(_ExpenseDatePreset.thisYear));
+                },
+              ),
+              ListTile(
+                leading: Icon(Icons.edit_calendar_rounded, color: AppColors.accentGold),
+                title: const Text('نطاق مخصص…'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  unawaited(_pickRange());
+                },
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     final rangeLabel =
         'من: ${_dateDispFmt.format(_from)}   إلى: ${_dateDispFmt.format(_to)}';
     final breakdown = _breakdownLine();
+    final activePreset = _activeDatePreset(_from, _to);
 
     final layout = ScreenLayout.of(context);
     final isPhone = layout.isPhoneVariant;
+    final themed = OilChangeFormTheme.wrap(context, Theme.of(context));
+
+    Widget buildScaffold(BuildContext ctx) {
+      return Scaffold(
+        backgroundColor: isPhone
+            ? ExpensesStitchMetrics.background
+            : Theme.of(ctx).scaffoldBackgroundColor,
+        floatingActionButton: isPhone
+            ? FloatingActionButton.extended(
+                onPressed: () => unawaited(_openEditor()),
+                backgroundColor: ExpensesStitchMetrics.gold,
+                foregroundColor: ExpensesStitchMetrics.onGold,
+                icon: const Icon(Icons.add_rounded),
+                label: const Text(
+                  'إضافة مصروف',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+              )
+            : null,
+        floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+        appBar: isPhone
+            ? AppBar(
+                backgroundColor: ExpensesStitchMetrics.background,
+                elevation: 0,
+                scrolledUnderElevation: 0,
+                centerTitle: true,
+                title: const Text(
+                  'المصروفات',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 20,
+                    color: ExpensesStitchMetrics.textPrimary,
+                  ),
+                ),
+                actions: [
+                  IconButton(
+                    tooltip: 'تحديث',
+                    onPressed: _loading ? null : _refreshFromServer,
+                    icon: const Icon(Icons.refresh_rounded),
+                  ),
+                  IconButton(
+                    tooltip: 'إضافة مصروف',
+                    onPressed: () => unawaited(_openEditor()),
+                    icon: const Icon(Icons.add_rounded),
+                  ),
+                  PopupMenuButton<String>(
+                    tooltip: 'المزيد',
+                    icon: const Icon(Icons.more_vert_rounded),
+                    onSelected: (v) {
+                      if (v == 'export' && !_loading) {
+                        unawaited(_exportExpensesToClipboard());
+                      } else if (v == 'print') {
+                        _openReportDialog();
+                      } else if (v == 'search') {
+                        _searchFocus.requestFocus();
+                      }
+                    },
+                    itemBuilder: (_) => const [
+                      PopupMenuItem(
+                        value: 'search',
+                        child: ListTile(
+                          leading: Icon(Icons.search_rounded),
+                          title: Text('بحث'),
+                          contentPadding: EdgeInsets.zero,
+                          dense: true,
+                        ),
+                      ),
+                      PopupMenuItem(
+                        value: 'export',
+                        child: ListTile(
+                          leading: Icon(Icons.table_chart_outlined),
+                          title: Text('تصدير (نسخ Excel)'),
+                          contentPadding: EdgeInsets.zero,
+                          dense: true,
+                        ),
+                      ),
+                      PopupMenuItem(
+                        value: 'print',
+                        child: ListTile(
+                          leading: Icon(Icons.print_outlined),
+                          title: Text('طباعة تقرير فترة'),
+                          contentPadding: EdgeInsets.zero,
+                          dense: true,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+                bottom: TabBar(
+                  labelColor: ExpensesStitchMetrics.textPrimary,
+                  unselectedLabelColor: ExpensesStitchMetrics.textMuted,
+                  indicatorColor: ExpensesStitchMetrics.gold,
+                  indicatorWeight: 2.5,
+                  tabs: const [
+                    Tab(text: 'السجل'),
+                    Tab(text: 'تحليلات'),
+                  ],
+                ),
+              )
+            : OilChangeFormTheme.appBar(
+          context: ctx,
+          title: 'المصروفات',
+          bottom: TabBar(
+            labelColor: AppColors.accentGold,
+            indicatorColor: AppColors.accentGold,
+            unselectedLabelColor: OilChangeFormTheme.secondaryText(ctx),
+            tabs: const [
+              Tab(text: 'السجل'),
+              Tab(text: 'تحليلات'),
+            ],
+          ),
+          actions: [
+                  IconButton(
+                    tooltip: 'تصدير (نسخ لـ Excel)',
+                    onPressed:
+                        _loading ? null : _exportExpensesToClipboard,
+                    icon: const Icon(Icons.table_chart_outlined),
+                  ),
+                  IconButton(
+                    tooltip: 'طباعة تقرير فترة',
+                    onPressed: _openReportDialog,
+                    icon: const Icon(Icons.print_outlined),
+                  ),
+                  IconButton(
+                    tooltip: 'تحديث (F5)',
+                    onPressed: _loading ? null : _refreshFromServer,
+                    icon: const Icon(Icons.refresh_rounded),
+                  ),
+                  IconButton(
+                    tooltip: 'إضافة مصروف (Ctrl+N)',
+                    onPressed: () => unawaited(_openEditor()),
+                    icon: const Icon(Icons.add_rounded),
+                  ),
+                ],
+        ),
+        body: TabBarView(
+          children: [
+            _ExpensesLedgerTab(
+              loading: _loading,
+              categories: _categories,
+              items: _items,
+              total: _total,
+              rangeLabel: rangeLabel,
+              activeDatePreset: activePreset,
+              breakdownLine: breakdown,
+              onPickRange: _pickRange,
+              onPickPreset: _pickPresetAndReload,
+              onShowDateSheet: _showDatePresetSheet,
+              searchCtrl: _searchCtrl,
+              searchFocus: _searchFocus,
+              highlightExpenseId: _highlightExpenseId,
+              categoryId: _categoryId,
+              status: _status,
+              onCategoryChanged: (v) async {
+                setState(() => _categoryId = v);
+                await _reload();
+              },
+              onStatusChanged: (v) async {
+                setState(() => _status = v);
+                await _reload();
+              },
+              onEdit: (e) => unawaited(_openEditor(existing: e)),
+              onDelete: _delete,
+              onAddExpense: () => unawaited(_openEditor()),
+            ),
+            _ExpensesAnalyticsTab(
+              loading: _loading,
+              total: _total,
+              byCategory: _byCategory,
+              daily: _daily,
+              dailyByCategory: _dailyByCategory,
+              from: _from,
+              to: _to,
+            ),
+          ],
+        ),
+      );
+    }
+
     return Shortcuts(
       shortcuts: <ShortcutActivator, Intent>{
         const SingleActivator(LogicalKeyboardKey.keyN, control: true):
@@ -395,126 +688,14 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
             textDirection: TextDirection.rtl,
             child: DefaultTabController(
               length: 2,
-              child: Scaffold(
-                backgroundColor: cs.surfaceContainerLowest,
-                appBar: AppBar(
-                  title: const Text('المصروفات'),
-                  // AppBar Consolidation (Golden §9.7):
-                  // - على الموبايل: refresh + overflow menu (export + print).
-                  // - على tablet/desktop: refresh + export + print كأيقونات منفصلة.
-                  actions: isPhone
-                      ? [
-                          IconButton(
-                            tooltip: 'تحديث (F5)',
-                            onPressed: _loading ? null : _refreshFromServer,
-                            icon: const Icon(Icons.refresh_rounded),
-                          ),
-                          PopupMenuButton<String>(
-                            tooltip: 'المزيد',
-                            icon: const Icon(Icons.more_vert_rounded),
-                            onSelected: (v) {
-                              if (v == 'export' && !_loading) {
-                                unawaited(_exportExpensesToClipboard());
-                              } else if (v == 'print') {
-                                _openReportDialog();
-                              }
-                            },
-                            itemBuilder: (_) => const [
-                              PopupMenuItem(
-                                value: 'export',
-                                child: ListTile(
-                                  leading: Icon(Icons.table_chart_outlined),
-                                  title: Text('تصدير (نسخ Excel)'),
-                                  contentPadding: EdgeInsets.zero,
-                                  dense: true,
-                                ),
-                              ),
-                              PopupMenuItem(
-                                value: 'print',
-                                child: ListTile(
-                                  leading: Icon(Icons.print_outlined),
-                                  title: Text('طباعة تقرير فترة'),
-                                  contentPadding: EdgeInsets.zero,
-                                  dense: true,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ]
-                      : [
-                          IconButton(
-                            tooltip: 'تصدير (نسخ لـ Excel)',
-                            onPressed:
-                                _loading ? null : _exportExpensesToClipboard,
-                            icon: const Icon(Icons.table_chart_outlined),
-                          ),
-                          IconButton(
-                            tooltip: 'طباعة تقرير فترة',
-                            onPressed: _openReportDialog,
-                            icon: const Icon(Icons.print_outlined),
-                          ),
-                          IconButton(
-                            tooltip: 'تحديث (F5)',
-                            onPressed: _loading ? null : _refreshFromServer,
-                            icon: const Icon(Icons.refresh_rounded),
-                          ),
-                        ],
-                  bottom: const TabBar(
-                    tabs: [
-                      Tab(text: 'السجل'),
-                      Tab(text: 'تحليلات'),
-                    ],
-                  ),
+              child: Theme(
+                data: themed,
+                child: Builder(
+                  builder: (ctx) => buildScaffold(ctx),
                 ),
-                // FAB واحد فقط بعد الـ Consolidation (export + print انتقلتا للـ AppBar).
-                floatingActionButton: FloatingActionButton.extended(
-                  heroTag: 'exp_add_btn',
-                  onPressed: () => unawaited(_openEditor()),
-                  icon: const Icon(Icons.add_rounded),
-                  label: const Text('إضافة مصروف'),
-                ),
-              body: TabBarView(
-                children: [
-                  _ExpensesLedgerTab(
-                    loading: _loading,
-                    categories: _categories,
-                    items: _items,
-                    total: _total,
-                    rangeLabel: rangeLabel,
-                    breakdownLine: breakdown,
-                    onPickRange: _pickRange,
-                    onPickPreset: _pickPresetAndReload,
-                    searchCtrl: _searchCtrl,
-                    searchFocus: _searchFocus,
-                    highlightExpenseId: _highlightExpenseId,
-                    categoryId: _categoryId,
-                    status: _status,
-                    onCategoryChanged: (v) async {
-                      setState(() => _categoryId = v);
-                      await _reload();
-                    },
-                    onStatusChanged: (v) async {
-                      setState(() => _status = v);
-                      await _reload();
-                    },
-                    onEdit: (e) => unawaited(_openEditor(existing: e)),
-                    onDelete: _delete,
-                    onAddExpense: () => unawaited(_openEditor()),
-                  ),
-                  _ExpensesAnalyticsTab(
-                    loading: _loading,
-                    total: _total,
-                    byCategory: _byCategory,
-                    daily: _daily,
-                    dailyByCategory: _dailyByCategory,
-                    from: _from,
-                    to: _to,
-                  ),
-                ],
               ),
             ),
           ),
-        ),
         ),
       ),
     );
@@ -548,9 +729,11 @@ class _ExpensesLedgerTab extends StatelessWidget {
     required this.items,
     required this.total,
     required this.rangeLabel,
+    required this.activeDatePreset,
     required this.breakdownLine,
     required this.onPickRange,
     required this.onPickPreset,
+    required this.onShowDateSheet,
     required this.searchCtrl,
     required this.searchFocus,
     required this.highlightExpenseId,
@@ -568,9 +751,11 @@ class _ExpensesLedgerTab extends StatelessWidget {
   final List<ExpenseEntry> items;
   final double total;
   final String rangeLabel;
+  final _ExpenseDatePreset? activeDatePreset;
   final String breakdownLine;
   final VoidCallback onPickRange;
   final Future<void> Function(_ExpenseDatePreset preset) onPickPreset;
+  final VoidCallback onShowDateSheet;
   final TextEditingController searchCtrl;
   final FocusNode searchFocus;
   final int? highlightExpenseId;
@@ -585,81 +770,97 @@ class _ExpensesLedgerTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final ac = context.appCorners;
+    final layout = ScreenLayout.of(context);
+    final usePhoneLayout = layout.isPhoneVariant;
+
+    if (usePhoneLayout) {
+      return ExpensesStitchLedgerList(
+        loading: loading,
+        categories: categories,
+        items: items,
+        total: total,
+        dateChipLabel: activeDatePreset != null
+            ? _datePresetLabel(activeDatePreset, rangeLabel)
+            : 'نطاق مخصص',
+        searchCtrl: searchCtrl,
+        searchFocus: searchFocus,
+        highlightExpenseId: highlightExpenseId,
+        categoryId: categoryId,
+        status: status,
+        onShowDateSheet: onShowDateSheet,
+        onCategoryChanged: onCategoryChanged,
+        onStatusChanged: onStatusChanged,
+        onEdit: onEdit,
+        onAddExpense: onAddExpense,
+      );
+    }
 
     final contentCount = loading ? 1 : (items.isEmpty ? 1 : items.length);
 
     return ListView.builder(
       padding: const EdgeInsets.only(bottom: 24),
-      itemCount: 2 + contentCount,
+      itemCount: 3 + contentCount,
       itemBuilder: (context, index) {
-        // Stats Bar (Golden §9.2) — أعلى التبويب لإعطاء نظرة سريعة على الحالة
-        // الكلية للمصروفات قبل الفلاتر التفصيلية.
         if (index == 0) {
           return Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-            child: _ExpensesStatsBar(
-              items: items,
-              byCategory: const [],
-              totalAll: total,
+            child: _ExpensesContentWidth(
+              child: _ExpensesStatsBar(
+                items: items,
+                byCategory: const [],
+                totalAll: total,
+                activeDatePreset: activeDatePreset,
+              ),
             ),
           );
         }
         if (index == 1) {
           return Padding(
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-            child: Material(
-              color: cs.surface,
-              borderRadius: ac.md,
-              child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 6, 16, 6),
+            child: _ExpensesContentWidth(
+              child: Container(
+                padding: const EdgeInsetsDirectional.fromSTEB(12, 4, 12, 4),
+                decoration: BoxDecoration(
+                  color: cs.surfaceContainerHighest.withValues(alpha: 0.3),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppColors.accentGold.withValues(alpha: 0.5)),
+                ),
+                child: _ExpensesUnifiedSearchDock(
+                  controller: searchCtrl,
+                  focusNode: searchFocus,
+                ),
+              ),
+            ),
+          );
+        }
+        if (index == 2) {
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(16, 6, 16, 10),
+            child: _ExpensesContentWidth(
+              child: Container(
                 padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: cs.surfaceContainerHighest.withValues(alpha: 0.3),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppColors.accentGold.withValues(alpha: 0.5)),
+                ),
                 child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    LayoutBuilder(
-                      builder: (context, c) {
-                        final compact = c.maxWidth < 360;
-                        if (compact) {
-                          return Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              Text(
-                                'إجمالي المصروفات ضمن الفترة',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w800,
-                                  color: cs.onSurface,
-                                ),
-                              ),
-                              const SizedBox(height: 6),
-                              Align(
-                                alignment: Alignment.centerRight,
-                                child: TextButton.icon(
-                                  onPressed: onPickRange,
-                                  icon: const Icon(
-                                    Icons.date_range_rounded,
-                                    size: 18,
-                                  ),
-                                  label: Text(
-                                    rangeLabel,
-                                    textDirection: TextDirection.ltr,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          );
-                        }
-                        return Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                'إجمالي المصروفات ضمن الفترة',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w800,
-                                  color: cs.onSurface,
-                                ),
+                    Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              'إجمالي المصروفات ضمن الفترة',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w800,
+                                color: AppColors.accentGold,
                               ),
                             ),
+                          ),
+                          if (!usePhoneLayout)
                             Flexible(
                               child: TextButton.icon(
                                 onPressed: onPickRange,
@@ -673,237 +874,224 @@ class _ExpensesLedgerTab extends StatelessWidget {
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                 ),
+                                style: TextButton.styleFrom(
+                                  foregroundColor: AppColors.accentGold,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 10,
+                        ),
+                        decoration: BoxDecoration(
+                          color: AppColors.accentGold.withValues(alpha: 0.1),
+                          borderRadius: ac.sm,
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.payments_outlined,
+                              color: AppColors.accentGold,
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                IraqiCurrencyFormat.formatIqd(total),
+                                style: TextStyle(
+                                  fontSize: 17,
+                                  fontWeight: FontWeight.w900,
+                                  color: cs.onSurface,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                textDirection: TextDirection.ltr,
                               ),
                             ),
                           ],
-                        );
-                      },
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 10,
-                            ),
-                            decoration: BoxDecoration(
-                              color: cs.primaryContainer.withValues(
-                                alpha: 0.35,
-                              ),
-                              borderRadius: ac.sm,
-                              border: Border.all(
-                                color: cs.outlineVariant.withValues(alpha: 0.6),
-                              ),
-                            ),
-                            child: Row(
-                              children: [
-                                Icon(
-                                  Icons.payments_outlined,
-                                  color: cs.primary,
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: Text(
-                                    IraqiCurrencyFormat.formatIqd(total),
-                                    style: TextStyle(
-                                      fontSize: 15,
-                                      fontWeight: FontWeight.w900,
-                                      color: cs.onSurface,
-                                    ),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    textDirection: TextDirection.ltr,
-                                  ),
-                                ),
-                              ],
-                            ),
+                        ),
+                      ),
+                      if (breakdownLine.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        Text(
+                          breakdownLine,
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            height: 1.25,
+                            color: isDark
+                                ? Colors.white.withValues(alpha: 0.72)
+                                : cs.onSurface.withValues(alpha: 0.72),
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
                       ],
-                    ),
-                    if (breakdownLine.isNotEmpty) ...[
-                      const SizedBox(height: 8),
-                      Text(
-                        breakdownLine,
-                        style: TextStyle(
-                          fontSize: 11.5,
-                          height: 1.25,
-                          color: cs.onSurfaceVariant,
-                          fontWeight: FontWeight.w600,
+                      const SizedBox(height: 10),
+                      if (usePhoneLayout)
+                        Align(
+                          alignment: AlignmentDirectional.centerStart,
+                          child: ActionChip(
+                            avatar: Icon(
+                              Icons.date_range_rounded,
+                              size: 18,
+                              color: AppColors.accentGold.withValues(alpha: 0.95),
+                            ),
+                            label: Text(
+                              _datePresetLabel(activeDatePreset, rangeLabel),
+                              style: const TextStyle(fontWeight: FontWeight.w700),
+                            ),
+                            side: BorderSide(
+                              color: AppColors.accentGold.withValues(alpha: 0.45),
+                            ),
+                            onPressed: onShowDateSheet,
+                          ),
+                        )
+                      else
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          children: [
+                            for (final entry in <(_ExpenseDatePreset, String)>[
+                              (_ExpenseDatePreset.today, 'اليوم'),
+                              (_ExpenseDatePreset.thisWeek, 'هذا الأسبوع'),
+                              (_ExpenseDatePreset.thisMonth, 'هذا الشهر'),
+                              (_ExpenseDatePreset.thisYear, 'هذا العام'),
+                            ])
+                              _ExpenseDatePresetButton(
+                                label: entry.$2,
+                                isActive: activeDatePreset == entry.$1,
+                                onPressed: () =>
+                                    unawaited(onPickPreset(entry.$1)),
+                              ),
+                          ],
                         ),
-                      ),
-                    ],
-                    const SizedBox(height: 8),
-                    Align(
-                      alignment: Alignment.center,
-                      child: Wrap(
-                        spacing: 6,
-                        runSpacing: 6,
-                        alignment: WrapAlignment.center,
-                        children: [
-                          OutlinedButton(
-                            onPressed: () => unawaited(
-                              onPickPreset(_ExpenseDatePreset.today),
+                      const SizedBox(height: 10),
+                      LayoutBuilder(
+                        builder: (context, c) {
+                          final row = c.maxWidth >= 520;
+                          final category = Container(
+                            decoration: OilChangeFormTheme.fieldContainerDecoration(
+                              context,
                             ),
-                            child: const Text('اليوم'),
-                          ),
-                          OutlinedButton(
-                            onPressed: () => unawaited(
-                              onPickPreset(_ExpenseDatePreset.thisWeek),
+                            padding: const EdgeInsetsDirectional.symmetric(
+                              horizontal: 10,
                             ),
-                            child: const Text('هذا الأسبوع'),
-                          ),
-                          OutlinedButton(
-                            onPressed: () => unawaited(
-                              onPickPreset(_ExpenseDatePreset.thisMonth),
-                            ),
-                            child: const Text('هذا الشهر'),
-                          ),
-                          OutlinedButton(
-                            onPressed: () => unawaited(
-                              onPickPreset(_ExpenseDatePreset.thisYear),
-                            ),
-                            child: const Text('هذا العام'),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    LayoutBuilder(
-                      builder: (context, c) {
-                        final row = c.maxWidth >= 520;
-                        final search = ValueListenableBuilder<TextEditingValue>(
-                          valueListenable: searchCtrl,
-                          builder: (context, tv, _) {
-                            return Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Expanded(
-                                  child: AppInput(
-                                    label: 'بحث',
-                                    showLabel: false,
-                                    hint: 'بحث (وصف أو فئة)',
-                                    controller: searchCtrl,
-                                    focusNode: searchFocus,
-                                    prefixIcon: const Icon(
-                                      Icons.search_rounded,
-                                    ),
-                                  ),
-                                ),
-                                if (tv.text.trim().isNotEmpty)
-                                  IconButton(
-                                    tooltip: 'مسح البحث',
-                                    onPressed: () {
-                                      searchCtrl.clear();
-                                      searchFocus.requestFocus();
-                                    },
-                                    icon: const Icon(Icons.clear_rounded),
-                                  ),
-                              ],
-                            );
-                          },
-                        );
-
-                        final category = DropdownButtonHideUnderline(
-                          child: DropdownButton<int?>(
-                            value: categoryId,
-                            isExpanded: true,
-                            borderRadius: ac.md,
-                            hint: const Text('الفئة'),
-                            items: [
-                              const DropdownMenuItem<int?>(
-                                value: null,
-                                child: Row(
-                                  children: [
-                                    Text('🔵 '),
-                                    Expanded(child: Text('كل الفئات')),
-                                  ],
+                            child: DropdownButtonHideUnderline(
+                            child: DropdownButton<int?>(
+                              value: categoryId,
+                              isExpanded: true,
+                              borderRadius: ac.md,
+                              style: TextStyle(
+                                color: OilChangeFormTheme.emphasisText(context),
+                              ),
+                              hint: Text(
+                                'الفئة',
+                                style: TextStyle(
+                                  color: OilChangeFormTheme.secondaryText(context),
                                 ),
                               ),
-                              for (final cat in categories)
-                                DropdownMenuItem<int?>(
-                                  value: cat.id,
+                              items: [
+                                const DropdownMenuItem<int?>(
+                                  value: null,
                                   child: Row(
                                     children: [
-                                      Text(
-                                        '${_ledgerFilterEmojiForCategoryName(cat.name)} ',
-                                      ),
-                                      Expanded(
-                                        child: Text(
-                                          cat.name,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                      ),
+                                      Text('🔵 '),
+                                      Expanded(child: Text('كل الفئات')),
                                     ],
                                   ),
                                 ),
-                            ],
-                            onChanged: onCategoryChanged,
+                                for (final cat in categories)
+                                  DropdownMenuItem<int?>(
+                                    value: cat.id,
+                                    child: Row(
+                                      children: [
+                                        Text(
+                                          '${_ledgerFilterEmojiForCategoryName(cat.name)} ',
+                                        ),
+                                        Expanded(
+                                          child: Text(
+                                            cat.name,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                              ],
+                              onChanged: onCategoryChanged,
+                            ),
                           ),
-                        );
+                          );
 
-                        final statusPick = DropdownButtonHideUnderline(
-                          child: DropdownButton<String>(
-                            value: status,
-                            isExpanded: true,
-                            borderRadius: ac.md,
-                            items: const [
-                              DropdownMenuItem(
-                                value: 'all',
-                                child: Text('الكل'),
+                          final statusPick = Container(
+                            decoration: OilChangeFormTheme.fieldContainerDecoration(
+                              context,
+                            ),
+                            padding: const EdgeInsetsDirectional.symmetric(
+                              horizontal: 10,
+                            ),
+                            child: DropdownButtonHideUnderline(
+                            child: DropdownButton<String>(
+                              value: status,
+                              isExpanded: true,
+                              borderRadius: ac.md,
+                              style: TextStyle(
+                                color: OilChangeFormTheme.emphasisText(context),
                               ),
-                              DropdownMenuItem(
-                                value: 'paid',
-                                child: Text('مدفوع'),
-                              ),
-                              DropdownMenuItem(
-                                value: 'pending',
-                                child: Text('غير مدفوع'),
-                              ),
-                              DropdownMenuItem(
-                                value: 'recurring',
-                                child: Text('متكرر'),
-                              ),
-                            ],
-                            onChanged: (v) {
-                              if (v == null) return;
-                              onStatusChanged(v);
-                            },
+                              items: const [
+                                DropdownMenuItem(
+                                  value: 'all',
+                                  child: Text('الكل'),
+                                ),
+                                DropdownMenuItem(
+                                  value: 'paid',
+                                  child: Text('مدفوع'),
+                                ),
+                                DropdownMenuItem(
+                                  value: 'pending',
+                                  child: Text('غير مدفوع'),
+                                ),
+                                DropdownMenuItem(
+                                  value: 'recurring',
+                                  child: Text('متكرر'),
+                                ),
+                              ],
+                              onChanged: (v) {
+                                if (v == null) return;
+                                onStatusChanged(v);
+                              },
+                            ),
                           ),
-                        );
+                          );
 
-                        if (row) {
-                          return Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                          if (row) {
+                            return Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Expanded(child: category),
+                                const SizedBox(width: 10),
+                                SizedBox(width: 120, child: statusPick),
+                              ],
+                            );
+                          }
+
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
-                              Expanded(child: search),
-                              const SizedBox(width: 10),
-                              SizedBox(width: 180, child: category),
-                              const SizedBox(width: 10),
-                              SizedBox(width: 120, child: statusPick),
+                              category,
+                              const SizedBox(height: 10),
+                              statusPick,
                             ],
                           );
-                        }
-
-                        return Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            search,
-                            const SizedBox(height: 10),
-                            category,
-                            const SizedBox(height: 10),
-                            statusPick,
-                          ],
-                        );
-                      },
-                    ),
-                  ],
+                        },
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            ),
           );
         }
 
@@ -916,39 +1104,60 @@ class _ExpensesLedgerTab extends StatelessWidget {
         }
         if (items.isEmpty) {
           return Padding(
-            padding: const EdgeInsets.fromLTRB(24, 36, 24, 24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  'لا توجد مصروفات ضمن هذه الفترة',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontWeight: FontWeight.w800,
-                    color: cs.onSurfaceVariant,
-                  ),
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+            child: _ExpensesContentWidth(
+              child: Container(
+                padding: const EdgeInsets.fromLTRB(24, 36, 24, 28),
+                decoration: OilChangeRoyalCard.decoration(
+                  cs,
+                  radius: ac.rMd,
+                  borderWidth: 1.75,
+                  borderAlpha: 0.72,
                 ),
-                const SizedBox(height: 8),
-                Text(
-                  'جرّب تغيير نطاق التاريخ أو الفلتر',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 12.5,
-                    color: cs.onSurfaceVariant.withValues(alpha: 0.9),
-                  ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.receipt_long_outlined,
+                      size: 48,
+                      color: OilChangeRoyalCard.gold.withValues(alpha: 0.85),
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      'لا توجد مصروفات ضمن هذه الفترة',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        color: cs.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'جرّب تغيير نطاق التاريخ أو الفلتر',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        color: cs.onSurfaceVariant.withValues(alpha: 0.9),
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                    FilledButton.icon(
+                      onPressed: onAddExpense,
+                      style: FilledButton.styleFrom(
+                        backgroundColor: OilChangeRoyalCard.gold,
+                        foregroundColor: Colors.white,
+                      ),
+                      icon: const Icon(Icons.add_rounded),
+                      label: const Text('إضافة مصروف'),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 18),
-                FilledButton.icon(
-                  onPressed: onAddExpense,
-                  icon: const Icon(Icons.add_rounded),
-                  label: const Text('إضافة مصروف'),
-                ),
-              ],
+              ),
             ),
           );
         }
 
-        final i = index - 2;
+        final i = index - 3;
         final e = items[i];
         final color = expenseCategoryColor(e.categoryName, cs);
         final icon = expenseCategoryIcon(e.categoryName);
@@ -956,6 +1165,7 @@ class _ExpensesLedgerTab extends StatelessWidget {
         final highlighted = highlightExpenseId == e.id;
         final isRecurringRow = e.isRecurring || e.recurringOriginId != null;
 
+        const royalGold = OilChangeRoyalCard.gold;
         return Padding(
           padding: EdgeInsets.fromLTRB(
             16,
@@ -963,37 +1173,46 @@ class _ExpensesLedgerTab extends StatelessWidget {
             16,
             i == items.length - 1 ? 0 : 10,
           ),
-          child: Material(
-            color: cs.surface,
-            shape: RoundedRectangleBorder(
+          child: DecoratedBox(
+            decoration: BoxDecoration(
               borderRadius: ac.md,
-              side: BorderSide(
+              border: Border.all(
                 color: highlighted
-                    ? cs.primary
-                    : cs.outlineVariant.withValues(alpha: 0.42),
-                width: highlighted ? 2 : 1,
+                    ? royalGold.withValues(alpha: 0.95)
+                    : royalGold.withValues(alpha: 0.72),
+                width: highlighted ? 2.25 : 1.75,
               ),
+              boxShadow: const [
+                BoxShadow(
+                  color: AppGlass.goldGlow,
+                  blurRadius: 8,
+                  offset: Offset(0, 2),
+                ),
+              ],
             ),
-            child: InkWell(
+            child: Material(
+              color: highlighted
+                  ? royalGold.withValues(alpha: 0.1)
+                  : cs.surface,
               borderRadius: ac.md,
-              onTap: () => onEdit(e),
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 40,
-                      height: 40,
-                      decoration: BoxDecoration(
-                        color: color.withValues(alpha: 0.12),
-                        borderRadius: ac.md,
-                        border: Border.all(
-                          color: color.withValues(alpha: 0.25),
+              clipBehavior: Clip.antiAlias,
+              child: InkWell(
+                borderRadius: ac.md,
+                onTap: () => onEdit(e),
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          color: color.withValues(alpha: 0.12),
+                          borderRadius: ac.md,
                         ),
+                        child: Icon(icon, color: color),
                       ),
-                      child: Icon(icon, color: color),
-                    ),
-                    const SizedBox(width: 12),
+                      const SizedBox(width: 12),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1067,7 +1286,7 @@ class _ExpensesLedgerTab extends StatelessWidget {
                                 Icon(
                                   Icons.person_outline_rounded,
                                   size: 14,
-                                  color: cs.primary,
+                                  color: AppColors.accentGold,
                                 ),
                                 const SizedBox(width: 4),
                                 Expanded(
@@ -1078,7 +1297,7 @@ class _ExpensesLedgerTab extends StatelessWidget {
                                     style: TextStyle(
                                       fontSize: 11.5,
                                       fontWeight: FontWeight.w700,
-                                      color: cs.primary,
+                                      color: AppColors.accentGold,
                                     ),
                                   ),
                                 ),
@@ -1153,7 +1372,7 @@ class _ExpensesLedgerTab extends StatelessWidget {
                               onPressed: () => onEdit(e),
                               icon: Icon(
                                 Icons.edit_outlined,
-                                color: cs.primary,
+                                color: AppColors.accentGold,
                               ),
                             ),
                             IconButton(
@@ -1183,7 +1402,8 @@ class _ExpensesLedgerTab extends StatelessWidget {
                         ),
                       ],
                     ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -1242,21 +1462,24 @@ class _ExpensesAnalyticsTab extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Material(
-            color: cs.surface,
-            borderRadius: ac.md,
+          Container(
+            decoration: BoxDecoration(
+              color: cs.surfaceContainerHighest.withValues(alpha: 0.3),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppColors.accentGold.withValues(alpha: 0.5)),
+            ),
             child: Padding(
               padding: const EdgeInsets.all(12),
               child: Row(
                 children: [
-                  Icon(Icons.analytics_outlined, color: cs.primary),
+                  Icon(Icons.analytics_outlined, color: AppColors.accentGold),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
                       'تحليلات المصروفات ضمن الفترة',
                       style: TextStyle(
                         fontWeight: FontWeight.w800,
-                        color: cs.onSurface,
+                        color: AppColors.accentGold,
                       ),
                     ),
                   ),
@@ -1273,9 +1496,12 @@ class _ExpensesAnalyticsTab extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 12),
-          Material(
-            color: cs.surface,
-            borderRadius: ac.md,
+          Container(
+            decoration: BoxDecoration(
+              color: cs.surfaceContainerHighest.withValues(alpha: 0.3),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppColors.accentGold.withValues(alpha: 0.5)),
+            ),
             child: Padding(
               padding: const EdgeInsets.all(12),
               child: Column(
@@ -1285,7 +1511,7 @@ class _ExpensesAnalyticsTab extends StatelessWidget {
                     'توزيع حسب الفئة',
                     style: TextStyle(
                       fontWeight: FontWeight.w800,
-                      color: cs.onSurface,
+                      color: AppColors.accentGold,
                     ),
                   ),
                   const SizedBox(height: 10),
@@ -1312,9 +1538,12 @@ class _ExpensesAnalyticsTab extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 12),
-          Material(
-            color: cs.surface,
-            borderRadius: ac.md,
+          Container(
+            decoration: BoxDecoration(
+              color: cs.surfaceContainerHighest.withValues(alpha: 0.3),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppColors.accentGold.withValues(alpha: 0.5)),
+            ),
             child: Padding(
               padding: const EdgeInsets.all(12),
               child: Column(
@@ -1324,7 +1553,7 @@ class _ExpensesAnalyticsTab extends StatelessWidget {
                     'اتجاه يومي',
                     style: TextStyle(
                       fontWeight: FontWeight.w800,
-                      color: cs.onSurface,
+                      color: AppColors.accentGold,
                     ),
                   ),
                   const SizedBox(height: 10),
@@ -1357,7 +1586,7 @@ class _ExpensesAnalyticsTab extends StatelessWidget {
                 children: [
                   Row(
                     children: [
-                      Icon(Icons.speed_outlined, color: cs.primary),
+                      Icon(Icons.speed_outlined, color: AppColors.accentGold),
                       const SizedBox(width: 8),
                       Text(
                         'نسب إنفاق الفئات (Gauges)',
@@ -1399,13 +1628,13 @@ class _ExpensesAnalyticsTab extends StatelessWidget {
                 children: [
                   Row(
                     children: [
-                      Icon(Icons.stacked_line_chart_rounded, color: cs.primary),
+                      Icon(Icons.stacked_line_chart_rounded, color: AppColors.accentGold),
                       const SizedBox(width: 8),
                       Text(
                         'اتجاه الفئات المكدّس عبر الزمن',
                         style: TextStyle(
                           fontWeight: FontWeight.w800,
-                          color: cs.onSurface,
+                          color: AppColors.accentGold,
                         ),
                       ),
                     ],
@@ -1543,7 +1772,7 @@ class _MiniBars extends StatelessWidget {
                     width: barW,
                     height: (p.$2 / max).clamp(0.0, 1.0) * 160,
                     decoration: BoxDecoration(
-                      color: cs.primary.withValues(alpha: 0.65),
+                      color: AppColors.accentGold.withValues(alpha: 0.65),
                       borderRadius: BorderRadius.circular(6),
                     ),
                   ),
@@ -2712,7 +2941,7 @@ class _ExpenseEditorSheetState extends State<_ExpenseEditorSheet> {
                           ),
                         ),
                       ),
-                      Icon(Icons.chevron_left_rounded, color: cs.primary),
+                      Icon(Icons.chevron_left_rounded, color: AppColors.accentGold),
                     ],
                   ),
                 ),
@@ -2736,23 +2965,26 @@ class _ExpenseEditorSheetState extends State<_ExpenseEditorSheet> {
                     _wizardStep = 1;
                     _categoryId = 0;
                   }),
-                  icon: Icon(
+                  icon: const Icon(
                     Icons.arrow_back_ios_new_rounded,
                     size: 16,
-                    color: cs.primary,
+                    color: AppColors.accentGold,
                   ),
-                  label: Text(
+                  label: const Text(
                     'اختيار فئة أخرى',
                     style: TextStyle(
                       fontWeight: FontWeight.w700,
-                      color: cs.primary,
+                      color: AppColors.accentGold,
                     ),
                   ),
                 ),
               ),
             DropdownButtonFormField<int>(
               value: _categoryId <= 0 ? null : _categoryId,
-              decoration: const InputDecoration(labelText: 'الفئة *'),
+              decoration: OilChangeFormTheme.field(
+                context: context,
+                labelText: 'الفئة *',
+              ),
               items: [
                 for (final c in widget.categories)
                   DropdownMenuItem<int>(
@@ -2797,12 +3029,9 @@ class _ExpenseEditorSheetState extends State<_ExpenseEditorSheet> {
                 borderRadius: ac.md,
                 onTap: _pickEmployee,
                 child: InputDecorator(
-                  decoration: InputDecoration(
-                    filled: true,
-                    fillColor: cs.surfaceContainerHighest.withValues(
-                      alpha: 0.5,
-                    ),
-                    border: OutlineInputBorder(borderRadius: ac.md),
+                  decoration: OilChangeFormTheme.field(
+                    context: context,
+                    labelText: 'الموظف',
                     suffixIcon: const Icon(Icons.search_rounded),
                   ),
                   child: Text(
@@ -2810,8 +3039,8 @@ class _ExpenseEditorSheetState extends State<_ExpenseEditorSheet> {
                     style: TextStyle(
                       fontWeight: FontWeight.w700,
                       color: _employeeLabel.isEmpty
-                          ? cs.onSurfaceVariant
-                          : cs.onSurface,
+                          ? OilChangeFormTheme.secondaryText(context)
+                          : OilChangeFormTheme.emphasisText(context),
                     ),
                   ),
                 ),
@@ -2884,18 +3113,12 @@ class _ExpenseEditorSheetState extends State<_ExpenseEditorSheet> {
                             horizontal: 12,
                             vertical: 12,
                           ),
-                          decoration: BoxDecoration(
-                            color: cs.surfaceContainerHighest.withValues(
-                              alpha: 0.55,
-                            ),
-                            borderRadius: ac.md,
-                            border: Border.all(
-                              color: cs.outlineVariant.withValues(alpha: 0.7),
-                            ),
+                          decoration: OilChangeFormTheme.fieldContainerDecoration(
+                            context,
                           ),
                           child: Row(
                             children: [
-                              Icon(Icons.event_rounded, color: cs.primary),
+                              Icon(Icons.event_rounded, color: AppColors.accentGold),
                               const SizedBox(width: 8),
                               Expanded(
                                 child: Text(
@@ -2904,7 +3127,9 @@ class _ExpenseEditorSheetState extends State<_ExpenseEditorSheet> {
                                   textDirection: TextDirection.ltr,
                                   style: TextStyle(
                                     fontWeight: FontWeight.w700,
-                                    color: cs.onSurface,
+                                    color: OilChangeFormTheme.emphasisText(
+                                      context,
+                                    ),
                                   ),
                                 ),
                               ),
@@ -2931,7 +3156,10 @@ class _ExpenseEditorSheetState extends State<_ExpenseEditorSheet> {
                 SizedBox(
                   width: 130,
                   child: DropdownButtonFormField<ExpenseStatus>(
-                    decoration: const InputDecoration(labelText: 'الحالة'),
+                    decoration: OilChangeFormTheme.field(
+                      context: context,
+                      labelText: 'الحالة',
+                    ),
                     value: _status,
                     items: const [
                       DropdownMenuItem(
@@ -3153,7 +3381,7 @@ class _AttachmentPicker extends StatelessWidget {
                       color: cs.onSurfaceVariant,
                     ),
                   )
-                : Icon(Icons.receipt_long_outlined, color: cs.primary),
+                : Icon(Icons.receipt_long_outlined, color: AppColors.accentGold),
           ),
           const SizedBox(width: 10),
           Expanded(
@@ -3224,7 +3452,7 @@ class _RecurringPicker extends StatelessWidget {
         children: [
           Row(
             children: [
-              Icon(Icons.replay_rounded, color: cs.primary),
+              Icon(Icons.replay_rounded, color: AppColors.accentGold),
               const SizedBox(width: 8),
               const Expanded(
                 child: Text(
@@ -3382,19 +3610,181 @@ class _EmployeePickerDialogState extends State<_EmployeePickerDialog> {
   }
 }
 
+// ── Spec v1.0 — عرض محتوى + بحث بلوري + KPIs ─────────────────────────────────
+
+class _ExpensesContentWidth extends StatelessWidget {
+  const _ExpensesContentWidth({required this.child});
+
+  final Widget child;
+
+  static const double _maxWidth = 1200;
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: AlignmentDirectional.topCenter,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: _maxWidth),
+        child: child,
+      ),
+    );
+  }
+}
+
+class _ExpensesUnifiedSearchDock extends StatefulWidget {
+  const _ExpensesUnifiedSearchDock({
+    required this.controller,
+    required this.focusNode,
+  });
+
+  final TextEditingController controller;
+  final FocusNode focusNode;
+
+  @override
+  State<_ExpensesUnifiedSearchDock> createState() =>
+      _ExpensesUnifiedSearchDockState();
+}
+
+class _ExpensesUnifiedSearchDockState extends State<_ExpensesUnifiedSearchDock> {
+  @override
+  void initState() {
+    super.initState();
+    widget.focusNode.addListener(_onFocusChanged);
+    widget.controller.addListener(_onTextChanged);
+  }
+
+  @override
+  void dispose() {
+    widget.focusNode.removeListener(_onFocusChanged);
+    widget.controller.removeListener(_onTextChanged);
+    super.dispose();
+  }
+
+  void _onFocusChanged() {
+    if (mounted) setState(() {});
+  }
+
+  void _onTextChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final ac = context.appCorners;
+    final royalGold = OilChangeRoyalCard.gold;
+
+    return TextField(
+      controller: widget.controller,
+      focusNode: widget.focusNode,
+      textInputAction: TextInputAction.search,
+      style: TextStyle(
+        fontSize: 15,
+        color: cs.onSurface,
+        fontWeight: FontWeight.w600,
+      ),
+      cursorColor: royalGold,
+      decoration: InputDecoration(
+        hintText: 'بحث (وصف أو فئة)… (Ctrl+F)',
+        hintStyle: TextStyle(
+          color: cs.onSurfaceVariant.withValues(alpha: 0.75),
+          fontWeight: FontWeight.w500,
+        ),
+        prefixIcon: Icon(Icons.search_rounded, color: royalGold),
+        suffixIcon: widget.controller.text.trim().isEmpty
+            ? null
+            : IconButton(
+                tooltip: 'مسح البحث',
+                onPressed: () {
+                  widget.controller.clear();
+                  widget.focusNode.requestFocus();
+                },
+                icon: const Icon(Icons.close_rounded, size: 20),
+              ),
+        border: OutlineInputBorder(
+          borderRadius: ac.md,
+          borderSide: BorderSide(
+            color: royalGold.withValues(alpha: 0.35),
+          ),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: ac.md,
+          borderSide: BorderSide(
+            color: royalGold.withValues(alpha: 0.28),
+          ),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: ac.md,
+          borderSide: BorderSide(
+            color: royalGold.withValues(alpha: 0.85),
+            width: 1.5,
+          ),
+        ),
+        filled: true,
+        fillColor: cs.surfaceContainerHighest.withValues(alpha: 0.22),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 14,
+          vertical: 14,
+        ),
+      ),
+    );
+  }
+}
+
+class _ExpenseDatePresetButton extends StatelessWidget {
+  const _ExpenseDatePresetButton({
+    required this.label,
+    required this.isActive,
+    required this.onPressed,
+  });
+
+  final String label;
+  final bool isActive;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final royalGold = OilChangeRoyalCard.gold;
+    final idleFg = OilChangeFormTheme.secondaryText(context);
+    return OutlinedButton(
+      onPressed: onPressed,
+      style: OutlinedButton.styleFrom(
+        foregroundColor: isActive ? royalGold : idleFg,
+        side: BorderSide(
+          color: isActive
+              ? royalGold.withValues(alpha: 0.95)
+              : royalGold.withValues(alpha: 0.38),
+          width: isActive ? 1.75 : 1,
+        ),
+        backgroundColor: isActive
+            ? royalGold.withValues(alpha: 0.12)
+            : Colors.transparent,
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontWeight: isActive ? FontWeight.w800 : FontWeight.w600,
+          color: isActive ? royalGold : idleFg,
+        ),
+      ),
+    );
+  }
+}
+
 // ── شريط الإحصاءات (KPIs) للمصروفات ───────────────────────────────────────────
-/// 4 KPIs قابلة للتجاوب — يلتزم نمط `_StatsBar` في `invoices_screen.dart`
-/// (Golden §9.2): على phone variants شبكة 2×2، على tablet+ صف أفقي.
+/// 4 KPIs قابلة للتجاوب — carousel أفقي على الموبايل، صف على الديسكتوب.
 class _ExpensesStatsBar extends StatelessWidget {
   const _ExpensesStatsBar({
     required this.items,
     required this.byCategory,
     required this.totalAll,
+    required this.activeDatePreset,
   });
 
   final List<ExpenseEntry> items;
   final List<Map<String, dynamic>> byCategory;
   final double totalAll;
+  final _ExpenseDatePreset? activeDatePreset;
 
   @override
   Widget build(BuildContext context) {
@@ -3437,13 +3827,15 @@ class _ExpensesStatsBar extends StatelessWidget {
         icon: Icons.today_rounded,
         label: 'مصروف اليوم',
         value: IraqiCurrencyFormat.formatIqd(todayTotal),
-        color: cs.primary,
+        color: AppColors.accentGold,
+        isActiveFilter: activeDatePreset == _ExpenseDatePreset.today,
       ),
       _ExpenseStatChip(
         icon: Icons.calendar_view_month_rounded,
         label: 'هذا الشهر',
         value: IraqiCurrencyFormat.formatIqd(monthTotal),
         color: AppSemanticColors.info,
+        isActiveFilter: activeDatePreset == _ExpenseDatePreset.thisMonth,
       ),
       _ExpenseStatChip(
         icon: Icons.category_rounded,
@@ -3461,26 +3853,16 @@ class _ExpensesStatsBar extends StatelessWidget {
 
     return LayoutBuilder(
       builder: (ctx, c) {
-        final useTwoByTwo = layout.isPhoneVariant || c.maxWidth < 600;
-        if (useTwoByTwo) {
-          return Column(
-            children: [
-              Row(
-                children: [
-                  Expanded(child: chips[0]),
-                  const SizedBox(width: 8),
-                  Expanded(child: chips[1]),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(child: chips[2]),
-                  const SizedBox(width: 8),
-                  Expanded(child: chips[3]),
-                ],
-              ),
-            ],
+        final useCarousel = layout.isPhoneVariant || c.maxWidth < 600;
+        if (useCarousel) {
+          return SizedBox(
+            height: 92,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: chips.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 8),
+              itemBuilder: (_, i) => SizedBox(width: 168, child: chips[i]),
+            ),
           );
         }
         return Row(
@@ -3502,63 +3884,81 @@ class _ExpenseStatChip extends StatelessWidget {
     required this.label,
     required this.value,
     required this.color,
+    this.isActiveFilter = false,
   });
 
   final IconData icon;
   final String label;
   final String value;
   final Color color;
+  final bool isActiveFilter;
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final ac = context.appCorners;
+    final titleColor = isDark
+        ? Colors.white.withValues(alpha: 0.82)
+        : cs.onSurface.withValues(alpha: 0.72);
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: cs.surface,
-        borderRadius: AppShape.none,
-        border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.6)),
+        color: isActiveFilter 
+            ? AppColors.accentGold.withValues(alpha: 0.1) 
+            : cs.surfaceContainerHighest.withValues(alpha: 0.3),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isActiveFilter 
+              ? AppColors.accentGold 
+              : AppColors.accentGold.withValues(alpha: 0.5),
+          width: isActiveFilter ? 2.0 : 1.0,
+        ),
       ),
-      child: Row(
-        children: [
-          Container(
-            width: 36,
-            height: 36,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.12),
-              borderRadius: AppShape.none,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Row(
+          children: [
+            Container(
+              width: 36,
+              height: 36,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.14),
+                borderRadius: ac.sm,
+              ),
+              child: Icon(icon, size: 20, color: color),
             ),
-            child: Icon(icon, size: 20, color: color),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  label,
-                  style: TextStyle(
-                    fontSize: 11.5,
-                    color: cs.onSurfaceVariant,
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    label,
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: titleColor,
+                    ),
+                    overflow: TextOverflow.ellipsis,
                   ),
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  value,
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w800,
-                    color: cs.onSurface,
+                  const SizedBox(height: 2),
+                  Text(
+                    value,
+                    style: TextStyle(
+                      fontSize: 19,
+                      fontWeight: FontWeight.w900,
+                      color: OilChangeFormTheme.emphasisText(context),
+                    ),
+                    overflow: TextOverflow.ellipsis,
                   ),
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

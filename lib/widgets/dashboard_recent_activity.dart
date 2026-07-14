@@ -26,6 +26,7 @@ class DashboardRecentActivity extends StatefulWidget {
     this.onOpenInvoicesList,
     this.onOpenCash,
     this.maxPanelHeight,
+    this.staffName,
   });
 
   final bool isDark;
@@ -36,6 +37,7 @@ class DashboardRecentActivity extends StatefulWidget {
   final VoidCallback? onOpenInvoicesList;
   final VoidCallback? onOpenCash;
   final double? maxPanelHeight;
+  final String? staffName;
 
   @override
   State<DashboardRecentActivity> createState() =>
@@ -137,7 +139,7 @@ class _DashboardRecentActivityState extends State<DashboardRecentActivity> {
       _error = null;
     });
     try {
-      final rows = await _db.getRecentActivityFeed();
+      final rows = await _db.getRecentActivityFeed(staffName: widget.staffName);
       if (!mounted) return;
       setState(() {
         _all = rows;
@@ -245,7 +247,9 @@ class _DashboardRecentActivityState extends State<DashboardRecentActivity> {
                   Icon(Icons.inbox_rounded, size: 48, color: text2),
                   const SizedBox(height: 12),
                   Text(
-                    'لا يوجد نشاط مطابق بعد',
+                    widget.staffName != null && widget.staffName!.isNotEmpty
+                        ? 'لا يوجد نشاط مطابق للموظف'
+                        : 'لا يوجد نشاط مطابق بعد',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       fontSize: 14,

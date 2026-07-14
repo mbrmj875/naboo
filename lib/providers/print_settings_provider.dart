@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import '../models/print_settings_data.dart';
 import '../services/print_settings_repository.dart';
+import '../utils/app_logger.dart';
 
 /// إعدادات الطباعة المشتركة بين شاشة الطباعة وإيصال البيع.
 class PrintSettingsProvider extends ChangeNotifier {
@@ -20,7 +21,8 @@ class PrintSettingsProvider extends ChangeNotifier {
       _data = await PrintSettingsRepository.instance.load();
       _ready = true;
       notifyListeners();
-    } catch (_) {
+    } catch (e, st) {
+      AppLogger.error('PrintSettingsProvider', 'load failed', e, st);
       _ready = true;
       notifyListeners();
     }

@@ -5,10 +5,12 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../models/subscription_pricing.dart';
 import 'license/license_engine_v2.dart';
 import 'license/license_token.dart';
 import 'license/trusted_time_service.dart';
 import '../providers/open_ops_registry.dart';
+import '../utils/app_logger.dart';
 import 'security_audit_log_service.dart';
 
 // ── خطط الاشتراك ─────────────────────────────────────────────────────────────
@@ -20,6 +22,8 @@ class SubscriptionPlan {
     required this.priceIQD,
     required this.maxDevices,
     required this.features,
+    this.billingCycle,
+    this.computerCount,
   });
 
   final String key;
@@ -27,27 +31,26 @@ class SubscriptionPlan {
   final int priceIQD;
   final int maxDevices;
   final List<String> features;
+  final SubscriptionBillingCycle? billingCycle;
+  final int? computerCount;
 
   bool get isUnlimited => maxDevices == 0;
 
-  /// بطاقة واجهة للتجربة التلقائية — ليست خطة «الأساسية» المدفوعة؛ حد الأجهزة كما في التجربة السابقة (جهازان).
+  /// بطاقة واجهة للتجربة التلقائية — ليست خطة مدفوعة؛ حد الأجهزة (هاتف + حاسوب).
   bool get isIntroTrialTier => key == 'trial';
 
-  String get devicesLabel =>
-      isUnlimited ? 'أجهزة غير محدودة' : '$maxDevices أجهزة';
-
-  String get priceLabel => isIntroTrialTier
-      ? 'مجاناً — 15 يوماً'
-      : '${_fmt(priceIQD)} د.ع / شهر';
-
-  static String _fmt(int p) {
-    final s = p.toString();
-    final b = StringBuffer();
-    for (var i = 0; i < s.length; i++) {
-      if (i > 0 && (s.length - i) % 3 == 0) b.write(',');
-      b.write(s[i]);
+  String get devicesLabel {
+    if (isUnlimited) return 'أجهزة غير محدودة';
+    if (computerCount != null) {
+      return SubscriptionPricingCatalog.devicesBreakdownAr(computerCount!);
     }
-    return b.toString();
+    return '$maxDevices أجهزة';
+  }
+
+  String get priceLabel {
+    if (isIntroTrialTier) return 'مجاناً — 15 يوماً';
+    final cycle = billingCycle ?? SubscriptionBillingCycle.monthly;
+    return '${SubscriptionPricingCatalog.formatIqd(priceIQD)} د.ع / ${cycle.periodSuffixAr}';
   }
 
   static const trial = SubscriptionPlan(
@@ -57,60 +60,136 @@ class SubscriptionPlan {
     maxDevices: 2,
     features: [
       '15 يوماً من أول استخدام (أو من أول تسجيل للحساب السحابي)',
-      'جهازان على نفس الحساب',
-      'بعدها اختر خطة مدفوعة وفعّل المفتاح الذي ترسله الإدارة',
+      'هاتف واحد + حاسوب واحد على نفس الحساب',
+      'بعدها اختر خطة مدفوعة وفعّل الرمز الذي ترسله الإدارة',
     ],
   );
 
-  static const basic = SubscriptionPlan(
-    key: 'basic',
-    nameAr: 'الأساسية',
-    priceIQD: 15000,
+  /// عرض افتراضي للاشتراك الشهري (حاسوب واحد).
+  static const monthly = SubscriptionPlan(
+    key: 'monthly',
+    nameAr: 'اشتراك شهري',
+    priceIQD: SubscriptionPricingCatalog.pricePerComputerUnitIqd,
     maxDevices: 2,
+    billingCycle: SubscriptionBillingCycle.monthly,
+    computerCount: 1,
     features: [
-      'جهازان على نفس الحساب',
-      'جميع ميزات المخزون والفواتير',
-      'التقارير والتحليلات',
+      'هاتف واحد + حاسوب واحد — 15,000 د.ع/شهر',
+      'كل حاسوب إضافي +15,000 د.ع/شهر',
+      'جميع ميزات المخزون والفواتير والتقارير',
       'دعم فني',
     ],
   );
 
-  static const pro = SubscriptionPlan(
-    key: 'pro',
-    nameAr: 'الاحترافية',
-    priceIQD: 30000,
-    maxDevices: 3,
+  /// عرض افتراضي للاشتراك السنوي (حاسوب واحد — 10 أشهر = 12 شهراً).
+  static const annual = SubscriptionPlan(
+    key: 'annual',
+    nameAr: 'اشتراك سنوي',
+    priceIQD: SubscriptionPricingCatalog.pricePerComputerUnitIqd *
+        SubscriptionPricingCatalog.annualPaidMonths,
+    maxDevices: 2,
+    billingCycle: SubscriptionBillingCycle.annual,
+    computerCount: 1,
     features: [
-      '3 أجهزة على نفس الحساب',
-      'جميع ميزات الخطة الأساسية',
-      'أوامر الشراء وإدارة الموردين',
-      'تقارير متقدمة',
+      'هاتف واحد + حاسوب واحد — ادفع 10 أشهر واحصل على 12',
+      'كل حاسوب إضافي يُضاف بنفس قاعدة التسعير ×10',
+      'جميع ميزات الاشتراك الشهري',
       'أولوية في الدعم الفني',
     ],
   );
 
-  static const unlimited = SubscriptionPlan(
-    key: 'unlimited',
-    nameAr: 'غير المحدودة',
-    priceIQD: 50000,
-    maxDevices: 0,
-    features: [
-      'أجهزة غير محدودة على حساب واحد',
-      'جميع ميزات الخطة الاحترافية',
-      'متعدد الفروع',
-      'أولوية قصوى في الدعم',
-    ],
+  /// خطط قديمة — للتراخيص السابقة فقط.
+  static const basic = SubscriptionPlan(
+    key: 'basic',
+    nameAr: 'الأساسية (قديم)',
+    priceIQD: 15000,
+    maxDevices: 2,
+    features: const ['خطة سابقة — 2 أجهزة'],
   );
 
-  static const all = [trial, basic, pro, unlimited];
+  static const pro = SubscriptionPlan(
+    key: 'pro',
+    nameAr: 'الاحترافية (قديم)',
+    priceIQD: 30000,
+    maxDevices: 3,
+    features: const ['خطة سابقة — 3 أجهزة'],
+  );
+
+  static const unlimited = SubscriptionPlan(
+    key: 'unlimited',
+    nameAr: 'غير المحدودة (قديم)',
+    priceIQD: 50000,
+    maxDevices: 0,
+    features: const ['خطة سابقة — أجهزة غير محدودة'],
+  );
+
+  static const paidCatalog = [monthly, annual];
+
+  static const all = [trial, ...paidCatalog];
+
+  /// تسعير ديناميكي حسب عدد الحاسبات ودورة الفوترة.
+  static SubscriptionPlan quote({
+    required SubscriptionBillingCycle billingCycle,
+    required int computers,
+  }) {
+    final count = SubscriptionPricingCatalog.clampComputers(computers);
+    final price = SubscriptionPricingCatalog.priceIqd(
+      computers: count,
+      cycle: billingCycle,
+    );
+    final devices = SubscriptionPricingCatalog.maxDevicesForComputers(count);
+    final key =
+        billingCycle == SubscriptionBillingCycle.annual ? 'annual' : 'monthly';
+    final name = billingCycle == SubscriptionBillingCycle.annual
+        ? 'اشتراك سنوي'
+        : 'اشتراك شهري';
+    final extraComputerNote = count > 1
+        ? ' (+${count - 1} ${count == 2 ? 'حاسوب' : 'حاسبات'} إضافية)'
+        : '';
+    return SubscriptionPlan(
+      key: key,
+      nameAr: '$name$extraComputerNote',
+      priceIQD: price,
+      maxDevices: devices,
+      billingCycle: billingCycle,
+      computerCount: count,
+      features: [
+        SubscriptionPricingCatalog.devicesBreakdownAr(count),
+        if (billingCycle == SubscriptionBillingCycle.annual)
+          'ادفع ${SubscriptionPricingCatalog.annualPaidMonths} أشهر — صلاحية ${SubscriptionPricingCatalog.annualCoverageMonths} شهراً'
+        else
+          '15,000 د.ع لكل حاسوب (يشمل الهاتف في الباقة)',
+        'جميع ميزات NaBoo ERP',
+        'دعم فني',
+      ],
+    );
+  }
 
   static SubscriptionPlan fromKey(String? k) => switch (k) {
     'trial' => trial,
+    'monthly' => monthly,
+    'annual' => annual,
     'basic' => basic,
     'pro' => pro,
     'unlimited' => unlimited,
-    _ => basic,
+    _ => monthly,
   };
+
+  /// يطابق JWT: يستنتج عدد الحاسبات من [maxDevices] ودورة الفوترة من [planKey].
+  static SubscriptionPlan fromLicenseClaims({
+    required String? planKey,
+    required int maxDevices,
+  }) {
+    if (planKey == 'trial') return trial;
+    if (maxDevices == 0) return unlimited;
+    if (SubscriptionPricingCatalog.isLegacyPlanKey(planKey)) {
+      return fromKey(planKey);
+    }
+    final cycle = SubscriptionPricingCatalog.billingCycleFromPlanKey(planKey);
+    final computers =
+        SubscriptionPricingCatalog.computersFromMaxDevices(maxDevices);
+    return quote(billingCycle: cycle, computers: computers);
+  }
 }
 
 // ── مفاتيح الكاش ─────────────────────────────────────────────────────────────
@@ -191,10 +270,34 @@ class LicenseState {
 
   bool get isAllowed =>
       status == LicenseStatus.trial || status == LicenseStatus.active;
-  bool get isUnlimited => maxDevices == 0;
+  bool get isUnlimited => effectiveMaxDevices == 0;
+
+  /// حد الأجهزة الفعّال: يفضّل `maxDevices` المخزّن في الـ state، ويرجع إلى
+  /// `plan.maxDevices` كـ fallback لمنع عرض "X / 0" عندما يأتي JWT بدون
+  /// `max_devices` صحيح (مشكلة شائعة في تجربة Supabase trial).
+  int get effectiveMaxDevices {
+    if (maxDevices > 0) return maxDevices;
+    return plan?.maxDevices ?? 0;
+  }
+
   String get devicesInfo => isUnlimited
       ? 'أجهزة غير محدودة'
-      : '$registeredDeviceCount / $maxDevices جهاز';
+      : '$registeredDeviceCount / $effectiveMaxDevices جهاز';
+
+  LicenseState copyWith({int? registeredDeviceCount}) {
+    return LicenseState(
+      status: status,
+      businessName: businessName,
+      expiresAt: expiresAt,
+      trialEndsAt: trialEndsAt,
+      daysLeft: daysLeft,
+      message: message,
+      plan: plan,
+      registeredDeviceCount: registeredDeviceCount ?? this.registeredDeviceCount,
+      maxDevices: maxDevices,
+      lockReason: lockReason,
+    );
+  }
 
   static const none = LicenseState(status: LicenseStatus.none);
   static const checking = LicenseState(status: LicenseStatus.checking);
@@ -348,7 +451,9 @@ class LicenseService extends ChangeNotifier {
   }
 
   Future<void> _initializeV2() async {
-    _setState(LicenseState.checking);
+    if (_shouldShowCheckingUi) {
+      _setState(LicenseState.checking);
+    }
     final prefs = await SharedPreferences.getInstance();
     final user = Supabase.instance.client.auth.currentUser;
     final tok = await _v2Activator.loadAndVerifyStoredToken();
@@ -366,7 +471,9 @@ class LicenseService extends ChangeNotifier {
   }
 
   Future<void> _checkLicenseV2({bool forceRemote = false}) async {
-    _setState(LicenseState.checking);
+    if (_shouldShowCheckingUi) {
+      _setState(LicenseState.checking);
+    }
     final prefs = await SharedPreferences.getInstance();
     final tok = await _v2Activator.loadAndVerifyStoredToken();
     if (tok == null) {
@@ -393,6 +500,13 @@ class LicenseService extends ChangeNotifier {
   Future<String> getDeviceId() => _v2Activator.getDeviceId();
 
   Future<String> getDeviceName() => _v2Activator.getDeviceName();
+
+  /// يُحدَّث بعد [CloudSyncService.refreshDevices] — عدّاد موحّد في الإعدادات واللوحة.
+  void publishActiveDeviceCount(int activeCount) {
+    if (activeCount < 0) return;
+    if (_state.registeredDeviceCount == activeCount) return;
+    _setState(_state.copyWith(registeredDeviceCount: activeCount));
+  }
 
   // ── التحقق من الترخيص ─────────────────────────────────────────────────────
 
@@ -436,9 +550,13 @@ class LicenseService extends ChangeNotifier {
           maxDevices: (m['max_devices'] as num?)?.toInt() ?? 0,
         );
       }
-    } on PostgrestException catch (_) {
+    } on PostgrestException catch (e, st) {
+      AppLogger.warn('LicenseService', 'device_limit rpc failed: $e');
+      AppLogger.error('LicenseService', 'device_limit rpc stack', null, st);
       return null;
-    } catch (_) {
+    } catch (e, st) {
+      AppLogger.warn('LicenseService', 'device_limit unexpected failure: $e');
+      AppLogger.error('LicenseService', 'device_limit unexpected stack', null, st);
       return null;
     }
     return null;
@@ -544,9 +662,18 @@ class LicenseService extends ChangeNotifier {
       if (res is List && res.isNotEmpty && res.first is Map) {
         return Map<String, dynamic>.from(res.first as Map);
       }
-    } on PostgrestException catch (_) {
+    } on PostgrestException catch (e, st) {
+      AppLogger.warn('LicenseService', 'tenant_access rpc failed: $e');
+      AppLogger.error('LicenseService', 'tenant_access rpc stack', null, st);
       return null;
-    } catch (_) {
+    } catch (e, st) {
+      AppLogger.warn('LicenseService', 'tenant_access unexpected failure: $e');
+      AppLogger.error(
+        'LicenseService',
+        'tenant_access unexpected stack',
+        null,
+        st,
+      );
       return null;
     }
     return null;
@@ -737,7 +864,10 @@ class LicenseService extends ChangeNotifier {
         message: null,
         plan: tok.isTrial
             ? SubscriptionPlan.trial
-            : SubscriptionPlan.fromKey(tok.plan),
+            : SubscriptionPlan.fromLicenseClaims(
+                planKey: tok.plan,
+                maxDevices: tok.maxDevices,
+              ),
         maxDevices: tok.maxDevices,
         trialEndsAt: tok.isTrial ? endsLocal : null,
         daysLeft: tok.isTrial
@@ -766,7 +896,7 @@ class LicenseService extends ChangeNotifier {
         trialEndsAt: trialEnd,
         plan: SubscriptionPlan.trial,
         maxDevices: SubscriptionPlan.trial.maxDevices,
-        registeredDeviceCount: 1,
+        registeredDeviceCount: 0,
         message: 'انتهت التجربة المجانية (15 يوم). اختر خطة اشتراك للمتابعة.',
       );
     }
@@ -776,7 +906,7 @@ class LicenseService extends ChangeNotifier {
       daysLeft: trialDaysLeftCalendar(trialEnd, trustedNow).clamp(0, 15),
       plan: SubscriptionPlan.trial,
       maxDevices: SubscriptionPlan.trial.maxDevices,
-      registeredDeviceCount: 1,
+      registeredDeviceCount: _state.registeredDeviceCount,
       message: cloud
           ? 'تجربة مجانية 15 يوم من أول تسجيل Google لهذا الحساب (موحّدة لكل الأجهزة).'
           : 'تجربة مجانية مفعلة لمدة 15 يوم من أول استخدام لهذا الجهاز.',
@@ -870,7 +1000,12 @@ class LicenseService extends ChangeNotifier {
       await prefs.setInt(_Prefs.trialEndsAt, endUtc.millisecondsSinceEpoch);
       await prefs.remove(_Prefs.localTrialStartAt);
       _setState(await _stateFromTrialEndLocal(endUtc.toLocal(), cloud: true));
-    } catch (_) {
+    } catch (e, st) {
+      AppLogger.warn(
+        'LicenseService',
+        'cloud trial bootstrap failed, fallback to local trial: $e',
+      );
+      AppLogger.error('LicenseService', 'cloud trial bootstrap stack', null, st);
       await ensureLocalTrialStartedV2();
     }
   }
@@ -881,7 +1016,13 @@ class LicenseService extends ChangeNotifier {
       if (raw is String && raw.trim().isNotEmpty) {
         return DateTime.parse(raw).toUtc().toIso8601String();
       }
-    } catch (_) {}
+    } catch (e, st) {
+      AppLogger.warn(
+        'LicenseService',
+        'failed to read supabase created_at, fallback to local clock: $e',
+      );
+      AppLogger.error('LicenseService', 'read created_at stack', null, st);
+    }
     // fallback: الاعتماد على ساعة الجهاز هنا للتسجيل أول مرة فقط.
     return DateTime.now().toUtc().toIso8601String();
   }
@@ -891,6 +1032,10 @@ class LicenseService extends ChangeNotifier {
   }
 
   Future<void> ensureLocalTrialStartedV2() async {
+    // حسابات Supabase: التجربة من user_profiles — لا نبدأ عدّاداً محلياً متعارضاً.
+    if (Supabase.instance.client.auth.currentUser != null) {
+      return;
+    }
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_Prefs.useCloudTrial, false);
     if (!prefs.containsKey(_Prefs.localTrialStartAt)) {
@@ -988,11 +1133,37 @@ class LicenseService extends ChangeNotifier {
   }
 
   void _setState(LicenseState s) {
-    _state = s;
+    // تحديثات الترخيص/التجربة لا تُصفّر عدّاد الأجهزة النشطة — يُحدَّث عبر
+    // [publishActiveDeviceCount] بعد [CloudSyncService.refreshDevices] فقط.
+    final isScopeReset =
+        s.status == LicenseStatus.checking || s.status == LicenseStatus.none;
+    final next = (!isScopeReset &&
+            s.registeredDeviceCount == 0 &&
+            _state.registeredDeviceCount > 0)
+        ? s.copyWith(registeredDeviceCount: _state.registeredDeviceCount)
+        : s;
+    _state = next;
     notifyListeners();
 
     // Best-effort security audit logs (no sensitive payloads).
-    unawaited(_auditStateChange(s));
+    unawaited(_auditStateChange(next));
+  }
+
+  /// لا نُعيد واجهة «جاري التحقق» أثناء إعادة التحقق الخلفي بعد اكتمال الترخيص.
+  bool get _shouldShowCheckingUi {
+    switch (_state.status) {
+      case LicenseStatus.active:
+      case LicenseStatus.trial:
+      case LicenseStatus.offline:
+      case LicenseStatus.restricted:
+      case LicenseStatus.pendingLock:
+        return false;
+      case LicenseStatus.checking:
+      case LicenseStatus.none:
+      case LicenseStatus.expired:
+      case LicenseStatus.suspended:
+        return true;
+    }
   }
 
   Future<void> _auditStateChange(LicenseState s) async {
@@ -1025,7 +1196,9 @@ class LicenseService extends ChangeNotifier {
           context: const {},
         );
       }
-    } catch (_) {
+    } catch (e, st) {
+      AppLogger.warn('LicenseService', 'security audit logging failed: $e');
+      AppLogger.error('LicenseService', 'security audit stack', null, st);
       // best-effort فقط — لا نُسقط تغيير الحالة بسبب فشل تسجيل الـ audit.
     }
   }

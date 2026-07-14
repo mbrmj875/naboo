@@ -194,22 +194,7 @@ class _InstallmentsScreenState extends State<InstallmentsScreen>
         textDirection: TextDirection.rtl,
         child: Scaffold(
           backgroundColor: theme.scaffoldBackgroundColor,
-          appBar: AppBar(
-            title: const Text(
-              'خطط التقسيط',
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
-            ),
-            backgroundColor: cs.primary,
-            foregroundColor: cs.onPrimary,
-            elevation: 0,
-            actions: [
-              const IconButton(
-                tooltip: 'تحديث',
-                onPressed: null,
-                icon: Icon(Icons.refresh_rounded),
-              ),
-            ],
-          ),
+          appBar: _buildAppBar(cs),
           body: const Center(child: CircularProgressIndicator()),
         ),
       );
@@ -230,22 +215,7 @@ class _InstallmentsScreenState extends State<InstallmentsScreen>
       textDirection: TextDirection.rtl,
       child: Scaffold(
         backgroundColor: theme.scaffoldBackgroundColor,
-        appBar: AppBar(
-          title: const Text(
-            'خطط التقسيط',
-            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
-          ),
-          backgroundColor: cs.primary,
-          foregroundColor: cs.onPrimary,
-          elevation: 0,
-          actions: [
-            IconButton(
-              tooltip: 'تحديث',
-              onPressed: _refreshFromServer,
-              icon: const Icon(Icons.refresh_rounded),
-            ),
-          ],
-        ),
+        appBar: _buildAppBar(cs, onRefresh: _refreshFromServer),
         body: NestedScrollView(
           headerSliverBuilder: (context, innerBoxIsScrolled) => [
             SliverToBoxAdapter(
@@ -272,7 +242,9 @@ class _InstallmentsScreenState extends State<InstallmentsScreen>
                         child: Text(
                           'القائمة: ${filtered.length} من ${tabOnly.length} خطة في «${_tabLabels[_tabs.index]}» (بحث)',
                           style: theme.textTheme.labelMedium?.copyWith(
-                            color: cs.onSurfaceVariant,
+                            color: isDark
+                                ? cs.onSurfaceVariant
+                                : AppColors.primaryDark.withValues(alpha: 0.75),
                             height: 1.4,
                           ),
                           textAlign: TextAlign.right,
@@ -323,17 +295,64 @@ class _InstallmentsScreenState extends State<InstallmentsScreen>
     );
   }
 
+  PreferredSizeWidget _buildAppBar(
+    ColorScheme cs, {
+    Future<void> Function()? onRefresh,
+  }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final appBarBg = isDark ? AppColors.primary : Colors.white;
+    final appBarFg = isDark ? Colors.white : AppColors.primaryDark;
+    return AppBar(
+      backgroundColor: appBarBg,
+      foregroundColor: appBarFg,
+      iconTheme: const IconThemeData(color: AppColors.accentGold),
+      actionsIconTheme: const IconThemeData(color: AppColors.accentGold),
+      elevation: 0,
+      title: Text(
+        'خطط التقسيط',
+        style: TextStyle(
+          fontWeight: FontWeight.bold,
+          fontSize: 18,
+          color: appBarFg,
+        ),
+      ),
+      bottom: PreferredSize(
+        preferredSize: const Size.fromHeight(1.2),
+        child: Container(
+          height: 1.2,
+          color: AppColors.accentGold.withValues(alpha: 0.55),
+        ),
+      ),
+      actions: [
+        IconButton(
+          tooltip: 'تحديث',
+          onPressed: onRefresh,
+          icon: const Icon(Icons.refresh_rounded),
+        ),
+      ],
+    );
+  }
+
   Widget _buildInstallmentTabBar(ColorScheme cs) {
     final narrow = ScreenLayout.of(context).isNarrowWidth;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
-      color: cs.surface,
+      decoration: BoxDecoration(
+        color: cs.surface,
+        border: Border(
+          bottom: BorderSide(
+            color: AppColors.accentGold.withValues(alpha: isDark ? 0.45 : 0.35),
+          ),
+        ),
+      ),
       child: TabBar(
         controller: _tabs,
         onTap: (_) => setState(() {}),
         isScrollable: true,
-        labelColor: cs.secondary,
-        unselectedLabelColor: cs.onSurfaceVariant,
-        indicatorColor: cs.secondary,
+        labelColor: AppColors.accentGold,
+        unselectedLabelColor:
+            isDark ? cs.onSurfaceVariant : AppColors.primaryDark,
+        indicatorColor: AppColors.accentGold,
         indicatorWeight: 3,
         labelStyle: TextStyle(
           fontWeight: FontWeight.bold,
@@ -524,29 +543,36 @@ class _InstStatChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final primaryText = isDark ? Colors.white : AppColors.primaryDark;
     return Expanded(
       child: Material(
         color: Colors.transparent,
         child: InkWell(
           onTap: onTap,
-          borderRadius: AppShape.none,
+          borderRadius: BorderRadius.circular(12),
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             decoration: BoxDecoration(
               color: color.withValues(alpha: 0.09),
-              borderRadius: AppShape.none,
-              border: Border.all(color: color.withValues(alpha: 0.22)),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: isDark
+                    ? AppColors.accentGold.withValues(alpha: 0.35)
+                    : color.withValues(alpha: 0.35),
+                width: 1.2,
+              ),
             ),
             child: Column(
               children: [
-                Icon(icon, size: 18, color: color),
+                Icon(icon, size: 18, color: AppColors.accentGold),
                 const SizedBox(height: 4),
                 Text(
                   value,
                   style: TextStyle(
                     fontWeight: FontWeight.bold,
                     fontSize: 13,
-                    color: color,
+                    color: primaryText,
                   ),
                   textAlign: TextAlign.center,
                   maxLines: 2,
@@ -558,7 +584,7 @@ class _InstStatChip extends StatelessWidget {
                   style: TextStyle(
                     fontSize: 10,
                     height: 1.25,
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    color: primaryText.withValues(alpha: 0.82),
                   ),
                   textAlign: TextAlign.center,
                   maxLines: 2,
@@ -585,6 +611,7 @@ class _InstallmentSearchBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
       color: cs.surface,
       padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
@@ -594,15 +621,24 @@ class _InstallmentSearchBar extends StatelessWidget {
           return TextField(
             controller: controller,
             textDirection: TextDirection.rtl,
-            style: TextStyle(color: cs.onSurface),
-            cursorColor: cs.primary,
+            style: TextStyle(
+              color: isDark ? cs.onSurface : AppColors.primaryDark,
+            ),
+            cursorColor: AppColors.accentGold,
             decoration: InputDecoration(
               hintText: 'بحث: عميل، منتج، رقم خطة، رقم فاتورة…',
-              hintStyle: TextStyle(fontSize: 13, color: cs.onSurfaceVariant),
+              hintStyle: TextStyle(
+                fontSize: 13,
+                color: isDark
+                    ? cs.onSurfaceVariant
+                    : AppColors.primaryDark.withValues(alpha: 0.68),
+              ),
               prefixIcon: Icon(
                 Icons.search_rounded,
                 size: 20,
-                color: cs.onSurfaceVariant,
+                color: isDark
+                    ? cs.onSurfaceVariant
+                    : AppColors.primaryDark.withValues(alpha: 0.72),
               ),
               contentPadding: const EdgeInsets.symmetric(
                 horizontal: 14,
@@ -610,9 +646,21 @@ class _InstallmentSearchBar extends StatelessWidget {
               ),
               filled: true,
               fillColor: cs.surfaceContainerHighest.withValues(alpha: 0.65),
-              border: const OutlineInputBorder(
-                borderRadius: AppShape.none,
-                borderSide: BorderSide.none,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(
+                  color: AppColors.accentGold.withValues(alpha: 0.45),
+                ),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(
+                  color: AppColors.accentGold.withValues(alpha: isDark ? 0.4 : 0.28),
+                ),
+              ),
+              focusedBorder: const OutlineInputBorder(
+                borderRadius: BorderRadius.all(Radius.circular(12)),
+                borderSide: BorderSide(color: AppColors.accentGold, width: 1.4),
               ),
               suffixIcon: value.text.isNotEmpty
                   ? IconButton(
@@ -657,7 +705,7 @@ class _InstallmentPlansListTabBody extends StatelessWidget {
     final cs = colorScheme;
     if (plans.isEmpty) {
       return RefreshIndicator(
-        color: cs.primary,
+        color: AppColors.accentGold,
         onRefresh: onRefresh,
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
@@ -676,7 +724,7 @@ class _InstallmentPlansListTabBody extends StatelessWidget {
       );
     }
     return RefreshIndicator(
-      color: cs.primary,
+      color: AppColors.accentGold,
       onRefresh: onRefresh,
       child: ListView.builder(
         physics: const AlwaysScrollableScrollPhysics(),
@@ -706,11 +754,17 @@ class _InfoBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final secondaryText = isDark
+        ? colorScheme.onSurfaceVariant
+        : AppColors.primaryDark.withValues(alpha: 0.75);
     return DecoratedBox(
       decoration: BoxDecoration(
         color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: colorScheme.outlineVariant),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: AppColors.accentGold.withValues(alpha: isDark ? 0.35 : 0.3),
+        ),
       ),
       child: Padding(
         padding: EdgeInsetsDirectional.only(
@@ -722,13 +776,13 @@ class _InfoBanner extends StatelessWidget {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(Icons.info_outline_rounded, color: colorScheme.primary),
+            const Icon(Icons.info_outline_rounded, color: AppColors.accentGold),
             const SizedBox(width: 10),
             Expanded(
               child: Text(
                 'تُنشأ خطة لكل فاتورة نوعها «تقسيط» (حتى لو المقدّم = الإجمالي). التسديد من تفاصيل الخطة يظهر في الصندوق. المقدّم والجدولة: الأقساط ← إعدادات تقسيط.',
                 style: Theme.of(context).textTheme.bodySmall!.copyWith(
-                  color: colorScheme.onSurfaceVariant,
+                  color: secondaryText,
                   height: 1.45,
                 ),
               ),
@@ -774,13 +828,13 @@ class _PlanListTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final titleC = isDark ? const Color(0xFFF8FAFC) : colorScheme.onSurface;
+    final titleC = isDark ? const Color(0xFFF8FAFC) : AppColors.primaryDark;
     final mutedC = isDark
         ? const Color(0xFF94A3B8)
-        : colorScheme.onSurfaceVariant;
-    final badgeC = isDark ? const Color(0xFF38BDF8) : colorScheme.tertiary;
-    final chevronC = isDark ? const Color(0xFF64748B) : colorScheme.outline;
-    final accentRem = isDark ? const Color(0xFF38BDF8) : AppColors.accent;
+        : AppColors.primaryDark.withValues(alpha: 0.75);
+    final badgeC = isDark ? AppColors.accentGold : AppColors.accentGold;
+    final chevronC = isDark ? const Color(0xFF64748B) : AppColors.primaryDark.withValues(alpha: 0.55);
+    final accentRem = isDark ? AppColors.accentGold : AppColors.accentGold;
     final rem = _InstallmentsScreenState._remaining(plan);
     final settled = _InstallmentsScreenState._isSettled(plan);
     final overdue = _InstallmentsScreenState._isOverdue(plan) && !settled;
@@ -814,7 +868,9 @@ class _PlanListTile extends StatelessWidget {
       color: fill,
       shape: RoundedRectangleBorder(
         borderRadius: r,
-        side: BorderSide(color: colorScheme.outlineVariant),
+        side: BorderSide(
+          color: AppColors.accentGold.withValues(alpha: isDark ? 0.35 : 0.28),
+        ),
       ),
       clipBehavior: Clip.antiAlias,
       child: Stack(
@@ -910,7 +966,7 @@ class _PlanListTile extends StatelessWidget {
                           : colorScheme.surfaceContainerHighest,
                       color: settled
                           ? const Color(0xFF22C55E)
-                          : colorScheme.primary,
+                          : AppColors.accentGold,
                     ),
                   ),
                   const SizedBox(height: 4),
@@ -1149,6 +1205,11 @@ class _EmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final primaryText = isDark ? Colors.white : AppColors.primaryDark;
+    final secondaryText = isDark
+        ? colorScheme.onSurfaceVariant
+        : AppColors.primaryDark.withValues(alpha: 0.75);
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
@@ -1158,7 +1219,7 @@ class _EmptyState extends StatelessWidget {
             Icon(
               hasPlans ? Icons.filter_alt_off_rounded : Icons.payments_outlined,
               size: 52,
-              color: colorScheme.outline,
+              color: AppColors.accentGold.withValues(alpha: 0.85),
             ),
             const SizedBox(height: 16),
             Text(
@@ -1168,7 +1229,11 @@ class _EmptyState extends StatelessWidget {
                         : 'لا نتائج')
                   : 'لا توجد خطط تقسيط',
               textAlign: TextAlign.center,
-              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
+              style: TextStyle(
+                fontWeight: FontWeight.w600,
+                fontSize: 16,
+                color: primaryText,
+              ),
             ),
             const SizedBox(height: 8),
             Text(
@@ -1177,7 +1242,7 @@ class _EmptyState extends StatelessWidget {
                   : 'بعد حفظ فاتورة تقسيط تُنشأ الخطة تلقائياً وتظهر هنا.',
               textAlign: TextAlign.center,
               style: TextStyle(
-                color: colorScheme.onSurfaceVariant,
+                color: secondaryText,
                 height: 1.45,
               ),
             ),

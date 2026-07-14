@@ -1,5 +1,6 @@
-import 'dart:async' show unawaited;
+import 'dart:async' show Timer, unawaited;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -9,12 +10,16 @@ import 'package:audioplayers/audioplayers.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../providers/business_features_provider.dart';
 import '../providers/auth_provider.dart';
+import '../services/app_session_lifecycle.dart';
+import '../services/app_remote_config_service.dart';
 import '../services/app_settings_repository.dart';
 import '../services/business_setup_settings.dart';
-import '../services/app_remote_config_service.dart';
+import '../services/license_service.dart';
 import '../theme/design_tokens.dart';
 import '../widgets/glass/glass_surface.dart';
+import '../utils/app_logger.dart';
 import '../utils/screen_layout.dart';
 
 class SplashScreen extends StatefulWidget {
@@ -26,6 +31,8 @@ class SplashScreen extends StatefulWidget {
 
 class _SplashScreenState extends State<SplashScreen>
     with TickerProviderStateMixin {
+  late final int _bootGeneration;
+
   late final AnimationController _stampCtrl;
   late final Animation<double> _logoScale;
   late final Animation<double> _logoOpacity;
@@ -33,10 +40,12 @@ class _SplashScreenState extends State<SplashScreen>
 
   AudioPlayer? _player;
   bool _stampSoundPlayed = false;
+  Timer? _startupFailsafeTimer;
 
   @override
   void initState() {
     super.initState();
+    _bootGeneration = ++AppSessionLifecycle.splashBootstrapGeneration;
 
     // One controller for the full "royal stamp" sequence (0..1300ms)
     _stampCtrl = AnimationController(
@@ -44,48 +53,40 @@ class _SplashScreenState extends State<SplashScreen>
       duration: const Duration(milliseconds: 1300),
     );
 
-    // Phase 2 (0..900ms): 0.3 -> 1.0 with elasticOut, then
-    // Phase 4 (900..1300ms): one pulse 1.0 -> 1.06 -> 1.0.
+    // انتقال سلس من الـ native splash: نبدأ بحجم قريب من النهائي بدل 0.3
+    // (تفادي إحساس «أيقونة صغيرة ثم تحميل فوقها»).
     _logoScale = TweenSequence<double>([
       TweenSequenceItem<double>(
         tween: Tween<double>(
-          begin: 0.3,
+          begin: 0.92,
           end: 1.0,
-        ).chain(CurveTween(curve: Curves.elasticOut)),
-        weight: 900,
+        ).chain(CurveTween(curve: Curves.easeOutCubic)),
+        weight: 700,
       ),
       TweenSequenceItem<double>(
         tween: Tween<double>(
           begin: 1.0,
-          end: 1.06,
+          end: 1.04,
         ).chain(CurveTween(curve: Curves.easeInOut)),
-        weight: 200,
+        weight: 300,
       ),
       TweenSequenceItem<double>(
         tween: Tween<double>(
-          begin: 1.06,
+          begin: 1.04,
           end: 1.0,
         ).chain(CurveTween(curve: Curves.easeInOut)),
-        weight: 200,
+        weight: 300,
       ),
     ]).animate(_stampCtrl);
 
-    // Opacity: 0 -> 1 within first 400ms, then stay at 1
-    _logoOpacity = TweenSequence<double>([
-      TweenSequenceItem<double>(
-        tween: Tween<double>(
-          begin: 0.0,
-          end: 1.0,
-        ).chain(CurveTween(curve: Curves.easeIn)),
-        weight: 400,
-      ),
-      TweenSequenceItem<double>(tween: ConstantTween<double>(1.0), weight: 900),
-    ]).animate(_stampCtrl);
+    // لا تبدأ الشفافية من 0 — وإلا يظهر إطار Flutter فوق الـ native splash
+    // (شاشة الأيقونة السوداء) ثم «يطفو» التحميل فوقها.
+    _logoOpacity = const AlwaysStoppedAnimation<double>(1.0);
 
-    // Text appears after 600ms from start (same controller, via Interval)
+    // النص ومؤشر التحميل يظهران بعد استقرار الختم بقليل.
     _textOpacity = CurvedAnimation(
       parent: _stampCtrl,
-      curve: const Interval(600 / 1300, 1.0, curve: Curves.easeIn),
+      curve: const Interval(400 / 1300, 1.0, curve: Curves.easeIn),
     );
 
     _stampCtrl.addListener(() {
@@ -98,8 +99,25 @@ class _SplashScreenState extends State<SplashScreen>
 
     _stampCtrl.forward();
 
-    WidgetsBinding.instance.addPostFrameCallback((_) => _goNext());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_bootGeneration != AppSessionLifecycle.splashBootstrapGeneration) {
+        return;
+      }
+      unawaited(_goNext());
+    });
+
+    _startupFailsafeTimer = Timer(const Duration(seconds: 22), () {
+      if (!mounted) return;
+      if (!_bootStillActive()) return;
+      if (AppSessionLifecycle.splashNavigationCompleted) return;
+      AppLogger.warn('Splash', 'failsafe — الإقلاع تجاوز 22 ثانية');
+      AppSessionLifecycle.splashNavigationCompleted = true;
+      unawaited(Navigator.of(context).pushReplacementNamed('/login'));
+    });
   }
+
+  bool _bootStillActive() =>
+      mounted && _bootGeneration == AppSessionLifecycle.splashBootstrapGeneration;
 
   Future<void> _playStampSound() async {
     try {
@@ -113,6 +131,40 @@ class _SplashScreenState extends State<SplashScreen>
   }
 
   Future<void> _goNext() async {
+    if (AppSessionLifecycle.splashNavigationCompleted) return;
+    if (!_bootStillActive()) return;
+
+    final gen = _bootGeneration;
+    final prior = AppSessionLifecycle.splashNavigationTask;
+    if (prior != null) {
+      if (AppSessionLifecycle.splashNavigationTaskGen == gen) {
+        await prior;
+        if (AppSessionLifecycle.splashNavigationCompleted || !_bootStillActive()) {
+          return;
+        }
+      } else if (AppSessionLifecycle.splashNavigationTaskGen < gen) {
+        await prior;
+        if (!_bootStillActive()) return;
+        if (AppSessionLifecycle.splashNavigationCompleted) return;
+      }
+    }
+
+    if (!_bootStillActive()) return;
+    if (AppSessionLifecycle.splashNavigationCompleted) return;
+
+    AppSessionLifecycle.splashNavigationTaskGen = gen;
+    final task = _runStartupNavigation();
+    AppSessionLifecycle.splashNavigationTask = task;
+    try {
+      await task;
+    } finally {
+      if (identical(AppSessionLifecycle.splashNavigationTask, task)) {
+        AppSessionLifecycle.splashNavigationTask = null;
+      }
+    }
+  }
+
+  Future<void> _runStartupNavigation() async {
     final auth = context.read<AuthProvider>();
 
     // إعدادات سحابية: صيانة، تحديث، إلخ — تصل لكل من ثبّت التطبيق سابقاً عند فتحه مع إنترنت.
@@ -120,8 +172,10 @@ class _SplashScreenState extends State<SplashScreen>
       await AppRemoteConfigService.instance
           .refresh(force: true)
           .timeout(const Duration(seconds: 6));
-    } catch (_) {}
-    if (!mounted) return;
+    } catch (e, st) {
+      AppLogger.error('Splash', 'remote config refresh', e, st);
+    }
+    if (!_bootStillActive()) return;
 
     final cfg = AppRemoteConfigService.instance.current;
     if (cfg.maintenanceMode) {
@@ -150,7 +204,7 @@ class _SplashScreenState extends State<SplashScreen>
     if (cfg.forceUpdate &&
         AppRemoteConfigService.compareVersions(v, cfg.minSupportedVersion) <
             0) {
-      if (!mounted) return;
+      if (!_bootStillActive()) return;
       final msg = cfg.updateMessageAr.isNotEmpty
           ? cfg.updateMessageAr
           : 'يجب تحديث التطبيق للمتابعة.';
@@ -179,7 +233,7 @@ class _SplashScreenState extends State<SplashScreen>
 
     if (cfg.updateMessageAr.isNotEmpty &&
         AppRemoteConfigService.compareVersions(v, cfg.latestVersion) < 0) {
-      if (!mounted) return;
+      if (!_bootStillActive()) return;
       await showDialog<void>(
         context: context,
         barrierDismissible: true,
@@ -213,7 +267,7 @@ class _SplashScreenState extends State<SplashScreen>
       final prefs = await SharedPreferences.getInstance();
       final seen = prefs.getString('naboo.announcement_digest_seen') ?? '';
       if (seen != annDigest) {
-        if (!mounted) return;
+        if (!_bootStillActive()) return;
         final title = cfg.announcementTitleAr.isNotEmpty
             ? cfg.announcementTitleAr
             : 'رسالة من الإدارة';
@@ -250,28 +304,198 @@ class _SplashScreenState extends State<SplashScreen>
         const Duration(seconds: 6),
         onTimeout: () {},
       );
-    } catch (_) {}
-    if (!mounted) return;
+    } catch (e, st) {
+      AppLogger.error('Splash', 'فشل restoreSession', e, st);
+    }
+    if (!_bootStillActive()) return;
 
-    await _showTargetedRoyalMessageIfAny();
+    if (kIsWeb) {
+      try {
+        final oauthErr = await auth.tryCompletePendingWebGoogleOAuth().timeout(
+          const Duration(seconds: 60),
+          onTimeout: () => 'انتهت مهلة إكمال تسجيل Google',
+        );
+        if (!_bootStillActive()) return;
+        if (oauthErr == AuthProvider.kGoogleOwnerPinRestoreOtpRequired) {
+          AppSessionLifecycle.splashNavigationCompleted = true;
+          final row = await auth.getLocalOwnerRow();
+          final localId = (row?['id'] as num?)?.toInt();
+          unawaited(
+            Navigator.of(context).pushReplacementNamed(
+              '/owner-pin-restore-otp',
+              arguments: {
+                'otpAlreadySent': true,
+                if (localId != null) 'localOwnerUserId': localId,
+              },
+            ),
+          );
+          return;
+        }
+        if (oauthErr == AuthProvider.kGoogleOwnerProfileRequired) {
+          AppSessionLifecycle.splashNavigationCompleted = true;
+          unawaited(
+            Navigator.of(context).pushReplacementNamed(
+              '/complete-google-profile',
+            ),
+          );
+          return;
+        }
+        if (oauthErr == AuthProvider.kGoogleNetworkError) {
+          AppSessionLifecycle.splashNavigationCompleted = true;
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: const Text(
+                  'تعذر التحقق من الحساب. تحقق من الاتصال بالإنترنت وحاول مرة أخرى.',
+                ),
+                backgroundColor: Colors.orange.shade800,
+                behavior: SnackBarBehavior.floating,
+                duration: const Duration(seconds: 6),
+              ),
+            );
+          }
+          unawaited(Navigator.of(context).pushReplacementNamed('/login'));
+          return;
+        }
+        if (oauthErr == AuthProvider.kGoogleAccountAlreadyExists ||
+            oauthErr == AuthProvider.kGoogleNoAccountFound) {
+          final mismatchMsg = oauthErr!;
+          AppSessionLifecycle.splashNavigationCompleted = true;
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(mismatchMsg),
+                backgroundColor: Colors.orange.shade800,
+                behavior: SnackBarBehavior.floating,
+                duration: const Duration(seconds: 6),
+              ),
+            );
+          }
+          unawaited(Navigator.of(context).pushReplacementNamed('/login'));
+          return;
+        }
+        if (oauthErr != null && oauthErr.isNotEmpty) {
+          AppLogger.warn('Splash', 'Google OAuth web: $oauthErr');
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(oauthErr),
+                backgroundColor: Colors.red.shade700,
+                behavior: SnackBarBehavior.floating,
+                duration: const Duration(seconds: 6),
+              ),
+            );
+          }
+        }
+      } catch (e, st) {
+        AppLogger.error('Splash', 'فشل إكمال Google OAuth على الويب', e, st);
+      }
+    }
+    if (!_bootStillActive()) return;
+
+    try {
+      await _showTargetedRoyalMessageIfAny().timeout(
+        const Duration(seconds: 5),
+        onTimeout: () {},
+      );
+    } catch (e, st) {
+      AppLogger.error('Splash', 'فشل رسالة المالك المخصصة', e, st);
+    }
 
     await Future<void>.delayed(const Duration(milliseconds: 1200));
-    if (!mounted) return;
+    if (!_bootStillActive()) return;
 
-    var target = auth.isLoggedIn ? '/open-shift' : '/login';
-    if (auth.isLoggedIn) {
-      try {
-        final completed = await BusinessSetupSettingsData.isCompleted(
-          AppSettingsRepository.instance,
-        );
-        if (!completed) target = '/onboarding';
-      } catch (_) {}
+    if (!auth.deviceOwnerBound) {
+      // Phase A (Atomic): يمنع أي دخول تشغيلي قبل ربط الجهاز بمالك.
+      // إذا وجدت جلسة قديمة غير مربوطة، نغلقها ثم نعيد المستخدم إلى Gmail login.
+      if (auth.isLoggedIn) {
+        await auth.logout();
+        if (!_bootStillActive()) return;
+      }
+      AppSessionLifecycle.splashNavigationCompleted = true;
+      unawaited(Navigator.of(context).pushReplacementNamed('/login'));
+      return;
     }
+
+    if (auth.deviceOwnerBound) {
+      try {
+        await auth.ensureCloudSessionActive();
+      } catch (e, st) {
+        AppLogger.warn('Splash', 'ensureCloudSessionActive: $e');
+        AppLogger.error('Splash', 'cloud session restore stack', e, st);
+      }
+    }
+
+    if (Supabase.instance.client.auth.currentUser != null) {
+      try {
+        final needsImport = !(await BusinessSetupSettingsData.isCompleted(
+          AppSettingsRepository.instance,
+        ));
+        await auth.hydrateCloudAccountData(
+          timeout: const Duration(seconds: 12),
+          forcePull: true,
+          forceImportOnPull: needsImport,
+          maxAttempts: needsImport ? 2 : 1,
+        );
+      } catch (e, st) {
+        AppLogger.error(
+          'Splash',
+          'hydrateCloudAccountData — الإقلاع يستمر',
+          e,
+          st,
+        );
+      }
+      if (_bootStillActive()) {
+        try {
+          await context.read<BusinessFeaturesProvider>().refresh();
+        } catch (e, st) {
+          AppLogger.error('Splash', 'فشل refresh BusinessFeatures', e, st);
+        }
+      }
+    }
+    if (!_bootStillActive()) return;
+
+    await _navigateAfterBootstrap(auth);
+  }
+
+  Future<void> _navigateAfterBootstrap(AuthProvider auth) async {
+    final target = await _resolveStartupRoute(auth).timeout(
+      const Duration(seconds: 10),
+      onTimeout: () {
+        AppLogger.warn('Splash', 'resolveStartupRoute timed out — fallback');
+        return auth.deviceOwnerBound ? '/employee-gate' : '/login';
+      },
+    );
+    if (!_bootStillActive()) return;
+    if (AppSessionLifecycle.splashNavigationCompleted) return;
+    AppSessionLifecycle.splashNavigationCompleted = true;
     try {
-      unawaited(Navigator.of(context).pushReplacementNamed(target));
-    } catch (_) {
+      Object? routeArgs;
+      if (target == '/owner-pin-restore-otp') {
+        final row = await auth.getLocalOwnerRow();
+        final localId = (row?['id'] as num?)?.toInt();
+        routeArgs = {
+          if (localId != null) 'localOwnerUserId': localId,
+        };
+      }
+      unawaited(
+        Navigator.of(context).pushReplacementNamed(
+          target,
+          arguments: routeArgs,
+        ),
+      );
+    } catch (e, st) {
+      AppLogger.error('Splash', 'فشل التنقل بعد الإقلاع — fallback /login', e, st);
+      if (!_bootStillActive()) return;
       unawaited(Navigator.of(context).pushReplacementNamed('/login'));
     }
+  }
+
+  /// بعد ربط الجهاز: استعادة آخر جلسة تشغيل (مالك/موظف) أو بوابة PIN.
+  Future<String> _resolveStartupRoute(AuthProvider auth) async {
+    if (!auth.deviceOwnerBound) return '/login';
+    if (auth.deviceAccessRevokedPending) return '/device-access-revoked';
+    return auth.resolveStartupRouteLight();
   }
 
   Future<void> _showTargetedRoyalMessageIfAny() async {
@@ -285,7 +509,7 @@ class _SplashScreenState extends State<SplashScreen>
           )
           .eq('id', user.id)
           .maybeSingle();
-      if (!mounted || row == null) return;
+      if (!_bootStillActive() || row == null) return;
 
       final active = row['custom_message_active'] == true;
       final body = (row['custom_message_body_ar'] ?? '').toString().trim();
@@ -330,23 +554,31 @@ class _SplashScreenState extends State<SplashScreen>
           );
         },
       );
-    } catch (_) {
-      // نتجاهل أي خطأ شبكة/صلاحيات حتى لا يتعطل الدخول.
+    } catch (e, st) {
+      AppLogger.error('Splash', 'custom royal message — تخطي', e, st);
     }
   }
 
   @override
   void dispose() {
+    _startupFailsafeTimer?.cancel();
     _stampCtrl.dispose();
     try {
       _player?.dispose();
-    } catch (_) {}
+    } catch (e) {
+      AppLogger.warn('Splash', 'تعذّر dispose للصوت: $e');
+    }
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final w = MediaQuery.sizeOf(context).width;
+    final licenseChecking =
+        context.watch<LicenseService>().state.status == LicenseStatus.checking;
+    final statusText = licenseChecking
+        ? 'جارٍ التحقق من الترخيص…'
+        : 'جاري تهيئة النظام…';
 
     // 2026-05 (Phase 2): الـ logo scale factor صار يعتمد على DeviceVariant
     // بدل breakpoints رقمية. النسب نفسها لكن المنطق واضح ومحاذٍ للدستور.
@@ -375,16 +607,22 @@ class _SplashScreenState extends State<SplashScreen>
       body: Container(
         width: double.infinity,
         height: double.infinity,
-        decoration: const BoxDecoration(
-          image: DecorationImage(
-            image: AssetImage('assets/images/splash_bg.png'),
-            fit: BoxFit.cover,
-            alignment: Alignment.center,
-            filterQuality: FilterQuality.high,
-          ),
-        ),
+        color: AppColors.primary,
         child: Stack(
+          fit: StackFit.expand,
           children: [
+            // خلفية صلبة أولاً (مطابقة للـ native splash) ثم الصورة فوقها.
+            const ColoredBox(color: AppColors.primary),
+            const DecoratedBox(
+              decoration: BoxDecoration(
+                image: DecorationImage(
+                  image: AssetImage('assets/images/splash_bg.png'),
+                  fit: BoxFit.cover,
+                  alignment: Alignment.center,
+                  filterQuality: FilterQuality.high,
+                ),
+              ),
+            ),
             Positioned.fill(
               child: ColoredBox(
                 color: AppColors.primary.withValues(alpha: 0.22),
@@ -524,40 +762,39 @@ class _SplashScreenState extends State<SplashScreen>
               bottom: 48,
               left: 0,
               right: 0,
-              child: FadeTransition(
-                opacity: _textOpacity,
-                child: Column(
-                  children: [
-                    GlassSurface(
-                      borderRadius: const BorderRadius.all(Radius.circular(999)),
-                      blurSigma: 12,
-                      tintColor: AppGlass.surfaceTint,
-                      strokeColor: AppGlass.stroke,
-                      padding: const EdgeInsets.all(10),
-                      child: SizedBox(
-                        width: progressSize + 4,
-                        height: progressSize + 4,
-                        child: CircularProgressIndicator(
-                          strokeWidth: (progressSize * 0.08).clamp(1.5, 3.0),
-                          backgroundColor: Colors.white.withValues(alpha: 0.05),
-                          valueColor: AlwaysStoppedAnimation<Color>(
-                            AppColors.accentGold.withValues(alpha: 0.95),
-                          ),
+              child: Column(
+                children: [
+                  GlassSurface(
+                    borderRadius: const BorderRadius.all(
+                      Radius.circular(999),
+                    ),
+                    blurSigma: 12,
+                    tintColor: AppGlass.surfaceTint,
+                    strokeColor: AppGlass.stroke,
+                    padding: const EdgeInsets.all(10),
+                    child: SizedBox(
+                      width: progressSize + 4,
+                      height: progressSize + 4,
+                      child: CircularProgressIndicator(
+                        strokeWidth: (progressSize * 0.08).clamp(1.5, 3.0),
+                        backgroundColor: Colors.white.withValues(alpha: 0.05),
+                        valueColor: AlwaysStoppedAnimation<Color>(
+                          AppColors.accentGold.withValues(alpha: 0.95),
                         ),
                       ),
                     ),
-                    SizedBox(height: (progressSize * 0.35).clamp(8.0, 16.0)),
-                    Text(
-                      'جاري تهيئة النظام...',
-                      style: GoogleFonts.tajawal(
-                        color: Colors.white.withOpacity(0.6),
-                        fontSize: (w * 0.03).clamp(12.0, 16.0),
-                        fontWeight: FontWeight.w500,
-                        letterSpacing: 2.0,
-                      ),
+                  ),
+                  SizedBox(height: (progressSize * 0.35).clamp(8.0, 16.0)),
+                  Text(
+                    statusText,
+                    style: GoogleFonts.tajawal(
+                      color: Colors.white.withOpacity(0.6),
+                      fontSize: (w * 0.03).clamp(12.0, 16.0),
+                      fontWeight: FontWeight.w500,
+                      letterSpacing: 2.0,
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
           ],

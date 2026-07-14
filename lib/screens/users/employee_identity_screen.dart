@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/database_helper.dart';
 import '../../widgets/employee_id_card.dart';
+import '../../theme/design_tokens.dart';
 
 /// قائمة الموظفين وبطاقة الهوية (باركود + QR) لكل مستخدم.
 class EmployeeIdentityScreen extends StatefulWidget {
@@ -83,9 +84,15 @@ class _EmployeeIdentityScreenState extends State<EmployeeIdentityScreen> {
       child: Scaffold(
         backgroundColor: bg,
         appBar: AppBar(
-          title: const Text(
+          backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+          foregroundColor: Theme.of(context).colorScheme.onSurface,
+          elevation: 0,
+          title: Text(
             'هويات الموظفين',
-            style: TextStyle(fontWeight: FontWeight.bold),
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              color: Theme.of(context).colorScheme.onSurface,
+            ),
           ),
         ),
         body: _loading
@@ -110,11 +117,27 @@ class _EmployeeIdentityScreenState extends State<EmployeeIdentityScreen> {
                         ? u['displayName'] as String
                         : (u['username'] as String? ?? '—');
                     final expanded = _expandedId == id;
-                    return Card(
+                    return Container(
                       margin: const EdgeInsets.only(bottom: 10),
-                      child: ExpansionTile(
-                        key: ValueKey('id_$id'),
-                        initiallyExpanded: expanded,
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.surface,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: AppColors.accentGold.withValues(alpha: 0.5)),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.05),
+                            blurRadius: 8,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(16),
+                        child: Theme(
+                          data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+                          child: ExpansionTile(
+                            key: ValueKey('id_$id'),
+                            initiallyExpanded: expanded,
                         onExpansionChanged: (open) {
                           setState(() => _expandedId = open ? id : null);
                         },
@@ -145,6 +168,7 @@ class _EmployeeIdentityScreenState extends State<EmployeeIdentityScreen> {
                             Padding(
                               padding: const EdgeInsets.only(bottom: 8),
                               child: TextButton.icon(
+                                style: TextButton.styleFrom(foregroundColor: AppColors.accentGold),
                                 onPressed: () => _regeneratePin(id),
                                 icon: const Icon(Icons.refresh),
                                 label: const Text('تجديد رمز الوردية'),
@@ -152,8 +176,10 @@ class _EmployeeIdentityScreenState extends State<EmployeeIdentityScreen> {
                             ),
                         ],
                       ),
-                    );
-                  },
+                    ),
+                  ),
+                );
+              },
                 ),
               ),
       ),

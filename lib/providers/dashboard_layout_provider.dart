@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../utils/app_logger.dart';
 
 /// تفضيلات ترتيب وإظهار أقسام الشاشة الرئيسية (لوحة التحكم).
 class DashboardLayoutProvider extends ChangeNotifier {
@@ -85,7 +86,14 @@ class DashboardLayoutProvider extends ChangeNotifier {
         }
       }
       _visible['header'] = true;
-    } catch (_) {}
+    } catch (e, st) {
+      AppLogger.error(
+        'DashboardLayout',
+        'تعذر تحميل تفضيلات ترتيب أقسام الرئيسية',
+        e,
+        st,
+      );
+    }
     notifyListeners();
   }
 

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../services/product_repository.dart';
+import '../../theme/design_tokens.dart';
 import '../../utils/screen_layout.dart';
 
 /// إعدادات التصنيفات — بحث/فلترة وقائمة نتائج (بدون بيانات وهمية).
@@ -81,6 +82,11 @@ class _CategoriesSettingsScreenState extends State<CategoriesSettingsScreen> {
                   );
 
               return AlertDialog(
+                backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  side: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.5)),
+                ),
                 title: const Text('تصنيف جديد'),
                 content: SingleChildScrollView(
                   child: Column(
@@ -91,9 +97,21 @@ class _CategoriesSettingsScreenState extends State<CategoriesSettingsScreen> {
                         controller: nameCtrl,
                         autofocus: true,
                         textAlign: TextAlign.right,
-                        decoration: const InputDecoration(
+                        style: TextStyle(color: Theme.of(context).colorScheme.onSurface),
+                        decoration: InputDecoration(
                           labelText: 'الاسم',
-                          border: OutlineInputBorder(),
+                          labelStyle: const TextStyle(color: AppColors.accentGold),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.5)),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: const BorderSide(color: AppColors.accentGold, width: 2),
+                          ),
+                          filled: true,
+                          fillColor: Theme.of(context).colorScheme.surface,
                         ),
                       ),
                       const SizedBox(height: 16),
@@ -123,22 +141,42 @@ class _CategoriesSettingsScreenState extends State<CategoriesSettingsScreen> {
                         controller: descCtrl,
                         textAlign: TextAlign.right,
                         maxLines: 4,
-                        decoration: const InputDecoration(
+                        style: TextStyle(color: Theme.of(context).colorScheme.onSurface),
+                        decoration: InputDecoration(
                           labelText: 'الوصف',
                           alignLabelWithHint: true,
-                          border: OutlineInputBorder(),
+                          labelStyle: const TextStyle(color: AppColors.accentGold),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.5)),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: const BorderSide(color: AppColors.accentGold, width: 2),
+                          ),
+                          filled: true,
+                          fillColor: Theme.of(context).colorScheme.surface,
                         ),
                       ),
                     ],
                   ),
                 ),
                 actions: [
-                  TextButton(
+                  OutlinedButton(
                     onPressed: () => Navigator.pop(ctx),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppColors.accentGold,
+                      side: const BorderSide(color: AppColors.accentGold),
+                    ),
                     child: const Text('إلغاء'),
                   ),
                   FilledButton(
                     onPressed: () => Navigator.pop(ctx, 'save'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppColors.accentGold.withValues(alpha: 0.2),
+                      foregroundColor: AppColors.accentGold,
+                    ),
                     child: const Text('حفظ'),
                   ),
                 ],
@@ -187,15 +225,28 @@ class _CategoriesSettingsScreenState extends State<CategoriesSettingsScreen> {
       builder: (ctx) => Directionality(
         textDirection: TextDirection.rtl,
         child: AlertDialog(
+          backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.5)),
+          ),
           title: const Text('حذف التصنيف'),
           content: Text('حذف «${row['name']}»؟'),
           actions: [
-            TextButton(
+            OutlinedButton(
               onPressed: () => Navigator.pop(ctx, false),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppColors.accentGold,
+                side: const BorderSide(color: AppColors.accentGold),
+              ),
               child: const Text('إلغاء'),
             ),
             FilledButton(
               onPressed: () => Navigator.pop(ctx, true),
+              style: FilledButton.styleFrom(
+                backgroundColor: Colors.red.withValues(alpha: 0.2),
+                foregroundColor: Colors.redAccent,
+              ),
               child: const Text('حذف'),
             ),
           ],
@@ -236,16 +287,13 @@ class _CategoriesSettingsScreenState extends State<CategoriesSettingsScreen> {
       child: Scaffold(
         backgroundColor: bg,
         appBar: AppBar(
-          backgroundColor: const Color(0xFF1E3A5F),
-          foregroundColor: Colors.white,
+          backgroundColor: cs.surfaceContainerHighest,
+          foregroundColor: cs.onSurface,
+          iconTheme: IconThemeData(color: cs.onSurface),
           elevation: 0,
-          title: const Text(
+          title: Text(
             'التصنيفات',
-            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17),
-          ),
-          leading: IconButton(
-            icon: const Icon(Icons.arrow_back_ios_new, size: 18),
-            onPressed: () => Navigator.pop(context),
+            style: TextStyle(color: cs.onSurface, fontWeight: FontWeight.bold, fontSize: 17),
           ),
         ),
         body: _loading
@@ -276,6 +324,8 @@ class _CategoriesSettingsScreenState extends State<CategoriesSettingsScreen> {
                         icon: const Icon(Icons.add_rounded, size: 20),
                         label: const Text('إضافة تصنيف جديد'),
                         style: FilledButton.styleFrom(
+                          backgroundColor: AppColors.accentGold.withValues(alpha: 0.2),
+                          foregroundColor: AppColors.accentGold,
                           padding: const EdgeInsets.symmetric(
                             horizontal: 18,
                             vertical: 12,
@@ -356,9 +406,9 @@ class _SearchCard extends StatelessWidget {
 
     return Container(
       decoration: BoxDecoration(
-        color: surface,
-        borderRadius: BorderRadius.zero,
-        border: Border.all(color: border),
+        color: cs.surfaceContainerHighest.withValues(alpha: 0.3),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.accentGold.withValues(alpha: 0.5)),
       ),
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -401,6 +451,10 @@ class _SearchCard extends StatelessWidget {
             children: [
               const Spacer(),
               OutlinedButton(
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppColors.accentGold,
+                  side: const BorderSide(color: AppColors.accentGold),
+                ),
                 onPressed: onCancelFilter,
                 child: const Text('إلغاء الفلتر'),
               ),
@@ -408,8 +462,8 @@ class _SearchCard extends StatelessWidget {
               FilledButton(
                 onPressed: onSearch,
                 style: FilledButton.styleFrom(
-                  backgroundColor: cs.primary,
-                  foregroundColor: cs.onPrimary,
+                  backgroundColor: AppColors.accentGold.withValues(alpha: 0.2),
+                  foregroundColor: AppColors.accentGold,
                 ),
                 child: const Text('بحث'),
               ),
@@ -441,9 +495,9 @@ class _ResultsCard extends StatelessWidget {
 
     return Container(
       decoration: BoxDecoration(
-        color: surface,
-        borderRadius: BorderRadius.zero,
-        border: Border.all(color: border),
+        color: cs.surfaceContainerHighest.withValues(alpha: 0.3),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.accentGold.withValues(alpha: 0.5)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -500,13 +554,13 @@ class _ResultsCard extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Material(
-                        color: cs.primaryContainer.withValues(alpha: 0.35),
-                        borderRadius: BorderRadius.zero,
+                        color: cs.surfaceContainerHighest.withValues(alpha: 0.5),
+                        borderRadius: BorderRadius.circular(8),
                         child: PopupMenuButton<String>(
                           padding: const EdgeInsets.all(8),
-                          child: Icon(
+                          child: const Icon(
                             Icons.more_horiz,
-                            color: cs.primary,
+                            color: AppColors.accentGold,
                             size: 22,
                           ),
                           onSelected: (v) {
@@ -569,11 +623,22 @@ class _OutlineLabeledDropdown<T> extends StatelessWidget {
     return InputDecorator(
       decoration: InputDecoration(
         labelText: label,
-        border: const OutlineInputBorder(),
+        labelStyle: const TextStyle(color: AppColors.accentGold),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.5)),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: AppColors.accentGold, width: 2),
+        ),
         isDense: true,
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<T>(
+          dropdownColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+          style: TextStyle(color: Theme.of(context).colorScheme.onSurface),
           isExpanded: true,
           value: value,
           items: items,

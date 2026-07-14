@@ -1,10 +1,14 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <!-- Android 13+ لإظهار إشعارات في شريط النظام -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <application
-        android:label="naboo"
+        android:label="Naboo"
         android:name="${applicationName}"
         android:icon="@mipmap/launcher_icon">
         <activity
@@ -55,17 +59,17 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+        <!-- FCM — نفس قناة SystemNotificationService -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="naboo_alerts" />
+        <meta-data
+            android:name="com.google.android.geo.API_KEY"
+            android:value="${googleMapsApiKey}" />
     </application>
-    <!-- Required to query activities that can process text, see:
-         https://developer.android.com/training/package-visibility and
-         https://developer.android.com/reference/android/content/Intent#ACTION_PROCESS_TEXT.
-
-         In particular, this is used by the Flutter engine in io.flutter.plugin.text.ProcessTextPlugin. -->
+    <!-- tel / https فقط — لا نستعلم PROCESS_TEXT لتجنّب تحذيرات SwiftKey/لوحات خارجية
+         المعطوبة عند التركيز على حقول النص (ProcessTextPlugin). -->
     <queries>
-        <intent>
-            <action android:name="android.intent.action.PROCESS_TEXT"/>
-            <data android:mimeType="text/plain"/>
-        </intent>
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="tel" />
@@ -73,6 +77,10 @@
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="https" />
+        </intent>
+        <!-- مطلوب Android 11+ لتفعيل التعرف على الصوت -->
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
         </intent>
     </queries>
 </manifest>

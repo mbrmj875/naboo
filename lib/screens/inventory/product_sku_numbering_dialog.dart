@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../../services/inventory_product_settings.dart';
+import '../../theme/design_tokens.dart';
 
 /// حوار مركزي لإعدادات الترقيم التلقائي للمنتجات (عرض ثابت ~520px، قابل للتمرير).
 Future<InventoryProductSettingsData?> showProductSkuNumberingDialog(
@@ -100,8 +101,12 @@ class _ProductSkuNumberingDialogState extends State<_ProductSkuNumberingDialog> 
     return Directionality(
       textDirection: TextDirection.rtl,
       child: Dialog(
+        backgroundColor: cs.surfaceContainerHighest,
         insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.5)),
+        ),
         child: ConstrainedBox(
           constraints: BoxConstraints(maxWidth: maxW, maxHeight: maxH),
           child: Column(
@@ -145,6 +150,7 @@ class _ProductSkuNumberingDialogState extends State<_ProductSkuNumberingDialog> 
                         controller: _nextCtrl,
                         keyboardType: TextInputType.number,
                         textAlign: TextAlign.right,
+                        style: TextStyle(color: cs.onSurface),
                         decoration: _dec(cs),
                       ),
                       _footer(
@@ -156,12 +162,9 @@ class _ProductSkuNumberingDialogState extends State<_ProductSkuNumberingDialog> 
                       const SizedBox(height: 8),
                       DropdownButtonFormField<String>(
                         value: _format,
-                        decoration: const InputDecoration(
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.zero,
-                          ),
-                          isDense: true,
-                        ),
+                        dropdownColor: cs.surfaceContainerHighest,
+                        style: TextStyle(color: cs.onSurface),
+                        decoration: _dec(cs),
                         items: const [
                           DropdownMenuItem(
                             value: 'numeric',
@@ -191,6 +194,7 @@ class _ProductSkuNumberingDialogState extends State<_ProductSkuNumberingDialog> 
                         controller: _digitWidthCtrl,
                         keyboardType: TextInputType.number,
                         textAlign: TextAlign.right,
+                        style: TextStyle(color: cs.onSurface),
                         decoration: _dec(cs),
                       ),
                       _footer(
@@ -206,8 +210,8 @@ class _ProductSkuNumberingDialogState extends State<_ProductSkuNumberingDialog> 
                           vertical: 4,
                         ),
                         decoration: BoxDecoration(
-                          border: Border.all(color: cs.outlineVariant),
-                          borderRadius: BorderRadius.zero,
+                          border: Border.all(color: AppColors.accentGold.withValues(alpha: 0.5)),
+                          borderRadius: BorderRadius.circular(12),
                         ),
                         child: SwitchListTile(
                           contentPadding: EdgeInsets.zero,
@@ -229,8 +233,8 @@ class _ProductSkuNumberingDialogState extends State<_ProductSkuNumberingDialog> 
                           vertical: 4,
                         ),
                         decoration: BoxDecoration(
-                          border: Border.all(color: cs.outlineVariant),
-                          borderRadius: BorderRadius.zero,
+                          border: Border.all(color: AppColors.accentGold.withValues(alpha: 0.5)),
+                          borderRadius: BorderRadius.circular(12),
                         ),
                         child: SwitchListTile(
                           contentPadding: EdgeInsets.zero,
@@ -245,8 +249,10 @@ class _ProductSkuNumberingDialogState extends State<_ProductSkuNumberingDialog> 
                         controller: _prefixCtrl,
                         enabled: _prefixEnabled,
                         textAlign: TextAlign.right,
+                        style: TextStyle(color: cs.onSurface),
                         decoration: _dec(cs).copyWith(
                           hintText: 'مثال: PR أو INV',
+                          hintStyle: TextStyle(color: cs.onSurfaceVariant),
                         ),
                       ),
                       _footer(
@@ -264,11 +270,16 @@ class _ProductSkuNumberingDialogState extends State<_ProductSkuNumberingDialog> 
                   children: [
                     const Spacer(),
                     TextButton(
+                      style: TextButton.styleFrom(foregroundColor: AppColors.accentGold),
                       onPressed: () => Navigator.of(context).pop(),
                       child: const Text('إلغاء'),
                     ),
                     const SizedBox(width: 8),
                     FilledButton(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: AppColors.accentGold.withValues(alpha: 0.2),
+                        foregroundColor: AppColors.accentGold,
+                      ),
                       onPressed: _save,
                       child: const Text('حفظ'),
                     ),
@@ -311,7 +322,15 @@ class _ProductSkuNumberingDialogState extends State<_ProductSkuNumberingDialog> 
 
   InputDecoration _dec(ColorScheme cs) {
     return InputDecoration(
-      border: const OutlineInputBorder(borderRadius: BorderRadius.zero),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.5)),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: AppColors.accentGold, width: 2),
+      ),
       isDense: true,
       filled: true,
       fillColor: cs.surface,

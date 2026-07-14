@@ -30,14 +30,22 @@ class CustomerValidation {
     return null;
   }
 
-  static String? optionalPhone(String? v) {
+  /// هاتف عراقي اختياري: 11 رقمًا ويبدأ بـ 07 (مثل 07701234567).
+  static String? iraqiMobilePhone(String? v) {
     final t = v?.trim() ?? '';
     if (t.isEmpty) return null;
-    final digits = RegExp(r'\d').allMatches(t).length;
-    if (digits < 7) return 'رقم الهاتف يبدو غير مكتمل';
-    if (t.length > 40) return 'رقم الهاتف طويل جداً';
+    final digits = normalizePhoneDigits(t);
+    if (digits == null) return 'أدخل أرقام الهاتف فقط';
+    if (digits.length != 11) {
+      return 'رقم الهاتف العراقي يجب أن يكون 11 رقمًا';
+    }
+    if (!digits.startsWith('07')) {
+      return 'رقم الهاتف العراقي يبدأ بـ 07 (مثال: 07701234567)';
+    }
     return null;
   }
+
+  static String? optionalPhone(String? v) => iraqiMobilePhone(v);
 }
 
 /// رقم هاتف مُسجَّل لعميل آخر (يُعرض للمستخدم ولا يُكسر المزامنة).

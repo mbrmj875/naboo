@@ -1,4 +1,5 @@
 import 'dart:async' show unawaited;
+import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -9,10 +10,12 @@ import '../../models/customer_debt_models.dart';
 import '../../models/debt_settings_data.dart';
 import '../../services/cloud_sync_service.dart';
 import '../../services/database_helper.dart';
+import '../../theme/app_corner_style.dart';
 import '../../theme/design_tokens.dart';
 import '../../utils/screen_layout.dart';
 import '../../widgets/invoice_detail_sheet.dart';
 import 'customer_debt_detail_screen.dart';
+import 'customer_debt_linking_screen.dart';
 import 'debt_settings_screen.dart';
 import 'supplier_ap_tab.dart';
 
@@ -53,6 +56,7 @@ class _DebtsScreenState extends State<DebtsScreen>
   List<CustomerDebtSummary> _summaries = [];
   DebtSettingsData _settings = DebtSettingsData.defaults();
   bool _loading = true;
+  bool _showInfoBanner = true;
   _DebtFilter _filter = _DebtFilter.all;
 
   /// رقم الفاتورة المختارة في Tab 1 (لإبراز البطاقة عند فتح التفاصيل).
@@ -64,12 +68,29 @@ class _DebtsScreenState extends State<DebtsScreen>
   void initState() {
     super.initState();
     _tabs = TabController(length: 3, vsync: this);
-    _search.addListener(() => setState(() {}));
+    _tabs.addListener(_onTabsChanged);
+    _search.addListener(_onSearchChanged);
+    _searchFocus.addListener(_onSearchFocusChanged);
     _load();
+  }
+
+  void _onTabsChanged() {
+    if (mounted) setState(() {});
+  }
+
+  void _onSearchChanged() {
+    if (mounted) setState(() {});
+  }
+
+  void _onSearchFocusChanged() {
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
+    _tabs.removeListener(_onTabsChanged);
+    _search.removeListener(_onSearchChanged);
+    _searchFocus.removeListener(_onSearchFocusChanged);
     _tabs.dispose();
     _search.dispose();
     _searchFocus.dispose();
@@ -144,6 +165,144 @@ class _DebtsScreenState extends State<DebtsScreen>
     return list;
   }
 
+  Widget _buildUnifiedSearchDock({
+    required ColorScheme cs,
+    required bool isDark,
+  }) {
+    return LayoutBuilder(
+      builder: (context, c) {
+        final isNarrow = c.maxWidth < 600;
+        final useGlassBlur = !ScreenLayout.of(context).isHandsetForLayout;
+        final ac = context.appCorners;
+        final focused = _searchFocus.hasFocus;
+        const royalGold = AppColors.accentGold;
+        final textPrimary = cs.onSurface;
+        final textSecondary = cs.onSurfaceVariant;
+        final filterBg = cs.surfaceContainerHighest;
+
+        Widget dockBody = Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+          child: TextField(
+            controller: _search,
+            focusNode: _searchFocus,
+            textInputAction: TextInputAction.search,
+            style: TextStyle(
+              fontSize: isNarrow ? 14 : 15,
+              color: textPrimary,
+              fontWeight: FontWeight.w600,
+            ),
+            cursorColor: royalGold,
+            decoration: InputDecoration(
+              hintText: 'بحث: عميل، رقم فاتورة، معرّف… (Ctrl+F)',
+              hintStyle: TextStyle(
+                color: textSecondary.withValues(alpha: 0.75),
+                fontWeight: FontWeight.w500,
+              ),
+              prefixIcon: Icon(
+                Icons.search_rounded,
+                color: focused ? royalGold : textSecondary,
+              ),
+              suffixIcon: _search.text.trim().isEmpty
+                  ? null
+                  : IconButton(
+                      tooltip: 'مسح البحث',
+                      onPressed: () => _search.clear(),
+                      icon: const Icon(Icons.close_rounded, size: 20),
+                    ),
+              filled: false,
+              border: InputBorder.none,
+              enabledBorder: InputBorder.none,
+              focusedBorder: InputBorder.none,
+              contentPadding: EdgeInsets.symmetric(
+                horizontal: isNarrow ? 12 : 14,
+                vertical: isNarrow ? 14 : 16,
+              ),
+            ),
+          ),
+        );
+
+        if (useGlassBlur) {
+          dockBody = ClipRRect(
+            borderRadius: ac.md,
+            child: BackdropFilter(
+              filter: ImageFilter.blur(
+                sigmaX: AppGlass.blurSigma * 0.75,
+                sigmaY: AppGlass.blurSigma * 0.75,
+              ),
+              child: dockBody,
+            ),
+          );
+        }
+
+        return AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            color: useGlassBlur
+                ? AppGlass.surfaceTintStrong
+                : filterBg.withValues(alpha: isDark ? 0.55 : 0.92),
+            border: Border.all(
+              color: focused ? royalGold : royalGold.withValues(alpha: 0.5),
+              width: focused ? 2.0 : 1.0,
+            ),
+          ),
+          child: dockBody,
+        );
+      },
+    );
+  }
+
+  Widget _buildSharedHeader({
+    required ColorScheme cs,
+    required bool isDark,
+    required double gap,
+    required bool showKpis,
+    required double totalOpen,
+    required int openCount,
+    required int agedCount,
+  }) {
+    return Padding(
+      padding: EdgeInsetsDirectional.only(start: gap, end: gap, top: 12),
+      child: _DebtsContentWidth(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            AnimatedSize(
+              duration: const Duration(milliseconds: 220),
+              curve: Curves.easeOutCubic,
+              alignment: Alignment.topCenter,
+              child: _showInfoBanner
+                  ? Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: _InfoBanner(
+                        colorScheme: cs,
+                        isDark: isDark,
+                        warnDays: _settings.warnDebtAgeDays,
+                        onDismiss: () => setState(() => _showInfoBanner = false),
+                      ),
+                    )
+                  : const SizedBox.shrink(),
+            ),
+            _buildUnifiedSearchDock(cs: cs, isDark: isDark),
+            if (showKpis) ...[
+              const SizedBox(height: 12),
+              _SummaryStrip(
+                totalOpen: totalOpen,
+                openInvoices: openCount,
+                agedInvoices: agedCount,
+                activeFilter: _filter,
+                colorScheme: cs,
+                isDark: isDark,
+                onSelectFilter: (f) => setState(() => _filter = f),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -152,9 +311,10 @@ class _DebtsScreenState extends State<DebtsScreen>
     final bg = isDark ? AppColors.surfaceDark : AppColors.surfaceLight;
     final now = DateTime.now();
     final filtered = _filteredList(now);
-    final totalOpen = _rows
+    final totalOpenFils = _rows
         .where((r) => !r.isSettled)
-        .fold<double>(0, (s, r) => s + r.remaining);
+        .fold<int>(0, (s, r) => s + r.remainingFils);
+    final totalOpen = totalOpenFils / 1000.0;
     final openCount = _rows.where((r) => !r.isSettled).length;
     final agedCount = _rows.where((r) => _isAged(r, now)).length;
     final listScope = filtered.length != _rows.length;
@@ -209,7 +369,9 @@ class _DebtsScreenState extends State<DebtsScreen>
             child: Scaffold(
               backgroundColor: bg,
               appBar: AppBar(
-                title: const Text('الديون — آجل'),
+                backgroundColor: cs.surfaceContainerHighest,
+                foregroundColor: cs.onSurface,
+                title: Text('الديون — آجل', style: TextStyle(color: cs.onSurface)),
                 bottom: TabBar(
                   controller: _tabs,
                   isScrollable: sl.isNarrowWidth,
@@ -220,6 +382,11 @@ class _DebtsScreenState extends State<DebtsScreen>
                   unselectedLabelStyle: TextStyle(
                     fontSize: sl.isNarrowWidth ? 12 : 14,
                   ),
+                  unselectedLabelColor: isDark
+                      ? Colors.white.withValues(alpha: 0.55)
+                      : cs.onSurface.withValues(alpha: 0.55),
+                  labelColor: cs.onSurface,
+                  indicatorColor: AppColors.accentGold,
                   tabs: const [
                     Tab(text: 'فواتير'),
                     Tab(text: 'عملاء'),
@@ -227,6 +394,19 @@ class _DebtsScreenState extends State<DebtsScreen>
                   ],
                 ),
                 actions: [
+                  IconButton(
+                    tooltip: 'ربط ديون قديمة بالعملاء',
+                    onPressed: () async {
+                      await Navigator.push<void>(
+                        context,
+                        MaterialPageRoute<void>(
+                          builder: (_) => const CustomerDebtLinkingScreen(),
+                        ),
+                      );
+                      unawaited(_load());
+                    },
+                    icon: Icon(Icons.link_rounded, color: cs.onSurface),
+                  ),
                   IconButton(
                     tooltip: 'إعدادات الدين',
                     onPressed: () async {
@@ -238,12 +418,12 @@ class _DebtsScreenState extends State<DebtsScreen>
                       );
                       unawaited(_load());
                     },
-                    icon: const Icon(Icons.tune_rounded),
+                    icon: Icon(Icons.tune_rounded, color: cs.onSurface),
                   ),
                   IconButton(
                     tooltip: 'تحديث (F5)',
                     onPressed: _loading ? null : _refreshFromServer,
-                    icon: const Icon(Icons.refresh_rounded),
+                    icon: Icon(Icons.refresh_rounded, color: cs.onSurface),
                   ),
                 ],
               ),
@@ -252,331 +432,221 @@ class _DebtsScreenState extends State<DebtsScreen>
                   : TabBarView(
                       controller: _tabs,
                       children: [
-                    RefreshIndicator(
-                      color: cs.primary,
-                      onRefresh: _refreshFromServer,
-                      child: ListView(
-                        physics: const AlwaysScrollableScrollPhysics(),
-                        padding: const EdgeInsets.only(bottom: 100),
-                        children: [
-                          Padding(
-                            padding: EdgeInsetsDirectional.only(
-                              start: gap,
-                              end: gap,
-                              top: 12,
-                              bottom: 8,
-                            ),
-                            child: _InfoBanner(
-                              colorScheme: cs,
-                              warnDays: _settings.warnDebtAgeDays,
-                            ),
-                          ),
-                          Padding(
-                            padding: EdgeInsets.symmetric(horizontal: gap),
-                            child: _SummaryStrip(
-                              totalOpen: totalOpen,
-                              openInvoices: openCount,
-                              agedInvoices: agedCount,
-                              colorScheme: cs,
-                              isDark: isDark,
-                              onSelectFilter: (f) =>
-                                  setState(() => _filter = f),
-                            ),
-                          ),
-                          if (listScope)
-                            Padding(
-                              padding: EdgeInsetsDirectional.only(
-                                start: gap,
-                                end: gap,
-                                top: 10,
-                                bottom: 0,
+                        RefreshIndicator(
+                          color: cs.primary,
+                          onRefresh: _refreshFromServer,
+                          child: ListView(
+                            physics: const AlwaysScrollableScrollPhysics(),
+                            padding: const EdgeInsets.only(bottom: 100),
+                            children: [
+                              _buildSharedHeader(
+                                cs: cs,
+                                isDark: isDark,
+                                gap: gap,
+                                showKpis: true,
+                                totalOpen: totalOpen,
+                                openCount: openCount,
+                                agedCount: agedCount,
                               ),
-                              child: Text(
-                                'القائمة: ${filtered.length} من ${_rows.length} فاتورة (بحث أو تصفية)',
-                                style: theme.textTheme.labelMedium?.copyWith(
-                                  color: cs.onSurfaceVariant,
-                                ),
-                              ),
-                            ),
-                          Padding(
-                            padding: EdgeInsetsDirectional.only(
-                              start: gap,
-                              end: gap,
-                              top: 12,
-                              bottom: 8,
-                            ),
-                            child: TextField(
-                              controller: _search,
-                              focusNode: _searchFocus,
-                              style: TextStyle(color: cs.onSurface),
-                              cursorColor: cs.primary,
-                              decoration: InputDecoration(
-                                hintText: 'بحث: عميل، رقم فاتورة، معرّف عميل… (Ctrl+F)',
-                                hintStyle: TextStyle(
-                                  color: cs.onSurfaceVariant,
-                                ),
-                                prefixIcon: Icon(
-                                  Icons.search_rounded,
-                                  color: cs.onSurfaceVariant,
-                                ),
-                                suffixIcon: _search.text.isNotEmpty
-                                    ? IconButton(
-                                        tooltip: 'مسح البحث',
-                                        onPressed: () {
-                                          _search.clear();
-                                          setState(() {});
-                                        },
-                                        icon: Icon(
-                                          Icons.clear_rounded,
-                                          color: cs.onSurfaceVariant,
-                                        ),
-                                      )
-                                    : null,
-                                filled: true,
-                                fillColor: isDark
-                                    ? cs.surfaceContainerHighest
-                                    : cs.surface,
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(8),
-                                  borderSide: BorderSide(
-                                    color: cs.outlineVariant,
+                              if (listScope)
+                                Padding(
+                                  padding: EdgeInsetsDirectional.only(
+                                    start: gap,
+                                    end: gap,
+                                    top: 4,
+                                    bottom: 0,
+                                  ),
+                                  child: _DebtsContentWidth(
+                                    child: Text(
+                                      'القائمة: ${filtered.length} من ${_rows.length} فاتورة (بحث أو تصفية)',
+                                      style: theme.textTheme.labelMedium?.copyWith(
+                                        color: isDark
+                                            ? Colors.white.withValues(alpha: 0.72)
+                                            : cs.onSurface.withValues(alpha: 0.72),
+                                      ),
+                                    ),
                                   ),
                                 ),
-                                enabledBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(8),
-                                  borderSide: BorderSide(
-                                    color: cs.outlineVariant,
-                                  ),
-                                ),
-                                focusedBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(8),
-                                  borderSide: BorderSide(
-                                    color: cs.primary,
-                                    width: 1.5,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                          Padding(
-                            padding: EdgeInsets.symmetric(horizontal: gap),
-                            child: SingleChildScrollView(
-                              scrollDirection: Axis.horizontal,
-                              child: SegmentedButton<_DebtFilter>(
-                                segments: const [
-                                  ButtonSegment(
-                                    value: _DebtFilter.all,
-                                    label: Text('الكل'),
-                                  ),
-                                  ButtonSegment(
-                                    value: _DebtFilter.open,
-                                    label: Text('مفتوحة'),
-                                  ),
-                                  ButtonSegment(
-                                    value: _DebtFilter.aged,
-                                    label: Text('تحذير عمر'),
-                                  ),
-                                  ButtonSegment(
-                                    value: _DebtFilter.settled,
-                                    label: Text('مغلقة'),
-                                  ),
-                                ],
-                                selected: {_filter},
-                                emptySelectionAllowed: false,
-                                multiSelectionEnabled: false,
-                                onSelectionChanged: (s) {
-                                  if (s.isEmpty) return;
-                                  setState(() => _filter = s.first);
-                                },
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          if (filtered.isEmpty)
-                            SizedBox(
-                              height: 260,
-                              child: _EmptyState(
-                                hasRows: _rows.isNotEmpty,
-                                colorScheme: cs,
-                                filterActive:
-                                    listScope || _filter != _DebtFilter.all,
-                              ),
-                            )
-                          else
-                            for (final r in filtered)
                               Padding(
                                 padding: EdgeInsetsDirectional.only(
                                   start: gap,
                                   end: gap,
-                                  top: 0,
-                                  bottom: 10,
+                                  top: 10,
+                                  bottom: 8,
                                 ),
-                                child: _DebtCard(
-                                  row: r,
-                                  warnDays: _settings.warnDebtAgeDays,
-                                  colorScheme: cs,
-                                  isDark: isDark,
-                                  isHighlighted:
-                                      _selectedInvoiceId == r.invoiceId,
-                                  onTap: () async {
-                                    setState(() =>
-                                        _selectedInvoiceId = r.invoiceId);
-                                    await showInvoiceDetailSheet(
-                                      context,
-                                      _db,
-                                      r.invoiceId,
-                                    );
-                                    if (mounted) {
-                                      setState(
-                                          () => _selectedInvoiceId = null);
-                                    }
-                                  },
-                                ),
-                              ),
-                        ],
-                      ),
-                    ),
-                    RefreshIndicator(
-                      color: cs.primary,
-                      onRefresh: _load,
-                      child: ListView(
-                        physics: const AlwaysScrollableScrollPhysics(),
-                        padding: const EdgeInsets.only(bottom: 100),
-                        children: [
-                          Padding(
-                            padding: EdgeInsetsDirectional.only(
-                              start: gap,
-                              end: gap,
-                              top: 12,
-                              bottom: 8,
-                            ),
-                            child: _InfoBanner(
-                              colorScheme: cs,
-                              warnDays: _settings.warnDebtAgeDays,
-                            ),
-                          ),
-                          Padding(
-                            padding: EdgeInsetsDirectional.only(
-                              start: gap,
-                              end: gap,
-                              top: 0,
-                              bottom: 8,
-                            ),
-                            child: Text(
-                              'تجميع حسب العميل: المنتجات والبائعون وتسديد جزئي من شاشة التفاصيل. QR على الإيصال للعملاء المسجّلين فقط.',
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                color: cs.onSurfaceVariant,
-                                height: 1.45,
-                              ),
-                            ),
-                          ),
-                          Padding(
-                            padding: EdgeInsetsDirectional.only(
-                              start: gap,
-                              end: gap,
-                              top: 4,
-                              bottom: 8,
-                            ),
-                            child: TextField(
-                              controller: _search,
-                              style: TextStyle(color: cs.onSurface),
-                              cursorColor: cs.primary,
-                              decoration: InputDecoration(
-                                hintText: 'بحث باسم العميل أو المعرف…',
-                                hintStyle: TextStyle(
-                                  color: cs.onSurfaceVariant,
-                                ),
-                                prefixIcon: Icon(
-                                  Icons.search_rounded,
-                                  color: cs.onSurfaceVariant,
-                                ),
-                                suffixIcon: _search.text.isNotEmpty
-                                    ? IconButton(
-                                        tooltip: 'مسح البحث',
-                                        onPressed: () {
-                                          _search.clear();
-                                          setState(() {});
-                                        },
-                                        icon: Icon(
-                                          Icons.clear_rounded,
-                                          color: cs.onSurfaceVariant,
+                                child: _DebtsContentWidth(
+                                  child: SingleChildScrollView(
+                                    scrollDirection: Axis.horizontal,
+                                    child: SegmentedButton<_DebtFilter>(
+                                      style: SegmentedButton.styleFrom(
+                                        selectedBackgroundColor: AppColors.accentGold,
+                                        selectedForegroundColor: Colors.white,
+                                      ),
+                                      segments: const [
+                                        ButtonSegment(
+                                          value: _DebtFilter.all,
+                                          label: Text('الكل'),
                                         ),
-                                      )
-                                    : null,
-                                filled: true,
-                                fillColor: isDark
-                                    ? cs.surfaceContainerHighest
-                                    : cs.surface,
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(8),
-                                  borderSide: BorderSide(
-                                    color: cs.outlineVariant,
-                                  ),
-                                ),
-                                enabledBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(8),
-                                  borderSide: BorderSide(
-                                    color: cs.outlineVariant,
-                                  ),
-                                ),
-                                focusedBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(8),
-                                  borderSide: BorderSide(
-                                    color: cs.primary,
-                                    width: 1.5,
+                                        ButtonSegment(
+                                          value: _DebtFilter.open,
+                                          label: Text('مفتوحة'),
+                                        ),
+                                        ButtonSegment(
+                                          value: _DebtFilter.aged,
+                                          label: Text('تحذير عمر'),
+                                        ),
+                                        ButtonSegment(
+                                          value: _DebtFilter.settled,
+                                          label: Text('مغلقة'),
+                                        ),
+                                      ],
+                                      selected: {_filter},
+                                      emptySelectionAllowed: false,
+                                      multiSelectionEnabled: false,
+                                      onSelectionChanged: (s) {
+                                        if (s.isEmpty) return;
+                                        setState(() => _filter = s.first);
+                                      },
+                                    ),
                                   ),
                                 ),
                               ),
-                            ),
+                              const SizedBox(height: 8),
+                              if (filtered.isEmpty)
+                                SizedBox(
+                                  height: 260,
+                                  child: _EmptyState(
+                                    hasRows: _rows.isNotEmpty,
+                                    colorScheme: cs,
+                                    filterActive:
+                                        listScope || _filter != _DebtFilter.all,
+                                  ),
+                                )
+                              else
+                                for (final r in filtered)
+                                  Padding(
+                                    padding: EdgeInsetsDirectional.only(
+                                      start: gap,
+                                      end: gap,
+                                      top: 0,
+                                      bottom: 10,
+                                    ),
+                                    child: _DebtCard(
+                                      row: r,
+                                      warnDays: _settings.warnDebtAgeDays,
+                                      colorScheme: cs,
+                                      isDark: isDark,
+                                      isHighlighted:
+                                          _selectedInvoiceId == r.invoiceId,
+                                      onTap: () async {
+                                        setState(() =>
+                                            _selectedInvoiceId = r.invoiceId);
+                                        await showInvoiceDetailSheet(
+                                          context,
+                                          _db,
+                                          r.invoiceId,
+                                        );
+                                        if (mounted) {
+                                          setState(
+                                              () => _selectedInvoiceId = null);
+                                        }
+                                      },
+                                    ),
+                                  ),
+                            ],
                           ),
-                          if (sumScope)
-                            Padding(
-                              padding: EdgeInsetsDirectional.only(
-                                start: gap,
-                                end: gap,
-                                top: 0,
-                                bottom: 8,
+                        ),
+                        RefreshIndicator(
+                          color: cs.primary,
+                          onRefresh: _load,
+                          child: ListView(
+                            physics: const AlwaysScrollableScrollPhysics(),
+                            padding: const EdgeInsets.only(bottom: 100),
+                            children: [
+                              _buildSharedHeader(
+                                cs: cs,
+                                isDark: isDark,
+                                gap: gap,
+                                showKpis: false,
+                                totalOpen: totalOpen,
+                                openCount: openCount,
+                                agedCount: agedCount,
                               ),
-                              child: Text(
-                                '${sumFiltered.length} من ${_summaries.length} عميل',
-                                style: theme.textTheme.labelMedium?.copyWith(
-                                  color: cs.onSurfaceVariant,
-                                ),
-                              ),
-                            ),
-                          if (sumFiltered.isEmpty)
-                            SizedBox(
-                              height: 220,
-                              child: Center(
-                                child: Text(
-                                  _summaries.isEmpty
-                                      ? 'لا يوجد متبقٍ آجل مجمّع بالعملاء'
-                                      : 'لا نتائج للبحث',
-                                  style: TextStyle(color: cs.onSurfaceVariant),
-                                ),
-                              ),
-                            )
-                          else
-                            for (final s in sumFiltered)
                               Padding(
                                 padding: EdgeInsetsDirectional.only(
                                   start: gap,
                                   end: gap,
-                                  top: 0,
-                                  bottom: 10,
+                                  top: 4,
+                                  bottom: 8,
                                 ),
-                                child: _CustomerDebtSummaryCard(
-                                  summary: s,
-                                  colorScheme: cs,
-                                  isDark: isDark,
+                                child: _DebtsContentWidth(
+                                  child: Text(
+                                    'تجميع حسب العميل: المنتجات والبائعون وتسديد جزئي من شاشة التفاصيل. QR على الإيصال للعملاء المسجّلين فقط.',
+                                    style: theme.textTheme.bodySmall?.copyWith(
+                                      color: isDark
+                                          ? Colors.white.withValues(alpha: 0.78)
+                                          : cs.onSurface.withValues(alpha: 0.78),
+                                      height: 1.45,
+                                    ),
+                                  ),
                                 ),
                               ),
-                        ],
-                      ),
+                              if (sumScope)
+                                Padding(
+                                  padding: EdgeInsetsDirectional.only(
+                                    start: gap,
+                                    end: gap,
+                                    top: 0,
+                                    bottom: 8,
+                                  ),
+                                  child: _DebtsContentWidth(
+                                    child: Text(
+                                      '${sumFiltered.length} من ${_summaries.length} عميل',
+                                      style: theme.textTheme.labelMedium?.copyWith(
+                                        color: isDark
+                                            ? Colors.white.withValues(alpha: 0.72)
+                                            : cs.onSurface.withValues(alpha: 0.72),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              if (sumFiltered.isEmpty)
+                                SizedBox(
+                                  height: 220,
+                                  child: Center(
+                                    child: Text(
+                                      _summaries.isEmpty
+                                          ? 'لا يوجد متبقٍ آجل مجمّع بالعملاء'
+                                          : 'لا نتائج للبحث',
+                                      style: TextStyle(
+                                        color: isDark
+                                            ? Colors.white.withValues(alpha: 0.72)
+                                            : cs.onSurfaceVariant,
+                                      ),
+                                    ),
+                                  ),
+                                )
+                              else
+                                for (final s in sumFiltered)
+                                  Padding(
+                                    padding: EdgeInsetsDirectional.only(
+                                      start: gap,
+                                      end: gap,
+                                      top: 0,
+                                      bottom: 10,
+                                    ),
+                                    child: _CustomerDebtSummaryCard(
+                                      summary: s,
+                                      colorScheme: cs,
+                                      isDark: isDark,
+                                    ),
+                                  ),
+                            ],
+                          ),
+                        ),
+                        const SupplierApTab(),
+                      ],
                     ),
-                    const SupplierApTab(),
-                  ],
-                ),
             ),
           ),
         ),
@@ -604,12 +674,12 @@ class _CustomerDebtSummaryCard extends StatelessWidget {
     final mutedC = colorScheme.onSurfaceVariant;
     final r = BorderRadius.circular(12);
     return Material(
-      elevation: isDark ? 3 : 1,
+      elevation: 0,
       shadowColor: Colors.black.withValues(alpha: isDark ? 0.35 : 0.1),
-      color: fill,
+      color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
       shape: RoundedRectangleBorder(
-        borderRadius: r,
-        side: BorderSide(color: colorScheme.outlineVariant),
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.5)),
       ),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
@@ -761,37 +831,85 @@ class _DebtActionPill extends StatelessWidget {
   }
 }
 
+class _DebtsContentWidth extends StatelessWidget {
+  const _DebtsContentWidth({required this.child});
+
+  final Widget child;
+
+  static const double _maxWidth = 1200;
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: AlignmentDirectional.topCenter,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: _maxWidth),
+        child: child,
+      ),
+    );
+  }
+}
+
 class _InfoBanner extends StatelessWidget {
   final ColorScheme colorScheme;
+  final bool isDark;
   final int warnDays;
+  final VoidCallback onDismiss;
 
-  const _InfoBanner({required this.colorScheme, required this.warnDays});
+  const _InfoBanner({
+    required this.colorScheme,
+    required this.isDark,
+    required this.warnDays,
+    required this.onDismiss,
+  });
 
   @override
   Widget build(BuildContext context) {
     final ageHint = warnDays > 0
         ? ' التحذير بالعمر يبدأ بعد $warnDays يوماً من تاريخ الفاتورة.'
         : ' فعّل «أيام تحذير العمر» من إعدادات الدين لتمييز الفواتير القديمة.';
+    final bodyColor = isDark
+        ? Colors.white.withValues(alpha: 0.84)
+        : colorScheme.onSurface.withValues(alpha: 0.82);
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: colorScheme.outlineVariant),
+        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: AppColors.accentGold.withValues(alpha: 0.5),
+        ),
       ),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        padding: const EdgeInsetsDirectional.fromSTEB(14, 10, 6, 10),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(Icons.info_outline_rounded, color: colorScheme.primary),
+            Icon(
+              Icons.info_outline_rounded,
+              color: AppColors.accentGold.withValues(alpha: 0.95),
+              size: 20,
+            ),
             const SizedBox(width: 10),
             Expanded(
               child: Text(
                 'تُحسب الديون من فواتير النوع «دين / آجل». المتبقي = إجمالي الفاتورة − المقدّم. حدود البيع تُضبط من إعدادات الديون.$ageHint',
                 style: Theme.of(context).textTheme.bodySmall!.copyWith(
-                  color: colorScheme.onSurfaceVariant,
+                  color: bodyColor,
                   height: 1.45,
+                  fontWeight: FontWeight.w500,
                 ),
+              ),
+            ),
+            IconButton(
+              tooltip: 'إخفاء التنبيه',
+              visualDensity: VisualDensity.compact,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+              onPressed: onDismiss,
+              icon: Icon(
+                Icons.close_rounded,
+                size: 16,
+                color: bodyColor.withValues(alpha: 0.85),
               ),
             ),
           ],
@@ -805,6 +923,7 @@ class _SummaryStrip extends StatelessWidget {
   final double totalOpen;
   final int openInvoices;
   final int agedInvoices;
+  final _DebtFilter activeFilter;
   final ColorScheme colorScheme;
   final bool isDark;
   final ValueChanged<_DebtFilter> onSelectFilter;
@@ -813,6 +932,7 @@ class _SummaryStrip extends StatelessWidget {
     required this.totalOpen,
     required this.openInvoices,
     required this.agedInvoices,
+    required this.activeFilter,
     required this.colorScheme,
     required this.isDark,
     required this.onSelectFilter,
@@ -829,6 +949,7 @@ class _SummaryStrip extends StatelessWidget {
             icon: Icons.account_balance_wallet_outlined,
             colorScheme: colorScheme,
             isDark: isDark,
+            isActiveFilter: activeFilter == _DebtFilter.all,
             tooltip: 'عرض كل الفواتير',
             onTap: () => onSelectFilter(_DebtFilter.all),
           ),
@@ -841,6 +962,7 @@ class _SummaryStrip extends StatelessWidget {
             icon: Icons.description_outlined,
             colorScheme: colorScheme,
             isDark: isDark,
+            isActiveFilter: activeFilter == _DebtFilter.open,
             tooltip: 'تصفية: مفتوحة فقط',
             onTap: () => onSelectFilter(_DebtFilter.open),
           ),
@@ -853,6 +975,7 @@ class _SummaryStrip extends StatelessWidget {
             icon: Icons.schedule_rounded,
             colorScheme: colorScheme,
             isDark: isDark,
+            isActiveFilter: activeFilter == _DebtFilter.aged,
             accent: agedInvoices > 0 ? AppSemanticColors.warning : null,
             tooltip: 'تصفية: تحذير عمر',
             onTap: () => onSelectFilter(_DebtFilter.aged),
@@ -869,6 +992,7 @@ class _MetricBox extends StatelessWidget {
   final IconData icon;
   final ColorScheme colorScheme;
   final bool isDark;
+  final bool isActiveFilter;
   final Color? accent;
   final String tooltip;
   final VoidCallback onTap;
@@ -879,6 +1003,7 @@ class _MetricBox extends StatelessWidget {
     required this.icon,
     required this.colorScheme,
     required this.isDark,
+    this.isActiveFilter = false,
     this.accent,
     required this.tooltip,
     required this.onTap,
@@ -887,46 +1012,94 @@ class _MetricBox extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = accent ?? colorScheme.primary;
-    final fill = colorScheme.surface;
     final onSurf = colorScheme.onSurface;
-    final onVar = colorScheme.onSurfaceVariant;
-    final r = BorderRadius.circular(8);
+    final titleColor = isDark
+        ? Colors.white.withValues(alpha: 0.82)
+        : colorScheme.onSurface.withValues(alpha: 0.72);
+    final useGlassBlur = !ScreenLayout.of(context).isHandsetForLayout;
+    const royalGold = AppColors.accentGold;
+    final r = BorderRadius.circular(10);
+    final borderColor = isActiveFilter
+        ? royalGold.withValues(alpha: 0.95)
+        : colorScheme.outlineVariant.withValues(alpha: 0.45);
+
+    Widget inner = Padding(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 20, color: c),
+          const SizedBox(height: 8),
+          Text(
+            title,
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: titleColor,
+            ),
+          ),
+          Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontWeight: FontWeight.w900,
+              fontSize: 19,
+              color: accent != null ? c : onSurf,
+              height: 1.15,
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (useGlassBlur) {
+      inner = ClipRRect(
+        borderRadius: r,
+        child: BackdropFilter(
+          filter: ImageFilter.blur(
+            sigmaX: AppGlass.blurSigma * 0.55,
+            sigmaY: AppGlass.blurSigma * 0.55,
+          ),
+          child: inner,
+        ),
+      );
+    }
+
     return Tooltip(
       message: tooltip,
       child: Material(
-        color: fill,
-        shape: RoundedRectangleBorder(
-          borderRadius: r,
-          side: BorderSide(color: colorScheme.outlineVariant),
-        ),
-        clipBehavior: Clip.antiAlias,
+        color: Colors.transparent,
         child: InkWell(
           onTap: onTap,
           splashFactory: NoSplash.splashFactory,
           splashColor: Colors.transparent,
           highlightColor: Colors.transparent,
-          hoverColor: colorScheme.primary.withValues(alpha: 0.08),
+          hoverColor: royalGold.withValues(alpha: 0.08),
           borderRadius: r,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Icon(icon, size: 20, color: c),
-                const SizedBox(height: 6),
-                Text(title, style: TextStyle(fontSize: 10, color: onVar)),
-                Text(
-                  value,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 13,
-                    color: accent != null ? c : onSurf,
-                  ),
-                ),
-              ],
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOutCubic,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              color: useGlassBlur
+                  ? AppGlass.surfaceTintStrong
+                  : colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
+              border: Border.all(
+                color: isActiveFilter ? AppColors.accentGold : AppColors.accentGold.withValues(alpha: 0.5),
+                width: isActiveFilter ? 2.0 : 1.0,
+              ),
+              boxShadow: isActiveFilter
+                  ? [
+                      BoxShadow(
+                        color: AppColors.accentGold.withValues(alpha: 0.2),
+                        blurRadius: 14,
+                        spreadRadius: 0.5,
+                      ),
+                    ]
+                  : null,
             ),
+            child: inner,
           ),
         ),
       ),
@@ -967,8 +1140,10 @@ class _DebtCard extends StatelessWidget {
     final fill = isDark ? AppColors.cardDark : colorScheme.surface;
     final r = BorderRadius.circular(12);
     final rem = row.remaining;
-    final ratio = row.total > 1e-6
-        ? ((row.total - rem) / row.total).clamp(0.0, 1.0)
+    final totalFils = row.totalFils ?? (row.total * 1000).round();
+    final paidFils = (totalFils - row.remainingFils).clamp(0, totalFils);
+    final ratio = totalFils > 0
+        ? (paidFils / totalFils).clamp(0.0, 1.0)
         : 0.0;
     final ratioSafe = ratio.isFinite ? ratio : 0.0;
 

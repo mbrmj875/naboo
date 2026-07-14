@@ -146,16 +146,23 @@ begin
 
   v_was_known := found;
 
-  -- (هـ) إذا كان الصف موجوداً ومُلغى ⇒ نُبقيه ملغى ولا نحاول إعادة تنشيطه
-  --      من العميل. الإعادة تتمّ من الإدارة فقط.
+  -- (هـ) جهاز مُلغى: نُبقيه ملغى إلا إذا **لا يوجد أي جهاز نشط** (orphan recovery).
   if v_was_known and lower(coalesce(v_existing.access_status, 'active')) = 'revoked' then
-    return jsonb_build_object(
-      'access_status',     'revoked',
-      'is_over_limit',     false,
-      'active_devices',    0,
-      'max_devices',       coalesce(public.app_user_max_devices(), 0),
-      'already_registered', true
-    );
+    select count(*)::int into v_active
+    from public.account_devices d
+    where d.user_id = v_uid
+      and coalesce(d.access_status, 'active') = 'active';
+
+    if v_active > 0 then
+      return jsonb_build_object(
+        'access_status',     'revoked',
+        'is_over_limit',     false,
+        'active_devices',    v_active,
+        'max_devices',       coalesce(public.app_user_max_devices(), 0),
+        'already_registered', true
+      );
+    end if;
+    -- orphan: fall through — upsert below يُعيد access_status = active
   end if;
 
   -- (و) حساب الحدّ والـ active بعد القفل (قراءة قطعيّة).

@@ -1,0 +1,176 @@
+{
+  "name": "NaBoo Oil Change — WhatsApp Notify",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "oil-change-notify",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "oil-change-notify"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body ?? $input.first().json;\n\nconst secret = $env.WEBHOOK_SECRET;\nif (!secret || body.webhook_secret !== secret) {\n  throw new Error('UNAUTHORIZED');\n}\n\nconst tenantId = (body.tenant_id ?? '').toString().trim();\nconst phone = (body.customer_phone ?? '').toString().trim();\nconst order = body.order ?? {};\n\nif (!phone) {\n  throw new Error('MISSING customer_phone');\n}\n\nlet digits = phone.replace(/\\D/g, '');\nif (digits.startsWith('0')) digits = '964' + digits.slice(1);\nelse if (digits.length === 10 && digits.startsWith('7')) digits = '964' + digits;\n\nconst instanceFromBody = (body.instance_name ?? '').toString().trim();\nconst instanceName = instanceFromBody\n  || (tenantId ? 'tenant_' + tenantId.replace(/-/g, '_') : '');\n\nif (!instanceName) {\n  throw new Error('MISSING instance_name');\n}\n\nreturn [{\n  json: {\n    instanceName,\n    phone: digits,\n    order,\n    tenant_id: tenantId,\n    order_id: body.order_id ?? null\n  }\n}];"
+      },
+      "id": "validate-payload",
+      "name": "Validate Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.deepseek.com/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.DEEPSEEK_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"deepseek-chat\",\n  \"temperature\": 0.3,\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"أنت كاتب رسائل واتساب لمركز غيار زيت في العراق. اكتب بالعربية بأسلوب ودود ومهني. استخدم الأرقام والمبالغ من JSON فقط — لا تخترع أي رقم. اذكر موعد الصيانة القادمة إن وُجد. إن وُجد دين أو متبقي اذكره بوضوح. الطول 400-700 حرف. لا عروض ولا خصومات غير موجودة.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"اكتب رسالة واتساب لهذا الطلب:\\n\" + JSON.stringify($json.order, null, 2)\n    }\n  ]\n}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "deepseek",
+      "name": "DeepSeek",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 300],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const prev = $('Validate Payload').first().json;\nlet text = '';\n\ntry {\n  const ds = $input.first().json;\n  text = ds.choices?.[0]?.message?.content?.trim() ?? '';\n} catch (e) {\n  text = '';\n}\n\n// Fallback إذا فشل DeepSeek\nif (!text) {\n  const o = prev.order;\n  const name = o.customer_name ?? 'عميلنا الكريم';\n  const store = o.store_name ?? 'المحل';\n  text = `مرحباً ${name}، شكراً لزيارتكم ${store} لغيار الزيت.\\n`;\n  if (o.vehicle) text += `المركبة: ${o.vehicle}\\n`;\n  if (o.oil) text += `الزيت: ${o.oil}\\n`;\n  if (o.total_iqd) text += `الإجمالي: ${o.total_iqd} د.ع\\n`;\n  if (o.invoice_id) text += `رقم الفاتورة: ${o.invoice_id}\\n`;\n  text += 'نراكم عند موعد الصيانة القادمة.';\n}\n\nreturn [{ json: { ...prev, message_text: text, source: text ? 'deepseek' : 'fallback' } }];"
+      },
+      "id": "build-message",
+      "name": "Build Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "amount": "={{ Math.floor(Math.random() * 11) + 10 }}"
+      },
+      "id": "wait-delay",
+      "name": "Wait 10-20s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [1120, 300],
+      "webhookId": "oil-wait"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://localhost:8080/message/sendText/{{ $json.instanceName }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.EVOLUTION_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"number\": \"{{ $json.phone }}\",\n  \"text\": {{ JSON.stringify($json.message_text) }}\n}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "evolution-send",
+      "name": "Evolution Send",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"ok\": true,\n  \"tenant_id\": \"{{ $('Build Message').item.json.tenant_id }}\",\n  \"order_id\": {{ $('Build Message').item.json.order_id ?? 'null' }},\n  \"source\": \"{{ $('Build Message').item.json.source }}\",\n  \"sent_to\": \"{{ $('Build Message').item.json.phone }}\"\n}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "respond-ok",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1560, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"ok\": false,\n  \"error\": \"{{ $json.error?.message ?? 'send_failed' }}\"\n}",
+        "options": {
+          "responseCode": 500
+        }
+      },
+      "id": "respond-error",
+      "name": "Respond Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1340, 500]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Validate Payload", "type": "main", "index": 0 }]]
+    },
+    "Validate Payload": {
+      "main": [[{ "node": "DeepSeek", "type": "main", "index": 0 }]]
+    },
+    "DeepSeek": {
+      "main": [
+        [{ "node": "Build Message", "type": "main", "index": 0 }],
+        [{ "node": "Build Message", "type": "main", "index": 0 }]
+      ]
+    },
+    "Build Message": {
+      "main": [[{ "node": "Wait 10-20s", "type": "main", "index": 0 }]]
+    },
+    "Wait 10-20s": {
+      "main": [[{ "node": "Evolution Send", "type": "main", "index": 0 }]]
+    },
+    "Evolution Send": {
+      "main": [
+        [{ "node": "Respond OK", "type": "main", "index": 0 }],
+        [{ "node": "Respond Error", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": [
+    { "name": "naboo" },
+    { "name": "oil-change" },
+    { "name": "whatsapp" }
+  ]
+}

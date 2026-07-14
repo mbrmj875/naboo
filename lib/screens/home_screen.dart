@@ -5,14 +5,25 @@ import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
+import 'package:intl/intl.dart' hide TextDirection;
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../home/home_dashboard_resolver.dart';
+import '../home/specs/home_dashboard_spec.dart';
 import '../providers/auth_provider.dart';
-import '../services/app_settings_repository.dart';
+import '../providers/business_features_provider.dart';
+import '../services/global_search/global_search_history_store.dart';
+import '../services/global_search/global_search_matcher.dart';
+import '../services/global_search/global_search_tool_hit.dart';
+import '../services/global_search/global_search_tools_index.dart';
+import '../verticals/oil_change/screens/oil_change_hub_screen.dart';
 import '../services/business_setup_settings.dart';
+import '../services/app_settings_repository.dart';
 import '../services/license_service.dart';
 import '../services/license/restricted_mode_policy.dart';
 import '../providers/notification_provider.dart';
+import '../providers/invoice_provider.dart';
+import '../providers/permissions_provider.dart';
 import '../providers/shift_provider.dart';
 import '../providers/product_provider.dart';
 import '../providers/theme_provider.dart';
@@ -25,7 +36,10 @@ import '../widgets/home_glance_orbit.dart';
 import '../widgets/invoice_detail_sheet.dart';
 import '../models/recent_activity_entry.dart';
 import '../widgets/barcode_input_launcher.dart';
+import '../widgets/inputs/arabic_speech_mic_button.dart';
 import '../widgets/app_notifications_sheet.dart';
+import '../widgets/user_info_dialog.dart';
+import '../widgets/double_back_to_exit_scope.dart';
 import '../utils/app_logger.dart';
 import 'invoices/invoices_screen.dart';
 import 'installments/installment_settings_screen.dart';
@@ -53,6 +67,7 @@ import 'reports/reports_screen.dart';
 import 'expenses/expenses_screen.dart';
 import 'invoices/add_invoice_screen.dart';
 import 'invoices/process_return_screen.dart';
+import 'online_orders/online_orders_screen.dart';
 import 'services/add_service_screen.dart';
 import 'services/services_hub_screen.dart';
 import 'services/service_orders_hub_screen.dart';
@@ -65,8 +80,6 @@ import 'customers/customer_contacts_screen.dart';
 import 'loyalty/loyalty_settings_screen.dart';
 import 'loyalty/loyalty_ledger_screen.dart';
 import 'settings/settings_screen.dart';
-import '../services/mac_style_settings_prefs.dart';
-import '../widgets/mac_style_settings_panel.dart';
 import '../widgets/floating_calculator_overlay.dart';
 import '../widgets/app_brand_mark.dart';
 import 'shift/close_shift_dialog.dart';
@@ -77,10 +90,17 @@ import '../widgets/adaptive/home_user_menu.dart';
 import '../widgets/app_breadcrumb_strip.dart';
 import '../widgets/sidebar_nav_highlight.dart';
 import '../navigation/app_route_observer.dart';
+import '../navigation/app_root_navigator_key.dart';
+import '../services/marketplace/marketplace_merchant_bootstrap_service.dart';
+import '../services/marketplace/marketplace_pending_orders_notifier.dart';
 import '../navigation/content_navigation.dart';
 import '../utils/screen_layout.dart';
+import '../verticals/_contract/vertical_manifest.dart';
+import '../verticals/_contract/vertical_registry.dart';
+import '../theme/sale_brand.dart';
 import '../models/invoice.dart';
 import '../services/database_helper.dart';
+import '../services/session_resume_context.dart';
 import '../services/product_repository.dart';
 import '../services/cloud_sync_service.dart';
 import '../services/permission_service.dart';
@@ -106,32 +126,39 @@ class _HomeScreenState extends State<HomeScreen>
   Timer? _searchDebounce;
   bool _globalSearchLoading = false;
 
-  /// على الهاتف فقط: شريط البحث يختفي عند دفع المحتوى للأعلى، ويعود عند السحب
-  /// للأسفل، حتى يترك مساحة أكبر للمحتوى بدون فقدان الوصول للبحث.
-  final ValueNotifier<bool> _mobileSearchCollapsed = ValueNotifier<bool>(false);
-  double _mobileSearchHideDrag = 0;
-  double _mobileSearchShowDrag = 0;
+  /// يُستدعى لإعادة بناء صفحة البحث المخصصة على الهاتف عند تحديث النتائج.
+  VoidCallback? _mobileSearchPageRebuild;
+
   final ProductRepository _productRepo = ProductRepository();
   final DatabaseHelper _dbHelper = DatabaseHelper();
   List<Map<String, dynamic>> _hitProducts = [];
   List<Map<String, dynamic>> _hitCustomers = [];
   List<Map<String, dynamic>> _hitUsers = [];
   List<ModuleItem> _hitModules = [];
+  List<GlobalSearchToolHit> _hitTools = [];
+  List<String> _recentSearches = [];
 
-  bool get _isDarkMode =>
-      Provider.of<ThemeProvider>(context, listen: false).isDarkMode;
+  bool get _isDarkMode => Theme.of(context).brightness == Brightness.dark;
 
   final ValueNotifier<bool> _isDrawerOpen = ValueNotifier(false);
   late AnimationController _nameAnimController;
 
-  /// Inner Navigator key — keeps sidebar visible across screens on large displays.
+  /// Inner Navigator — واحد لجميع التخطيطات (هاتف / تابلت / سطح مكتب).
   final GlobalKey<NavigatorState> _innerNavKey = GlobalKey<NavigatorState>();
 
-  /// Inner Navigator key for small screens — keeps bottom nav fixed.
-  final GlobalKey<NavigatorState> _innerNavKeySmall =
-      GlobalKey<NavigatorState>();
+  final RouteObserver<PageRoute<dynamic>> _homeRouteObserverLarge =
+      RouteObserver<PageRoute<dynamic>>();
+
+  late final NavigatorObserver _innerNavObserverLarge =
+      _HomeInnerNavObserver(this);
+
+  /// DeviceVariant السابق — لاكتشاف تبديل الهاتف ↔ تابلت عند الدوران.
+  DeviceVariant? _lastLayoutVariant;
 
   ShiftProvider? _shiftProviderForGateListener;
+  PermissionsProvider? _permissionsProvider;
+  BusinessFeaturesProvider? _businessFeaturesProvider;
+  AuthProvider? _authProvider;
 
   GlobalBarcodeRouteBridge? _barcodeBridge;
   bool _barcodeBridgeAttached = false;
@@ -145,23 +172,14 @@ class _HomeScreenState extends State<HomeScreen>
 
   void _onBusinessFeaturesRevision() {
     if (!mounted) return;
-    unawaited(_recomputeNavModules());
+    _recomputeNavModules();
   }
 
   void _shiftGateListener() {
     if (!mounted) return;
-    final shift = _shiftProviderForGateListener;
-    if (shift == null) return;
-    unawaited(_recomputeNavModules());
-    if (shift.hasOpenShift) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      final s = _shiftProviderForGateListener;
-      if (s != null && !s.hasOpenShift) {
-        Navigator.of(context).pushReplacementNamed('/open-shift');
-      }
-    });
+    _recomputeNavModules();
   }
+
 
   String? _navPermissionKeyForMainRoute(String routeId) {
     if (routeId.startsWith(AppContentRoutes.reportsPrefix)) {
@@ -191,71 +209,252 @@ class _HomeScreenState extends State<HomeScreen>
     }
   }
 
-  Future<void> _recomputeNavModules() async {
-    if (!mounted) return;
-    final auth = context.read<AuthProvider>();
-    final shiftProv = context.read<ShiftProvider>();
-    final activeShift = shiftProv.activeShift;
-    final perm = PermissionService.instance;
-    final settingsRepo = AppSettingsRepository.instance;
+  /// إخفاء عناصر القائمة الفرعية المعطّلة بوابة الميزات (الطبقة أ).
+  ModuleItem? _applyFeatureGateToModuleSubs(
+    ModuleItem m, {
+    required bool enableCustomers,
+    required bool enableLoyalty,
+    required bool enablePos,
+  }) {
+    final subs = m.subItems;
+    if (subs == null || subs.isEmpty) return m;
 
-    bool enableDebts = true;
-    bool enableInstallments = true;
-    bool enableCustomers = true;
-    bool enableLoyalty = true;
-    bool enableServices = true;
-    try {
-      final tenantId = await settingsRepo.getActiveTenantId();
-      enableDebts =
-          (await settingsRepo.getForTenant(
-                BusinessSetupKeys.enableDebts,
-                tenantId: tenantId,
-              ) ??
-              '1') ==
-          '1';
-      enableInstallments =
-          (await settingsRepo.getForTenant(
-                BusinessSetupKeys.enableInstallments,
-                tenantId: tenantId,
-              ) ??
-              '1') ==
-          '1';
-      enableCustomers =
-          (await settingsRepo.getForTenant(
-                BusinessSetupKeys.enableCustomers,
-                tenantId: tenantId,
-              ) ??
-              '1') ==
-          '1';
-      enableLoyalty =
-          (await settingsRepo.getForTenant(
-                BusinessSetupKeys.enableLoyalty,
-                tenantId: tenantId,
-              ) ??
-              '1') ==
-          '1';
-      enableServices =
-          (await settingsRepo.getForTenant(
-                BusinessSetupKeys.enableServices,
-                tenantId: tenantId,
-              ) ??
-              '1') ==
-          '1';
-    } catch (_) {
-      // في حال تعذر قراءة الإعدادات: لا نكسر التصفح.
+    final kept = <SubMenuItem>[];
+    for (final s in subs) {
+      if (!enableLoyalty && s.routeId == AppContentRoutes.loyaltySettings) {
+        continue;
+      }
+      if (!enablePos &&
+          (s.routeId == AppContentRoutes.addInvoice ||
+              s.routeId == AppContentRoutes.parkedSales ||
+              s.routeId == AppContentRoutes.salePosSettings)) {
+        continue;
+      }
+      if (!enableCustomers &&
+          (s.routeId == AppContentRoutes.customers ||
+              s.routeId == AppContentRoutes.customersAdd ||
+              s.routeId == AppContentRoutes.customerContacts)) {
+        continue;
+      }
+      kept.add(s);
     }
 
-    Future<bool> allow(String key) => perm.canForSession(
-      sessionUserId: auth.userId,
-      sessionRoleKey: auth.isAdmin ? 'admin' : 'staff',
-      activeShift: activeShift,
-      permissionKey: key,
+    if (kept.isEmpty) return null;
+    if (kept.length == subs.length) return m;
+    return ModuleItem(
+      icon: m.icon,
+      title: m.title,
+      iconColor: m.iconColor,
+      routeId: m.routeId,
+      breadcrumbTitle: m.breadcrumbTitle,
+      destination: m.destination,
+      subItems: kept,
     );
+  }
 
-    final source = _orderedModules;
+  VerticalManifest? get _oilVerticalManifest =>
+      VerticalRegistry.instance.manifestFor(BusinessVertical.oilChange);
+
+  VerticalManifest? get _pharmacyVerticalManifest =>
+      VerticalRegistry.instance.manifestFor(BusinessVertical.pharmacy);
+
+  WidgetBuilder? _oilRouteBuilder(String routeId) =>
+      _oilVerticalManifest?.routes[routeId];
+
+  WidgetBuilder? _pharmacyRouteBuilder(String routeId) =>
+      _pharmacyVerticalManifest?.routes[routeId];
+
+  ModuleItem? _oilNavModuleFromManifest() {
+    final manifest = _oilVerticalManifest;
+    if (manifest == null) return null;
+    final specs = manifest.navModules;
+    if (specs.isEmpty) return null;
+
+    final spec = specs.first;
+    final routes = manifest.routes;
+    final dest = routes[spec.routeId];
+    if (dest == null) return null;
+
+    List<SubMenuItem>? subItems;
+    final rawSubs = spec.subItems;
+    if (rawSubs != null && rawSubs.isNotEmpty) {
+      subItems = [];
+      for (final s in rawSubs) {
+        final subDest = routes[s.routeId];
+        if (subDest == null) continue;
+        subItems.add(
+          SubMenuItem(
+            title: s.title,
+            routeId: s.routeId,
+            breadcrumbTitle: s.effectiveBreadcrumbTitle,
+            destination: (ctx) => subDest(ctx),
+            icon: s.icon,
+          ),
+        );
+      }
+      if (subItems.isEmpty) subItems = null;
+    }
+
+    return ModuleItem(
+      icon: spec.icon,
+      title: spec.title,
+      iconColor: spec.iconColor,
+      routeId: spec.routeId,
+      breadcrumbTitle: spec.effectiveBreadcrumbTitle,
+      destination: (ctx) => dest(ctx),
+      subItems: subItems,
+    );
+  }
+
+  ModuleItem? _pharmacyNavModuleFromManifest() {
+    final manifest = _pharmacyVerticalManifest;
+    if (manifest == null) return null;
+    final specs = manifest.navModules;
+    if (specs.isEmpty) return null;
+
+    final spec = specs.first;
+    final routes = manifest.routes;
+    final dest = routes[spec.routeId];
+    if (dest == null) return null;
+
+    List<SubMenuItem>? subItems;
+    final rawSubs = spec.subItems;
+    if (rawSubs != null && rawSubs.isNotEmpty) {
+      subItems = [];
+      for (final s in rawSubs) {
+        final subDest = routes[s.routeId];
+        if (subDest == null) continue;
+        subItems.add(
+          SubMenuItem(
+            title: s.title,
+            routeId: s.routeId,
+            breadcrumbTitle: s.effectiveBreadcrumbTitle,
+            destination: (ctx) => subDest(ctx),
+            icon: s.icon,
+          ),
+        );
+      }
+      if (subItems.isEmpty) subItems = null;
+    }
+
+    return ModuleItem(
+      icon: spec.icon,
+      title: spec.title,
+      iconColor: spec.iconColor,
+      routeId: spec.routeId,
+      breadcrumbTitle: spec.effectiveBreadcrumbTitle,
+      destination: (ctx) => dest(ctx),
+      subItems: subItems,
+    );
+  }
+
+  List<ModuleItem> _navSourceModules({
+    required bool enableOilChange,
+    required bool enablePharmacy,
+  }) {
+    final list = List<ModuleItem>.from(_orderedModules);
+    list.removeWhere((m) => m.routeId == AppContentRoutes.oilServicesLog);
+    if (enableOilChange) {
+      final oilMod = _oilNavModuleFromManifest();
+      if (oilMod != null) {
+        final servicesIdx = list.indexWhere(
+          (m) => m.routeId == AppContentRoutes.servicesHub,
+        );
+        final insertAt = servicesIdx >= 0 ? servicesIdx + 1 : list.length;
+        list.insert(insertAt, oilMod);
+      }
+    }
+    if (enablePharmacy) {
+      final pharmacyBuilder =
+          _pharmacyRouteBuilder(AppContentRoutes.pharmacyInvoices);
+      if (pharmacyBuilder != null) {
+        final invIdx = list.indexWhere(
+          (m) => m.routeId == AppContentRoutes.invoices,
+        );
+        if (invIdx >= 0) {
+          final m = list[invIdx];
+          final subs = List<SubMenuItem>.from(m.subItems ?? const []);
+          subs.insert(
+            1,
+            SubMenuItem(
+              title: 'فواتير الأدوية',
+              routeId: AppContentRoutes.pharmacyInvoices,
+              breadcrumbTitle: 'فواتير الصيدلية',
+              destination: pharmacyBuilder,
+              icon: Icons.medication_liquid_rounded,
+            ),
+          );
+          list[invIdx] = ModuleItem(
+            icon: m.icon,
+            title: m.title,
+            iconColor: m.iconColor,
+            routeId: m.routeId,
+            breadcrumbTitle: m.breadcrumbTitle,
+            destination: m.destination,
+            subItems: subs,
+          );
+        } else {
+          final pharmacyMod = _pharmacyNavModuleFromManifest();
+          if (pharmacyMod != null) {
+            list.insert(1, pharmacyMod);
+          }
+        }
+      }
+    }
+    return list;
+  }
+
+  BoxDecoration _royalGoldBorderDecoration(
+    BuildContext context, {
+    required double radius,
+  }) {
+    final gold = SaleBrandColors.gold;
+    return BoxDecoration(
+      color: Theme.of(context).colorScheme.surface,
+      borderRadius: BorderRadius.circular(radius),
+      border: Border.all(
+        color: gold.withValues(alpha: 0.72),
+        width: 1.75,
+      ),
+      boxShadow: const [
+        BoxShadow(
+          color: AppGlass.goldGlow,
+          blurRadius: 14,
+          offset: Offset(0, 3),
+        ),
+      ],
+    );
+  }
+
+  void _recomputeNavModules() {
+    if (!mounted) return;
+    if (_permissionsProvider == null || _businessFeaturesProvider == null) return;
+    final perm = _permissionsProvider!;
+    final features = _businessFeaturesProvider!;
+    if (!features.isLoaded) return; // Wait for features to load
+
+    final biz = features.data;
+    final enableDebts = biz.enableDebts;
+    final enableInstallments = biz.enableInstallments;
+    final enableCustomers = biz.enableCustomers;
+    final enableLoyalty = biz.enableLoyalty;
+    final enableOilChange = biz.enableOilChange;
+    final enableRepairServices = biz.enableRepairServices;
+    final enablePos = biz.enablePos;
+    final enablePharmacy = biz.businessVertical == BusinessVertical.pharmacy;
+
+    bool allow(String key) => perm.can(key);
+
+    final hideNav = HomeDashboardResolver.resolve(biz).hideNavRouteIds;
+
+    final source = _navSourceModules(
+      enableOilChange: enableOilChange,
+      enablePharmacy: enablePharmacy,
+    );
     final out = <ModuleItem>[];
 
     for (final m in source) {
+      if (hideNav.contains(m.routeId)) continue;
       if (!enableDebts && m.routeId == AppContentRoutes.debts) continue;
       if (!enableInstallments && m.routeId == AppContentRoutes.installments) {
         continue;
@@ -264,7 +463,11 @@ class _HomeScreenState extends State<HomeScreen>
       if (!enableLoyalty && m.routeId == AppContentRoutes.loyaltySettings) {
         continue;
       }
-      if (!enableServices && m.routeId == AppContentRoutes.servicesHub) {
+      if (!enablePos && m.routeId == AppContentRoutes.invoices) continue;
+      if (!enableRepairServices && m.routeId == AppContentRoutes.servicesHub) {
+        continue;
+      }
+      if (!enableOilChange && m.routeId == AppContentRoutes.oilServicesLog) {
         continue;
       }
       if (m.routeId == AppContentRoutes.users) {
@@ -286,7 +489,7 @@ class _HomeScreenState extends State<HomeScreen>
             default:
               key = PermissionKeys.usersView;
           }
-          if (await allow(key)) newSubs.add(s);
+          if (allow(key)) newSubs.add(s);
         }
         if (newSubs.isEmpty) continue;
         out.add(
@@ -303,12 +506,20 @@ class _HomeScreenState extends State<HomeScreen>
         continue;
       }
 
-      final key = _navPermissionKeyForMainRoute(m.routeId);
+      final gated = _applyFeatureGateToModuleSubs(
+        m,
+        enableCustomers: enableCustomers,
+        enableLoyalty: enableLoyalty,
+        enablePos: enablePos,
+      );
+      if (gated == null) continue;
+
+      final key = _navPermissionKeyForMainRoute(gated.routeId);
       if (key == null) {
-        out.add(m);
+        out.add(gated);
         continue;
       }
-      if (await allow(key)) out.add(m);
+      if (allow(key)) out.add(gated);
     }
 
     if (!mounted) return;
@@ -318,28 +529,86 @@ class _HomeScreenState extends State<HomeScreen>
     });
   }
 
-  /// جلسة العمل مرتبطة بوردية مفتوحة: لا وصول للرئيسية بدون وردية (بعد إغلاقها أو مزامنة أزلتها).
   Future<void> _ensureActiveShiftGate() async {
     if (!mounted) return;
+    if (context.read<AuthProvider>().isOwner) return;
+    final auth = context.read<AuthProvider>();
     try {
-      await context.read<ShiftProvider>().refresh();
-    } catch (_) {}
-    if (!mounted) return;
-    if (!context.read<ShiftProvider>().hasOpenShift) {
-      unawaited(Navigator.of(context).pushReplacementNamed('/open-shift'));
+      final uid = auth.userId;
+      await context.read<ShiftProvider>().refresh(
+            forStaffUserId: uid != null && uid > 0 ? uid : null,
+          );
+    } catch (e, st) {
+      AppLogger.error('Home', 'فشل refresh الوردية', e, st);
     }
+    if (!mounted) return;
+    if (context.read<ShiftProvider>().hasOpenShift) return;
+    final root = appRootNavigatorKey.currentState;
+    if (root == null || !mounted) return;
+    unawaited(root.pushReplacementNamed('/open-shift'));
   }
 
   /// مزامنة فتات الخبز مع مكدس [Navigator] الداخلي.
-  late final NavigatorObserver _innerNavObserver = _HomeInnerNavObserver(this);
+  // _innerNavObserverLarge معرّف أعلى مع _innerNavKey.
+
+  Widget _wrapHomeInnerRouteScope(
+    RouteObserver<PageRoute<dynamic>> observer,
+    Widget child,
+  ) {
+    return HomeInnerRouteObserverScope(
+      routeObserver: observer,
+      child: child,
+    );
+  }
+
+  RouteObserver<PageRoute<dynamic>> get _activeHomeRouteObserver =>
+      _homeRouteObserverLarge;
+
+  NavigatorState? get _contentNavigator => _innerNavKey.currentState;
+
+  bool _innerNavCanPop() => _innerNavKey.currentState?.canPop() ?? false;
+
+  void _innerNavPop() {
+    _innerNavKey.currentState?.pop();
+  }
+
+  Widget _buildHomeInnerNavigator() {
+    return Navigator(
+      key: _innerNavKey,
+      restorationScopeId: 'home_inner_nav',
+      observers: [
+        _innerNavObserverLarge,
+        _homeRouteObserverLarge,
+      ],
+      onGenerateInitialRoutes: (_, _) => [
+        FastContentPageRoute(
+          settings: const RouteSettings(
+            name: AppContentRoutes.home,
+            arguments: BreadcrumbMeta('الرئيسية'),
+          ),
+          builder: (_) => _wrapHomeInnerRouteScope(
+            _homeRouteObserverLarge,
+            _HomeContentPage(parentState: this),
+          ),
+        ),
+      ],
+    );
+  }
 
   /// مسار الشاشات الحالي (الرئيسية → …) للعرض والرجوع السريع.
-  final List<BreadcrumbSegment> _breadcrumbTrail = [
-    const BreadcrumbSegment(id: AppContentRoutes.home, title: 'الرئيسية'),
-  ];
+  String _currentRouteId = AppContentRoutes.home;
+  String _currentTitle = 'الرئيسية';
+  String? _currentParentOverride;
+
+  List<BreadcrumbSegment> get _breadcrumbTrail => buildBreadcrumbTrail(
+    _currentRouteId,
+    _currentTitle,
+    _currentParentOverride,
+  );
 
   /// Active tab index for the bottom nav bar (small screens) ومزامنة تمييز الشريط الجانبي.
   int _activeBottomIndex = 0;
+  ModuleItem? _openBottomSubMenuModule;
 
   /// يطابق مسار المحتوى الحالي مع فهرس وحدة في [_orderedModules] لتمييز الشريط السفلي/الجانبي.
   int? _indexForContentRoute(String name) {
@@ -365,6 +634,8 @@ class _HomeScreenState extends State<HomeScreen>
       if (name == AppContentRoutes.addInvoice ||
           name == AppContentRoutes.parkedSales ||
           name == AppContentRoutes.salePosSettings ||
+          name == AppContentRoutes.pharmacyInvoices ||
+          name.startsWith(AppContentRoutes.pharmacyInvoiceDetailPrefix) ||
           name.startsWith('app_process_return')) {
         return invIdx;
       }
@@ -388,6 +659,19 @@ class _HomeScreenState extends State<HomeScreen>
             name == AppContentRoutes.serviceOrdersCreate)) {
       return servicesIdx;
     }
+    final oilIdx = _navForUi.indexWhere(
+      (m) => m.routeId == AppContentRoutes.oilServicesLog,
+    );
+    if (oilIdx >= 0 &&
+        (name == AppContentRoutes.oilServicesLog ||
+            name == AppContentRoutes.oilChangeCreate ||
+            name == AppContentRoutes.oilChangeHub ||
+            name == AppContentRoutes.oilChangeServices ||
+            name == AppContentRoutes.oilChangeServiceCreate ||
+            name.startsWith(AppContentRoutes.oilChangeEditPrefix) ||
+            name.startsWith(AppContentRoutes.oilChangeServiceEditPrefix))) {
+      return oilIdx;
+    }
     return null;
   }
 
@@ -410,6 +694,7 @@ class _HomeScreenState extends State<HomeScreen>
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         setState(() {
+          _openBottomSubMenuModule = null;
           for (final t in expandParents) {
             _expandedSubmenus.add(t);
           }
@@ -425,12 +710,7 @@ class _HomeScreenState extends State<HomeScreen>
   final Set<String> _expandedSubmenus = {};
 
   // وضع تحرير الوحدات (إعادة ترتيب). متاح في tabletLG/desktop فقط.
-  // (سابقاً كان يستخدم لـ QuickActions، حُذفت الآن وفق دستور 2026-05.)
   bool _isEditMode = false;
-
-  // حالة لوحة Mac-Style (تفعيل/تعطيل). تُستخدم في HomeUserMenu على الديسكتوب
-  // فقط. يُهيَّأ من `MacStyleSettingsPrefs.cachedValue` ثم يُحدَّث بعد قراءة I/O.
-  bool _macPanelEnabled = MacStyleSettingsPrefs.cachedValue ?? true;
 
   /// ترتيب الوحدات: مبيعات وعملاء → أقساط ومخزون وصندوق → تقارير وإدارة → أدوات.
   final List<ModuleItem> _originalModules = [
@@ -462,6 +742,13 @@ class _HomeScreenState extends State<HomeScreen>
           destination: (context) => const SalePosSettingsScreen(),
         ),
       ],
+    ),
+    ModuleItem(
+      icon: Icons.shopping_bag_outlined,
+      title: 'طلبات Market',
+      iconColor: Colors.deepOrange,
+      routeId: AppContentRoutes.onlineOrders,
+      destination: (context) => const OnlineOrdersScreen(),
     ),
     ModuleItem(
       icon: Icons.person_outline,
@@ -700,9 +987,17 @@ class _HomeScreenState extends State<HomeScreen>
   // يجب أن تُؤخذ من [Theme] (بعد دمج إعدادات الهوية ولون النص) وليس ألواناً ثابتة.
   Color get _bgColor => Theme.of(context).scaffoldBackgroundColor;
   Color get _surfaceColor => Theme.of(context).colorScheme.surface;
-  Color get _textPrimary => Theme.of(context).colorScheme.onSurface;
-  Color get _textSecondary => Theme.of(context).colorScheme.onSurfaceVariant;
+  Color get _textPrimary => _isDarkMode
+      ? Theme.of(context).colorScheme.onSurface
+      : AppColors.primaryDark;
+  Color get _textSecondary => _isDarkMode
+      ? Theme.of(context).colorScheme.onSurfaceVariant
+      : AppColors.primaryDark.withValues(alpha: 0.75);
   Color get _dividerColor => Theme.of(context).dividerColor;
+  void _onMarketOrdersBadgeChanged() {
+    if (mounted) setState(() {});
+  }
+
   @override
   void initState() {
     super.initState();
@@ -714,21 +1009,32 @@ class _HomeScreenState extends State<HomeScreen>
       duration: const Duration(milliseconds: 300),
     );
     unawaited(_loadHomeDiskPrefsOnce());
+    unawaited(_loadRecentSearches());
     _searchController.addListener(_onSearchControllerChanged);
     _searchFocusNode.addListener(_onSearchFocusTick);
     CloudSyncService.instance.remoteImportGeneration.addListener(
       _onRemoteSnapshotImported,
+    );
+    MarketplacePendingOrdersNotifier.instance.addListener(
+      _onMarketOrdersBadgeChanged,
     );
     // يؤجّل تحديث المزودين الثقيلة حتى بعد أول إطار + لحظة لتفادي التجمّد مع بناء الرئيسية.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _shiftProviderForGateListener = context.read<ShiftProvider>();
       _shiftProviderForGateListener!.addListener(_shiftGateListener);
-      BusinessFeaturesRevision.instance.addListener(_onBusinessFeaturesRevision);
+      BusinessFeaturesRevision.instance.addListener(
+        _onBusinessFeaturesRevision,
+      );
+      _permissionsProvider = context.read<PermissionsProvider>();
+      _businessFeaturesProvider = context.read<BusinessFeaturesProvider>();
+      _authProvider = context.read<AuthProvider>();
+      _permissionsProvider!.addListener(_recomputeNavModules);
       unawaited(_ensureActiveShiftGate());
       Future<void>.delayed(const Duration(milliseconds: 450), () {
         if (!mounted) return;
         unawaited(_refreshHomeAuxProviders());
+        unawaited(_restorePersistedContentRouteIfAny());
       });
     });
   }
@@ -768,25 +1074,22 @@ class _HomeScreenState extends State<HomeScreen>
     // ولا نكتبه. عند الحاجة لتنظيف بيانات قديمة من جهاز المستخدم، يمكن إضافة
     // migration واحدة في FirstRunInit تحذف هذا المفتاح القديم.
 
-    // ترطيب حالة لوحة Mac من SharedPreferences (للديسكتوب فقط — لكنه آمن دائماً).
-    final macEnabled = await MacStyleSettingsPrefs.isMacStylePanelEnabled();
-
-    if (!mounted) return;
-    setState(() {
-      _macPanelEnabled = macEnabled;
-    });
-    await _recomputeNavModules();
+    _recomputeNavModules();
   }
 
   Future<void> _refreshHomeAuxProviders() async {
     if (!mounted) return;
     try {
       await context.read<ParkedSalesProvider>().refresh();
-    } catch (_) {}
+    } catch (e, st) {
+      AppLogger.error('Home', 'فشل refresh الفواتير المعلّقة', e, st);
+    }
     if (!mounted) return;
     try {
       await context.read<NotificationProvider>().refresh();
-    } catch (_) {}
+    } catch (e, st) {
+      AppLogger.error('Home', 'فشل refresh الإشعارات', e, st);
+    }
   }
 
   /// استيراد لقطة من جهاز آخر (أو مزامنة يدوية): تحديث المزودات المعروضة على الرئيسية.
@@ -794,18 +1097,29 @@ class _HomeScreenState extends State<HomeScreen>
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
       try {
-        await context.read<ShiftProvider>().refresh();
-      } catch (_) {}
+        final auth = context.read<AuthProvider>();
+        final uid = auth.userId;
+        await context.read<ShiftProvider>().refresh(
+              forStaffUserId:
+                  !auth.isOwner && uid != null && uid > 0 ? uid : null,
+            );
+      } catch (e, st) {
+        AppLogger.error('Home', 'فشل refresh الوردية بعد استيراد لقطة', e, st);
+      }
       if (!mounted) return;
-      if (!context.read<ShiftProvider>().hasOpenShift) {
-        unawaited(Navigator.of(context).pushReplacementNamed('/open-shift'));
+      if (context.read<AuthProvider>().isOwner) {
+        await _refreshHomeAuxProviders();
+        if (mounted) setState(() {});
         return;
       }
+
       await _refreshHomeAuxProviders();
       if (!mounted) return;
       try {
         await context.read<ProductProvider>().loadProducts(seedIfEmpty: false);
-      } catch (_) {}
+      } catch (e, st) {
+        AppLogger.error('Home', 'فشل loadProducts بعد استيراد لقطة', e, st);
+      }
       if (mounted) setState(() {});
     });
   }
@@ -838,6 +1152,7 @@ class _HomeScreenState extends State<HomeScreen>
     final v = _searchController.text.toLowerCase();
     if (_searchQuery != v) {
       setState(() => _searchQuery = v);
+      _notifyMobileSearchPage();
     }
     _scheduleGlobalSearch();
   }
@@ -848,12 +1163,21 @@ class _HomeScreenState extends State<HomeScreen>
       _barcodeBridge?.detach();
     }
     WidgetsBinding.instance.removeObserver(this);
+    _permissionsProvider?.removeListener(_recomputeNavModules);
+    _permissionsProvider = null;
+    _businessFeaturesProvider = null;
+    _authProvider = null;
     _shiftProviderForGateListener?.removeListener(_shiftGateListener);
     _shiftProviderForGateListener = null;
     CloudSyncService.instance.remoteImportGeneration.removeListener(
       _onRemoteSnapshotImported,
     );
-    BusinessFeaturesRevision.instance.removeListener(_onBusinessFeaturesRevision);
+    BusinessFeaturesRevision.instance.removeListener(
+      _onBusinessFeaturesRevision,
+    );
+    MarketplacePendingOrdersNotifier.instance.removeListener(
+      _onMarketOrdersBadgeChanged,
+    );
     _searchDebounce?.cancel();
     _nameAnimController.dispose();
     _searchController.removeListener(_onSearchControllerChanged);
@@ -861,17 +1185,25 @@ class _HomeScreenState extends State<HomeScreen>
     _searchController.dispose();
     _searchFocusNode.dispose();
     _isDrawerOpen.dispose();
-    _mobileSearchCollapsed.dispose();
     super.dispose();
+  }
+
+  void _notifyMobileSearchPage() {
+    _mobileSearchPageRebuild?.call();
+  }
+
+  Future<void> _openMobileSearchPage() async {
+    final isHandset = context.screenLayout.isHandsetForLayout;
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        fullscreenDialog: isHandset,
+        builder: (_) => _HomeMobileSearchPage(host: this),
+      ),
+    );
   }
 
   void _onSearchFocusTick() {
     if (_searchFocusNode.hasFocus) {
-      // عند تركيز البحث على الهاتف نفتح شريط البحث المطوي حتى لا يكتب المستخدم
-      // داخل حقل غير ظاهر.
-      if (_mobileSearchCollapsed.value) {
-        _mobileSearchCollapsed.value = false;
-      }
       VirtualKeyboardController.instance.registerField(
         controller: _searchController,
         focusNode: _searchFocusNode,
@@ -940,13 +1272,15 @@ class _HomeScreenState extends State<HomeScreen>
         return Directionality(
           textDirection: TextDirection.rtl,
           child: AlertDialog(
-            title: const Text('تسجيل الخروج'),
+            title: const Text('قفل الجلسة'),
             content: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Text(
-                  'هل أنت متأكد أنك تريد تسجيل الخروج؟',
+                  'ستعود إلى بوابة الموظفين. حساب Gmail يبقى مفعّلاً '
+                  'وهذا الجهاز يبقى نشطاً على السيرفر.\n\n'
+                  'لفصل الجهاز نهائياً: بوابة الموظفين ← «خروج نهائي من الحساب».',
                   style: TextStyle(
                     color: Theme.of(ctx).colorScheme.onSurfaceVariant,
                     height: 1.4,
@@ -969,16 +1303,181 @@ class _HomeScreenState extends State<HomeScreen>
       },
     );
     if (ok != true || !mounted) return;
-    await auth.logout();
+    await auth.lockSession();
     if (!mounted) return;
-    unawaited(Navigator.pushReplacementNamed(context, '/login'));
+    unawaited(Navigator.pushReplacementNamed(context, '/employee-gate'));
   }
 
-  void _scheduleGlobalSearch() {
+  Future<void> _loadRecentSearches() async {
+    final items = await GlobalSearchHistoryStore.load();
+    if (!mounted) return;
+    setState(() => _recentSearches = items);
+    _notifyMobileSearchPage();
+  }
+
+  Future<void> _rememberSearchQuery(String query) async {
+    await GlobalSearchHistoryStore.remember(query);
+    await _loadRecentSearches();
+  }
+
+  List<GlobalSearchNavEntry> _searchNavEntries() {
+    return _navForUi
+        .map(
+          (m) => GlobalSearchNavEntry(
+            title: m.title,
+            routeId: m.routeId,
+            breadcrumbTitle: m.breadcrumbTitle,
+            destination: m.destination,
+            icon: m.icon,
+            iconColor: m.iconColor,
+            subItems: (m.subItems ?? const [])
+                .map(
+                  (s) => GlobalSearchNavEntry(
+                    title: s.title,
+                    routeId: s.routeId,
+                    breadcrumbTitle: s.breadcrumbTitle,
+                    destination: s.destination,
+                    icon: s.icon ?? m.icon,
+                    iconColor: m.iconColor,
+                  ),
+                )
+                .toList(),
+          ),
+        )
+        .toList();
+  }
+
+  List<GlobalSearchToolHit> _oilSearchExtras(String raw) {
+    if (_dashboardSpec().searchConfig?.routeToOilHub != true) {
+      return const [];
+    }
+    final q = raw.trim();
+    if (q.isEmpty) return const [];
+    final score = GlobalSearchMatcher.scoreFields(
+      q,
+      const [
+        'سجل',
+        'غيار',
+        'زيت',
+        'لوحة',
+        'سجل غيارات',
+        'بطاقة غيار',
+      ],
+    );
+    return [
+      GlobalSearchToolHit(
+        title: 'البحث في سجل غيارات الزيت',
+        routeId: AppContentRoutes.oilServicesLog,
+        breadcrumbTitle: 'سجل غيارات الزيت',
+        destination: (_) => OilChangeHubScreen(initialSearchQuery: q),
+        icon: Icons.history_rounded,
+        iconColor: SaleBrandColors.gold,
+        score: score > 0 ? score + 20 : 40,
+        subtitle: '«$q» — لوحة، هاتف، أو اسم عميل',
+      ),
+    ];
+  }
+
+  void _applyRecentSearch(String query) {
+    _searchController.text = query;
+    _searchController.selection = TextSelection.collapsed(offset: query.length);
+    _searchFocusNode.requestFocus();
+    _scheduleGlobalSearch(immediate: true);
+  }
+
+  HomeDashboardSpec _dashboardSpec() {
+    final features = context.read<BusinessFeaturesProvider>();
+    return HomeDashboardResolver.resolve(features.data);
+  }
+
+  void _scheduleGlobalSearch({bool immediate = false}) {
     _searchDebounce?.cancel();
-    _searchDebounce = Timer(const Duration(milliseconds: 350), () {
-      _runGlobalSearch();
+    if (immediate) {
+      unawaited(_runGlobalSearch());
+      return;
+    }
+    _searchDebounce = Timer(const Duration(milliseconds: 280), () {
+      unawaited(_runGlobalSearch());
     });
+  }
+
+  bool get _isMobileSearchPageOpen => _mobileSearchPageRebuild != null;
+
+  /// يغلق صفحة البحث على الهاتف ثم ينفّذ الانتقال للصفحة المختارة.
+  void _onGlobalSearchResultTap({
+    required String query,
+    required VoidCallback navigate,
+  }) {
+    if (query.trim().isNotEmpty) {
+      unawaited(_rememberSearchQuery(query));
+    }
+    _searchFocusNode.unfocus();
+
+    void finish() {
+      if (!mounted) return;
+      _clearGlobalSearch();
+      navigate();
+    }
+
+    if (_isMobileSearchPageOpen && mounted) {
+      Navigator.of(context).pop();
+      WidgetsBinding.instance.addPostFrameCallback((_) => finish());
+      return;
+    }
+    finish();
+  }
+
+  void _openOilChangeHubSearch({String? query}) {
+    final q = (query ?? _searchController.text).trim();
+    _onGlobalSearchResultTap(
+      query: q,
+      navigate: () {
+        _pushInContentTagged(
+          AppContentRoutes.oilServicesLog,
+          'سجل غيارات الزيت',
+          (_) => OilChangeHubScreen(initialSearchQuery: q.isEmpty ? null : q),
+        );
+      },
+    );
+  }
+
+  void _onOilDashboardAction(HomeDashboardAction action) {
+    switch (action.routeId) {
+      case 'oil_change_create':
+        final createBuilder = _oilRouteBuilder(AppContentRoutes.oilChangeCreate);
+        if (createBuilder != null) {
+          _pushInContentTagged(
+            AppContentRoutes.oilChangeCreate,
+            'بطاقة غيار زيت جديدة',
+            createBuilder,
+          );
+        }
+        break;
+      case 'oil_services_log':
+        _openOilChangeHubSearch();
+        break;
+      case 'inventory':
+        _pushInContentTagged(
+          AppContentRoutes.inventory,
+          'المخزون',
+          (_) => const InventoryHubScreen(),
+        );
+        break;
+      case 'cash':
+        _pushInContentTagged(
+          AppContentRoutes.cash,
+          'الصندوق',
+          (_) => const CashScreen(),
+        );
+        break;
+      case 'add_invoice':
+        _pushInContentTagged(
+          AppContentRoutes.addInvoice,
+          'بيع جديد',
+          (_) => const AddInvoiceScreen(),
+        );
+        break;
+    }
   }
 
   bool get _hasActiveSearch => _searchController.text.trim().isNotEmpty;
@@ -992,8 +1491,10 @@ class _HomeScreenState extends State<HomeScreen>
       _hitCustomers = [];
       _hitUsers = [];
       _hitModules = [];
+      _hitTools = [];
       _globalSearchLoading = false;
     });
+    _notifyMobileSearchPage();
   }
 
   Future<void> _runGlobalSearch() async {
@@ -1006,6 +1507,7 @@ class _HomeScreenState extends State<HomeScreen>
         _hitCustomers = [];
         _hitUsers = [];
         _hitModules = [];
+        _hitTools = [];
       });
       return;
     }
@@ -1018,33 +1520,70 @@ class _HomeScreenState extends State<HomeScreen>
         _hitCustomers = [];
         _hitUsers = [];
         _hitModules = [];
+        _hitTools = [];
       });
       await _offerReturnForScannedInvoiceId(invId);
       return;
     }
     setState(() => _globalSearchLoading = true);
     try {
-      final qLower = raw.toLowerCase();
       final results = await Future.wait([
         _productRepo.searchProducts(raw, limit: 25),
         _dbHelper.searchCustomers(raw, limit: 20),
         _dbHelper.searchUsers(raw, limit: 20),
       ]);
       if (!mounted) return;
+
+      final products = List<Map<String, dynamic>>.from(results[0] as List);
+      final customers = List<Map<String, dynamic>>.from(results[1] as List);
+      final users = List<Map<String, dynamic>>.from(results[2] as List);
+
+      int rowScore(Map<String, dynamic> row, List<String> fields) {
+        return GlobalSearchMatcher.scoreFields(
+          raw,
+          fields.map((f) => (row[f] ?? '').toString()).toList(),
+        );
+      }
+
+      products.sort(
+        (a, b) => rowScore(b, const ['name', 'barcode', 'productCode'])
+            .compareTo(rowScore(a, const ['name', 'barcode', 'productCode'])),
+      );
+      customers.sort(
+        (a, b) => rowScore(b, const ['name', 'phone', 'email'])
+            .compareTo(rowScore(a, const ['name', 'phone', 'email'])),
+      );
+      users.sort(
+        (a, b) => rowScore(b, const ['username', 'email', 'phone'])
+            .compareTo(rowScore(a, const ['username', 'email', 'phone'])),
+      );
+
+      final tools = GlobalSearchToolsIndex.search(
+        query: raw,
+        modules: _searchNavEntries(),
+        extra: _oilSearchExtras(raw),
+      );
+
       final modules = _navForUi
-          .where((m) => m.title.toLowerCase().contains(qLower))
+          .where((m) => GlobalSearchMatcher.score(raw, m.title) > 0)
           .toList();
+
+      unawaited(_rememberSearchQuery(raw));
+
       setState(() {
-        _hitProducts = results[0];
-        _hitCustomers = results[1];
-        _hitUsers = results[2];
+        _hitProducts = products;
+        _hitCustomers = customers;
+        _hitUsers = users;
         _hitModules = modules;
+        _hitTools = tools;
         _globalSearchLoading = false;
       });
+      _notifyMobileSearchPage();
     } catch (e, st) {
       AppLogger.error('HomeSearch', 'فشل البحث الشامل', e, st);
       if (!mounted) return;
       setState(() => _globalSearchLoading = false);
+      _notifyMobileSearchPage();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('تعذر إكمال البحث: $e'),
@@ -1078,13 +1617,17 @@ class _HomeScreenState extends State<HomeScreen>
     final raw = scanned.trim();
     if (raw.isEmpty || !mounted) return;
 
+    final features = context.read<BusinessFeaturesProvider>();
+
     final invFromReceipt = tryParseInvoiceIdFromBarcode(raw);
     if (invFromReceipt != null) {
+      if (!features.data.enablePos) return;
       await _offerReturnForScannedInvoiceId(invFromReceipt);
       return;
     }
     final debtCustomerId = tryParseCustomerDebtIdFromScannedText(raw);
     if (debtCustomerId != null) {
+      if (!features.data.enableDebts) return;
       if (!mounted) return;
       final nav = Navigator.of(context);
       await nav.push<void>(
@@ -1100,6 +1643,7 @@ class _HomeScreenState extends State<HomeScreen>
     if (deepInvUri != null && deepInvUri.hasScheme) {
       final linkInvId = InvoiceDeepLink.parseInvoiceId(deepInvUri);
       if (linkInvId != null && linkInvId > 0) {
+        if (!features.data.enablePos) return;
         if (!mounted) return;
         if (!context.read<AuthProvider>().isLoggedIn) return;
         await showInvoiceDetailSheet(context, _dbHelper, linkInvId);
@@ -1113,6 +1657,30 @@ class _HomeScreenState extends State<HomeScreen>
     // بعد async: يجب جدولة إطار وإلا قد يتأخر الرسم حتى حدث إدخال (ماوس/لوحة).
     SchedulerBinding.instance.scheduleFrame();
     if (product != null) {
+      if (features.data.enableOilChange && !features.data.enablePos) {
+        final oilCreateBuilder =
+            _oilRouteBuilder(AppContentRoutes.oilChangeCreate);
+        if (oilCreateBuilder != null) {
+          final route = contentMaterialRoute(
+            routeId: AppContentRoutes.oilChangeCreate,
+            breadcrumbTitle: 'بطاقة غيار زيت جديدة',
+            builder: oilCreateBuilder,
+          );
+          final nav = _contentNavigator;
+          if (nav != null) {
+            unawaited(nav.push<void>(route));
+          } else {
+            unawaited(Navigator.of(context).push<void>(route));
+          }
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!mounted) return;
+              unawaited(_barcodeBridge?.dispatch(raw));
+            });
+          });
+        }
+        return;
+      }
       final draft = context.read<SaleDraftProvider>();
       draft.enqueueProductLine({'barcode': raw});
       if (!draft.isSaleScreenOpen) {
@@ -1145,74 +1713,12 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  NavigatorState? get _contentNavigator =>
-      _innerNavKey.currentState ?? _innerNavKeySmall.currentState;
-
-  /// مسارات تُفتح في النافذة العائمة (mac-style) عند تفعيل التفضيل.
-  static const Set<String> _macFloatingRouteIds = {
-    AppContentRoutes.settings,
-    AppContentRoutes.cash,
-    AppContentRoutes.installments,
-    AppContentRoutes.installmentSettings,
-    AppContentRoutes.invoices,
-    AppContentRoutes.addInvoice,
-    AppContentRoutes.parkedSales,
-    AppContentRoutes.salePosSettings,
-    AppContentRoutes.users,
-    AppContentRoutes.staffShiftsWeek,
-    AppContentRoutes.employeeIdentity,
-    AppContentRoutes.printing,
-    AppContentRoutes.loyaltySettings,
-    AppContentRoutes.loyaltyLedger,
-    AppContentRoutes.debts,
-    AppContentRoutes.debtSettings,
-  };
-
   /// يفتح الشاشة داخل مسار المحتوى مع معرّف ثابت: لا يُكرّر نفس الشاشة في المكدس.
-  /// عند تفعيل [MacStyleSettingsPrefs] والمسار ضمن [_macFloatingRouteIds] يُفتح عائماً
-  /// على الشاشات العريضة فقط؛ على الهاتف ([ScreenLayout.isHandsetForLayout]) دائماً ملء الشاشة.
   void _pushInContentTagged(
     String routeId,
     String breadcrumbTitle,
-    Widget Function(BuildContext) builder, {
-    Widget Function(BuildContext)? floatingPageBuilder,
-  }) {
-    unawaited(
-      _pushInContentTaggedAsync(
-        routeId,
-        breadcrumbTitle,
-        builder,
-        floatingPageBuilder: floatingPageBuilder,
-      ),
-    );
-  }
-
-  Future<void> _pushInContentTaggedAsync(
-    String routeId,
-    String breadcrumbTitle,
-    Widget Function(BuildContext) builder, {
-    Widget Function(BuildContext)? floatingPageBuilder,
-  }) async {
-    if (!mounted) return;
-    // على الهاتف: صفحة كاملة داخل المحتوى — لا نافذة عائمة ضيقة فوق الواجهة.
-    if (ScreenLayout.of(context).isHandsetForLayout) {
-      _pushInContentTaggedSync(routeId, breadcrumbTitle, builder);
-      return;
-    }
-    final cached = MacStyleSettingsPrefs.cachedValue;
-    final useMacPanel =
-        cached ?? await MacStyleSettingsPrefs.isMacStylePanelEnabled();
-    if (!mounted) return;
-    if (useMacPanel && _macFloatingRouteIds.contains(routeId)) {
-      final page = floatingPageBuilder ?? builder;
-      await showMacStyleFloatingPanel(
-        context,
-        routeId: routeId,
-        windowTitle: breadcrumbTitle,
-        pageBuilder: page,
-      );
-      return;
-    }
+    Widget Function(BuildContext) builder,
+  ) {
     _pushInContentTaggedSync(routeId, breadcrumbTitle, builder);
   }
 
@@ -1227,10 +1733,14 @@ class _HomeScreenState extends State<HomeScreen>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final nav = _contentNavigator;
+      final observer = _activeHomeRouteObserver;
       final route = contentMaterialRoute(
         routeId: routeId,
         breadcrumbTitle: breadcrumbTitle,
-        builder: (ctx) => builder(ctx),
+        builder: (ctx) => _wrapHomeInnerRouteScope(
+          observer,
+          builder(ctx),
+        ),
       );
       if (nav != null) {
         final alreadyThere = popUntilContentRoute(nav, routeId);
@@ -1243,63 +1753,61 @@ class _HomeScreenState extends State<HomeScreen>
     });
   }
 
-  /// يغلق الورقة/الحوار ثم يفتح المسار بعد انتهاء إطار الرسم حتى لا يُستدعى [Navigator.push]
-  /// أثناء قفل الـ Navigator (انظر: `!_debugLocked`).
-  void _popSheetThenPushInContentTagged(
-    String routeId,
-    String breadcrumbTitle,
-    Widget Function(BuildContext) builder, {
-    Widget Function(BuildContext)? floatingPageBuilder,
-  }) {
-    Navigator.of(context).pop();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      _pushInContentTagged(
-        routeId,
-        breadcrumbTitle,
-        builder,
-        floatingPageBuilder: floatingPageBuilder,
-      );
-    });
-  }
-
-  /// [NavigatorObserver] يستدعي هذا أثناء تركيب الـ Navigator؛ لا يُسمح بـ [setState] هنا مباشرة.
-  void _appendBreadcrumbForRoute(Route<dynamic> route) {
+  /// [NavigatorObserver] يستدعي هذا عند تغيّر مسار الـ Navigator لمزامنة الملاحة الشجرية التلقائية.
+  void _syncBreadcrumbForRoute(Route<dynamic> route) {
     final id = route.settings.name;
     if (id is! String) return;
     final title = breadcrumbTitleForRouteSettings(route.settings);
+    final args = route.settings.arguments;
+    final parentOverride = args is BreadcrumbMeta ? args.parentOverride : null;
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       setState(() {
-        if (_breadcrumbTrail.isNotEmpty && _breadcrumbTrail.last.id == id) {
-          return;
-        }
-        if (id == AppContentRoutes.home &&
-            _breadcrumbTrail.any((e) => e.id == AppContentRoutes.home)) {
-          return;
-        }
-        _breadcrumbTrail.add(BreadcrumbSegment(id: id, title: title));
+        _currentRouteId = id;
+        _currentTitle = title;
+        _currentParentOverride = parentOverride;
       });
+      _persistResumeContext(id);
     });
   }
 
-  void _removeBreadcrumbForRoute(Route<dynamic> route) {
-    final id = route.settings.name;
-    if (id is! String) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      setState(() {
-        if (_breadcrumbTrail.isEmpty) return;
-        if (_breadcrumbTrail.last.id == id) {
-          _breadcrumbTrail.removeLast();
+  void _persistResumeContext(String routeId) {
+    final auth = _authProvider;
+    final uid = auth?.userId;
+    if (uid == null || auth == null || !auth.isLoggedIn || auth.isOwner) return;
+    unawaited(
+      SessionResumeContext.recordActiveSession(
+        userId: uid,
+        rootRoute: '/home',
+        contentRouteId: routeId,
+      ),
+    );
+  }
+
+  Future<void> _restorePersistedContentRouteIfAny() async {
+    final auth = _authProvider ?? context.read<AuthProvider>();
+    final uid = auth.userId;
+    if (uid == null || auth.isOwner || !mounted) return;
+    final routeId = await SessionResumeContext.contentRouteForUser(uid);
+    if (routeId == null ||
+        routeId == AppContentRoutes.home ||
+        routeId == _currentRouteId) {
+      return;
+    }
+
+    for (final m in _navForUi) {
+      if (m.routeId == routeId) {
+        _pushInContentTagged(routeId, m.title, m.destination);
+        return;
+      }
+      for (final s in m.subItems ?? const <SubMenuItem>[]) {
+        if (s.routeId == routeId) {
+          _pushInContentTagged(routeId, s.title, s.destination);
           return;
         }
-        final idx = _breadcrumbTrail.lastIndexWhere((s) => s.id == id);
-        if (idx >= 0) {
-          _breadcrumbTrail.removeRange(idx, _breadcrumbTrail.length);
-        }
-      });
-    });
+      }
+    }
   }
 
   void _onBreadcrumbSegmentTap(BreadcrumbSegment segment) {
@@ -1319,16 +1827,40 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  /// تثبيت حجم المحتوى: اللوحة تُرسَم فوق الجسم ولا تُصغّر النافذة (مثل سلوك لوحة فوق المحتوى).
+  bool _systemKeyboardOpen(BuildContext context) {
+    return MediaQuery.viewInsetsOf(context).bottom > 0;
+  }
+
+  /// على الهاتف: عند فتح لوحة المفاتيح نخفي الشريط السفلي — يمنع الشريط
+  /// الفارغ بين الحقل والكيبورد.
+  Widget? _bottomNavWhenKeyboardClosed(List<ModuleItem> bottomModules) {
+    if (bottomModules.isEmpty) return const SizedBox.shrink();
+    if (context.screenLayout.isHandsetForLayout &&
+        _systemKeyboardOpen(context)) {
+      return null;
+    }
+    return _buildBottomNavBar(bottomModules);
+  }
+
+  /// تثبيت حجم المحتوى: اللوحة تُرسَم فوق الجسم مع حجز ارتفاعها حتى لا يفيض المحتوى الداخلي.
   Widget _wrapBodyWithSearchKeyboard(Widget bodyColumn) {
     final hideVk = ScreenLayout.of(context).hideInAppSearchKeyboard;
+    final vkVisible = _showVirtualSearchKeyboard && !hideVk;
+    final vkReserve = vkVisible ? MediaQuery.sizeOf(context).height * 0.40 : 0.0;
+    final subMenuOverlay = _buildBottomSubMenuOverlay();
     return Stack(
       fit: StackFit.expand,
       clipBehavior: Clip.none,
       children: [
-        // يملأ [Stack] بشكل صريح؛ يمنع قيوداً غير متوقعة على [Column]/[Expanded] داخل المحتوى.
-        Positioned.fill(child: bodyColumn),
-        if (_showVirtualSearchKeyboard && !hideVk)
+        Positioned.fill(
+          child: Padding(
+            padding: EdgeInsets.only(bottom: vkReserve),
+            child: bodyColumn,
+          ),
+        ),
+        if (subMenuOverlay != null)
+          Positioned.fill(child: subMenuOverlay),
+        if (vkVisible)
           Positioned(
             left: 0,
             right: 0,
@@ -1336,10 +1868,14 @@ class _HomeScreenState extends State<HomeScreen>
             child: SearchVirtualKeyboard(
               controller: _searchController,
               isDark: _isDarkMode,
-              onClose: () => setState(() => _showVirtualSearchKeyboard = false),
+              onClose: () {
+                setState(() => _showVirtualSearchKeyboard = false);
+                _notifyMobileSearchPage();
+              },
               onSubmit: () {
                 _scheduleGlobalSearch();
                 setState(() => _showVirtualSearchKeyboard = false);
+                _notifyMobileSearchPage();
                 if (mounted) FocusScope.of(context).unfocus();
               },
             ),
@@ -1348,194 +1884,158 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
+  /// ارتفاع الشريط السفلي + الهوامش — لموضع القائمة الفرعية في طبقة الـ body.
+  ({double totalHeight, double horizontalInset, double barHeight}) _bottomNavLayoutMetrics() {
+    final sl = ScreenLayout.of(context);
+    final isPhoneDock = sl.isHandsetForLayout;
+    final barHeight = sl.isVeryShort ? 56.0 : (sl.isCompactHeight ? 60.0 : 64.0);
+    final safeBottom = MediaQuery.paddingOf(context).bottom;
+    if (isPhoneDock) {
+      final bottomPad = math.max(10.0, safeBottom);
+      return (
+        totalHeight: barHeight + bottomPad,
+        horizontalInset: 14.0,
+        barHeight: barHeight,
+      );
+    }
+    return (
+      totalHeight: barHeight + safeBottom,
+      horizontalInset: 16.0,
+      barHeight: barHeight,
+    );
+  }
+
+  /// طبقة القائمة الفرعية داخل الـ body — [Scaffold.bottomNavigationBar] لا يستقبل
+  /// لمسات خارج حدوده حتى لو ظهرت فوقه بصرياً.
+  Widget? _buildBottomSubMenuOverlay() {
+    final module = _openBottomSubMenuModule;
+    if (module == null) return null;
+    final variant = ScreenLayout.of(context).layoutVariant;
+    if (variant.index >= DeviceVariant.tabletLG.index) return null;
+    if (_systemKeyboardOpen(context)) return null;
+
+    final metrics = _bottomNavLayoutMetrics();
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Positioned(
+          left: 0,
+          right: 0,
+          top: 0,
+          bottom: metrics.totalHeight,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => setState(() => _openBottomSubMenuModule = null),
+            child: ColoredBox(
+              color: Colors.black.withValues(alpha: _isDarkMode ? 0.48 : 0.30),
+            ),
+          ),
+        ),
+        Positioned(
+          left: metrics.horizontalInset,
+          right: metrics.horizontalInset,
+          bottom: metrics.totalHeight + 8,
+          child: _buildBottomSubMenuPopover(module),
+        ),
+      ],
+    );
+  }
+
   // ── Build ────────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
+    final features = context.watch<BusinessFeaturesProvider>();
+    if (!features.isLoaded) {
+      return Scaffold(
+        backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+        body: const Center(child: CircularProgressIndicator()),
+      );
+    }
+
     return Consumer<ThemeProvider>(
       builder: (context, themeProvider, _) {
         return LayoutBuilder(
           builder: (outerCtx, outerConstraints) {
-            // تصنيف الجهاز يعتمد الآن على DeviceVariant (Single Source of Truth).
-            // tabletLG+ (≥840dp width) ⇒ شريط جانبي ثابت.
-            // أصغر ⇒ شريط سفلي + Navigator داخلي.
-            // ملاحظة: نحتفظ بـ LayoutBuilder لتمرير outerConstraints إلى العناصر
-            // الداخلية، لكن قرار الـ Shell نفسه يأخذ من DeviceVariant.
             final variant = context.screenLayout.layoutVariant;
             final isLarge = variant.index >= DeviceVariant.tabletLG.index;
-
-            // ── LARGE SCREEN: persistent sidebar + nested Navigator ──────────
-            if (isLarge) {
-              return PopScope(
-                canPop: false,
-                onPopInvokedWithResult: (didPop, _) {
-                  if (_innerNavKey.currentState?.canPop() ?? false) {
-                    _innerNavKey.currentState!.pop();
-                  }
-                },
-                child: Scaffold(
-                  resizeToAvoidBottomInset: false,
-                  backgroundColor: _bgColor,
-                  appBar: _buildAppBar(themeProvider),
-                  body: _wrapBodyWithSearchKeyboard(
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        _buildBreadcrumbStrip(),
-                        Expanded(
-                          child: Row(
-                            children: [
-                              ValueListenableBuilder<bool>(
-                                valueListenable: _isDrawerOpen,
-                                builder: (_, isOpen, _) {
-                                  const double collapsedW = 56.0;
-                                  const double expandedW = 220.0;
-                                  final sideW = isOpen ? expandedW : collapsedW;
-                                  return AnimatedContainer(
-                                    duration: const Duration(milliseconds: 240),
-                                    curve: Curves.easeInOut,
-                                    width: sideW,
-                                    child: _buildPersistentSidebar(isOpen),
-                                  );
-                                },
-                              ),
-                              Expanded(
-                                child: Stack(
-                                  fit: StackFit.expand,
-                                  clipBehavior: Clip.none,
-                                  children: [
-                                    SizedBox.expand(
-                                      child: Navigator(
-                                        key: _innerNavKey,
-                                        restorationScopeId:
-                                            'home_inner_nav_main',
-                                        observers: [
-                                          _innerNavObserver,
-                                          homeInnerRouteObserver,
-                                        ],
-                                        onGenerateInitialRoutes: (_, _) => [
-                                          FastContentPageRoute(
-                                            settings: const RouteSettings(
-                                              name: AppContentRoutes.home,
-                                              arguments: BreadcrumbMeta(
-                                                'الرئيسية',
-                                              ),
-                                            ),
-                                            builder: (_) => _HomeContentPage(
-                                              parentState: this,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                    if (_hasActiveSearch) ...[
-                                      Positioned.fill(
-                                        child: GestureDetector(
-                                          behavior: HitTestBehavior.opaque,
-                                          onTap: _clearGlobalSearch,
-                                          child: Container(
-                                            color: Colors.black.withValues(
-                                              alpha: 0.4,
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                      Positioned(
-                                        top: 0,
-                                        left: 0,
-                                        right: 0,
-                                        child: _buildSearchOverlayDropdown(),
-                                      ),
-                                    ],
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              );
-            }
-
-            // ── NARROW SCREEN: شريط سفلي للوحدات فقط — بدون عمود جانبي (هاتف/نافذة ضيقة) ─
             final isHandset = ScreenLayout.of(context).isHandsetForLayout;
 
-            final navigatorWidget = Navigator(
-              key: _innerNavKeySmall,
-              restorationScopeId: 'home_inner_nav_small',
-              observers: [
-                _innerNavObserver,
-                homeInnerRouteObserver,
+            if (_lastLayoutVariant != null &&
+                _lastLayoutVariant != variant) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (!mounted) return;
+                _syncActiveModuleIndexFromRoute(_currentRouteId);
+              });
+            }
+            _lastLayoutVariant = variant;
+
+            final innerNav = _buildHomeInnerNavigator();
+            final contentArea = Stack(
+              fit: StackFit.expand,
+              clipBehavior: Clip.none,
+              children: [
+                Positioned.fill(child: innerNav),
               ],
-              onGenerateInitialRoutes: (_, _) => [
-                FastContentPageRoute(
-                  settings: const RouteSettings(
-                    name: AppContentRoutes.home,
-                    arguments: BreadcrumbMeta('الرئيسية'),
+            );
+
+            final bodyColumn = Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (isLarge) _buildBreadcrumbStrip(),
+                Expanded(
+                  child: Row(
+                    children: [
+                      if (isLarge)
+                        ValueListenableBuilder<bool>(
+                          valueListenable: _isDrawerOpen,
+                          builder: (_, isOpen, _) {
+                            const double collapsedW = 56.0;
+                            const double expandedW = 220.0;
+                            final sideW = isOpen ? expandedW : collapsedW;
+                            return AnimatedContainer(
+                              duration: const Duration(milliseconds: 240),
+                              curve: Curves.easeInOut,
+                              width: sideW,
+                              child: _buildPersistentSidebar(isOpen),
+                            );
+                          },
+                        ),
+                      Expanded(child: contentArea),
+                    ],
                   ),
-                  builder: (_) => _HomeContentPage(parentState: this),
                 ),
               ],
             );
 
-            return PopScope(
-              canPop: false,
-              onPopInvokedWithResult: (didPop, _) {
-                if (_innerNavKeySmall.currentState?.canPop() ?? false) {
-                  _innerNavKeySmall.currentState!.pop();
+            final scaffold = Scaffold(
+              resizeToAvoidBottomInset: _systemKeyboardOpen(context),
+              backgroundColor: _bgColor,
+              appBar: _buildMobileTopAppBar(themeProvider),
+              body: _wrapBodyWithSearchKeyboard(bodyColumn),
+              bottomNavigationBar:
+                  isLarge ? null : _bottomNavWhenKeyboardClosed(_navForUi),
+            );
+
+            if (isLarge) {
+              return PopScope(
+                canPop: false,
+                onPopInvokedWithResult: (didPop, _) {
+                  if (_innerNavCanPop()) _innerNavPop();
+                },
+                child: scaffold,
+              );
+            }
+
+            return DoubleBackToExitScope(
+              enabled: isHandset,
+              onBackPressed: () {
+                if (_innerNavCanPop()) {
+                  _innerNavPop();
+                  return true;
                 }
+                return false;
               },
-              child: Scaffold(
-                resizeToAvoidBottomInset: false,
-                backgroundColor: _bgColor,
-                appBar: isHandset
-                    ? _buildMobileTopAppBar(themeProvider)
-                    : _buildAppBar(themeProvider),
-                body: _wrapBodyWithSearchKeyboard(
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      if (isHandset) _buildMobileSearchSlot(),
-                      Expanded(
-                        child: Stack(
-                          fit: StackFit.expand,
-                          clipBehavior: Clip.none,
-                          children: [
-                            SizedBox.expand(
-                              child: isHandset
-                                  ? NotificationListener<ScrollNotification>(
-                                      onNotification: _onMobileBodyScroll,
-                                      child: navigatorWidget,
-                                    )
-                                  : navigatorWidget,
-                            ),
-                            if (_hasActiveSearch) ...[
-                              Positioned.fill(
-                                child: GestureDetector(
-                                  behavior: HitTestBehavior.opaque,
-                                  onTap: _clearGlobalSearch,
-                                  child: Container(
-                                    color: Colors.black.withValues(alpha: 0.4),
-                                  ),
-                                ),
-                              ),
-                              Positioned(
-                                top: 0,
-                                left: 0,
-                                right: 0,
-                                child: _buildSearchOverlayDropdown(),
-                              ),
-                            ],
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                bottomNavigationBar: _buildBottomNavBar(_navForUi),
-              ),
+              child: scaffold,
             );
           },
         );
@@ -1546,7 +2046,7 @@ class _HomeScreenState extends State<HomeScreen>
   /// أزرار شريط التطبيق العلوي — تتبع [AppCornerStyle] (خلفية وحواف عند «مستدير»).
   ButtonStyle _homeAppBarActionStyle({Color? foreground}) {
     final ac = context.appCorners;
-    final onPrimary = foreground ?? Theme.of(context).colorScheme.onPrimary;
+    final onPrimary = foreground ?? Theme.of(context).colorScheme.onSurface;
     if (!ac.isRounded) {
       return IconButton.styleFrom(foregroundColor: onPrimary);
     }
@@ -1563,13 +2063,28 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Widget _appBarShiftButton() {
+    if (context.watch<AuthProvider>().isOwner) {
+      return const SizedBox.shrink();
+    }
     return Consumer<ShiftProvider>(
       builder: (context, shift, _) {
-        if (!shift.hasOpenShift) return const SizedBox.shrink();
+        if (!shift.hasOpenShift) {
+          return IconButton(
+            style: _homeAppBarActionStyle(),
+            icon: const Icon(Icons.event_available_outlined, size: 20),
+            tooltip: 'فتح وردية',
+            onPressed: () {
+              final root = appRootNavigatorKey.currentState;
+              if (root != null) {
+                unawaited(root.pushNamed('/open-shift'));
+              }
+            },
+          );
+        }
         final label = shift.activeShift?['shiftStaffName'] as String?;
         return IconButton(
           style: _homeAppBarActionStyle(),
-          icon: const Icon(Icons.event_available_outlined, size: 20),
+          icon: const Icon(Icons.event_busy_outlined, size: 20),
           tooltip: label != null && label.isNotEmpty
               ? 'وردية: $label — إغلاق'
               : 'إغلاق الوردية',
@@ -1593,22 +2108,83 @@ class _HomeScreenState extends State<HomeScreen>
             IconButton(
               style: _homeAppBarActionStyle(),
               icon: Icon(
-                hasError
-                    ? Icons.cloud_off_outlined
-                    : Icons.cloud_sync_outlined,
+                hasError ? Icons.cloud_off_outlined : Icons.cloud_sync_outlined,
                 size: 20,
               ),
               tooltip: hasError ? 'تزامن — فشل آخر محاولة' : 'تزامن سحابي',
               onPressed: () async {
                 final messenger = ScaffoldMessenger.of(context);
+                final cs = Theme.of(context).colorScheme;
                 messenger.showSnackBar(
                   const SnackBar(
-                    content: Text('بدء التزامن…'),
+                    content: Text('جارٍ التزامن مع السحابة…'),
                     duration: Duration(seconds: 2),
                     behavior: SnackBarBehavior.floating,
                   ),
                 );
-                await CloudSyncService.instance.syncNow();
+                // نفس منطق «مزامنة الآن» في الإعدادات: سحب + رفع لقطة كاملة.
+                await CloudSyncService.instance.syncNow(
+                  forcePull: true,
+                  forcePush: true,
+                  forceImportOnPull: true,
+                );
+                if (!context.mounted) return;
+                final err = CloudSyncService.instance.lastError.value;
+                if (err != null && err.trim().isNotEmpty) {
+                  final short = err.length > 120
+                      ? '${err.substring(0, 120)}…'
+                      : err;
+                  messenger.showSnackBar(
+                    SnackBar(
+                      content: Text('تعذّر التزامن: $short'),
+                      backgroundColor: cs.error,
+                      behavior: SnackBarBehavior.floating,
+                      duration: const Duration(seconds: 5),
+                    ),
+                  );
+                  return;
+                }
+                final at = CloudSyncService.instance.lastSyncAt.value;
+                final timeLabel = at == null
+                    ? ''
+                    : ' — ${DateFormat.Hm('ar').format(at.toLocal())}';
+                messenger.showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      'تمت مزامنة قاعدة البيانات كاملة$timeLabel'
+                      '\nعملاء، منتجات، فواتير، صندوق، وبطاقات غيار الزيت.',
+                    ),
+                    behavior: SnackBarBehavior.floating,
+                    duration: const Duration(seconds: 4),
+                  ),
+                );
+                try {
+                  await MarketplaceMerchantBootstrapService.instance
+                      .ensureStoreAndSyncCatalog();
+                  if (!context.mounted) return;
+                  messenger.showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                        'تم رفع متجرك ومنتجات Market المتوفرة — '
+                        'أعد تشغيل تطبيق المشتري.',
+                      ),
+                      behavior: SnackBarBehavior.floating,
+                      duration: Duration(seconds: 5),
+                    ),
+                  );
+                } catch (e) {
+                  if (!context.mounted) return;
+                  messenger.showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        'المزامنة السحابية نجحت لكن Market لم يُرفع: $e'
+                        '\nافتح «طلبات Market» → «إنشاء متجري على Market».',
+                      ),
+                      behavior: SnackBarBehavior.floating,
+                      duration: const Duration(seconds: 6),
+                    ),
+                  );
+                }
               },
             ),
             if (hasError)
@@ -1669,11 +2245,9 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   /// قائمة المستخدم المنسدلة — تجمع كل الأدوات الثانوية (Theme، الإعدادات،
-  /// الحاسبة، Mac panel، التحرير، الخروج). تُستخدم في كل الفئات.
+  /// الحاسبة، التحرير، الخروج). تُستخدم في كل الفئات.
   Widget _appBarUserMenu(ThemeProvider themeProvider, AuthProvider auth) {
     final variant = context.screenLayout.layoutVariant;
-    final isDesktop = variant == DeviceVariant.desktopSM ||
-        variant == DeviceVariant.desktopLG;
     final showEditMode = variant.index >= DeviceVariant.tabletLG.index;
 
     return HomeUserMenu(
@@ -1681,7 +2255,6 @@ class _HomeScreenState extends State<HomeScreen>
       userRole: auth.role,
       isDarkMode: _isDarkMode,
       isEditMode: _isEditMode,
-      macPanelEnabled: _macPanelEnabled,
       showEditMode: showEditMode,
       onShowUserInfo: () => _showUserInfoDialog(auth),
       onToggleTheme: () {
@@ -1692,20 +2265,10 @@ class _HomeScreenState extends State<HomeScreen>
         AppContentRoutes.settings,
         'الإعدادات',
         (_) => const SettingsScreen(),
-        floatingPageBuilder: (_) => const SettingsScreen(showAppBar: false),
       ),
       onShowCalculator: () => showFloatingCalculator(context),
       onToggleEditMode: () => setState(() => _isEditMode = !_isEditMode),
       onLogout: () => unawaited(_confirmAndLogout(auth)),
-      // لوحة Mac على الديسكتوب فقط — تمرير null في الباقي يخفي الخيار تماماً
-      onToggleMacPanel: isDesktop
-          ? () async {
-              final next = !_macPanelEnabled;
-              await MacStyleSettingsPrefs.setMacStylePanelEnabled(next);
-              if (!mounted) return;
-              setState(() => _macPanelEnabled = next);
-            }
-          : null,
     );
   }
 
@@ -1714,8 +2277,7 @@ class _HomeScreenState extends State<HomeScreen>
     AuthProvider auth,
   ) {
     // التصميم الجديد (2026-05): نُبقي خارج القائمة المنسدلة 3 أزرار رئيسية
-    // فقط (شرط أن تكون الوردية مفتوحة يظهر الـ shift أيضاً)، وكل ما عداها
-    // يدخل في HomeUserMenu لتقليل العبء الذهني (Cognitive Load).
+    // + زر الوردية (فتح/إغلاق) للموظفين، وكل ما عداها يدخل في HomeUserMenu.
     return [
       _appBarShiftButton(),
       _appBarSyncButton(),
@@ -1725,375 +2287,192 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   // ── AppBar ──────────────────────────────────────────────────────────────────
-  PreferredSizeWidget _buildAppBar(ThemeProvider themeProvider) {
+  /// AppBar — شعار + شريط بحث مضغوط بين الشعار وأزرار الوردية (كل المقاسات).
+  PreferredSizeWidget _buildMobileTopAppBar(ThemeProvider themeProvider) {
     final auth = Provider.of<AuthProvider>(context, listen: false);
-    final sl = ScreenLayout.of(context);
-    final ac = context.appCorners;
     final cs = Theme.of(context).colorScheme;
     return AppBar(
-      backgroundColor: cs.primary,
-      foregroundColor: cs.onPrimary,
+      backgroundColor: cs.surfaceContainerHighest,
+      foregroundColor: cs.onSurface,
+      iconTheme: IconThemeData(color: cs.onSurface),
       elevation: 0,
       surfaceTintColor: Colors.transparent,
       shadowColor: Colors.transparent,
       titleSpacing: 0,
       automaticallyImplyLeading: false,
-      shape: ac.isRounded
-          ? RoundedRectangleBorder(
-              borderRadius: BorderRadius.vertical(
-                bottom: Radius.circular(ac.rLg),
-              ),
-            )
-          : null,
-      title: _buildZorahTitle(),
+      title: Row(
+        children: [
+          _buildMobileAppBarLogo(),
+          _buildMobileCompactSearchTrigger(),
+        ],
+      ),
       actions: _buildAppBarActions(themeProvider, auth),
-      bottom: PreferredSize(
-        preferredSize: Size.fromHeight(sl.appBarSearchSectionHeight),
-        child: Padding(
-          padding: EdgeInsets.fromLTRB(
-            sl.pageHorizontalGap,
-            4,
-            sl.pageHorizontalGap,
-            sl.isCompactHeight ? 6 : 10,
+    );
+  }
+
+  Widget _buildMobileAppBarLogo() {
+    final sl = ScreenLayout.of(context);
+    return GestureDetector(
+      onTap: _animateCompanyName,
+      child: AppBrandMark(
+        title: 'naboo',
+        logoSize: sl.isNarrowWidth ? 32 : 34,
+        gap: 0,
+        borderColor: const Color(0xFFB8960C),
+        borderWidth: 1.6,
+        showTitle: false,
+      ),
+    );
+  }
+
+  String _mobileSearchHintText() {
+    final sl = ScreenLayout.of(context);
+    final w = MediaQuery.sizeOf(context).width;
+    final shortHint = sl.isHandsetForLayout && w < 400;
+    final searchConfig = _dashboardSpec().searchConfig;
+    if (searchConfig != null) {
+      return shortHint
+          ? searchConfig.shortPlaceholder
+          : searchConfig.placeholder;
+    }
+    return shortHint
+        ? 'بحث سريع: وحدات، منتجات، عملاء…'
+        : 'بحث: وحدات، منتجات، عملاء، موظفون، باركود…';
+  }
+
+  /// زر بحث مضغوط في شريط التطبيق — يفتح صفحة بحث كاملة عند الضغط.
+  Widget _buildMobileCompactSearchTrigger() {
+    final sl = ScreenLayout.of(context);
+    final ac = context.appCorners;
+    final cs = Theme.of(context).colorScheme;
+    final oilSearch = _dashboardSpec().searchConfig;
+    final royalGold = SaleBrandColors.gold;
+    final useRoyal = oilSearch?.routeToOilHub == true;
+    final hint = _mobileSearchHintText();
+    final borderColor = useRoyal
+        ? royalGold.withValues(alpha: 0.55)
+        : cs.outline.withValues(alpha: 0.35);
+    final triggerHeight = sl.isWideVariant ? 40.0 : 36.0;
+
+    return Expanded(
+      child: Padding(
+        padding: EdgeInsetsDirectional.only(
+          start: sl.isNarrowWidth ? 6 : 8,
+          end: sl.isWideVariant ? 12 : 4,
+        ),
+        child: Semantics(
+          button: true,
+          label: 'فتح البحث',
+          child: Material(
+            color: _isDarkMode
+                ? const Color(0xFF1E293B)
+                : (useRoyal
+                      ? cs.surfaceContainerHighest.withValues(alpha: 0.35)
+                      : cs.surface),
+            elevation: 0,
+            borderRadius: ac.lg,
+            child: InkWell(
+              onTap: _openMobileSearchPage,
+              borderRadius: ac.lg,
+              child: Container(
+                height: triggerHeight,
+                padding: const EdgeInsetsDirectional.symmetric(horizontal: 10),
+                decoration: BoxDecoration(
+                  borderRadius: ac.lg,
+                  border: Border.all(
+                    color: borderColor,
+                    width: useRoyal ? 1.5 : 1,
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.search_rounded,
+                      size: sl.isWideVariant ? 20 : 18,
+                      color: useRoyal ? royalGold : _textSecondary,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        hint,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: _textSecondary,
+                          fontSize: sl.isWideVariant
+                              ? 13.5
+                              : (sl.isNarrowWidth ? 11.5 : 12.5),
+                        ),
+                      ),
+                    ),
+                    Icon(
+                      Icons.qr_code_scanner_rounded,
+                      size: sl.isWideVariant ? 20 : 18,
+                      color: useRoyal ? royalGold : _textSecondary,
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ),
-          child: _buildSearchBar(),
         ),
       ),
     );
   }
 
-  /// AppBar مبسّط للهاتف فقط — بدون شريط بحث في الأسفل (يعرض شريط البحث
-  /// كجزء من جسم الصفحة بحيث يمكن طيّه عند التمرير).
-  PreferredSizeWidget _buildMobileTopAppBar(ThemeProvider themeProvider) {
-    final auth = Provider.of<AuthProvider>(context, listen: false);
-    final cs = Theme.of(context).colorScheme;
-    return AppBar(
-      backgroundColor: cs.primary,
-      foregroundColor: cs.onPrimary,
-      elevation: 0,
-      surfaceTintColor: Colors.transparent,
-      shadowColor: Colors.transparent,
-      titleSpacing: 0,
-      automaticallyImplyLeading: false,
-      title: _buildZorahTitle(),
-      actions: _buildAppBarActions(themeProvider, auth),
-    );
+  Widget _buildMobileSearchResultsBody() {
+    if (_globalSearchLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (!_hasActiveSearch) {
+      return _buildRecentSearchSuggestions();
+    }
+    return _buildSearchOverlayScrollable();
   }
 
-  /// شريط البحث المتحرك تحت [_buildMobileTopAppBar].
-  ///
-  /// عند التمرير داخل محتوى الهاتف يختفي بالكامل بحركة ناعمة، وعند السحب
-  /// للأسفل يعود بنفس الإيقاع حتى لا يزاحم محتوى الرئيسية.
-  Widget _buildMobileSearchSlot() {
+  Widget _buildRecentSearchSuggestions() {
     final sl = ScreenLayout.of(context);
-    final cs = Theme.of(context).colorScheme;
-    return ValueListenableBuilder<bool>(
-      valueListenable: _mobileSearchCollapsed,
-      builder: (context, collapsed, _) {
-        return Material(
-          color: cs.primary,
-          elevation: 0,
-          child: AnimatedSize(
-            duration: const Duration(milliseconds: 260),
-            reverseDuration: const Duration(milliseconds: 220),
-            curve: Curves.easeOutCubic,
-            alignment: Alignment.topCenter,
-            child: ClipRect(
-              child: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 220),
-                reverseDuration: const Duration(milliseconds: 180),
-                switchInCurve: Curves.easeOutCubic,
-                switchOutCurve: Curves.easeInCubic,
-                transitionBuilder: (child, animation) {
-                  final slide = Tween<Offset>(
-                    begin: const Offset(0, -0.22),
-                    end: Offset.zero,
-                  ).animate(animation);
-                  return FadeTransition(
-                    opacity: animation,
-                    child: SlideTransition(position: slide, child: child),
-                  );
-                },
-                child: collapsed
-                    ? const SizedBox.shrink(key: ValueKey('hidden-search'))
-                    : Padding(
-                        key: const ValueKey('visible-search'),
-                        padding: EdgeInsets.fromLTRB(
-                          sl.pageHorizontalGap,
-                          2,
-                          sl.pageHorizontalGap,
-                          sl.isCompactHeight ? 8 : 10,
-                        ),
-                        child: _buildSearchBar(),
-                      ),
-              ),
+    return ListView(
+      padding: EdgeInsetsDirectional.fromSTEB(
+        sl.pageHorizontalGap,
+        12,
+        sl.pageHorizontalGap,
+        24,
+      ),
+      children: [
+        Text(
+          _mobileSearchHintText(),
+          textAlign: TextAlign.start,
+          style: TextStyle(color: _textSecondary, fontSize: 14, height: 1.5),
+        ),
+        if (_recentSearches.isNotEmpty) ...[
+          const SizedBox(height: 20),
+          Text(
+            'آخر عمليات البحث',
+            textAlign: TextAlign.start,
+            style: TextStyle(
+              color: _textPrimary,
+              fontWeight: FontWeight.w800,
+              fontSize: 14,
             ),
           ),
-        );
-      },
-    );
-  }
-
-  /// مستمع لتمرير محتوى الهاتف — يخفي البحث بعد تمرير صغير للأعلى، ويعيده
-  /// عند أول سحب للأسفل حتى لو كانت القائمة عند بدايتها.
-  bool _onMobileBodyScroll(ScrollNotification n) {
-    if (_hasActiveSearch) return false;
-    if (_searchFocusNode.hasFocus) return false;
-    if (n.metrics.axis != Axis.vertical) return false;
-
-    if (n is ScrollStartNotification || n is ScrollEndNotification) {
-      _mobileSearchHideDrag = 0;
-      _mobileSearchShowDrag = 0;
-      return false;
-    }
-
-    if (n.metrics.pixels <= 1 && _mobileSearchCollapsed.value) {
-      if (_mobileSearchCollapsed.value) _mobileSearchCollapsed.value = false;
-      return false;
-    }
-
-    double delta = 0;
-    if (n is ScrollUpdateNotification) {
-      delta = n.scrollDelta ?? 0;
-    } else if (n is OverscrollNotification) {
-      delta = n.overscroll;
-    }
-    if (delta == 0) return false;
-
-    if (delta > 0) {
-      // تمرير بسيط للأعلى: أخفِ البحث بسرعة بعد عدة بكسلات فقط.
-      _mobileSearchHideDrag += delta;
-      _mobileSearchShowDrag = 0;
-      if (_mobileSearchHideDrag >= 8 && !_mobileSearchCollapsed.value) {
-        _mobileSearchCollapsed.value = true;
-        _mobileSearchHideDrag = 0;
-      }
-    } else {
-      // سحب للأسفل: أعد البحث بسرعة، ويشمل السحب عند بداية القائمة (overscroll).
-      _mobileSearchShowDrag += -delta;
-      _mobileSearchHideDrag = 0;
-      if (_mobileSearchShowDrag >= 3 && _mobileSearchCollapsed.value) {
-        _mobileSearchCollapsed.value = false;
-        _mobileSearchShowDrag = 0;
-      }
-    }
-    return false;
-  }
-
-  Widget _buildZorahTitle() {
-    final sl = ScreenLayout.of(context);
-    return LayoutBuilder(
-      builder: (context, c) {
-        final maxW = c.maxWidth.isFinite ? c.maxWidth : 280.0;
-        return GestureDetector(
-          onTap: _animateCompanyName,
-          child: Align(
-            alignment: AlignmentDirectional.centerStart,
-            child: ClipRect(
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
-                alignment: Alignment.centerRight,
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(
-                    maxWidth: maxW.clamp(48.0, 400.0),
-                  ),
-                  child: AppBrandMark(
-                    title: 'naboo',
-                    logoSize: sl.isNarrowWidth ? 34 : 38,
-                    gap: sl.isNarrowWidth ? 8 : 10,
-                    borderColor: const Color(0xFFB8960C),
-                    borderWidth: 1.6,
-                    showTitle: false,
-                  ),
-                ),
-              ),
+          const SizedBox(height: 8),
+          ..._recentSearches.map(
+            (q) => ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(Icons.history_rounded, color: _textSecondary),
+              title: Text(q, textAlign: TextAlign.start),
+              trailing: const Icon(Icons.north_west_rounded, size: 18),
+              onTap: () => _applyRecentSearch(q),
             ),
           ),
-        );
-      },
+        ],
+      ],
     );
   }
 
   void _showUserInfoDialog(AuthProvider auth) {
-    showDialog<void>(
-      context: context,
-      barrierDismissible: true,
-      builder: (ctx) {
-        final mq = MediaQuery.sizeOf(ctx);
-        final dialogW = math.min(400.0, mq.width - 48);
-        const goldClose = Color(0xFFF5C518);
-
-        Widget row(
-          String label,
-          String value, {
-          bool ltrValue = false,
-          bool allowCopy = true,
-        }) {
-          final trimmed = label.endsWith(':')
-              ? label.substring(0, label.length - 1)
-              : label;
-          final show = '$trimmed:';
-
-          Widget valueWidget() {
-            if (ltrValue && value.isNotEmpty && value != '—') {
-              return SelectableText(
-                value,
-                textAlign: TextAlign.right,
-                textDirection: TextDirection.ltr,
-                style: TextStyle(
-                  color: _textPrimary,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                ),
-              );
-            }
-            return SelectableText(
-              value.isEmpty ? '—' : value,
-              textAlign: TextAlign.right,
-              style: TextStyle(
-                color: _textPrimary,
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-              ),
-            );
-          }
-
-          return Padding(
-            padding: const EdgeInsetsDirectional.only(
-              start: 2,
-              end: 2,
-              bottom: 8,
-            ),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              textDirection: TextDirection.rtl,
-              children: [
-                Expanded(
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    textDirection: TextDirection.rtl,
-                    children: [
-                      Expanded(flex: 3, child: valueWidget()),
-                      const SizedBox(width: 10),
-                      SizedBox(
-                        width: 118,
-                        child: Text(
-                          show,
-                          textAlign: TextAlign.right,
-                          style: TextStyle(
-                            color: _textSecondary,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                IconButton(
-                  tooltip: 'نسخ',
-                  visualDensity: VisualDensity.compact,
-                  onPressed: allowCopy && value.isNotEmpty && value != '—'
-                      ? () async {
-                          await Clipboard.setData(ClipboardData(text: value));
-                          if (!ctx.mounted) return;
-                          ScaffoldMessenger.of(ctx).showSnackBar(
-                            const SnackBar(
-                              content: Text('تم النسخ'),
-                              behavior: SnackBarBehavior.floating,
-                            ),
-                          );
-                        }
-                      : null,
-                  icon: Icon(
-                    Icons.copy_rounded,
-                    size: 20,
-                    color: allowCopy && value.isNotEmpty && value != '—'
-                        ? AppColors.primary
-                        : Colors.grey,
-                  ),
-                ),
-              ],
-            ),
-          );
-        }
-
-        return Center(
-          child: SizedBox(
-            width: dialogW,
-            child: AlertDialog(
-              backgroundColor: _surfaceColor,
-              shape: RoundedRectangleBorder(borderRadius: ctx.appCorners.lg),
-              titlePadding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
-              title: Row(
-                textDirection: TextDirection.rtl,
-                children: [
-                  const CircleAvatar(
-                    radius: 28,
-                    backgroundColor: Color(0xFF6366F1),
-                    child: Icon(
-                      Icons.person_rounded,
-                      color: Colors.white,
-                      size: 30,
-                    ),
-                  ),
-                  Expanded(
-                    child: Text(
-                      'بيانات المستخدم',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: _textPrimary,
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 56),
-                ],
-              ),
-              content: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Divider(color: _dividerColor),
-                    const SizedBox(height: 6),
-                    row(
-                      'الاسم المعروض:',
-                      auth.displayName.isNotEmpty ? auth.displayName : '—',
-                    ),
-                    row(
-                      'اسم الدخول:',
-                      auth.username.isNotEmpty ? auth.username : '—',
-                    ),
-                    row('الصلاحية:', auth.role.isNotEmpty ? auth.role : '—'),
-                    row(
-                      'البريد الإلكتروني:',
-                      auth.email.isNotEmpty ? auth.email : '—',
-                      ltrValue: true,
-                    ),
-                    Divider(color: _dividerColor),
-                  ],
-                ),
-              ),
-              actionsAlignment: MainAxisAlignment.center,
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(ctx),
-                  child: const Text(
-                    'إغلاق',
-                    style: TextStyle(
-                      color: goldClose,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
+    unawaited(UserInfoDialog.show(context, auth));
   }
 
   // ── _buildDarkModeToggle حُذف في 2026-05 ────────────────────────────────────
@@ -2122,6 +2501,12 @@ class _HomeScreenState extends State<HomeScreen>
     final w = MediaQuery.sizeOf(context).width;
     final collapse = sl.isHandsetForLayout && w < 400 && !hideVk;
 
+    final micBtn = ArabicSpeechMicButton(
+      controller: _searchController,
+      tooltip: 'إملاء البحث بالصوت',
+      onTextUpdated: _onSearchControllerChanged,
+    );
+
     final barcodeBtn = IconButton(
       style: _searchBarSuffixIconStyle(iconInField),
       tooltip:
@@ -2146,6 +2531,7 @@ class _HomeScreenState extends State<HomeScreen>
         setState(() {
           _showVirtualSearchKeyboard = !_showVirtualSearchKeyboard;
         });
+        _notifyMobileSearchPage();
         if (_showVirtualSearchKeyboard) {
           _searchFocusNode.requestFocus();
         }
@@ -2164,13 +2550,14 @@ class _HomeScreenState extends State<HomeScreen>
     if (!collapse) {
       return Row(
         mainAxisSize: MainAxisSize.min,
-        children: [barcodeBtn, if (!hideVk) keyboardBtn, ?clearBtn],
+        children: [micBtn, barcodeBtn, if (!hideVk) keyboardBtn, ?clearBtn],
       );
     }
 
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
+        micBtn,
         barcodeBtn,
         PopupMenuButton<String>(
           padding: EdgeInsets.zero,
@@ -2183,6 +2570,7 @@ class _HomeScreenState extends State<HomeScreen>
             setState(() {
               _showVirtualSearchKeyboard = !_showVirtualSearchKeyboard;
             });
+            _notifyMobileSearchPage();
             if (_showVirtualSearchKeyboard) {
               _searchFocusNode.requestFocus();
             }
@@ -2219,56 +2607,96 @@ class _HomeScreenState extends State<HomeScreen>
     final iconInField = _textSecondary;
     final w = MediaQuery.sizeOf(context).width;
     final shortHint = sl.isHandsetForLayout && w < 400;
-    return Directionality(
-      textDirection: TextDirection.rtl,
-      child: TextField(
-        controller: _searchController,
-        focusNode: _searchFocusNode,
-        readOnly:
-            _showVirtualSearchKeyboard &&
-            !hideVk &&
-            VirtualKeyboardController.instance.isPinned,
-        textInputAction: TextInputAction.search,
-        onSubmitted: (_) => _scheduleGlobalSearch(),
-        style: TextStyle(color: _textPrimary),
-        decoration: InputDecoration(
-          prefixIcon: Icon(Icons.search_rounded, color: iconInField, size: 22),
-          suffixIcon: _buildSearchBarSuffixRow(iconInField, hideVk),
-          suffixIconConstraints: const BoxConstraints(
-            minHeight: 48,
-            maxHeight: 52,
-          ),
-          hintText: shortHint
-              ? 'بحث سريع: وحدات، منتجات، عملاء…'
-              : 'بحث: وحدات، منتجات، عملاء، موظفون، باركود…',
-          hintStyle: TextStyle(
-            color: _textSecondary,
-            fontSize: sl.isNarrowWidth ? 12 : 13,
-          ),
-          isDense: true,
-          filled: true,
-          fillColor: _isDarkMode ? const Color(0xFF1E293B) : Colors.white,
-          border: OutlineInputBorder(
-            borderRadius: ac.lg,
-            borderSide: BorderSide(
-              color: _isDarkMode ? AppColors.borderDark : AppColors.borderLight,
-            ),
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: ac.lg,
-            borderSide: BorderSide(
-              color: _isDarkMode ? AppColors.borderDark : AppColors.borderLight,
-            ),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: ac.lg,
-            borderSide: const BorderSide(color: AppColors.accent, width: 1.5),
-          ),
-          contentPadding: EdgeInsets.symmetric(
-            vertical: sl.isCompactHeight ? 8 : 10,
-            horizontal: sl.isNarrowWidth ? 4 : 8,
+    final oilSearch = _dashboardSpec().searchConfig;
+    final royalGold = SaleBrandColors.gold;
+    final useRoyal = oilSearch?.routeToOilHub == true;
+
+    Widget field = TextField(
+      controller: _searchController,
+      focusNode: _searchFocusNode,
+      readOnly:
+          _showVirtualSearchKeyboard &&
+          !hideVk &&
+          VirtualKeyboardController.instance.isPinned,
+      textInputAction: TextInputAction.search,
+      onSubmitted: (_) => _scheduleGlobalSearch(immediate: true),
+      style: TextStyle(color: _textPrimary),
+      decoration: InputDecoration(
+        prefixIcon: Icon(
+          Icons.search_rounded,
+          color: useRoyal ? royalGold : iconInField,
+          size: 22,
+        ),
+        suffixIcon: _buildSearchBarSuffixRow(iconInField, hideVk),
+        suffixIconConstraints: const BoxConstraints(
+          minHeight: 48,
+          maxHeight: 52,
+        ),
+        hintText: oilSearch != null
+            ? (shortHint
+                  ? oilSearch.shortPlaceholder
+                  : oilSearch.placeholder)
+            : (shortHint
+                  ? 'بحث سريع: وحدات، منتجات، عملاء…'
+                  : 'بحث: وحدات، منتجات، عملاء، موظفون، باركود…'),
+        hintStyle: TextStyle(
+          color: _textSecondary,
+          fontSize: sl.isNarrowWidth ? 12 : 13,
+        ),
+        isDense: true,
+        filled: true,
+        fillColor: _isDarkMode
+            ? const Color(0xFF1E293B)
+            : (useRoyal
+                  ? Theme.of(context).colorScheme.surfaceContainerHighest
+                        .withValues(alpha: 0.22)
+                  : Colors.white),
+        border: OutlineInputBorder(
+          borderRadius: ac.lg,
+          borderSide: BorderSide(
+            color: useRoyal
+                ? royalGold.withValues(alpha: 0.35)
+                : AppColors.accentGold.withValues(
+                    alpha: _isDarkMode ? 0.4 : 0.28,
+                  ),
           ),
         ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: ac.lg,
+          borderSide: BorderSide(
+            color: useRoyal
+                ? royalGold.withValues(alpha: 0.28)
+                : AppColors.accentGold.withValues(
+                    alpha: _isDarkMode ? 0.4 : 0.28,
+                  ),
+          ),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: ac.lg,
+          borderSide: BorderSide(
+            color: useRoyal
+                ? royalGold.withValues(alpha: 0.85)
+                : AppColors.accentGold,
+            width: 1.4,
+          ),
+        ),
+        contentPadding: EdgeInsets.symmetric(
+          vertical: sl.isCompactHeight ? 8 : 10,
+          horizontal: sl.isNarrowWidth ? 4 : 8,
+        ),
+      ),
+    );
+
+    if (!useRoyal) {
+      return Directionality(textDirection: TextDirection.rtl, child: field);
+    }
+
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: Container(
+        padding: const EdgeInsets.all(2),
+        decoration: _royalGoldBorderDecoration(context, radius: ac.rLg),
+        child: field,
       ),
     );
   }
@@ -2384,6 +2812,7 @@ class _HomeScreenState extends State<HomeScreen>
     final sidebarItems = [
       ..._navForUi.map(
         (module) => _SidebarItem(
+          routeId: module.routeId,
           icon: module.icon,
           title: module.title,
           iconColor: module.iconColor,
@@ -2398,10 +2827,10 @@ class _HomeScreenState extends State<HomeScreen>
                   onTap: blockedInRestricted(s.routeId)
                       ? null
                       : () => navToTagged(
-                            s.routeId,
-                            s.breadcrumbTitle,
-                            s.destination,
-                          ),
+                          s.routeId,
+                          s.breadcrumbTitle,
+                          s.destination,
+                        ),
                 ),
               )
               .toList(),
@@ -2411,15 +2840,15 @@ class _HomeScreenState extends State<HomeScreen>
           onTap: blockedInRestricted(module.routeId)
               ? null
               : () => navToTagged(
-                    module.routeId,
-                    module.breadcrumbTitle,
-                    module.destination,
-                  ),
+                  module.routeId,
+                  module.breadcrumbTitle,
+                  module.destination,
+                ),
         ),
       ),
       _SidebarItem(
         icon: Icons.logout,
-        title: 'تسجيل الخروج',
+        title: 'قفل الجلسة',
         iconColor: Colors.red,
         onTap: () => _confirmAndLogout(auth),
       ),
@@ -2518,7 +2947,7 @@ class _HomeScreenState extends State<HomeScreen>
                         if (isExpanded)
                           SidebarLogoutPill(
                             colorScheme: cs,
-                            label: 'تسجيل الخروج',
+                            label: 'قفل الجلسة',
                             onTap: () => _confirmAndLogout(auth),
                           )
                         else
@@ -2569,20 +2998,21 @@ class _HomeScreenState extends State<HomeScreen>
               onTap: !enabled
                   ? null
                   : () {
-                if (hasSubmenu) {
-                  setState(() {
-                    if (isSubmenuOpen) {
-                      _expandedSubmenus.remove(item.title);
-                    } else {
-                      _expandedSubmenus.add(item.title);
-                      // افتح الشريط إذا كان مطوياً
-                      if (!_isDrawerOpen.value) _isDrawerOpen.value = true;
-                    }
-                  });
-                } else {
-                  item.onTap?.call();
-                }
-              },
+                      if (hasSubmenu) {
+                        setState(() {
+                          if (isSubmenuOpen) {
+                            _expandedSubmenus.remove(item.title);
+                          } else {
+                            _expandedSubmenus.add(item.title);
+                            // افتح الشريط إذا كان مطوياً
+                            if (!_isDrawerOpen.value)
+                              _isDrawerOpen.value = true;
+                          }
+                        });
+                      } else {
+                        item.onTap?.call();
+                      }
+                    },
               child: SizedBox(
                 height: 48,
                 child: LayoutBuilder(
@@ -2617,8 +3047,9 @@ class _HomeScreenState extends State<HomeScreen>
                                   ]
                                 : null,
                           ),
-                          child: Icon(
-                            item.icon,
+                          child: _MarketOrdersNavIcon(
+                            routeId: item.routeId,
+                            icon: item.icon,
                             color: !enabled
                                 ? cs.onPrimary.withValues(alpha: 0.35)
                                 : (isActive ? cs.primary : item.iconColor),
@@ -2639,8 +3070,9 @@ class _HomeScreenState extends State<HomeScreen>
                             duration: const Duration(milliseconds: 180),
                             curve: Curves.easeOutCubic,
                             scale: isActive ? 1.06 : 1.0,
-                            child: Icon(
-                              item.icon,
+                            child: _MarketOrdersNavIcon(
+                              routeId: item.routeId,
+                              icon: item.icon,
                               color: item.iconColor.withValues(
                                 alpha: isActive ? 1.0 : 0.85,
                               ),
@@ -2789,8 +3221,11 @@ class _HomeScreenState extends State<HomeScreen>
 
   // ── Main content (Dashboard فقط — QuickActions حُذفت في 2026-05) ──────────
   Widget _buildMainContent(double availableWidth) {
+    final dashSpec = _dashboardSpec();
     final dashboard = DashboardView(
       isDark: _isDarkMode,
+      dashboardSpec: dashSpec,
+      onDashboardAction: dashSpec.isOilProfile ? _onOilDashboardAction : null,
       onPinnedProductQuickSale: (preset) {
         _pushInContentTagged(
           AppContentRoutes.addInvoice,
@@ -2944,59 +3379,11 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  /// نتائج البحث تظهر تحت شريط البحث مباشرة (فوق المحتوى) بقوائم أفقية لكل قسم.
-  ///
-  /// على الهاتف: لوحة منسدلة مع زوايا سفلية مدوّرة وهامش جانبي خفيف حتى لا
-  /// تبدو ملتصقة بحواف الشاشة، وحدّ علوي خفيف يفصلها عن شريط البحث.
-  Widget _buildSearchOverlayDropdown() {
-    final mq = MediaQuery.sizeOf(context);
-    final sl = ScreenLayout.of(context);
-    final maxH = mq.height * 0.55;
-    final isHandset = sl.isHandsetForLayout;
-    final cs = Theme.of(context).colorScheme;
-    final radius = BorderRadius.vertical(
-      bottom: Radius.circular(isHandset ? 16 : 8),
-    );
-    return Padding(
-      padding: EdgeInsetsDirectional.only(
-        start: isHandset ? 8 : 0,
-        end: isHandset ? 8 : 0,
-        top: isHandset ? 0 : 0,
-      ),
-      child: Material(
-        elevation: 12,
-        color: _surfaceColor,
-        shadowColor: Colors.black45,
-        borderRadius: radius,
-        child: Container(
-          decoration: BoxDecoration(
-            borderRadius: radius,
-            border: Border.all(
-              color: cs.outlineVariant.withValues(alpha: 0.5),
-              width: 1,
-            ),
-          ),
-          clipBehavior: Clip.antiAlias,
-          child: ConstrainedBox(
-            constraints: BoxConstraints(maxHeight: maxH),
-            child: Directionality(
-              textDirection: TextDirection.rtl,
-              child: _globalSearchLoading
-                  ? const Padding(
-                      padding: EdgeInsets.all(28),
-                      child: Center(child: CircularProgressIndicator()),
-                    )
-                  : _buildSearchOverlayScrollable(),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
   Widget _buildSearchOverlayScrollable() {
     final sl = ScreenLayout.of(context);
+    final query = _searchController.text.trim();
     final hasAny =
+        _hitTools.isNotEmpty ||
         _hitModules.isNotEmpty ||
         _hitProducts.isNotEmpty ||
         _hitCustomers.isNotEmpty ||
@@ -3008,7 +3395,7 @@ class _HomeScreenState extends State<HomeScreen>
           vertical: 20,
         ),
         child: Text(
-          'لا توجد نتائج لـ «${_searchController.text.trim()}»',
+          'لا توجد نتائج لـ «$query»',
           textAlign: TextAlign.center,
           style: TextStyle(color: _textSecondary, fontSize: 14, height: 1.4),
         ),
@@ -3025,50 +3412,27 @@ class _HomeScreenState extends State<HomeScreen>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (_hitModules.isNotEmpty)
+          if (_hitTools.isNotEmpty)
             _buildHorizontalSearchSection(
-              title: 'الوحدات',
-              count: _hitModules.length,
-              height: 92,
-              itemCount: _hitModules.length,
+              title: 'أدوات وصفحات',
+              count: _hitTools.length,
+              height: 96,
+              itemCount: _hitTools.length,
               itemBuilder: (i) {
-                final m = _hitModules[i];
+                final t = _hitTools[i];
                 return _searchHChip(
-                  onTap: () {
-                    _clearGlobalSearch();
-                    _pushInContentTagged(
-                      m.routeId,
-                      m.breadcrumbTitle,
-                      m.destination,
-                    );
-                  },
-                  icon: m.icon,
-                  iconColor: m.iconColor,
-                  title: m.title,
-                  subtitle: 'فتح الوحدة',
-                );
-              },
-            ),
-          if (_hitProducts.isNotEmpty)
-            _buildHorizontalSearchSection(
-              title: 'المنتجات',
-              count: _hitProducts.length,
-              height: 128,
-              itemCount: _hitProducts.length,
-              itemBuilder: (i) {
-                final p = _hitProducts[i];
-                final sellRaw = p['sell'] as num?;
-                final sell = sellRaw != null
-                    ? IraqiCurrencyFormat.formatInt(sellRaw)
-                    : '—';
-                final stockLine = _productSearchStockLine(p);
-                return _searchHChip(
-                  onTap: () => _handleProductQuickPick(p),
-                  icon: Icons.inventory_2_outlined,
-                  iconColor: const Color(0xFF0D9488),
-                  title: '${p['name'] ?? ''}',
-                  subtitle: 'بيع $sell د.ع',
-                  belowSubtitle: stockLine,
+                  onTap: () => _onGlobalSearchResultTap(
+                    query: query,
+                    navigate: () => _pushInContentTagged(
+                      t.routeId,
+                      t.breadcrumbTitle,
+                      t.destination,
+                    ),
+                  ),
+                  icon: t.icon,
+                  iconColor: t.iconColor,
+                  title: t.title,
+                  subtitle: t.subtitle ?? 'فتح',
                 );
               },
             ),
@@ -3087,18 +3451,44 @@ class _HomeScreenState extends State<HomeScreen>
                     c['email'].toString(),
                 ].where((s) => s.isNotEmpty).take(2).join(' · ');
                 return _searchHChip(
-                  onTap: () {
-                    _clearGlobalSearch();
-                    _pushInContentTagged(
+                  onTap: () => _onGlobalSearchResultTap(
+                    query: query,
+                    navigate: () => _pushInContentTagged(
                       AppContentRoutes.customers,
                       'العملاء',
                       (_) => const CustomersScreen(),
-                    );
-                  },
+                    ),
+                  ),
                   icon: Icons.person_outline,
                   iconColor: const Color(0xFF0D9488),
                   title: '${c['name'] ?? ''}',
                   subtitle: sub.isEmpty ? 'عرض العملاء' : sub,
+                );
+              },
+            ),
+          if (_hitProducts.isNotEmpty)
+            _buildHorizontalSearchSection(
+              title: 'المنتجات',
+              count: _hitProducts.length,
+              height: 128,
+              itemCount: _hitProducts.length,
+              itemBuilder: (i) {
+                final p = _hitProducts[i];
+                final sellRaw = p['sell'] as num?;
+                final sell = sellRaw != null
+                    ? IraqiCurrencyFormat.formatInt(sellRaw)
+                    : '—';
+                final stockLine = _productSearchStockLine(p);
+                return _searchHChip(
+                  onTap: () => _onGlobalSearchResultTap(
+                    query: query,
+                    navigate: () => _handleProductQuickPick(p),
+                  ),
+                  icon: Icons.inventory_2_outlined,
+                  iconColor: const Color(0xFF0D9488),
+                  title: '${p['name'] ?? ''}',
+                  subtitle: 'بيع $sell د.ع',
+                  belowSubtitle: stockLine,
                 );
               },
             ),
@@ -3117,18 +3507,42 @@ class _HomeScreenState extends State<HomeScreen>
                     u['email'].toString(),
                 ].where((s) => s.isNotEmpty).join(' · ');
                 return _searchHChip(
-                  onTap: () {
-                    _clearGlobalSearch();
-                    _pushInContentTagged(
+                  onTap: () => _onGlobalSearchResultTap(
+                    query: query,
+                    navigate: () => _pushInContentTagged(
                       AppContentRoutes.users,
                       'المستخدمين',
                       (_) => const UsersScreen(),
-                    );
-                  },
+                    ),
+                  ),
                   icon: Icons.badge_outlined,
                   iconColor: const Color(0xFF3B82F6),
                   title: '${u['username'] ?? ''}',
                   subtitle: sub.isEmpty ? 'عرض الموظفين' : sub,
+                );
+              },
+            ),
+          if (_hitModules.isNotEmpty && _hitTools.isEmpty)
+            _buildHorizontalSearchSection(
+              title: 'الوحدات',
+              count: _hitModules.length,
+              height: 92,
+              itemCount: _hitModules.length,
+              itemBuilder: (i) {
+                final m = _hitModules[i];
+                return _searchHChip(
+                  onTap: () => _onGlobalSearchResultTap(
+                    query: query,
+                    navigate: () => _pushInContentTagged(
+                      m.routeId,
+                      m.breadcrumbTitle,
+                      m.destination,
+                    ),
+                  ),
+                  icon: m.icon,
+                  iconColor: m.iconColor,
+                  title: m.title,
+                  subtitle: 'فتح الوحدة',
                 );
               },
             ),
@@ -3213,8 +3627,11 @@ class _HomeScreenState extends State<HomeScreen>
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           decoration: BoxDecoration(
             border: Border.all(
-              color: _isDarkMode ? AppColors.borderDark : AppColors.borderLight,
+              color: AppColors.accentGold.withValues(
+                alpha: _isDarkMode ? 0.4 : 0.28,
+              ),
             ),
+            borderRadius: ac.md,
           ),
           child: Row(
             children: [
@@ -3349,10 +3766,10 @@ class _HomeScreenState extends State<HomeScreen>
       _activeBottomIndex = newActive >= 0 ? newActive : 0;
     });
     unawaited(_persistModulesOrder());
-    unawaited(_recomputeNavModules());
+    _recomputeNavModules();
   }
 
-  // ── Bottom Navigation Bar — Material 3 (مؤشر كبسولة + خلفية فاتحة كالمرجع) ─
+  // ── Bottom Navigation Bar — Square Nav (Stitch) + ألوان زجاجية فاتحة سابقة ─
   Widget _buildBottomNavBar(List<ModuleItem> bottomModules) {
     if (bottomModules.isEmpty) return const SizedBox.shrink();
     final sl = ScreenLayout.of(context);
@@ -3360,33 +3777,45 @@ class _HomeScreenState extends State<HomeScreen>
     final isDark = _isDarkMode;
     final isPhoneDock = sl.isHandsetForLayout;
     final barBg = isDark ? cs.surfaceContainerHigh : const Color(0xFFF7F4EF);
-    final indicator = isDark
-        ? Colors.white.withValues(alpha: 0.14)
-        : const Color(0xFFE8E0D6);
-    // على بعض أجهزة الهاتف يظهر overflow بسيط (≈5px) بسبب SafeArea + حشوات عناصر الشريط.
-    // نعطي ارتفاعاً أعلى قليلاً مع تقليل الحشوات الداخلية.
-    final height = sl.isVeryShort
-        ? 66.0
-        : (sl.isCompactHeight ? 70.0 : 78.0);
+    final height = sl.isVeryShort ? 56.0 : (sl.isCompactHeight ? 60.0 : 64.0);
     final idx = _activeBottomIndex.clamp(0, bottomModules.length - 1);
+
+    void onBottomModuleTap(int i, ModuleItem m) {
+      HapticFeedback.lightImpact();
+      final hasSubItems = m.subItems != null && m.subItems!.isNotEmpty;
+      if (hasSubItems) {
+        setState(() {
+          _activeBottomIndex = i;
+          _openBottomSubMenuModule =
+              _openBottomSubMenuModule?.routeId == m.routeId ? null : m;
+        });
+        return;
+      }
+      setState(() {
+        _activeBottomIndex = i;
+        _openBottomSubMenuModule = null;
+      });
+      _pushInContentTagged(m.routeId, m.breadcrumbTitle, m.destination);
+    }
 
     Widget reorderableBar({required Color effectiveBarColor}) {
       return ReorderableListView.builder(
         scrollDirection: Axis.horizontal,
-        padding: EdgeInsets.symmetric(
-          horizontal: isPhoneDock ? 10 : 8,
-          vertical: isPhoneDock ? (sl.isVeryShort ? 2 : 4) : 4,
-        ),
+        padding: EdgeInsets.zero,
         proxyDecorator: (child, index, anim) {
           return Material(
             color: Colors.transparent,
             elevation: isPhoneDock ? 10 : 6,
-            shadowColor: Colors.black.withValues(alpha: isPhoneDock ? 0.24 : 0.18),
+            shadowColor: Colors.black.withValues(
+              alpha: isPhoneDock ? 0.24 : 0.18,
+            ),
             child: child,
           );
         },
-        onReorder: (oldI, newI) =>
-            _reorderBottomModules(bottomModules, oldI, newI),
+        onReorder: (oldI, newI) {
+          setState(() => _openBottomSubMenuModule = null);
+          _reorderBottomModules(bottomModules, oldI, newI);
+        },
         itemCount: bottomModules.length,
         itemBuilder: (ctx, i) {
           final m = bottomModules[i];
@@ -3398,23 +3827,9 @@ class _HomeScreenState extends State<HomeScreen>
               module: m,
               selected: selected,
               barColor: effectiveBarColor,
-              indicatorColor: indicator,
               useGlassDock: isPhoneDock,
-              onTap: () {
-                HapticFeedback.lightImpact();
-                final hasSubItems =
-                    m.subItems != null && m.subItems!.isNotEmpty;
-                setState(() => _activeBottomIndex = i);
-                if (hasSubItems) {
-                  _showSubItemsSheet(m);
-                } else {
-                  _pushInContentTagged(
-                    m.routeId,
-                    m.breadcrumbTitle,
-                    m.destination,
-                  );
-                }
-              },
+              subMenuOpen: _openBottomSubMenuModule?.routeId == m.routeId,
+              onTap: () => onBottomModuleTap(i, m),
             ),
           );
         },
@@ -3430,53 +3845,51 @@ class _HomeScreenState extends State<HomeScreen>
           : Colors.black.withValues(alpha: 0.07);
       final topHighlight = Colors.white.withValues(alpha: isDark ? 0.10 : 0.44);
       final safeBottom = MediaQuery.paddingOf(context).bottom;
-      final bottomPad = math.max(12.0, safeBottom);
-      return Padding(
-        padding: EdgeInsets.fromLTRB(14, 0, 14, bottomPad),
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(26),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: isDark ? 0.34 : 0.10),
-                blurRadius: 26,
-                offset: const Offset(0, 10),
+      final bottomPad = math.max(10.0, safeBottom);
+      final dock = DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(26),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: isDark ? 0.34 : 0.10),
+              blurRadius: 26,
+              offset: const Offset(0, 10),
+            ),
+            BoxShadow(
+              color: cs.primary.withValues(alpha: isDark ? 0.14 : 0.08),
+              blurRadius: 18,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(26),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+            child: Container(
+              height: height,
+              decoration: BoxDecoration(
+                color: dockBg,
+                borderRadius: BorderRadius.circular(26),
+                border: Border.all(color: borderColor, width: 1.1),
               ),
-              BoxShadow(
-                color: cs.primary.withValues(alpha: isDark ? 0.14 : 0.08),
-                blurRadius: 18,
-                offset: const Offset(0, 4),
-              ),
-            ],
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(26),
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-              child: Container(
-                height: height,
-                decoration: BoxDecoration(
-                  color: dockBg,
-                  borderRadius: BorderRadius.circular(26),
-                  border: Border.all(color: borderColor, width: 1.1),
+              foregroundDecoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(26),
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [topHighlight, topHighlight.withValues(alpha: 0)],
+                  stops: const [0, 0.18],
                 ),
-                foregroundDecoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(26),
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      topHighlight,
-                      topHighlight.withValues(alpha: 0),
-                    ],
-                    stops: const [0, 0.18],
-                  ),
-                ),
-                child: reorderableBar(effectiveBarColor: dockBg),
               ),
+              child: reorderableBar(effectiveBarColor: dockBg),
             ),
           ),
         ),
+      );
+      return Padding(
+        padding: EdgeInsets.fromLTRB(14, 0, 14, bottomPad),
+        child: dock,
       );
     }
 
@@ -3495,157 +3908,294 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  /// ورقة القائمة الفرعية لعنصر ذي sub-items
-  void _showSubItemsSheet(ModuleItem module) {
+  /// قائمة فرعية منبثقة فوق الشريط — تُعرض في طبقة الـ body لاستقبال اللمسات.
+  Widget _buildBottomSubMenuPopover(ModuleItem module) {
     final ac = context.appCorners;
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (_) => SafeArea(
-        child: Container(
-          margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-          decoration: BoxDecoration(
-            color: _isDarkMode ? const Color(0xFF1E1E2E) : Colors.white,
-            borderRadius: ac.lg,
-            border: Border.all(
-              color: _isDarkMode ? AppColors.borderDark : AppColors.borderLight,
+    final subs = module.subItems ?? const <SubMenuItem>[];
+    if (subs.isEmpty) return const SizedBox.shrink();
+    final cardBg = _isDarkMode ? AppColors.cardDark : Colors.white;
+    final headerBg = _isDarkMode
+        ? const Color(0xFF243044)
+        : const Color(0xFFF1F5F9);
+
+    void onSubTap(SubMenuItem sub) {
+      HapticFeedback.selectionClick();
+      setState(() => _openBottomSubMenuModule = null);
+      _pushInContentTagged(sub.routeId, sub.breadcrumbTitle, sub.destination);
+    }
+
+    void onViewAll() {
+      HapticFeedback.selectionClick();
+      setState(() => _openBottomSubMenuModule = null);
+      _pushInContentTagged(
+        module.routeId,
+        module.breadcrumbTitle,
+        module.destination,
+      );
+    }
+
+    return Material(
+      elevation: 18,
+      shadowColor: Colors.black.withValues(alpha: 0.28),
+      borderRadius: ac.lg,
+      clipBehavior: Clip.antiAlias,
+      color: cardBg,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: ac.lg,
+          border: Border.all(
+            color: module.iconColor.withValues(alpha: 0.55),
+            width: 1.5,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.20),
+              blurRadius: 28,
+              offset: const Offset(0, -8),
             ),
-            boxShadow: const [
-              BoxShadow(
-                color: Colors.black26,
-                blurRadius: 12,
-                offset: Offset(0, -2),
-              ),
-            ],
+            BoxShadow(
+              color: module.iconColor.withValues(alpha: 0.16),
+              blurRadius: 14,
+              offset: const Offset(0, -2),
+            ),
+          ],
+        ),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(context).height * 0.46,
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // Handle bar
-              Container(
-                margin: const EdgeInsets.only(top: 10, bottom: 4),
-                width: 36,
-                height: 4,
+              DecoratedBox(
                 decoration: BoxDecoration(
-                  color: Colors.grey.shade400,
-                  borderRadius: ac.radius(2),
+                  color: headerBg,
+                  border: BorderDirectional(
+                    bottom: BorderSide(color: _dividerColor, width: 1),
+                    start: BorderSide(color: module.iconColor, width: 4),
+                  ),
                 ),
-              ),
-              // Header
-              Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 10,
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 36,
-                      height: 36,
-                      decoration: BoxDecoration(
-                        color: module.iconColor.withOpacity(0.12),
-                        borderRadius: ac.sm,
-                      ),
-                      child: Icon(
-                        module.icon,
-                        color: module.iconColor,
-                        size: 20,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            module.title,
-                            style: TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.bold,
-                              color: _textPrimary,
-                            ),
+                child: Padding(
+                  padding: const EdgeInsetsDirectional.fromSTEB(12, 10, 4, 10),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 34,
+                        height: 34,
+                        decoration: BoxDecoration(
+                          color: module.iconColor.withValues(alpha: 0.16),
+                          borderRadius: ac.sm,
+                          border: Border.all(
+                            color: module.iconColor.withValues(alpha: 0.35),
                           ),
-                          Text(
-                            'اختر من القائمة أدناه',
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: _textSecondary,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    // زر الوصول المباشر للصفحة الرئيسية للوحدة
-                    TextButton(
-                      onPressed: () {
-                        _popSheetThenPushInContentTagged(
-                          module.routeId,
-                          module.breadcrumbTitle,
-                          module.destination,
-                        );
-                      },
-                      style: TextButton.styleFrom(
-                        foregroundColor: module.iconColor,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 6,
+                        ),
+                        child: Icon(
+                          module.icon,
+                          color: module.iconColor,
+                          size: 18,
                         ),
                       ),
-                      child: const Text(
-                        'عرض الكل',
-                        style: TextStyle(fontSize: 12),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          module.title,
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w800,
+                            color: _textPrimary,
+                          ),
+                        ),
                       ),
-                    ),
-                  ],
+                      TextButton(
+                        onPressed: onViewAll,
+                        style: TextButton.styleFrom(
+                          foregroundColor: module.iconColor,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 4,
+                          ),
+                          minimumSize: Size.zero,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                        child: const Text(
+                          'عرض الكل',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'إغلاق',
+                        visualDensity: VisualDensity.compact,
+                        onPressed: () =>
+                            setState(() => _openBottomSubMenuModule = null),
+                        icon: Icon(Icons.close, size: 18, color: _textSecondary),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-              Divider(height: 1, color: _dividerColor),
-              // Sub-items list
-              ...module.subItems!.map(
-                (sub) => ListTile(
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 20,
-                    vertical: 2,
+              Flexible(
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  padding: EdgeInsets.zero,
+                  itemCount: subs.length,
+                  separatorBuilder: (_, __) => Divider(
+                    height: 1,
+                    thickness: 1,
+                    color: _dividerColor.withValues(alpha: 0.75),
                   ),
-                  leading: Container(
-                    width: 34,
-                    height: 34,
-                    decoration: BoxDecoration(
-                      color: module.iconColor.withOpacity(0.08),
-                      borderRadius: ac.sm,
-                    ),
-                    child: Icon(
-                      sub.icon ?? Icons.arrow_left,
-                      color: module.iconColor,
-                      size: 18,
-                    ),
-                  ),
-                  title: Text(
-                    sub.title,
-                    style: TextStyle(
-                      color: _textPrimary,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                  trailing: Icon(
-                    Icons.chevron_left,
-                    color: _textSecondary,
-                    size: 18,
-                  ),
-                  shape: RoundedRectangleBorder(borderRadius: ac.md),
-                  onTap: () {
-                    _popSheetThenPushInContentTagged(
-                      sub.routeId,
-                      sub.breadcrumbTitle,
-                      sub.destination,
+                  itemBuilder: (context, index) {
+                    final sub = subs[index];
+                    final isLast = index == subs.length - 1;
+                    return Material(
+                      color: cardBg,
+                      child: InkWell(
+                        onTap: () => onSubTap(sub),
+                        child: Padding(
+                          padding: const EdgeInsetsDirectional.fromSTEB(
+                            14,
+                            12,
+                            14,
+                            12,
+                          ),
+                          child: Row(
+                            children: [
+                              Container(
+                                width: 32,
+                                height: 32,
+                                decoration: BoxDecoration(
+                                  color: module.iconColor.withValues(
+                                    alpha: isLast ? 0.14 : 0.08,
+                                  ),
+                                  borderRadius: ac.sm,
+                                ),
+                                child: Icon(
+                                  sub.icon ?? Icons.arrow_forward,
+                                  size: 17,
+                                  color: isLast
+                                      ? AppColors.accentGold
+                                      : module.iconColor,
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  sub.title,
+                                  style: TextStyle(
+                                    color: _textPrimary,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                              Icon(
+                                Icons.chevron_left,
+                                size: 16,
+                                color: _textSecondary,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                     );
                   },
                 ),
               ),
-              const SizedBox(height: 8),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// صفحة بحث كاملة على الهاتف — تُفتح من شريط البحث المضغوط في AppBar.
+class _HomeMobileSearchPage extends StatefulWidget {
+  const _HomeMobileSearchPage({required this.host});
+
+  final _HomeScreenState host;
+
+  @override
+  State<_HomeMobileSearchPage> createState() => _HomeMobileSearchPageState();
+}
+
+class _HomeMobileSearchPageState extends State<_HomeMobileSearchPage> {
+  @override
+  void initState() {
+    super.initState();
+    widget.host._mobileSearchPageRebuild = () {
+      if (mounted) setState(() {});
+    };
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      widget.host._searchFocusNode.requestFocus();
+    });
+  }
+
+  @override
+  void dispose() {
+    widget.host._mobileSearchPageRebuild = null;
+    widget.host._searchFocusNode.unfocus();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final host = widget.host;
+    final sl = ScreenLayout.of(context);
+
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: Scaffold(
+        backgroundColor: host._bgColor,
+        appBar: AppBar(
+          backgroundColor: host._surfaceColor,
+          foregroundColor: host._textPrimary,
+          elevation: 0,
+          surfaceTintColor: Colors.transparent,
+          iconTheme: IconThemeData(color: host._textPrimary),
+          titleTextStyle: TextStyle(
+            color: host._textPrimary,
+            fontWeight: FontWeight.w800,
+            fontSize: 18,
+          ),
+          leading: IconButton(
+            icon: Icon(Icons.arrow_forward, color: host._textPrimary),
+            tooltip: 'رجوع',
+            onPressed: () => Navigator.of(context).pop(),
+          ),
+          title: Text('بحث', style: TextStyle(color: host._textPrimary)),
+        ),
+        body: host._wrapBodyWithSearchKeyboard(
+          Align(
+            alignment: Alignment.topCenter,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: sl.isWideVariant ? 920 : double.infinity,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Padding(
+                    padding: EdgeInsets.fromLTRB(
+                      sl.pageHorizontalGap,
+                      8,
+                      sl.pageHorizontalGap,
+                      8,
+                    ),
+                    child: host._buildSearchBar(),
+                  ),
+                  Expanded(
+                    child: Material(
+                      color: host._surfaceColor,
+                      child: host._buildMobileSearchResultsBody(),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
         ),
       ),
@@ -3662,27 +4212,30 @@ class _HomeInnerNavObserver extends NavigatorObserver {
 
   @override
   void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
-    _state._appendBreadcrumbForRoute(route);
+    _state._syncBreadcrumbForRoute(route);
     _state._syncActiveModuleIndexFromRoute(route.settings.name);
   }
 
   @override
   void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) {
-    _state._removeBreadcrumbForRoute(route);
-    _state._syncActiveModuleIndexFromRoute(previousRoute?.settings.name);
+    if (previousRoute != null) {
+      _state._syncBreadcrumbForRoute(previousRoute);
+      _state._syncActiveModuleIndexFromRoute(previousRoute.settings.name);
+    }
   }
 
   @override
   void didRemove(Route<dynamic> route, Route<dynamic>? previousRoute) {
-    _state._removeBreadcrumbForRoute(route);
-    _state._syncActiveModuleIndexFromRoute(previousRoute?.settings.name);
+    if (previousRoute != null) {
+      _state._syncBreadcrumbForRoute(previousRoute);
+      _state._syncActiveModuleIndexFromRoute(previousRoute.settings.name);
+    }
   }
 
   @override
   void didReplace({Route<dynamic>? newRoute, Route<dynamic>? oldRoute}) {
-    if (oldRoute != null) _state._removeBreadcrumbForRoute(oldRoute);
     if (newRoute != null) {
-      _state._appendBreadcrumbForRoute(newRoute);
+      _state._syncBreadcrumbForRoute(newRoute);
       _state._syncActiveModuleIndexFromRoute(newRoute.settings.name);
     }
   }
@@ -3694,26 +4247,58 @@ class _BottomNavIcon extends StatelessWidget {
     required this.module,
     required this.barColor,
     required this.useGlassDock,
-    this.iconSize = 24,
+    required this.iconColor,
+    this.iconSize = 20,
   });
 
   final ModuleItem module;
   final Color barColor;
   final bool useGlassDock;
+  final Color iconColor;
   final double iconSize;
 
   @override
   Widget build(BuildContext context) {
     final hasSub = module.subItems != null && module.subItems!.isNotEmpty;
-    final iconTheme = IconTheme.of(context);
     return SizedBox(
-      width: 32,
-      height: 28,
+      width: 28,
+      height: 24,
       child: Stack(
         clipBehavior: Clip.none,
         alignment: Alignment.center,
         children: [
-          Icon(module.icon, size: iconSize, color: iconTheme.color),
+          Icon(module.icon, size: iconSize, color: iconColor),
+          if (module.routeId == AppContentRoutes.onlineOrders)
+            ListenableBuilder(
+              listenable: MarketplacePendingOrdersNotifier.instance,
+              builder: (context, _) {
+                final n = MarketplacePendingOrdersNotifier.instance.pendingCount;
+                if (n <= 0) return const SizedBox.shrink();
+                return PositionedDirectional(
+                  top: -4,
+                  end: -6,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                    constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
+                    decoration: BoxDecoration(
+                      color: Colors.redAccent,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: barColor, width: 1.2),
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(
+                      n > 99 ? '99+' : '$n',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 9,
+                        fontWeight: FontWeight.bold,
+                        height: 1,
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
           if (hasSub)
             PositionedDirectional(
               top: -2,
@@ -3748,16 +4333,16 @@ class _BottomNavTile extends StatefulWidget {
     required this.module,
     required this.selected,
     required this.barColor,
-    required this.indicatorColor,
     required this.useGlassDock,
+    required this.subMenuOpen,
     required this.onTap,
   });
 
   final ModuleItem module;
   final bool selected;
   final Color barColor;
-  final Color indicatorColor;
   final bool useGlassDock;
+  final bool subMenuOpen;
   final VoidCallback onTap;
 
   @override
@@ -3774,96 +4359,80 @@ class _BottomNavTileState extends State<_BottomNavTile> {
     final cs = Theme.of(context).colorScheme;
     final selected = widget.selected;
     final useGlassDock = widget.useGlassDock;
+    final hasSub =
+        widget.module.subItems != null && widget.module.subItems!.isNotEmpty;
     final fg = selected ? cs.onSurface : cs.onSurfaceVariant;
-    final indicatorColor = useGlassDock
-        ? Color.lerp(widget.indicatorColor, widget.module.iconColor, 0.18)!
-            .withValues(alpha: Theme.of(context).brightness == Brightness.dark
-                ? 0.22
-                : 0.34)
-        : widget.indicatorColor;
     return SizedBox(
-      width: useGlassDock ? 76 : 78,
+      width: 72,
       child: Listener(
         onPointerDown: (_) => setState(() => _pressed = true),
         onPointerCancel: (_) => setState(() => _pressed = false),
         onPointerUp: (_) => setState(() => _pressed = false),
         child: AnimatedScale(
-          scale: _pressed && useGlassDock ? 0.94 : 1,
+          scale: _pressed && useGlassDock ? 0.96 : 1,
           duration: const Duration(milliseconds: 120),
           curve: Curves.easeOutBack,
           child: Material(
             color: Colors.transparent,
             child: InkWell(
               onTap: widget.onTap,
-              borderRadius: AppShape.none,
-              child: Padding(
-                padding: EdgeInsets.symmetric(
-                  horizontal: 2,
-                  vertical: tiny ? 1 : (useGlassDock ? 2 : 3),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                curve: Curves.easeOutCubic,
+                decoration: BoxDecoration(
+                  color: selected
+                      ? cs.onSurface.withValues(alpha: useGlassDock ? 0.05 : 0.04)
+                      : Colors.transparent,
+                  border: Border(
+                    bottom: BorderSide(
+                      color: selected
+                          ? AppColors.accentGold
+                          : Colors.transparent,
+                      width: 4,
+                    ),
+                  ),
                 ),
                 child: Column(
-                  mainAxisSize: MainAxisSize.min,
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    AnimatedContainer(
-                      duration: Duration(milliseconds: useGlassDock ? 230 : 160),
-                      curve: useGlassDock
-                          ? Curves.easeOutBack
-                          : Curves.easeOutCubic,
-                      padding: EdgeInsets.symmetric(
-                        horizontal: useGlassDock ? (tiny ? 11 : 13) : 14,
-                        vertical: useGlassDock ? (tiny ? 5 : 7) : 8,
-                      ),
-                      decoration: BoxDecoration(
-                        color: selected ? indicatorColor : Colors.transparent,
-                        borderRadius: BorderRadius.circular(999),
-                        border: selected && useGlassDock
-                            ? Border.all(
-                                color: Colors.white.withValues(alpha: 0.14),
-                              )
-                            : null,
-                        boxShadow: selected && useGlassDock
-                            ? [
-                                BoxShadow(
-                                  color: widget.module.iconColor.withValues(
-                                    alpha: 0.20,
-                                  ),
-                                  blurRadius: 16,
-                                  offset: const Offset(0, 5),
-                                ),
-                              ]
-                            : null,
-                      ),
-                      child: _BottomNavIcon(
-                        module: widget.module,
-                        barColor: widget.barColor,
-                        useGlassDock: useGlassDock,
-                        iconSize: tiny ? 22 : 24,
-                      ),
+                    _BottomNavIcon(
+                      module: widget.module,
+                      barColor: widget.barColor,
+                      useGlassDock: useGlassDock,
+                      iconSize: tiny ? 18 : 20,
+                      iconColor: fg,
                     ),
-                    SizedBox(height: tiny ? 2 : (useGlassDock ? 4 : 5)),
-                    Flexible(
-                      child: FittedBox(
-                        fit: BoxFit.scaleDown,
-                        child: AnimatedDefaultTextStyle(
-                          duration: const Duration(milliseconds: 180),
-                          curve: Curves.easeOutCubic,
-                          style: TextStyle(
-                            fontSize: tiny ? 10.2 : (useGlassDock ? 10.8 : 11),
-                            height: 1.12,
-                            letterSpacing: -0.2,
-                            fontWeight:
-                                selected ? FontWeight.w700 : FontWeight.w500,
-                            color: fg,
-                          ),
+                    SizedBox(height: tiny ? 2 : 4),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Flexible(
                           child: Text(
                             widget.module.title,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: tiny ? 9.5 : 10,
+                              height: 1.1,
+                              fontWeight:
+                                  selected ? FontWeight.w700 : FontWeight.w500,
+                              color: fg,
+                            ),
                           ),
                         ),
-                      ),
+                        if (hasSub) ...[
+                          const SizedBox(width: 1),
+                          Icon(
+                            widget.subMenuOpen
+                                ? Icons.expand_more
+                                : Icons.expand_less,
+                            size: 10,
+                            color: fg.withValues(alpha: 0.75),
+                          ),
+                        ],
+                      ],
                     ),
                   ],
                 ),
@@ -3931,6 +4500,7 @@ class SubMenuItem {
 }
 
 class _SidebarItem {
+  final String? routeId;
   final IconData icon;
   final String title;
   final Color iconColor;
@@ -3938,6 +4508,7 @@ class _SidebarItem {
   final List<_SubItem>? subItems;
   final String? disabledTooltip;
   _SidebarItem({
+    this.routeId,
     required this.icon,
     required this.title,
     required this.iconColor,
@@ -3958,4 +4529,37 @@ class _SubItem {
     this.icon,
     this.disabledTooltip,
   });
+}
+
+class _MarketOrdersNavIcon extends StatelessWidget {
+  const _MarketOrdersNavIcon({
+    required this.routeId,
+    required this.icon,
+    required this.color,
+    required this.size,
+  });
+
+  final String? routeId;
+  final IconData icon;
+  final Color color;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final iconWidget = Icon(icon, color: color, size: size);
+    if (routeId != AppContentRoutes.onlineOrders) return iconWidget;
+
+    return ListenableBuilder(
+      listenable: MarketplacePendingOrdersNotifier.instance,
+      builder: (context, _) {
+        final n = MarketplacePendingOrdersNotifier.instance.pendingCount;
+        if (n <= 0) return iconWidget;
+        return Badge(
+          label: Text(n > 99 ? '99+' : '$n'),
+          backgroundColor: Colors.redAccent,
+          child: iconWidget,
+        );
+      },
+    );
+  }
 }

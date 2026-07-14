@@ -10,9 +10,6 @@ import '../providers/auth_provider.dart';
 import '../providers/global_barcode_route_bridge.dart';
 
 /// يستمع لضربات لوحة المفاتيح السريعة (قارئ HID) ويُجمّع الباركود حتى Enter.
-///
-/// يُسجَّل بعد [IdleSessionShell] ليُستدعى قبل معالج السكون (LIFO).
-/// الحرف الأول قد يظهر في الحقل المُركَّز؛ باقي الرموز تُستهلك هنا حتى لا يُفسد المسح الحقول.
 class GlobalBarcodeKeyboardListener extends StatefulWidget {
   const GlobalBarcodeKeyboardListener({super.key, required this.child});
 

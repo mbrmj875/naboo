@@ -450,8 +450,13 @@ class _ServiceOrderDetailScreenState extends State<ServiceOrderDetailScreen> {
                 style: TextStyle(fontWeight: FontWeight.w900, color: cs.primary),
               ),
             ),
-            extra: serial.isEmpty ? null : 'سيريال/لوحة: $serial',
+            extra: [
+              if (serial.isNotEmpty) 'رقم اللوحة: $serial',
+              if ((o['customerPhone'] ?? '').toString().isNotEmpty) 'الهاتف: ${(o['customerPhone'] ?? '')}',
+            ].join('  |  '),
           ),
+          const SizedBox(height: 10),
+          _buildVehicleServiceDetails(context, o),
           const SizedBox(height: 10),
           ..._etaSummaryWidgets(context, o),
           _moneyCard(
@@ -717,6 +722,255 @@ class _ServiceOrderDetailScreenState extends State<ServiceOrderDetailScreen> {
             trailing,
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildVehicleServiceDetails(BuildContext context, Map<String, dynamic> o) {
+    final cs = Theme.of(context).colorScheme;
+    final carModel = (o['carModel'] ?? '').toString().trim();
+    final engineSize = (o['engineSize'] ?? '').toString().trim();
+    final odomCurrent = (o['odometerCurrent'] ?? '').toString().trim();
+    final odomNext = (o['odometerNext'] ?? '').toString().trim();
+    final oilType = (o['oilType'] ?? '').toString().trim();
+    final viscosity = (o['oilViscosity'] ?? '').toString().trim();
+    final size = (o['oilSize'] ?? '').toString().trim();
+    final filterType = (o['filterType'] ?? '').toString().trim();
+    final reqServicesRaw = (o['requestedServices'] ?? '').toString().trim();
+    final techName = (o['technicianName'] ?? '').toString().trim();
+    final notes = (o['issueDescription'] ?? '').toString().trim();
+
+    final List<String> selectedServices = reqServicesRaw.isNotEmpty 
+        ? reqServicesRaw.split(',') 
+        : [];
+
+    final hasCarSpecs = carModel.isNotEmpty || engineSize.isNotEmpty;
+    final hasOilChange = odomCurrent.isNotEmpty || odomNext.isNotEmpty || oilType.isNotEmpty || viscosity.isNotEmpty || size.isNotEmpty || filterType.isNotEmpty;
+    final hasTechOrNotes = techName.isNotEmpty || notes.isNotEmpty;
+
+    if (!hasCarSpecs && !hasOilChange && selectedServices.isEmpty && !hasTechOrNotes) {
+      return const SizedBox.shrink();
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // 1. مواصفات السيارة والاتصال
+        if (hasCarSpecs)
+          _buildSectionDetailCard(
+            context,
+            title: 'مواصفات المركبة',
+            icon: Icons.directions_car_filled_rounded,
+            children: [
+              _buildDetailRow(context, 'الموديل', carModel.isEmpty ? '—' : carModel),
+              _buildDetailRow(context, 'حجم المحرك', engineSize.isEmpty ? '—' : engineSize),
+            ],
+          ),
+
+        // 2. غيار الزيت والفلتر
+        if (hasOilChange)
+          _buildSectionDetailCard(
+            context,
+            title: 'سجل غيار الزيت والفلتر',
+            icon: Icons.opacity_rounded,
+            children: [
+              if (odomCurrent.isNotEmpty || odomNext.isNotEmpty) ...[
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('القراءة الحالية', style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
+                        Text(odomCurrent.isEmpty ? '—' : '$odomCurrent كم', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                      ],
+                    ),
+                    Icon(Icons.arrow_back_rounded, color: cs.primary, size: 20),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text('القراءة اللاحقة', style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
+                        Text(odomNext.isEmpty ? '—' : '$odomNext كم', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: cs.primary)),
+                      ],
+                    ),
+                  ],
+                ),
+                const Divider(height: 16),
+              ],
+              _buildDetailRow(context, 'نوع الزيت', oilType.isEmpty ? '—' : oilType),
+              _buildDetailRow(context, 'القياس (Viscosity)', viscosity.isEmpty ? '—' : viscosity),
+              _buildDetailRow(context, 'الحجم (Size)', size.isEmpty ? '—' : size),
+              _buildDetailRow(context, 'نوع الفلتر', filterType.isEmpty ? '—' : filterType),
+            ],
+          ),
+
+        // 3. الخدمات المطلوبة
+        if (selectedServices.isNotEmpty)
+          _buildSectionDetailCard(
+            context,
+            title: 'الخدمات المطلوبة المنجزة',
+            icon: Icons.checklist_rounded,
+            children: [
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: selectedServices.map((srv) {
+                  return Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: cs.primary.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: cs.primary.withValues(alpha: 0.25)),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.check_circle_rounded, color: cs.primary, size: 16),
+                        const SizedBox(width: 6),
+                        Text(
+                          srv,
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w700,
+                            color: cs.primary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }).toList(),
+              ),
+            ],
+          ),
+
+        // 4. الفني والملاحظات
+        if (hasTechOrNotes)
+          _buildSectionDetailCard(
+            context,
+            title: 'المسؤول والملاحظات',
+            icon: Icons.assignment_ind_outlined,
+            children: [
+              if (techName.isNotEmpty)
+                _buildDetailRow(context, 'الفني المسؤول', techName, icon: Icons.handyman_rounded),
+              if (notes.isNotEmpty) ...[
+                if (techName.isNotEmpty) const SizedBox(height: 8),
+                Text(
+                  'تفاصيل إضافية / ملاحظات:',
+                  style: TextStyle(fontSize: 11.5, color: cs.onSurfaceVariant, fontWeight: FontWeight.bold),
+                  textAlign: TextAlign.start,
+                ),
+                const SizedBox(height: 4),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: cs.surfaceContainerHighest.withValues(alpha: 0.25),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    notes,
+                    style: const TextStyle(fontSize: 12.5, height: 1.4),
+                    textAlign: TextAlign.start,
+                  ),
+                ),
+              ],
+            ],
+          ),
+      ],
+    );
+  }
+
+  Widget _buildSectionDetailCard(
+    BuildContext context, {
+    required String title,
+    required IconData icon,
+    required List<Widget> children,
+  }) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: cs.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: cs.outlineVariant.withValues(alpha: 0.5),
+          width: 1,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: cs.surfaceContainerHighest.withValues(alpha: 0.15),
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+              border: Border(
+                bottom: BorderSide(
+                  color: cs.outlineVariant.withValues(alpha: 0.3),
+                  width: 1,
+                ),
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(icon, color: cs.primary, size: 18),
+                const SizedBox(width: 8),
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w900,
+                    fontSize: 13.5,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: children,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDetailRow(
+    BuildContext context,
+    String label,
+    String value, {
+    IconData? icon,
+  }) {
+    final cs = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          if (icon != null) ...[
+            Icon(icon, size: 16, color: cs.onSurfaceVariant),
+            const SizedBox(width: 6),
+          ],
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 12.5,
+              fontWeight: FontWeight.w600,
+              color: cs.onSurfaceVariant,
+            ),
+          ),
+          const Spacer(),
+          Text(
+            value,
+            style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w800,
+            ),
+            textAlign: TextAlign.end,
+          ),
+        ],
       ),
     );
   }

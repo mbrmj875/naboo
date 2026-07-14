@@ -114,6 +114,8 @@ class SalePosSettingsScreen extends StatelessWidget {
     final prov = context.watch<SalePosSettingsProvider>();
     final d = prov.data;
     final scheme = Theme.of(context).colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final appBarFg = isDark ? Colors.white : AppColors.primaryDark;
     final gap = ScreenLayout.of(context).pageHorizontalGap;
     final variant = context.screenLayout.layoutVariant;
     final showWideSaleLayoutControls = variant != DeviceVariant.phoneXS &&
@@ -125,8 +127,22 @@ class SalePosSettingsScreen extends StatelessWidget {
         appBar: AppBar(
           title: Text(
             appearanceOnly ? 'مظهر التطبيق' : 'إعدادات نقطة البيع',
+            style: TextStyle(
+              fontWeight: FontWeight.w700,
+              color: appBarFg,
+            ),
           ),
-          backgroundColor: scheme.primary,
+          backgroundColor: isDark ? AppColors.primary : Colors.white,
+          foregroundColor: appBarFg,
+          iconTheme: const IconThemeData(color: AppColors.accentGold),
+          actionsIconTheme: const IconThemeData(color: AppColors.accentGold),
+          bottom: PreferredSize(
+            preferredSize: const Size.fromHeight(1.2),
+            child: Container(
+              height: 1.2,
+              color: AppColors.accentGold.withValues(alpha: 0.55),
+            ),
+          ),
         ),
         body: ListView(
           padding: EdgeInsetsDirectional.fromSTEB(gap, 16, gap, 32),
@@ -1295,16 +1311,17 @@ class _SectionLabel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Row(
       children: [
-        Icon(icon, size: 20, color: scheme.primary),
+        Icon(icon, size: 20, color: AppColors.accentGold),
         const SizedBox(width: 8),
         Text(
           title,
           style: TextStyle(
             fontWeight: FontWeight.w800,
             fontSize: 14,
-            color: scheme.onSurface,
+            color: isDark ? scheme.onSurface : AppColors.primaryDark,
           ),
         ),
       ],
@@ -1320,13 +1337,17 @@ class _PolicyCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Material(
       color: scheme.surface,
       elevation: 0,
-      shape: const RoundedRectangleBorder(borderRadius: AppShape.none),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Container(
         decoration: BoxDecoration(
-          border: Border.all(color: scheme.outlineVariant),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: AppColors.accentGold.withValues(alpha: isDark ? 0.35 : 0.3),
+          ),
         ),
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 4),
@@ -1355,16 +1376,26 @@ class _PolicySwitch extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return SwitchListTile.adaptive(
       value: value,
       onChanged: onChanged,
-      title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
+      activeColor: AppColors.accentGold,
+      title: Text(
+        title,
+        style: TextStyle(
+          fontWeight: FontWeight.w700,
+          color: isDark ? Colors.white : AppColors.primaryDark,
+        ),
+      ),
       subtitle: Text(
         subtitle,
         style: TextStyle(
           fontSize: 11.5,
           height: 1.35,
-          color: Theme.of(context).colorScheme.onSurfaceVariant,
+          color: isDark
+              ? Theme.of(context).colorScheme.onSurfaceVariant
+              : AppColors.primaryDark.withValues(alpha: 0.75),
         ),
       ),
       contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),

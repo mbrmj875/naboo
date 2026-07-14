@@ -11,10 +11,12 @@ import 'package:provider/provider.dart';
 import '../../models/supplier_ap_models.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/invoice_provider.dart';
+import '../../providers/shift_provider.dart';
 import '../../services/database_helper.dart';
 import '../../services/tenant_context_service.dart';
 import '../../utils/screen_layout.dart';
 import '../../utils/sale_receipt_pdf.dart';
+import '../../utils/shift_actor_conflict_guard.dart';
 import '../../theme/design_tokens.dart';
 
 final _numFmt = NumberFormat('#,##0', 'ar');
@@ -97,6 +99,22 @@ class _SupplierDetailScreenState extends State<SupplierDetailScreen> {
   String _userName(BuildContext context) {
     final u = context.read<AuthProvider>().username.trim();
     return u.isEmpty ? '—' : u;
+  }
+
+  bool _blockIfShiftConflict(String actionLabel) {
+    final conflict = ShiftActorConflictGuard.evaluate(
+      sessionUserId: context.read<AuthProvider>().userId,
+      activeShift: context.read<ShiftProvider>().activeShift,
+    );
+    if (!conflict.hasConflict) return false;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'لا يمكن $actionLabel من هذه الجلسة: الوردية المفتوحة باسم ${conflict.shiftStaffName}.',
+        ),
+      ),
+    );
+    return true;
   }
 
   Future<void> _openActionsSheet() async {
@@ -385,6 +403,7 @@ class _SupplierDetailScreenState extends State<SupplierDetailScreen> {
       ).showSnackBar(const SnackBar(content: Text('أدخل مبلغاً صالحاً')));
       return;
     }
+    if (_blockIfShiftConflict('تسجيل دفعة المورد')) return;
 
     final payableBefore = _openPayable;
     final res = await _db.recordSupplierPayout(
@@ -496,6 +515,7 @@ class _SupplierDetailScreenState extends State<SupplierDetailScreen> {
       ).showSnackBar(const SnackBar(content: Text('أدخل مبلغاً صالحاً')));
       return;
     }
+    if (_blockIfShiftConflict('تسجيل مرتجع المورد')) return;
 
     final payableBefore = _openPayable;
     final res = await _db.recordSupplierPayout(
@@ -558,6 +578,7 @@ class _SupplierDetailScreenState extends State<SupplierDetailScreen> {
       ),
     );
     if (ok != true || !mounted) return;
+    if (_blockIfShiftConflict('عكس دفعة المورد')) return;
     final done = await _db.deleteSupplierPayoutReversingCash(
       payoutId: p.id,
       supplierId: widget.supplierId,
@@ -577,6 +598,7 @@ class _SupplierDetailScreenState extends State<SupplierDetailScreen> {
   }
 
   Future<void> _createStubVoucherAndLink(SupplierBill bill) async {
+    if (_blockIfShiftConflict('إنشاء سند وارد وربطه بوصل المورد')) return;
     final whs = await _db.listWarehousesActive(
       tenantId: TenantContextService.instance.activeTenantId,
     );

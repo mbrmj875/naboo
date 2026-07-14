@@ -32,48 +32,46 @@ class DefaultFirebaseOptions {
   // ستجدها في: Project Settings → Your apps → Config
 
   static const FirebaseOptions web = FirebaseOptions(
-    apiKey:            'YOUR-WEB-API-KEY',
-    appId:             'YOUR-WEB-APP-ID',
-    messagingSenderId: 'YOUR-SENDER-ID',
-    projectId:         'YOUR-PROJECT-ID',
-    authDomain:        'YOUR-PROJECT-ID.firebaseapp.com',
-    storageBucket:     'YOUR-PROJECT-ID.appspot.com',
+    apiKey: 'AIzaSyCMSTANLVf-VkWZiM8SnqrKXZdqc4EXhVY',
+    appId: '1:281392172783:web:b78a05dd0c8f311818151a',
+    messagingSenderId: '281392172783',
+    projectId: 'naboo-93580',
+    authDomain: 'naboo-93580.firebaseapp.com',
+    storageBucket: 'naboo-93580.firebasestorage.app',
+    measurementId: 'G-TMWVPDJSEP',
   );
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyBJb21mA_icY3P0ykAhajKcfiLBRapgpYE',
-    appId: '1:201331038467:android:d59414d912d42bb8703136',
-    messagingSenderId: '201331038467',
-    projectId: 'naboo-m',
-    storageBucket: 'naboo-m.firebasestorage.app',
+    apiKey: 'AIzaSyCzHzbSN54H4ou58XAh-Yv2kW_ADsct9L4',
+    appId: '1:281392172783:android:86018c680e01403a18151a',
+    messagingSenderId: '281392172783',
+    projectId: 'naboo-93580',
+    storageBucket: 'naboo-93580.firebasestorage.app',
   );
-
   static const FirebaseOptions ios = FirebaseOptions(
-    apiKey: 'AIzaSyCtCKHs_MMz9Kw-aKQd68EFAIBKzv2DZO8',
-    appId: '1:201331038467:ios:0cb65ac76b68dcce703136',
-    messagingSenderId: '201331038467',
-    projectId: 'naboo-m',
-    storageBucket: 'naboo-m.firebasestorage.app',
-    iosBundleId: 'com.yourdomain.yourAppName',
+    apiKey: 'AIzaSyB52IFcUaQ-uCVjLMJT2z2OONP8I9xMENI',
+    appId: '1:281392172783:ios:7c9ee1fd5470a6e918151a',
+    messagingSenderId: '281392172783',
+    projectId: 'naboo-93580',
+    storageBucket: 'naboo-93580.firebasestorage.app',
+    iosBundleId: 'com.basra.storemanager',
   );
-
   static const FirebaseOptions macos = FirebaseOptions(
-    apiKey: 'AIzaSyCtCKHs_MMz9Kw-aKQd68EFAIBKzv2DZO8',
-    appId: '1:201331038467:ios:e3e419a05339268c703136',
-    messagingSenderId: '201331038467',
-    projectId: 'naboo-m',
-    storageBucket: 'naboo-m.firebasestorage.app',
+    apiKey: 'AIzaSyB52IFcUaQ-uCVjLMJT2z2OONP8I9xMENI',
+    appId: '1:281392172783:ios:7c9ee1fd5470a6e918151a',
+    messagingSenderId: '281392172783',
+    projectId: 'naboo-93580',
+    storageBucket: 'naboo-93580.firebasestorage.app',
     iosBundleId: 'com.basra.storemanager',
   );
 
   static const FirebaseOptions windows = FirebaseOptions(
-    apiKey: 'AIzaSyDFGkfcqxeWJEab63TyLxuyPtBs8sbVZa0',
-    appId: '1:201331038467:web:cbe2a07852068cc2703136',
-    messagingSenderId: '201331038467',
-    projectId: 'naboo-m',
-    authDomain: 'naboo-m.firebaseapp.com',
-    storageBucket: 'naboo-m.firebasestorage.app',
-    measurementId: 'G-BQN14KZLZQ',
+    apiKey: 'AIzaSyCMSTANLVf-VkWZiM8SnqrKXZdqc4EXhVY',
+    appId: '1:281392172783:web:5f582b1d6152783218151a',
+    messagingSenderId: '281392172783',
+    projectId: 'naboo-93580',
+    authDomain: 'naboo-93580.firebaseapp.com',
+    storageBucket: 'naboo-93580.firebasestorage.app',
+    measurementId: 'G-052T7Z1NZR',
   );
-
 }

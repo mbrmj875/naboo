@@ -11,9 +11,12 @@ import '../../providers/auth_provider.dart';
 import '../../providers/notification_provider.dart';
 import '../../providers/shift_provider.dart';
 import '../../services/database_helper.dart';
+import '../../services/session_resume_context.dart';
 import '../../theme/design_tokens.dart';
 import '../../navigation/app_root_navigator_key.dart';
+import '../../services/auth/pin_attempt_guard.dart';
 import '../../services/password_hashing.dart';
+import '../../utils/pin_input_constraints.dart';
 import '../../utils/staff_identity_apply.dart';
 import '../../utils/staff_identity_qr.dart';
 import '../../utils/iraqi_currency_format.dart';
@@ -21,6 +24,7 @@ import '../../utils/screen_layout.dart';
 import '../../widgets/glass/glass_background.dart';
 import '../../widgets/glass/glass_surface.dart';
 import '../../widgets/inputs/app_input.dart';
+import '../../widgets/secure_screen.dart';
 import 'staff_qr_scan_screen.dart';
 
 /// بعد تسجيل الدخول: عرض رصيد الصندوق، الجرد، إضافة مال، ثم تمييز موظف الوردية.
@@ -48,17 +52,37 @@ class _OpenShiftScreenState extends State<OpenShiftScreen> {
 
   Future<void> _bootstrap() async {
     try {
-      final open = await _db.getOpenWorkShift();
+      final auth = context.read<AuthProvider>();
+      final uid = auth.userId;
+      if (uid != null && uid > 0) {
+        await _db.repairDuplicateOpenShifts();
+      }
+      final open = (uid != null && uid > 0)
+          ? await _db.getOpenWorkShiftForStaff(uid)
+          : await _db.getOpenWorkShift();
       if (!mounted) return;
       if (open != null) {
+        if (uid != null && uid > 0) {
+          final openId = (open['id'] as num?)?.toInt();
+          await _db.closeDuplicateOpenShiftsForStaff(
+            shiftStaffUserId: uid,
+            keepShiftId: openId,
+          );
+        }
         final ok = await _verifyShiftStaffResume(open);
         if (!mounted) return;
         if (!ok) {
-          await _logout();
+          await _returnToEmployeeGate();
           return;
         }
-        await context.read<ShiftProvider>().refresh();
+        await context.read<ShiftProvider>().refresh(forStaffUserId: uid);
         if (!mounted) return;
+        if (uid != null && uid > 0) {
+          await SessionResumeContext.recordActiveSession(
+            userId: uid,
+            rootRoute: '/home',
+          );
+        }
         unawaited(Navigator.of(context).pushReplacementNamed('/home'));
         return;
       }
@@ -73,7 +97,7 @@ class _OpenShiftScreenState extends State<OpenShiftScreen> {
     } catch (e) {
       if (e is StateError && e.message.contains('TenantContext')) {
         // الجلسة انتهت في الخلفية أثناء تحميل الشاشة (سباق زمني)، نعود لشاشة الدخول.
-        if (mounted) await _logout();
+        if (mounted) await _returnToEmployeeGate();
         return;
       }
       if (mounted) {
@@ -152,9 +176,20 @@ class _OpenShiftScreenState extends State<OpenShiftScreen> {
       barrierDismissible: false,
       useRootNavigator: true,
       builder: (ctx) =>
-          _ShiftStaffResumeLockDialog(staffName: name, salt: salt, hash: hash),
+          _ShiftStaffResumeLockDialog(
+            staffName: name,
+            salt: salt,
+            hash: hash,
+            userId: staffId,
+          ),
     );
     return ok == true;
+  }
+
+  String _staffDisplayLabel(BuildContext context) {
+    final auth = context.read<AuthProvider>();
+    final name = auth.displayName.trim();
+    return name.isNotEmpty ? name : auth.username;
   }
 
   String _formatInitial(double v) {
@@ -194,35 +229,8 @@ class _OpenShiftScreenState extends State<OpenShiftScreen> {
     FocusScope.of(context).unfocus();
     setState(() => _openingShift = true);
 
-    Map<String, dynamic>? identity;
-    try {
-      identity = await showDialog<Map<String, dynamic>?>(
-        context: context,
-        barrierDismissible: false,
-        builder: (ctx) => _ShiftStaffIdentityDialog(db: _db),
-      );
-    } catch (e) {
-      _showOpenShiftMessage('تعذر فتح نافذة اختيار موظف الوردية: $e');
-      if (mounted) setState(() => _openingShift = false);
-      return;
-    }
-
-    if (!mounted) return;
-    if (identity == null) {
-      setState(() => _openingShift = false);
-      _showOpenShiftMessage('لم يتم اختيار موظف الوردية.');
-      return;
-    }
-
-    final staffUserId = identity['shiftStaffUserId'];
-    if (staffUserId is! int || staffUserId <= 0) {
-      setState(() => _openingShift = false);
-      _showOpenShiftMessage('بيانات موظف الوردية غير مكتملة. اختر الموظف مرة أخرى.');
-      return;
-    }
-
-    final nameRaw = ((identity['name'] as String?) ?? '').trim();
-    final name = nameRaw.isEmpty ? '—' : nameRaw;
+    final nameRaw = auth.displayName.trim();
+    final name = nameRaw.isEmpty ? auth.username : nameRaw;
 
     var openedShiftId = 0;
     var openedDetail = '';
@@ -230,7 +238,7 @@ class _OpenShiftScreenState extends State<OpenShiftScreen> {
     try {
       final shiftId = await context.read<ShiftProvider>().openShift(
         sessionUserId: uid,
-        shiftStaffUserId: staffUserId,
+        shiftStaffUserId: uid,
         systemBalanceAtOpen: _systemBalance,
         declaredPhysicalCash: physical,
         addedCashAtOpen: addPart,
@@ -287,6 +295,10 @@ class _OpenShiftScreenState extends State<OpenShiftScreen> {
       return;
     }
 
+    await SessionResumeContext.recordActiveSession(
+      userId: uid,
+      rootRoute: '/home',
+    );
     unawaited(Navigator.of(context).pushReplacementNamed('/home'));
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final ctx = appRootNavigatorKey.currentContext;
@@ -301,20 +313,13 @@ class _OpenShiftScreenState extends State<OpenShiftScreen> {
     });
   }
 
-  /// رفض التحقق من موظف الوردية: يجب عدم فتح التطبيق على وردية مفتوحة دون إثبات الهوية.
-  /// لذلك نسجّل خروج الجلسة على هذا الجهاز ونعود لشاشة تسجيل الدخول.
-  Future<void> _logout() async {
-    await context.read<AuthProvider>().logout();
+  /// العودة لشاشة «من سيبدأ العمل؟» — لا خروج من Gmail ولا مسح بيانات المتجر.
+  Future<void> _returnToEmployeeGate() async {
+    await context.read<AuthProvider>().lockSession();
     if (!mounted) return;
-    final root = appRootNavigatorKey.currentState;
-    if (root != null && root.mounted) {
-      unawaited(root.pushNamedAndRemoveUntil('/login', (r) => false));
-      return;
-    }
-    unawaited(Navigator.of(context, rootNavigator: true).pushNamedAndRemoveUntil(
-      '/login',
-      (r) => false,
-    ));
+    final nav = appRootNavigatorKey.currentState ??
+        Navigator.of(context, rootNavigator: true);
+    await nav.pushNamedAndRemoveUntil('/employee-gate', (_) => false);
   }
 
   @override
@@ -341,7 +346,8 @@ class _OpenShiftScreenState extends State<OpenShiftScreen> {
       );
     }
 
-    return PopScope(
+    return SecureScreen(
+      child: PopScope(
       canPop: false,
       child: Directionality(
         textDirection: TextDirection.rtl,
@@ -404,7 +410,10 @@ class _OpenShiftScreenState extends State<OpenShiftScreen> {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
-                                  _OpenShiftHeader(compact: compact),
+                                  _OpenShiftHeader(
+                                    compact: compact,
+                                    staffLabel: _staffDisplayLabel(context),
+                                  ),
                                   SizedBox(height: compact ? 14 : 18),
                                   _SystemCashCard(
                                     amount: _systemBalance,
@@ -436,9 +445,10 @@ class _OpenShiftScreenState extends State<OpenShiftScreen> {
                                   ),
                                   SizedBox(height: compact ? 10 : 12),
                                   TextButton(
-                                    onPressed: _openingShift ? null : _logout,
+                                    onPressed:
+                                        _openingShift ? null : _returnToEmployeeGate,
                                     child: Text(
-                                      'الخروج من الحساب',
+                                      'اختيار مستخدم آخر',
                                       style: TextStyle(
                                         color: Colors.white.withValues(
                                           alpha: 0.70,
@@ -460,14 +470,19 @@ class _OpenShiftScreenState extends State<OpenShiftScreen> {
           ),
         ),
       ),
+      ),
     );
   }
 }
 
 class _OpenShiftHeader extends StatelessWidget {
-  const _OpenShiftHeader({required this.compact});
+  const _OpenShiftHeader({
+    required this.compact,
+    required this.staffLabel,
+  });
 
   final bool compact;
+  final String staffLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -500,6 +515,15 @@ class _OpenShiftHeader extends StatelessWidget {
             fontSize: compact ? 22 : 24,
             fontWeight: FontWeight.bold,
             height: 1.25,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          'موظف الوردية: $staffLabel',
+          style: TextStyle(
+            color: AppColors.accentGold,
+            fontSize: compact ? 14 : 15,
+            fontWeight: FontWeight.w600,
           ),
         ),
         const SizedBox(height: 8),
@@ -767,7 +791,7 @@ class _ShiftStaffIdentityDialogState extends State<_ShiftStaffIdentityDialog> {
     // الصلاحية صراحةً فيظهر فقط المدير. التحقق الحقيقي: رمز بطاقة الوردية + صلاحيات الجلسة لاحقاً.
     late final List<Map<String, dynamic>> eligible;
     try {
-      eligible = await widget.db.listActiveUsersOrdered();
+      eligible = await widget.db.listActiveUsersForEmployeeGate();
     } catch (e) {
       if (!mounted) return;
       setState(() => _loadingUsers = false);
@@ -865,25 +889,59 @@ class _ShiftStaffIdentityDialogState extends State<_ShiftStaffIdentityDialog> {
       );
       return;
     }
-    final pwd = _passwordCtrl.text;
+    final pwd = _passwordCtrl.text.trim();
+    if (!PinInputConstraints.isValid(pwd)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(PinInputConstraints.invalidMessage)),
+      );
+      return;
+    }
     final salt = row['passwordSalt'] as String?;
     final hash = row['passwordHash'] as String?;
     if (salt == null || hash == null || salt.isEmpty || hash.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            'لا توجد كلمة مرور محلية لهذا الحساب. عيّن كلمة مرور من إدارة المستخدمين (أو استخدم حساباً ليس دخوله عبر Google فقط).',
+            'لا يوجد رمز PIN محلي لهذا الحساب. عيّن رمز PIN من إدارة المستخدمين (أو استخدم حساباً ليس دخوله عبر Google فقط).',
           ),
         ),
       );
       return;
     }
-    if (!PasswordHashing.verify(pwd, salt, hash)) {
+    final guardScope = PinAttemptGuard.userScope(id);
+    final locked = await PinAttemptGuard.remainingLock(guardScope);
+    if (!mounted) return;
+    if (locked != null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('كلمة مرور الدخول غير صحيحة')),
+        SnackBar(
+          content: Text(
+            'تم إيقاف الإدخال مؤقتاً بعد محاولات خاطئة متكررة. '
+            'حاول بعد ${PinAttemptGuard.formatRemaining(locked)}',
+          ),
+        ),
       );
       return;
     }
+    if (!await PasswordHashing.verifyPin(pwd, salt, hash)) {
+      final newLock = await PinAttemptGuard.recordFailure(
+        guardScope,
+        userId: id,
+        username: row['username'] as String?,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            newLock != null
+                ? 'تم إيقاف الإدخال مؤقتاً بعد محاولات خاطئة متكررة. '
+                    'حاول بعد ${PinAttemptGuard.formatRemaining(newLock)}'
+                : 'رمز PIN غير صحيح',
+          ),
+        ),
+      );
+      return;
+    }
+    await PinAttemptGuard.recordSuccess(guardScope);
     final disp = (row['displayName'] as String?)?.trim() ?? '';
     final name = disp.isNotEmpty ? disp : (row['username'] as String? ?? '');
     if (!mounted) return;
@@ -962,7 +1020,7 @@ class _ShiftStaffIdentityDialogState extends State<_ShiftStaffIdentityDialog> {
                 ),
                 const SizedBox(height: 10),
                 Text(
-                  'اختر الموظف المسؤول عن الصندوق في هذه الوردية، ثم أدخل كلمة مرور دخوله. سجلات البيع والصلاحيات أثناء الوردية ستُحسب على هذا الموظف.',
+                  'اختر الموظف المسؤول عن الصندوق في هذه الوردية، ثم أدخل رمز PIN الخاص به. سجلات البيع والصلاحيات أثناء الوردية ستُحسب على هذا الموظف.',
                   style: bodyStyle,
                 ),
                 const SizedBox(height: 16),
@@ -1125,13 +1183,17 @@ class _ShiftStaffIdentityDialogState extends State<_ShiftStaffIdentityDialog> {
                         TextField(
                           controller: _passwordCtrl,
                           obscureText: true,
+                          keyboardType: TextInputType.number,
+                          textDirection: TextDirection.ltr,
+                          inputFormatters: PinInputConstraints.formatters,
+                          maxLength: PinInputConstraints.length,
                           style: const TextStyle(color: Color(0xFFF8FAFC)),
                           cursorColor: AppColors.accentGold,
                           decoration: inputDecoration(
-                            labelText: 'كلمة مرور الدخول',
-                            hintText: 'كلمة مرور المستخدم المختار',
+                            labelText: 'رمز PIN',
+                            hintText: PinInputConstraints.hint,
                             prefixIcon: Icons.lock_outline_rounded,
-                          ),
+                          ).copyWith(counterText: ''),
                         ),
                       ],
                     ),
@@ -1241,11 +1303,13 @@ class _ShiftStaffResumeLockDialog extends StatefulWidget {
     required this.staffName,
     required this.salt,
     required this.hash,
+    required this.userId,
   });
 
   final String staffName;
   final String salt;
   final String hash;
+  final int userId;
 
   @override
   State<_ShiftStaffResumeLockDialog> createState() =>
@@ -1274,13 +1338,51 @@ class _ShiftStaffResumeLockDialogState
     super.dispose();
   }
 
-  void _submit() {
-    if (PasswordHashing.verify(_ctrl.text, widget.salt, widget.hash)) {
+  bool _submitting = false;
+  Duration? _lockRemaining;
+
+  Future<void> _submit() async {
+    if (_submitting) return;
+    if (!PinInputConstraints.isValid(_ctrl.text)) {
+      setState(() {
+        _error = true;
+        _ctrl.clear();
+      });
+      return;
+    }
+    setState(() => _submitting = true);
+    final guardScope = PinAttemptGuard.userScope(widget.userId);
+    final locked = await PinAttemptGuard.remainingLock(guardScope);
+    if (!mounted) return;
+    if (locked != null) {
+      setState(() {
+        _submitting = false;
+        _error = true;
+        _lockRemaining = locked;
+        _ctrl.clear();
+      });
+      return;
+    }
+    if (await PasswordHashing.verifyPin(
+      _ctrl.text.trim(),
+      widget.salt,
+      widget.hash,
+    )) {
+      await PinAttemptGuard.recordSuccess(guardScope);
+      if (!mounted) return;
       Navigator.of(context, rootNavigator: true).pop(true);
       return;
     }
+    final newLock = await PinAttemptGuard.recordFailure(
+      guardScope,
+      userId: widget.userId,
+      username: widget.staffName,
+    );
+    if (!mounted) return;
     setState(() {
+      _submitting = false;
       _error = true;
+      _lockRemaining = newLock;
       _ctrl.clear();
     });
   }
@@ -1368,7 +1470,7 @@ class _ShiftStaffResumeLockDialogState
                             const SizedBox(height: 10),
                             Text(
                               'توجد وردية مفتوحة باسم "${widget.staffName}". '
-                              'أدخل كلمة مرور الموظف للمتابعة.',
+                              'أدخل رمز PIN للموظف للمتابعة.',
                               textAlign: TextAlign.center,
                               style: GoogleFonts.tajawal(
                                 fontSize: 14,
@@ -1379,16 +1481,18 @@ class _ShiftStaffResumeLockDialogState
                             ),
                             const SizedBox(height: 20),
                             AppInput(
-                              label: 'كلمة مرور الموظف',
+                              label: 'رمز PIN',
                               labelFontWeight: FontWeight.w700,
                               isRequired: true,
-                              hint: 'أدخل كلمة المرور',
+                              hint: PinInputConstraints.hint,
                               controller: _ctrl,
                               focusNode: _focusPwd,
                               useGlass: true,
                               cursorColor: Colors.white,
                               obscureText: _obscurePassword,
                               textDirection: TextDirection.ltr,
+                              keyboardType: TextInputType.number,
+                              inputFormatters: PinInputConstraints.formatters,
                               densePrefixConstraints: const BoxConstraints(
                                 minHeight: 48,
                                 minWidth: 48,
@@ -1414,7 +1518,10 @@ class _ShiftStaffResumeLockDialogState
                                 size: 20,
                               ),
                               warningText: _error
-                                  ? 'كلمة المرور غير صحيحة'
+                                  ? (_lockRemaining != null
+                                      ? 'تم إيقاف الإدخال مؤقتاً. حاول بعد '
+                                          '${PinAttemptGuard.formatRemaining(_lockRemaining!)}'
+                                      : 'رمز PIN غير صحيح')
                                   : null,
                               onChanged: (_) => setState(() => _error = false),
                               textInputAction: TextInputAction.done,
@@ -1473,7 +1580,7 @@ class _ShiftStaffResumeLockDialogState
                                 padding: const EdgeInsets.symmetric(vertical: 12),
                               ),
                               child: Text(
-                                'تسجيل الخروج',
+                                'اختيار مستخدم آخر',
                                 style: GoogleFonts.tajawal(
                                   fontWeight: FontWeight.w800,
                                   fontSize: 14,

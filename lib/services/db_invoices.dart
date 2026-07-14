@@ -14,6 +14,7 @@ int? _tryParseLocalTenantId(String raw) {
   return null;
 }
 
+/// معرّف المستأجر المحلي الموحّد (SQLite) — يتجاهل `local-{userId}` من الجلسة.
 Future<int> _resolveActiveTenantIdForLocalDb(DatabaseExecutor ex) async {
   try {
     final rows = await ex.query(
@@ -27,13 +28,133 @@ Future<int> _resolveActiveTenantIdForLocalDb(DatabaseExecutor ex) async {
         ? null
         : int.tryParse((rows.first['value'] ?? '').toString());
     if (fromSettings != null && fromSettings > 0) return fromSettings;
-  } catch (_) {}
-  try {
-    final sid = TenantContext.instance.requireTenantId();
-    final fromSession = _tryParseLocalTenantId(sid);
-    if (fromSession != null && fromSession > 0) return fromSession;
-  } catch (_) {}
+  } catch (e, st) {
+    AppLogger.error(
+      'DBInvoices',
+      'فشل قراءة active_tenant_id — fallback 1',
+      e,
+      st,
+    );
+  }
+  // لا نستخدم local-{userId} من TenantContext كـ tenantId — يفصل ورديات الموظف عن لوحة المالك.
   return 1;
+}
+
+Future<int?> _resolveWorkShiftIdForInvoice(
+  DatabaseExecutor txn, {
+  required int tenantId,
+  required Invoice invoice,
+}) async {
+  if (invoice.workShiftId != null && invoice.workShiftId! > 0) {
+    return invoice.workShiftId;
+  }
+
+  final actor = (invoice.createdByUserName ?? '').trim();
+  if (actor.isNotEmpty) {
+    final userRows = await txn.rawQuery(
+      '''
+      SELECT id FROM users
+      WHERE LOWER(TRIM(COALESCE(displayName, ''))) = LOWER(?)
+         OR LOWER(TRIM(COALESCE(username, ''))) = LOWER(?)
+      LIMIT 1
+      ''',
+      [actor, actor],
+    );
+    if (userRows.isNotEmpty) {
+      final uid = userRows.first['id'] as int;
+      final wsRows = await txn.rawQuery(
+        '''
+        SELECT id FROM work_shifts
+        WHERE deleted_at IS NULL
+          AND (closedAt IS NULL OR TRIM(IFNULL(closedAt, '')) = '')
+          AND shiftStaffUserId = ?
+          AND (
+            tenantId = ?
+            OR NOT EXISTS (SELECT 1 FROM tenants t WHERE t.id = tenantId)
+          )
+        ORDER BY datetime(openedAt) DESC, id DESC
+        LIMIT 1
+        ''',
+        [uid, tenantId],
+      );
+      if (wsRows.isNotEmpty) {
+        return wsRows.first['id'] as int?;
+      }
+    }
+
+    final byName = await txn.rawQuery(
+      '''
+      SELECT id FROM work_shifts
+      WHERE deleted_at IS NULL
+        AND (closedAt IS NULL OR TRIM(IFNULL(closedAt, '')) = '')
+        AND LOWER(TRIM(COALESCE(shiftStaffName, ''))) = LOWER(?)
+        AND (
+          tenantId = ?
+          OR NOT EXISTS (SELECT 1 FROM tenants t WHERE t.id = tenantId)
+        )
+      ORDER BY datetime(openedAt) DESC, id DESC
+      LIMIT 1
+      ''',
+      [actor, tenantId],
+    );
+    if (byName.isNotEmpty) {
+      return byName.first['id'] as int?;
+    }
+  }
+
+  final fallback = await txn.rawQuery(
+    '''
+    SELECT id FROM work_shifts
+    WHERE deleted_at IS NULL
+      AND (closedAt IS NULL OR TRIM(IFNULL(closedAt, '')) = '')
+      AND (
+        tenantId = ?
+        OR NOT EXISTS (SELECT 1 FROM tenants t WHERE t.id = tenantId)
+      )
+    ORDER BY datetime(openedAt) DESC, id DESC
+    LIMIT 1
+    ''',
+    [tenantId],
+  );
+  if (fallback.isEmpty) return null;
+  return fallback.first['id'] as int?;
+}
+
+Future<int?> _resolveActorUserIdForInvoice(
+  DatabaseExecutor txn, {
+  required Invoice invoice,
+}) async {
+  final actor = (invoice.createdByUserName ?? '').trim();
+  if (actor.isEmpty) return null;
+  final userRows = await txn.rawQuery(
+    '''
+    SELECT id FROM users
+    WHERE LOWER(TRIM(COALESCE(displayName, ''))) = LOWER(?)
+       OR LOWER(TRIM(COALESCE(username, ''))) = LOWER(?)
+    LIMIT 1
+    ''',
+    [actor, actor],
+  );
+  if (userRows.isEmpty) return null;
+  return userRows.first['id'] as int?;
+}
+
+Future<int?> _resolveShiftOwnerUserIdForInvoice(
+  DatabaseExecutor txn, {
+  required int? workShiftId,
+}) async {
+  if (workShiftId == null || workShiftId <= 0) return null;
+  final rows = await txn.query(
+    'work_shifts',
+    columns: const ['shiftStaffUserId'],
+    where: 'id = ?',
+    whereArgs: [workShiftId],
+    limit: 1,
+  );
+  if (rows.isEmpty) return null;
+  final sid = (rows.first['shiftStaffUserId'] as num?)?.toInt();
+  if (sid == null || sid <= 0) return null;
+  return sid;
 }
 
 extension DbInvoices on DatabaseHelper {
@@ -291,18 +412,25 @@ extension DbInvoices on DatabaseHelper {
     final loyaltyDiscount = loyaltyActive ? invoice.loyaltyDiscount : 0.0;
     final loyaltyRedeem = loyaltyActive ? invoice.loyaltyPointsRedeemed : 0;
 
-    final wsRows = await txn.query(
-      'work_shifts',
-      columns: ['id'],
-      where: 'closedAt IS NULL',
-      limit: 1,
+    final shiftId = await _resolveWorkShiftIdForInvoice(
+      txn,
+      tenantId: tenantId,
+      invoice: invoice,
     );
-    final int? shiftId = wsRows.isNotEmpty
-        ? wsRows.first['id'] as int
-        : invoice.workShiftId;
+    final actorUserId = await _resolveActorUserIdForInvoice(
+      txn,
+      invoice: invoice,
+    );
+    final shiftOwnerUserId = await _resolveShiftOwnerUserIdForInvoice(
+      txn,
+      workShiftId: shiftId,
+    );
+    final nowIso = DateTime.now().toUtc().toIso8601String();
+    final invoiceGlobalId = const Uuid().v4();
 
     final id = await txn.insert('invoices', {
       'tenantId': tenantId,
+      'global_id': invoiceGlobalId,
       'customerName': invoice.customerName,
       'date': invoice.date.toIso8601String(),
       'type': invoice.type.index,
@@ -318,6 +446,8 @@ extension DbInvoices on DatabaseHelper {
       'originalInvoiceId': invoice.originalInvoiceId,
       'deliveryAddress': invoice.deliveryAddress,
       'createdByUserName': invoice.createdByUserName,
+      'actorUserId': actorUserId,
+      'shiftOwnerUserId': shiftOwnerUserId,
       'discountPercent': invoice.discountPercent,
       'workShiftId': shiftId,
       'customerId': invoice.customerId,
@@ -331,6 +461,7 @@ extension DbInvoices on DatabaseHelper {
       'installmentInterestAmount': invoice.installmentInterestAmount,
       'installmentTotalWithInterest': invoice.installmentTotalWithInterest,
       'installmentSuggestedMonthly': invoice.installmentSuggestedMonthly,
+      'updatedAt': nowIso,
     });
     await _insertActivityLogInTxn(
       txn,
@@ -364,7 +495,12 @@ extension DbInvoices on DatabaseHelper {
             final tq = (wacRows.first['totalQty'] as num?)?.toDouble() ?? 0.0;
             if (tq > 0) stampedUnitCost = tc / tq;
           }
-        } catch (_) {}
+        } catch (e) {
+          AppLogger.warn(
+            'DbInvoices',
+            'WAC cost stamp skipped for product ${item.productId}: $e',
+          );
+        }
         if (stampedUnitCost <= 0) {
           try {
             final p = await txn.query(
@@ -378,11 +514,35 @@ extension DbInvoices on DatabaseHelper {
               stampedUnitCost =
                   (p.first['buyPrice'] as num?)?.toDouble() ?? 0.0;
             }
-          } catch (_) {}
+          } catch (e) {
+            AppLogger.warn(
+              'DbInvoices',
+              'buyPrice fallback failed for product ${item.productId}: $e',
+            );
+          }
+        }
+      }
+      String? productGlobalId;
+      final pid = item.productId;
+      if (pid != null && pid > 0) {
+        final rows = await txn.query(
+          'products',
+          columns: ['global_id'],
+          where: 'id = ?',
+          whereArgs: [pid],
+          limit: 1,
+        );
+        if (rows.isNotEmpty) {
+          final gid = (rows.first['global_id'] ?? '').toString().trim();
+          if (gid.isNotEmpty) productGlobalId = gid;
         }
       }
       final base = item.baseQtyResolved;
       await txn.insert('invoice_items', {
+        'global_id': const Uuid().v4(),
+        'invoice_global_id': invoiceGlobalId,
+        'product_global_id': productGlobalId,
+        'updatedAt': nowIso,
         'invoiceId': id,
         'productName': item.productName,
         'quantity': base,
@@ -510,7 +670,14 @@ extension DbInvoices on DatabaseHelper {
                   }
                 }
               }
-            } catch (_) {}
+            } catch (e, st) {
+              AppLogger.error(
+                'DBInvoices',
+                'فشل طابور مزامنة متغير ملابس',
+                e,
+                st,
+              );
+            }
 
             continue;
           }
@@ -524,7 +691,7 @@ extension DbInvoices on DatabaseHelper {
       }
 
       if (invoice.type == InvoiceType.supplierPayment) {
-        if (invoice.supplierPaymentAffectsCash && invoice.total > 1e-9) {
+        if (invoice.supplierPaymentAffectsCash && _toFils(invoice.total) > 0) {
           final cust = invoice.customerName.isEmpty
               ? 'مورد'
               : invoice.customerName;
@@ -536,6 +703,8 @@ extension DbInvoices on DatabaseHelper {
             'description': 'دفع مورد — $cust (سند #${id.toString()})',
             'invoiceId': id,
             'workShiftId': shiftId,
+            'actorUserId': actorUserId,
+            'shiftOwnerUserId': shiftOwnerUserId,
             'createdAt': DateTime.now().toIso8601String(),
           });
           await _insertActivityLogInTxn(
@@ -579,6 +748,8 @@ extension DbInvoices on DatabaseHelper {
             'description': desc,
             'invoiceId': id,
             'workShiftId': shiftId,
+            'actorUserId': actorUserId,
+            'shiftOwnerUserId': shiftOwnerUserId,
             'createdAt': DateTime.now().toIso8601String(),
           });
           await _insertActivityLogInTxn(
@@ -615,6 +786,8 @@ extension DbInvoices on DatabaseHelper {
               'مرتجع فاتورة #${id.toString()}${invoice.originalInvoiceId != null ? ' (أصل #${invoice.originalInvoiceId})' : ''} — ${invoice.customerName.isEmpty ? 'عميل' : invoice.customerName}',
           'invoiceId': id,
           'workShiftId': shiftId,
+          'actorUserId': actorUserId,
+          'shiftOwnerUserId': shiftOwnerUserId,
           'createdAt': DateTime.now().toIso8601String(),
         });
         await _insertActivityLogInTxn(
@@ -664,6 +837,7 @@ extension DbInvoices on DatabaseHelper {
 
   void _validateInvoiceForSave(Invoice invoice) {
     const moneyTol = 0.05;
+    const moneyTolFils = 50;
 
     bool isFiniteNum(double v) => v.isFinite && !v.isNaN;
 
@@ -671,7 +845,7 @@ extension DbInvoices on DatabaseHelper {
       if (!isFiniteNum(v)) {
         throw const FormatException('بيانات الفاتورة غير صالحة (قيمة رقمية غير منتهية).');
       }
-      if (v < -moneyTol) {
+      if (_toFils(v) < -moneyTolFils) {
         throw FormatException('لا يمكن أن يكون $label أقل من الصفر.');
       }
     }
@@ -701,6 +875,18 @@ extension DbInvoices on DatabaseHelper {
       );
     }
 
+    final requiresCustomerLink =
+        invoice.type == InvoiceType.credit ||
+        invoice.type == InvoiceType.installment;
+    if (requiresCustomerLink) {
+      final customerId = invoice.customerId;
+      if (customerId == null || customerId <= 0) {
+        throw const FormatException(
+          'لا يمكن حفظ فاتورة دين/تقسيط بدون ربط العميل ببطاقته (customerId).',
+        );
+      }
+    }
+
     var subtotal = 0.0;
     for (var i = 0; i < invoice.items.length; i++) {
       final item = invoice.items[i];
@@ -723,8 +909,9 @@ extension DbInvoices on DatabaseHelper {
         throw FormatException('معرّف المنتج في البند رقم $lineNo غير صالح.');
       }
 
-      final expectedLine = item.price * enteredQty;
-      if ((expectedLine - item.total).abs() > moneyTol) {
+      final expectedLineFils = _toFils(item.price * enteredQty);
+      final itemTotalFils = _toFils(item.total);
+      if ((expectedLineFils - itemTotalFils).abs() > moneyTolFils) {
         throw FormatException(
           'إجمالي البند رقم $lineNo غير متطابق مع السعر × الكمية.',
         );
@@ -733,17 +920,23 @@ extension DbInvoices on DatabaseHelper {
       subtotal += item.total;
     }
 
-    if (invoice.discount - subtotal > moneyTol) {
+    final subtotalFils = _toFils(subtotal);
+    final discountFils = _toFils(invoice.discount);
+    final taxFils = _toFils(invoice.tax);
+    final totalFils = _toFils(invoice.total);
+    final advanceFils = _toFils(invoice.advancePayment);
+
+    if (discountFils - subtotalFils > moneyTolFils) {
       throw const FormatException('قيمة الخصم لا يمكن أن تتجاوز مجموع البنود.');
     }
 
-    final expectedTotal = subtotal - invoice.discount + invoice.tax;
-    if ((expectedTotal - invoice.total).abs() > moneyTol) {
+    final expectedTotalFils = subtotalFils - discountFils + taxFils;
+    if ((expectedTotalFils - totalFils).abs() > moneyTolFils) {
       throw const FormatException(
         'إجمالي الفاتورة غير متطابق مع مجموع البنود بعد الخصم والضريبة.',
       );
     }
-    if (invoice.advancePayment - invoice.total > moneyTol) {
+    if (advanceFils - totalFils > moneyTolFils) {
       throw const FormatException('الدفعة المقدمة لا يمكن أن تتجاوز إجمالي الفاتورة.');
     }
   }
@@ -924,5 +1117,13 @@ extension DbInvoices on DatabaseHelper {
             0,
       );
     }).toList();
+  }
+}
+
+extension DbLocalTenant on DatabaseHelper {
+  /// معرّف tenant للبيانات المحلية (فواتير، صندوق، ديون) — موحّد عبر الشاشات.
+  Future<int> resolveLocalBusinessTenantId() async {
+    final db = await database;
+    return _resolveActiveTenantIdForLocalDb(db);
   }
 }
