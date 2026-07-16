@@ -69,6 +69,7 @@ secrets/
 
 # Local backup snapshots (do not push to GitHub)
 *.backup
+/backup/
 
 # Built distributables (rebuilt via CI release workflows)
 /dist/
@@ -84,3 +85,4 @@ admin-web/out/
 # عوائد بناء TypeScript / npm خاطئ من جذر المشروع
 *.tsbuildinfo
 /package-lock.json
+env/prod.env

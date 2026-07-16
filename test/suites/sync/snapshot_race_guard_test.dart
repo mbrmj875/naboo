@@ -15,6 +15,7 @@ import 'dart:convert';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:naboo/services/cloud_sync_service.dart';
+import 'package:naboo/services/snapshot_push_guards.dart';
 import 'package:naboo/services/snapshot_race_guard.dart';
 import 'package:naboo/services/sync_entity_types.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -76,6 +77,7 @@ void main() {
       ..remoteSnapshotHasNonEmptyOverrideForTesting = null
       ..conflictPullOverrideForTesting = null
       ..localDbHasNoSyncDataOverrideForTesting = null
+      ..remoteBusinessGuardInfoForTesting = null
       ..databaseProviderForTesting = null
       ..suppressScheduleSyncSoonForTesting = false;
   });
@@ -155,7 +157,20 @@ void main() {
       db = await _openRaceGuardDb();
       sync = CloudSyncService.instance
         ..databaseProviderForTesting = (() async => db)
-        ..suppressScheduleSyncSoonForTesting = true;
+        ..suppressScheduleSyncSoonForTesting = true
+        // بدون Supabase حي: سحابة فارغة افتراضياً (اختبار (ج) يتجاوزها).
+        ..remoteBusinessGuardInfoForTesting = ((_) async => (
+              chunked: false,
+              counts: {for (final t in kSnapshotBusinessTables) t: 0},
+            ));
+      // اختبارات الرفع تفترض جهازاً مُرطَّباً (بوابة الترطيب قبل RPC).
+      await sync.setDeviceHydratedForTesting('user-a', true);
+      await sync.setDeviceHydratedForTesting('user-b', true);
+      await sync.setDeviceHydratedForTesting('u1', true);
+      await sync.setDeviceHydratedForTesting('empty-user', true);
+      await sync.setDeviceHydratedForTesting('idem', true);
+      await sync.setDeviceHydratedForTesting('chunk-user', true);
+      await sync.setDeviceHydratedForTesting('legacy', true);
     });
 
     tearDown(() async {
@@ -345,7 +360,7 @@ void main() {
       final ok = await sync.pushSnapshotForTesting(userId: 'empty-user');
       expect(ok, isFalse);
       expect(rpcCalls, 0);
-      expect(sync.lastError.value, contains('فارغة'));
+      expect(sync.lastError.value, kBusinessDataPushBlockedAr);
     });
 
     test('(د) نفس idempotency_key يعيد ok بدون فشل', () async {

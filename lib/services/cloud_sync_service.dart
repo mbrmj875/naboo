@@ -20,6 +20,7 @@ import 'realtime_watchdog.dart';
 import 'cloud_sync_run_result.dart';
 import 'connectivity_resume_sync.dart';
 import 'auth/ensure_fresh_session.dart';
+import 'snapshot_push_guards.dart';
 import 'snapshot_race_guard.dart';
 import 'sync_entity_types.dart';
 
@@ -304,17 +305,22 @@ class CloudSyncService {
   })?
   pushSnapshotRpcOverrideForTesting;
 
-  /// للاختبارات فقط — يستبدل فحص «السحابة غنية».
+  /// للاختبارات فقط — يستبدل فحص «السحابة غنية» (مسار قديم؛ يُفضَّل [remoteBusinessGuardInfoForTesting]).
   @visibleForTesting
   Future<bool> Function(String userId)?
   remoteSnapshotHasNonEmptyOverrideForTesting;
+
+  /// للاختبارات فقط — يستبدل معلومات حارس بيانات العمل (أعداد/مجزّأ).
+  @visibleForTesting
+  Future<({bool chunked, Map<String, int> counts})> Function(String userId)?
+  remoteBusinessGuardInfoForTesting;
 
   /// للاختبارات فقط — يستبدل سحب اللقطة أثناء حلقة التعارض.
   @visibleForTesting
   Future<void> Function({required String userId, bool forceImport})?
   conflictPullOverrideForTesting;
 
-  /// للاختبارات فقط — يستبدل نتيجة «القاعدة المحلية فارغة».
+  /// للاختبارات فقط — يستبدل نتيجة «القاعدة المحلية فارغة» (مسار قديم).
   @visibleForTesting
   Future<bool> Function()? localDbHasNoSyncDataOverrideForTesting;
 
@@ -323,6 +329,57 @@ class CloudSyncService {
   Future<Database> Function()? databaseProviderForTesting;
 
   Future<void> _syncLock = Future<void>.value();
+
+  String _prefsKeyHydrated(String userId) => snapshotHydratedPrefsKey(userId);
+
+  @visibleForTesting
+  Future<bool> isDeviceHydratedForTesting(String userId) =>
+      _isDeviceHydrated(userId);
+
+  @visibleForTesting
+  Future<void> setDeviceHydratedForTesting(String userId, bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_prefsKeyHydrated(userId), value);
+  }
+
+  /// للاختبارات: بوابة الترطيب + حارس بيانات العمل دون رفع فعلي.
+  @visibleForTesting
+  Future<bool> evaluatePushGuardsForTesting({
+    required String userId,
+    required Map<String, int> localBusinessCounts,
+  }) async {
+    if (!await _isDeviceHydrated(userId)) {
+      lastError.value = kHydrationIncompleteAr;
+      return false;
+    }
+    try {
+      final remoteInfo = await _remoteBusinessGuardInfo(userId);
+      if (shouldBlockBusinessEmptyLocalOverRichRemote(
+        localCounts: localBusinessCounts,
+        remoteCounts: remoteInfo.counts,
+        remoteChunked: remoteInfo.chunked,
+      )) {
+        lastError.value = kBusinessDataPushBlockedAr;
+        return false;
+      }
+    } catch (e) {
+      lastError.value =
+          'تعذر التحقق من لقطة السحابة قبل الرفع (حماية من استبدال البيانات): $e';
+      return false;
+    }
+    lastError.value = null;
+    return true;
+  }
+
+  Future<void> _markDeviceHydrated(String userId) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_prefsKeyHydrated(userId), true);
+  }
+
+  Future<bool> _isDeviceHydrated(String userId) async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_prefsKeyHydrated(userId)) ?? false;
+  }
 
   void _logRealtimeStatus(String label, Object status, [Object? error]) {
     if (!kDebugMode) return;
@@ -1484,11 +1541,14 @@ class CloudSyncService {
           errorMessage: lastError.value,
         );
       }
-      if (forcePull) {
+      // جهاز غير مُرطَّب: إجبار السحب حتى لو استُدعي المسار بـ forcePull:false.
+      final needsHydration = !await _isDeviceHydrated(user.id);
+      final doPull = forcePull || needsHydration;
+      if (doPull) {
         pullAttempted = true;
         final pull = await _pullLatestSnapshot(
           userId: user.id,
-          forceImport: forceImportOnPull,
+          forceImport: forceImportOnPull || needsHydration,
         );
         pullStatus = pull.status;
         if (pull.status == CloudSyncPullStatus.skippedAlreadyCurrent) {
@@ -1498,6 +1558,7 @@ class CloudSyncService {
               'pullStatus': pull.status.name,
               'forceImportOnPull': forceImportOnPull,
               'forcePush': forcePush,
+              'needsHydration': needsHydration,
             },
           );
         }
@@ -1508,6 +1569,7 @@ class CloudSyncService {
               'pullStatus': pull.status.name,
               'error': lastError.value,
               'forceImportOnPull': forceImportOnPull,
+              'needsHydration': needsHydration,
             },
           );
           return CloudSyncRunResult(
@@ -2232,6 +2294,8 @@ class CloudSyncService {
         .limit(1);
 
     if (metaRows.isEmpty) {
+      // حساب بلا لقطة على السحابة — الجهاز مُهيَّأ ويُسمح بالرفع لاحقاً.
+      await _markDeviceHydrated(userId);
       return (
         status: CloudSyncPullStatus.noRemoteSnapshot,
         outcome: _PullOutcome.allowPush,
@@ -2246,6 +2310,7 @@ class CloudSyncService {
       lastError.value =
           'نسخة لقطة السحابة ($schemaVersion) لا تطابق التطبيق ($_snapshotSchemaVersion). '
           'حدّث التطبيق على هذا الجهاز ثم أعد «مزامنة الآن».';
+      // فشل سحب كامل — لا ترطيب.
       return (
         status: CloudSyncPullStatus.blockedSchema,
         outcome: _PullOutcome.blockPush,
@@ -2264,6 +2329,8 @@ class CloudSyncService {
           remoteUpdatedAt: remoteUpdatedAtMeta,
           lastImportedUpdatedAt: prevImported,
         )) {
+      // سبق استيراد هذه النسخة بنجاح ⇒ الجهاز مُرطَّب.
+      await _markDeviceHydrated(userId);
       return (
         status: CloudSyncPullStatus.skippedAlreadyCurrent,
         outcome: _PullOutcome.allowPush,
@@ -2336,6 +2403,7 @@ class CloudSyncService {
       if (decoded == null) {
         lastError.value =
             'تعذر تجميع أجزاء اللقطة من السحابة. تحقق من جدول app_snapshot_chunks وصلاحيات القراءة.';
+        // فشل جلب الأجزاء = فشل سحب كامل — العلم hydrated يبقى false.
         return (
           status: CloudSyncPullStatus.blockedChunks,
           outcome: _PullOutcome.blockPush,
@@ -2353,6 +2421,7 @@ class CloudSyncService {
     if (remoteUpdatedAt.isNotEmpty) {
       await prefs.setString(importedKey, remoteUpdatedAt);
     }
+    await _markDeviceHydrated(userId);
     lastSyncAt.value = DateTime.now();
     remoteImportGeneration.value = remoteImportGeneration.value + 1;
     return (
@@ -2361,7 +2430,7 @@ class CloudSyncService {
     );
   }
 
-  /// يعيد `false` إذا أُوقف الرفع (مثلاً حماية اللقطة الفارغة أو تعارض الإصدار بعد 3 محاولات).
+  /// يعيد `false` إذا أُوقف الرفع (ترطيب / حارس بيانات العمل / تعارض إصدار).
   Future<bool> _pushSnapshot({
     required String userId,
     bool forcePush = false,
@@ -2370,8 +2439,15 @@ class CloudSyncService {
     final db = dbProvider != null
         ? await dbProvider()
         : await _dbHelper.database;
-    final tableNames = await _listSyncTables(db);
     final prefs = await SharedPreferences.getInstance();
+
+    // 1) بوابة الترطيب — قبل أي رفع (بما فيها تخطي البصمات).
+    if (!await _isDeviceHydrated(userId)) {
+      lastError.value = kHydrationIncompleteAr;
+      return false;
+    }
+
+    final tableNames = await _listSyncTables(db);
     final sigMapKey = _prefsKeyLastPushedTableSignatures(userId);
     final currentSigMap = await _buildTableSignatures(db, tableNames);
     final previousSigMap = _readSignatureMap(prefs.getString(sigMapKey));
@@ -2386,27 +2462,42 @@ class CloudSyncService {
     final changedTables = tableNames.toSet();
     if (changedTables.isEmpty) return true;
 
-    final localEmptyOverride = localDbHasNoSyncDataOverrideForTesting;
-    final localEmpty = localEmptyOverride != null
-        ? await localEmptyOverride()
-        : await _localDbHasNoSyncData(db);
-    if (localEmpty) {
-      try {
-        final remoteRichOverride = remoteSnapshotHasNonEmptyOverrideForTesting;
-        final remoteRich = remoteRichOverride != null
-            ? await remoteRichOverride(userId)
-            : await _remoteSnapshotHasNonEmptyData(userId);
-        if (remoteRich) {
-          lastError.value =
-              'تم إيقاف الرفع: القاعدة المحلية فارغة بينما توجد بيانات على السحابة. '
-              'اضغط «مزامنة الآن» من الجهاز الذي يعرض البيانات أولاً، أو تأكد من السحب قبل الرفع.';
-          return false;
-        }
-      } catch (e) {
-        lastError.value =
-            'تعذر التحقق من لقطة السحابة قبل الرفع (حماية من استبدال البيانات): $e';
+    // 2) حارس بيانات العمل — محلي بلا عملاء/فواتير/منتجات/طلبات + سحابة غنية.
+    try {
+      final localEmptyOverride = localDbHasNoSyncDataOverrideForTesting;
+      final Map<String, int> localBiz;
+      if (localEmptyOverride != null && await localEmptyOverride()) {
+        localBiz = {for (final t in kSnapshotBusinessTables) t: 0};
+      } else {
+        localBiz = await _localBusinessTableCounts(db);
+      }
+
+      final remoteRichOverride = remoteSnapshotHasNonEmptyOverrideForTesting;
+      final ({bool chunked, Map<String, int> counts}) remoteInfo;
+      if (remoteRichOverride != null) {
+        final rich = await remoteRichOverride(userId);
+        remoteInfo = (
+          chunked: rich,
+          counts: {
+            for (final t in kSnapshotBusinessTables) t: rich ? 1 : 0,
+          },
+        );
+      } else {
+        remoteInfo = await _remoteBusinessGuardInfo(userId);
+      }
+
+      if (shouldBlockBusinessEmptyLocalOverRichRemote(
+        localCounts: localBiz,
+        remoteCounts: remoteInfo.counts,
+        remoteChunked: remoteInfo.chunked,
+      )) {
+        lastError.value = kBusinessDataPushBlockedAr;
         return false;
       }
+    } catch (e) {
+      lastError.value =
+          'تعذر التحقق من لقطة السحابة قبل الرفع (حماية من استبدال البيانات): $e';
+      return false;
     }
 
     final idemKey = await _getOrCreatePendingIdempotencyKey(
@@ -2414,6 +2505,7 @@ class CloudSyncService {
       userId: userId,
     );
 
+    // 3) رفع ذرّي عبر rpc_push_snapshot (+ حلقة تعارض content_version).
     for (var attempt = 0;
         attempt < SnapshotRaceGuard.maxConflictAttempts;
         attempt++) {
@@ -4493,46 +4585,72 @@ class CloudSyncService {
     return true;
   }
 
-  Future<bool> _localDbHasNoSyncData(Database db) async {
-    final names = await _listSyncTables(db);
-    for (final t in names) {
+  Future<Map<String, int>> _localBusinessTableCounts(Database db) async {
+    final out = <String, int>{
+      for (final t in kSnapshotBusinessTables) t: 0,
+    };
+    for (final t in kSnapshotBusinessTables) {
       try {
         final r = await db.rawQuery('SELECT COUNT(*) AS c FROM $t');
-        final c = (r.first['c'] as num?)?.toInt() ?? 0;
-        if (c > 0) return false;
+        out[t] = (r.first['c'] as num?)?.toInt() ?? 0;
       } catch (e) {
-        AppLogger.warn('CloudSync', 'count local sync table "$t" failed: $e');
+        AppLogger.warn('CloudSync', 'count local business table "$t" failed: $e');
       }
     }
-    return true;
+    return out;
   }
 
-  /// هل توجد لقطة على السحابة تحتوي صفوفاً فعلية (أو لقطة مجزّأة)؟
-  Future<bool> _remoteSnapshotHasNonEmptyData(String userId) async {
+  Future<({bool chunked, Map<String, int> counts})> _remoteBusinessGuardInfo(
+    String userId,
+  ) async {
+    final override = remoteBusinessGuardInfoForTesting;
+    if (override != null) return override(userId);
+
     final client = Supabase.instance.client;
     final row = await client
         .from(_snapshotsTable)
         .select('payload')
         .eq('user_id', userId)
         .maybeSingle();
-    if (row == null) return false;
+    if (row == null) {
+      return (
+        chunked: false,
+        counts: businessCountsFromSnapshotTables(null),
+      );
+    }
     final raw = row['payload'];
-    if (raw == null) return false;
+    if (raw == null) {
+      return (
+        chunked: false,
+        counts: businessCountsFromSnapshotTables(null),
+      );
+    }
     final Map<String, dynamic> p;
     if (raw is Map<String, dynamic>) {
       p = raw;
     } else if (raw is Map) {
       p = Map<String, dynamic>.from(raw);
     } else {
-      return false;
+      return (
+        chunked: false,
+        counts: businessCountsFromSnapshotTables(null),
+      );
     }
-    if (p['chunked'] == true) return true;
+    if (p['chunked'] == true) {
+      // لقطة مجزّأة: نفترض غنى بيانات العمل دون فك الأجزاء (فشل مغلق).
+      return (
+        chunked: true,
+        counts: businessCountsFromSnapshotTables(null),
+      );
+    }
     final tables = p['tables'];
-    if (tables is! Map) return false;
-    for (final v in tables.values) {
-      if (v is List && v.isNotEmpty) return true;
-    }
-    return false;
+    final tableMap = tables is Map<String, dynamic>
+        ? tables
+        : (tables is Map ? Map<String, dynamic>.from(tables) : null);
+    return (
+      chunked: false,
+      counts: businessCountsFromSnapshotTables(tableMap),
+    );
   }
 
   dynamic _normalizeValue(dynamic v) {
