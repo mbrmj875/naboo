@@ -20,6 +20,8 @@ import 'realtime_watchdog.dart';
 import 'cloud_sync_run_result.dart';
 import 'connectivity_resume_sync.dart';
 import 'auth/ensure_fresh_session.dart';
+import 'snapshot_race_guard.dart';
+import 'sync_entity_types.dart';
 
 /// ضغط UTF-8 bytes فقط (بدون Base64) لاستخدامه في chunk v2.
 Uint8List gzipSnapshotUtf8(Uint8List raw) {
@@ -174,6 +176,8 @@ class CloudSyncService {
 
   static const _prefPendingIdempotencyKeyPrefix =
       'sync.pending_idempotency_key.';
+  static const _prefLastRemoteContentVersionPrefix =
+      'sync.last_remote_content_version.';
 
   final DatabaseHelper _dbHelper = DatabaseHelper();
   final ValueNotifier<DateTime?> lastSyncAt = ValueNotifier<DateTime?>(null);
@@ -287,6 +291,36 @@ class CloudSyncService {
   /// للاختبارات فقط — يمنع [scheduleSyncSoon] من استدعاء Supabase بعد كتابة SQLite.
   @visibleForTesting
   bool suppressScheduleSyncSoonForTesting = false;
+
+  /// للاختبارات فقط — يستبدل استدعاء `rpc_push_snapshot`.
+  @visibleForTesting
+  Future<Map<String, dynamic>> Function({
+    required int expectedVersion,
+    required Map<String, dynamic> payload,
+    required int schemaVersion,
+    required String deviceLabel,
+    required String idempotencyKey,
+    String? uploadId,
+  })?
+  pushSnapshotRpcOverrideForTesting;
+
+  /// للاختبارات فقط — يستبدل فحص «السحابة غنية».
+  @visibleForTesting
+  Future<bool> Function(String userId)?
+  remoteSnapshotHasNonEmptyOverrideForTesting;
+
+  /// للاختبارات فقط — يستبدل سحب اللقطة أثناء حلقة التعارض.
+  @visibleForTesting
+  Future<void> Function({required String userId, bool forceImport})?
+  conflictPullOverrideForTesting;
+
+  /// للاختبارات فقط — يستبدل نتيجة «القاعدة المحلية فارغة».
+  @visibleForTesting
+  Future<bool> Function()? localDbHasNoSyncDataOverrideForTesting;
+
+  /// للاختبارات فقط — قاعدة بيانات بديلة لمسار الرفع/إعادة التطبيق.
+  @visibleForTesting
+  Future<Database> Function()? databaseProviderForTesting;
 
   Future<void> _syncLock = Future<void>.value();
 
@@ -2192,7 +2226,7 @@ class CloudSyncService {
     // (1) استعلام خفيف — لا ننزّل payload إن لم يكن هناك جديد أو نسخة غير متطابقة.
     final metaRows = await client
         .from(_snapshotsTable)
-        .select('updated_at,schema_version')
+        .select('updated_at,schema_version,content_version,upload_id')
         .eq('user_id', userId)
         .order('updated_at', ascending: false)
         .limit(1);
@@ -2205,6 +2239,8 @@ class CloudSyncService {
     }
     final meta = metaRows.first;
     final remoteUpdatedAtMeta = (meta['updated_at'] ?? '').toString();
+    final remoteContentVersion = (meta['content_version'] as num?)?.toInt();
+    final remoteUploadId = (meta['upload_id'] ?? '').toString().trim();
     final schemaVersion = (meta['schema_version'] as num?)?.toInt() ?? 1;
     if (schemaVersion != _snapshotSchemaVersion) {
       lastError.value =
@@ -2215,23 +2251,29 @@ class CloudSyncService {
         outcome: _PullOutcome.blockPush,
       );
     }
-    if (remoteUpdatedAtMeta.isNotEmpty) {
-      final prefs = await SharedPreferences.getInstance();
-      final importedKey = _prefsKeyLastImportedRemoteAt(userId);
-      final prevImported = prefs.getString(importedKey) ?? '';
-      // لا تعيد تنزيل/استيراد نفس النسخة — حتى عند forceImport (يوفر ذاكرة وشبكة).
-      if (prevImported == remoteUpdatedAtMeta) {
-        return (
-          status: CloudSyncPullStatus.skippedAlreadyCurrent,
-          outcome: _PullOutcome.allowPush,
-        );
-      }
+    final prefs = await SharedPreferences.getInstance();
+    final importedKey = _prefsKeyLastImportedRemoteAt(userId);
+    final prevImported = prefs.getString(importedKey) ?? '';
+    final lastVersion = prefs.getInt(_prefsKeyLastRemoteContentVersion(userId));
+    // تفضيل content_version؛ updated_at فقط كمسار قديم.
+    // forceImport (Realtime / استرداد تعارض) يفرض إعادة التنزيل حتى لو تطابق الإصدار.
+    if (!forceImport &&
+        SnapshotRaceGuard.shouldSkipPullAsCurrent(
+          remoteContentVersion: remoteContentVersion,
+          lastImportedContentVersion: lastVersion,
+          remoteUpdatedAt: remoteUpdatedAtMeta,
+          lastImportedUpdatedAt: prevImported,
+        )) {
+      return (
+        status: CloudSyncPullStatus.skippedAlreadyCurrent,
+        outcome: _PullOutcome.allowPush,
+      );
     }
 
     // (2) جلب payload فقط عند الحاجة — يوفّر نقلاً شبكياً كبيراً عند تطابق النسخة سابقاً.
     final payloadRows = await client
         .from(_snapshotsTable)
-        .select('payload,updated_at')
+        .select('payload,updated_at,content_version,upload_id')
         .eq('user_id', userId)
         .order('updated_at', ascending: false)
         .limit(1);
@@ -2249,6 +2291,13 @@ class CloudSyncService {
     if (remoteUpdatedAt.isEmpty) {
       remoteUpdatedAt = remoteUpdatedAtMeta;
     }
+    final pulledVersion =
+        (row['content_version'] as num?)?.toInt() ?? remoteContentVersion;
+    final pulledUploadId = () {
+      final fromRow = (row['upload_id'] ?? '').toString().trim();
+      if (fromRow.isNotEmpty) return fromRow;
+      return remoteUploadId;
+    }();
     final payloadRaw = row['payload'];
     if (payloadRaw == null) {
       lastError.value =
@@ -2266,8 +2315,12 @@ class CloudSyncService {
     }
     if (payload['chunked'] == true) {
       final syncId = (payload['sync_id'] ?? '').toString();
-      if (syncId.isEmpty) {
-        lastError.value = 'لقطة السحابة مُجزّأة لكن sync_id ناقص.';
+      final payloadUploadId = (payload['upload_id'] ?? '').toString().trim();
+      final uploadId = payloadUploadId.isNotEmpty
+          ? payloadUploadId
+          : (pulledUploadId.isNotEmpty ? pulledUploadId : null);
+      if (syncId.isEmpty && (uploadId == null || uploadId.isEmpty)) {
+        lastError.value = 'لقطة السحابة مُجزّأة لكن sync_id/upload_id ناقص.';
         return (
           status: CloudSyncPullStatus.blockedChunks,
           outcome: _PullOutcome.blockPush,
@@ -2278,6 +2331,7 @@ class CloudSyncService {
         userId: userId,
         syncId: syncId,
         encoding: encoding,
+        uploadId: uploadId,
       );
       if (decoded == null) {
         lastError.value =
@@ -2290,12 +2344,14 @@ class CloudSyncService {
       payload = decoded;
     }
     await _importSnapshot(payload);
-    if (remoteUpdatedAt.isNotEmpty) {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(
-        _prefsKeyLastImportedRemoteAt(userId),
-        remoteUpdatedAt,
+    if (pulledVersion != null) {
+      await prefs.setInt(
+        _prefsKeyLastRemoteContentVersion(userId),
+        pulledVersion,
       );
+    }
+    if (remoteUpdatedAt.isNotEmpty) {
+      await prefs.setString(importedKey, remoteUpdatedAt);
     }
     lastSyncAt.value = DateTime.now();
     remoteImportGeneration.value = remoteImportGeneration.value + 1;
@@ -2305,13 +2361,15 @@ class CloudSyncService {
     );
   }
 
-  /// يعيد `false` إذا أُوقف الرفع (مثلاً حماية اللقطة الفارغة) ويُضبط [lastError].
+  /// يعيد `false` إذا أُوقف الرفع (مثلاً حماية اللقطة الفارغة أو تعارض الإصدار بعد 3 محاولات).
   Future<bool> _pushSnapshot({
     required String userId,
     bool forcePush = false,
   }) async {
-    final client = Supabase.instance.client;
-    final db = await _dbHelper.database;
+    final dbProvider = databaseProviderForTesting;
+    final db = dbProvider != null
+        ? await dbProvider()
+        : await _dbHelper.database;
     final tableNames = await _listSyncTables(db);
     final prefs = await SharedPreferences.getInstance();
     final sigMapKey = _prefsKeyLastPushedTableSignatures(userId);
@@ -2328,9 +2386,17 @@ class CloudSyncService {
     final changedTables = tableNames.toSet();
     if (changedTables.isEmpty) return true;
 
-    if (await _localDbHasNoSyncData(db)) {
+    final localEmptyOverride = localDbHasNoSyncDataOverrideForTesting;
+    final localEmpty = localEmptyOverride != null
+        ? await localEmptyOverride()
+        : await _localDbHasNoSyncData(db);
+    if (localEmpty) {
       try {
-        if (await _remoteSnapshotHasNonEmptyData(userId)) {
+        final remoteRichOverride = remoteSnapshotHasNonEmptyOverrideForTesting;
+        final remoteRich = remoteRichOverride != null
+            ? await remoteRichOverride(userId)
+            : await _remoteSnapshotHasNonEmptyData(userId);
+        if (remoteRich) {
           lastError.value =
               'تم إيقاف الرفع: القاعدة المحلية فارغة بينما توجد بيانات على السحابة. '
               'اضغط «مزامنة الآن» من الجهاز الذي يعرض البيانات أولاً، أو تأكد من السحب قبل الرفع.';
@@ -2343,59 +2409,293 @@ class CloudSyncService {
       }
     }
 
-    final utf8Bytes = await _buildSnapshotPayloadUtf8Bytes(
-      db: db,
-      changedTables: changedTables,
-    );
-    final nowIso = DateTime.now().toUtc().toIso8601String();
-    final gzBytes = await _gzipSnapshotUtf8Bytes(utf8Bytes);
-    final estimatedBase64Chars = ((gzBytes.length + 2) ~/ 3) * 4;
     final idemKey = await _getOrCreatePendingIdempotencyKey(
       prefs: prefs,
       userId: userId,
     );
-    if (estimatedBase64Chars <= _chunkThresholdChars) {
-      await client.from(_snapshotsTable).upsert({
-        'user_id': userId,
-        'device_label': defaultTargetPlatform.name,
-        'schema_version': _snapshotSchemaVersion,
-        'payload': jsonDecode(utf8.decode(utf8Bytes)) as Map<String, dynamic>,
-        'idempotency_key': idemKey,
-        'updated_at': nowIso,
-      }, onConflict: 'user_id');
-    } else {
-      final syncId = idemKey;
-      final chunkCount = (gzBytes.length / _chunkSizeBytesV2).ceil();
-      await client.from(_snapshotChunksTable).delete().eq('user_id', userId);
-      for (var i = 0; i < chunkCount; i++) {
-        final start = i * _chunkSizeBytesV2;
-        final end = math.min(start + _chunkSizeBytesV2, gzBytes.length);
-        final chunk = base64Encode(gzBytes.sublist(start, end));
-        await client.from(_snapshotChunksTable).upsert({
-          'user_id': userId,
-          'sync_id': syncId,
-          'chunk_index': i,
-          'chunk_data': chunk,
-          'updated_at': nowIso,
-        }, onConflict: 'user_id,sync_id,chunk_index');
-      }
-      await client.from(_snapshotsTable).upsert({
-        'user_id': userId,
-        'device_label': defaultTargetPlatform.name,
-        'schema_version': _snapshotSchemaVersion,
-        'payload': {
+
+    for (var attempt = 0;
+        attempt < SnapshotRaceGuard.maxConflictAttempts;
+        attempt++) {
+      final expectedVersion =
+          prefs.getInt(_prefsKeyLastRemoteContentVersion(userId)) ?? 0;
+
+      final utf8Bytes = await _buildSnapshotPayloadUtf8Bytes(
+        db: db,
+        changedTables: changedTables,
+      );
+      final payloadMap =
+          jsonDecode(utf8.decode(utf8Bytes)) as Map<String, dynamic>;
+      final gzBytes = await _gzipSnapshotUtf8Bytes(utf8Bytes);
+      final estimatedBase64Chars = ((gzBytes.length + 2) ~/ 3) * 4;
+
+      String? uploadId;
+      Map<String, dynamic> rpcPayload;
+      if (estimatedBase64Chars <= _chunkThresholdChars) {
+        rpcPayload = payloadMap;
+      } else {
+        uploadId = idemKey;
+        final chunkCount = (gzBytes.length / _chunkSizeBytesV2).ceil();
+        final client = Supabase.instance.client;
+        for (var i = 0; i < chunkCount; i++) {
+          final start = i * _chunkSizeBytesV2;
+          final end = math.min(start + _chunkSizeBytesV2, gzBytes.length);
+          final chunk = base64Encode(gzBytes.sublist(start, end));
+          await client.from(_snapshotChunksTable).upsert({
+            'user_id': userId,
+            'sync_id': uploadId,
+            'upload_id': uploadId,
+            'chunk_index': i,
+            'chunk_data': chunk,
+            'updated_at': DateTime.now().toUtc().toIso8601String(),
+          }, onConflict: 'user_id,sync_id,chunk_index');
+        }
+        rpcPayload = {
           'chunked': true,
-          'sync_id': syncId,
+          'sync_id': uploadId,
+          'upload_id': uploadId,
           'chunk_count': chunkCount,
           'encoding': 'gzip-bytechunks-base64-v2',
-        },
-        'idempotency_key': idemKey,
-        'updated_at': nowIso,
-      }, onConflict: 'user_id');
+        };
+      }
+
+      final rpcResult = await _callPushSnapshotRpc(
+        expectedVersion: expectedVersion,
+        payload: rpcPayload,
+        schemaVersion: _snapshotSchemaVersion,
+        deviceLabel: defaultTargetPlatform.name,
+        idempotencyKey: idemKey,
+        uploadId: uploadId,
+      );
+
+      if (rpcResult.ok) {
+        final newVersion = rpcResult.newVersion ?? (expectedVersion + 1);
+        await prefs.setInt(
+          _prefsKeyLastRemoteContentVersion(userId),
+          newVersion,
+        );
+        if (rpcResult.updatedAt != null && rpcResult.updatedAt!.isNotEmpty) {
+          await prefs.setString(
+            _prefsKeyLastImportedRemoteAt(userId),
+            rpcResult.updatedAt!,
+          );
+        }
+        if (uploadId != null) {
+          await _deleteStaleSnapshotChunks(
+            userId: userId,
+            keepUploadId: uploadId,
+          );
+        }
+        final refreshedSigs = await _buildTableSignatures(db, tableNames);
+        await prefs.setString(sigMapKey, jsonEncode(refreshedSigs));
+        await _clearPendingIdempotencyKey(prefs: prefs, userId: userId);
+        return true;
+      }
+
+      if (rpcResult.isVersionConflict) {
+        // لا نخزّن الإصدار قبل السحب — forceImport يجب أن يستورد اللقطة فعلياً.
+        final conflictPull = conflictPullOverrideForTesting;
+        if (conflictPull != null) {
+          await conflictPull(userId: userId, forceImport: true);
+        } else {
+          await _pullLatestSnapshot(userId: userId, forceImport: true);
+        }
+        await _reapplyUnpushedSyncQueueMutations(db);
+        // أعد بناء اللقطة في المحاولة التالية من SQLite بعد الدمج+إعادة التطبيق.
+        continue;
+      }
+
+      lastError.value =
+          'فشل رفع اللقطة إلى السحابة'
+          '${rpcResult.reason == null ? '' : ' (${rpcResult.reason})'}.';
+      return false;
     }
-    await prefs.setString(sigMapKey, jsonEncode(currentSigMap));
-    await _clearPendingIdempotencyKey(prefs: prefs, userId: userId);
-    return true;
+
+    lastError.value =
+        'تعذّر رفع اللقطة بعد 3 محاولات بسبب تعارض مع جهاز آخر. '
+        'افتح «حالة المزامنة» ثم اضغط «مزامنة الآن»، أو أعد المحاولة بعد ثوانٍ.';
+    return false;
+  }
+
+  Future<SnapshotPushRpcResult> _callPushSnapshotRpc({
+    required int expectedVersion,
+    required Map<String, dynamic> payload,
+    required int schemaVersion,
+    required String deviceLabel,
+    required String idempotencyKey,
+    String? uploadId,
+  }) async {
+    final override = pushSnapshotRpcOverrideForTesting;
+    if (override != null) {
+      final raw = await override(
+        expectedVersion: expectedVersion,
+        payload: payload,
+        schemaVersion: schemaVersion,
+        deviceLabel: deviceLabel,
+        idempotencyKey: idempotencyKey,
+        uploadId: uploadId,
+      );
+      return SnapshotRaceGuard.parsePushRpcResponse(raw);
+    }
+    final client = Supabase.instance.client;
+    final raw = await client.rpc(
+      'rpc_push_snapshot',
+      params: {
+        'p_expected_version': expectedVersion,
+        'p_payload': payload,
+        'p_schema_version': schemaVersion,
+        'p_device_label': deviceLabel,
+        'p_idempotency_key': idempotencyKey,
+        'p_upload_id': uploadId,
+      },
+    );
+    return SnapshotRaceGuard.parsePushRpcResponse(raw);
+  }
+
+  Future<void> _deleteStaleSnapshotChunks({
+    required String userId,
+    required String keepUploadId,
+  }) async {
+    try {
+      final client = Supabase.instance.client;
+      await client
+          .from(_snapshotChunksTable)
+          .delete()
+          .eq('user_id', userId)
+          .neq('upload_id', keepUploadId);
+    } catch (e, st) {
+      AppLogger.warn(
+        'CloudSync',
+        'تعذر حذف أجزاء لقطة قديمة (upload_id≠$keepUploadId): $e',
+      );
+      AppLogger.error('CloudSync', 'stale chunks cleanup', e, st);
+    }
+  }
+
+  /// إعادة فرض حمولة الطابور غير المرفوع فوق SQLite بعد سحب لقطة متعارضة.
+  /// حالة فقط — بلا خصم مخزون مكرر ولا طباعة ولا صفوف طابور جديدة.
+  Future<void> _reapplyUnpushedSyncQueueMutations(Database db) async {
+    final rows = await db.rawQuery('''
+      SELECT mutation_id, entity_type, operation, payload, created_at
+      FROM sync_queue
+      WHERE status IN ('pending', 'failed', 'dead')
+      ORDER BY created_at ASC, mutation_id ASC
+    ''');
+    if (rows.isEmpty) return;
+
+    await db.transaction((txn) async {
+      for (final r in rows) {
+        final entityType = (r['entity_type'] ?? '').toString();
+        final table = SyncEntityTypes.sqliteTableFor(entityType);
+        if (table == null) continue;
+        final op = (r['operation'] ?? '').toString().toUpperCase();
+        Map<String, dynamic> payload;
+        try {
+          final decoded = jsonDecode((r['payload'] ?? '{}').toString());
+          if (decoded is! Map) continue;
+          payload = Map<String, dynamic>.from(decoded);
+        } catch (_) {
+          continue;
+        }
+        final gid = (payload['global_id'] ?? '').toString().trim();
+        if (gid.isEmpty) continue;
+
+        final pragma = await txn.rawQuery('PRAGMA table_info($table)');
+        final localCols = pragma
+            .map((e) => (e['name'] ?? '').toString())
+            .where((s) => s.isNotEmpty)
+            .toSet();
+        if (!localCols.contains('global_id')) continue;
+
+        final filtered = <String, dynamic>{};
+        for (final e in payload.entries) {
+          if (e.key == 'id') continue;
+          if (!localCols.contains(e.key)) continue;
+          filtered[e.key] = e.value;
+        }
+        filtered['global_id'] = gid;
+
+        if (op == 'DELETE') {
+          if (localCols.contains('deletedAt')) {
+            filtered['deletedAt'] =
+                filtered['deletedAt'] ??
+                DateTime.now().toUtc().toIso8601String();
+            final existing = await txn.query(
+              table,
+              columns: ['id'],
+              where: 'global_id = ?',
+              whereArgs: [gid],
+              limit: 1,
+            );
+            if (existing.isEmpty) {
+              await txn.insert(
+                table,
+                filtered,
+                conflictAlgorithm: ConflictAlgorithm.replace,
+              );
+            } else {
+              await txn.update(
+                table,
+                filtered,
+                where: 'global_id = ?',
+                whereArgs: [gid],
+              );
+            }
+          } else {
+            await txn.delete(table, where: 'global_id = ?', whereArgs: [gid]);
+          }
+          continue;
+        }
+
+        final existing = await txn.query(
+          table,
+          columns: ['id'],
+          where: 'global_id = ?',
+          whereArgs: [gid],
+          limit: 1,
+        );
+        if (existing.isEmpty) {
+          await txn.insert(
+            table,
+            filtered,
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          );
+        } else {
+          await txn.update(
+            table,
+            filtered,
+            where: 'global_id = ?',
+            whereArgs: [gid],
+          );
+        }
+      }
+    });
+  }
+
+  /// للاختبارات: إعادة تطبيق الطابور غير المرفوع.
+  @visibleForTesting
+  Future<void> reapplyUnpushedSyncQueueMutationsForTesting(Database db) =>
+      _reapplyUnpushedSyncQueueMutations(db);
+
+  /// للاختبارات: مسار رفع اللقطة (RPC + حلقة تعارض).
+  @visibleForTesting
+  Future<bool> pushSnapshotForTesting({
+    required String userId,
+    bool forcePush = true,
+  }) => _pushSnapshot(userId: userId, forcePush: forcePush);
+
+  /// للاختبارات: فلترة أجزاء اللقطة حسب upload_id.
+  @visibleForTesting
+  static List<Map<String, dynamic>> filterChunksByUploadId({
+    required List<Map<String, dynamic>> rows,
+    required String? uploadId,
+  }) {
+    if (uploadId == null || uploadId.isEmpty) return rows;
+    return rows.where((r) {
+      final rowUpload = (r['upload_id'] ?? '').toString();
+      if (rowUpload.isEmpty) return true; // صف قديم بلا العمود
+      return rowUpload == uploadId;
+    }).toList();
   }
 
   String _prefsKeyPendingIdempotencyKey(String userId) =>
@@ -2498,19 +2798,41 @@ class CloudSyncService {
     required String userId,
     required String syncId,
     required String encoding,
+    String? uploadId,
   }) async {
     final client = Supabase.instance.client;
-    final rows = await client
-        .from(_snapshotChunksTable)
-        .select('chunk_index,chunk_data')
-        .eq('user_id', userId)
-        .eq('sync_id', syncId)
-        .order('chunk_index', ascending: true);
+    // مسارات جديدة: فلترة بـ upload_id. القديم: sync_id فقط.
+    late final List<dynamic> rows;
+    if (uploadId != null && uploadId.isNotEmpty) {
+      rows = await client
+          .from(_snapshotChunksTable)
+          .select('chunk_index,chunk_data,upload_id')
+          .eq('user_id', userId)
+          .eq('upload_id', uploadId)
+          .order('chunk_index', ascending: true);
+    } else {
+      rows = await client
+          .from(_snapshotChunksTable)
+          .select('chunk_index,chunk_data')
+          .eq('user_id', userId)
+          .eq('sync_id', syncId)
+          .order('chunk_index', ascending: true);
+    }
     if (rows.isEmpty) return null;
+    // تجاهل صريح لأي جزء بـ upload_id أجنبي إن وُجد العمود في الصفوف.
+    final filtered = <Map<String, dynamic>>[];
+    for (final r in rows.whereType<Map<String, dynamic>>()) {
+      if (uploadId != null && uploadId.isNotEmpty) {
+        final rowUpload = (r['upload_id'] ?? '').toString();
+        if (rowUpload.isNotEmpty && rowUpload != uploadId) continue;
+      }
+      filtered.add(r);
+    }
+    if (filtered.isEmpty) return null;
     const isolateThreshold = 512 * 1024;
     if (encoding == 'gzip-bytechunks-base64-v2') {
       final gzBuilder = BytesBuilder(copy: false);
-      for (final r in rows.whereType<Map<String, dynamic>>()) {
+      for (final r in filtered) {
         final chunkData = (r['chunk_data'] ?? '').toString();
         if (chunkData.isEmpty) continue;
         gzBuilder.add(base64Decode(chunkData));
@@ -2529,7 +2851,7 @@ class CloudSyncService {
     }
 
     final b = StringBuffer();
-    for (final r in rows.whereType<Map<String, dynamic>>()) {
+    for (final r in filtered) {
       b.write((r['chunk_data'] ?? '').toString());
     }
     final text = b.toString();
@@ -3456,6 +3778,11 @@ class CloudSyncService {
         );
         continue;
       }
+      if (table == 'print_settings' &&
+          _printSettingsLocalIdentityWins(current, incomingRaw)) {
+        // لا تستبدل اسم/شعار/هاتف المحل بصف فارغ أحدث زمنياً (إعادة تثبيت / جهاز جديد).
+        continue;
+      }
       if (_incomingWins(current, incomingRaw)) {
         if (_isGenericLwwBlockedForTable(table)) {
           continue;
@@ -3467,6 +3794,42 @@ class CloudSyncService {
         );
       }
     }
+  }
+
+  /// هل صف [print_settings] بدون هوية متجر مفيدة؟
+  bool _printSettingsPayloadIsBlank(Map<String, dynamic> row) {
+    final raw = (row['payload'] ?? '').toString();
+    if (raw.trim().isEmpty) return true;
+    try {
+      final m = jsonDecode(raw);
+      if (m is! Map) return true;
+      final title = (m['storeTitleLine'] ?? '').toString().trim();
+      final addr = (m['storeAddress'] ?? '').toString().trim();
+      final logo = (m['storeLogoBase64'] ?? '').toString().trim();
+      final phonesRaw = m['storePhones'];
+      var hasPhone = false;
+      if (phonesRaw is List) {
+        for (final p in phonesRaw) {
+          if (p.toString().trim().isNotEmpty) {
+            hasPhone = true;
+            break;
+          }
+        }
+      }
+      return title.isEmpty && addr.isEmpty && logo.isEmpty && !hasPhone;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  /// احتفظ بالمحل المحلي المعبأ أمام لقطة بعيدة فارغة (حتى لو أحدث updatedAt).
+  bool _printSettingsLocalIdentityWins(
+    Map<String, dynamic> current,
+    Map<String, dynamic> incoming,
+  ) {
+    final localFilled = !_printSettingsPayloadIsBlank(current);
+    final remoteBlank = _printSettingsPayloadIsBlank(incoming);
+    return localFilled && remoteBlank;
   }
 
   /// جداول لا يُطبَّق عليها LWW عام عند وجود صف محلي (تعارض id بين أجهزة).
@@ -4067,6 +4430,8 @@ class CloudSyncService {
       'sync.last_pushed_table_sigs.$userId';
   String _prefsKeyLastImportedRemoteAt(String userId) =>
       'sync.last_imported_remote_at.$userId';
+  String _prefsKeyLastRemoteContentVersion(String userId) =>
+      '$_prefLastRemoteContentVersionPrefix$userId';
 
   Future<Map<String, String>> _buildTableSignatures(
     Database db,
