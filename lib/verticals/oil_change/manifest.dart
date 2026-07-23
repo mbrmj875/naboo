@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../home/specs/home_dashboard_spec.dart';
 import '../../navigation/content_navigation.dart';
+import '../../owner/models/owner_kpi_models.dart';
 import '../../owner/models/owner_section_load_context.dart';
 import '../../owner/models/owner_section_ttl.dart';
 import '../../owner/owner_trend_repository.dart';
@@ -17,6 +18,10 @@ import 'screens/oil_change_services_screen.dart';
 import '../../services/business_setup_settings.dart';
 import '../../services/reports_repository.dart';
 import '../_contract/vertical_manifest.dart';
+import '../car_wash/reports/car_wash_reports.dart';
+import '../car_wash/screens/car_wash_form_screen.dart';
+import '../car_wash/screens/car_wash_log_screen.dart';
+import '../car_wash/services/car_wash_orders_repository.dart';
 import 'inventory/oil_change_fluid_inventory_editor.dart';
 import 'reports/oil_change_reports_panel.dart';
 import 'services/oil_change_reports_repository.dart';
@@ -37,6 +42,7 @@ final class OilChangeVerticalManifest extends VerticalManifest {
 
   static const _oilNavColor = Color(0xFF0EA5E9);
   static const _oilReportsSectionId = 8;
+  static const _carWashReportsSectionId = 10;
   static const _fluidInventoryEditor = OilChangeFluidInventoryEditor();
   static const _gold = Color(0xFFB8960C);
   static const _blue = Color(0xFF2563EB);
@@ -68,6 +74,10 @@ final class OilChangeVerticalManifest extends VerticalManifest {
               title: 'الخدمات وأسعارها',
               routeId: AppContentRoutes.oilChangeServices,
             ),
+            NavSubItemSpec(
+              title: 'سجل الغسل',
+              routeId: AppContentRoutes.carWashLog,
+            ),
           ],
         ),
       ];
@@ -82,6 +92,8 @@ final class OilChangeVerticalManifest extends VerticalManifest {
         AppContentRoutes.oilChangeServiceCreate: (_) =>
             const OilChangeServiceFormScreen(),
         AppContentRoutes.oilInvoices: (_) => const OilChangeInvoicesScreen(),
+        AppContentRoutes.carWashCreate: (_) => const CarWashFormScreen(),
+        AppContentRoutes.carWashLog: (_) => const CarWashLogScreen(),
       };
 
   @override
@@ -102,6 +114,16 @@ final class OilChangeVerticalManifest extends VerticalManifest {
     );
 
     final tiles = <HomeDashboardAction>[
+      if (features.enableCarWash)
+        const HomeDashboardAction(
+          id: 'wash_new',
+          title: 'غسل سيارة',
+          subtitle: 'لوحة ونوع الغسل والدفع',
+          icon: Icons.local_car_wash_rounded,
+          routeId: 'car_wash_create',
+          accentColor: _gold,
+          isPrimary: true,
+        ),
       const HomeDashboardAction(
         id: 'oil_log',
         title: 'سجل الغيارات',
@@ -110,6 +132,15 @@ final class OilChangeVerticalManifest extends VerticalManifest {
         routeId: 'oil_services_log',
         accentColor: _blue,
       ),
+      if (features.enableCarWash)
+        const HomeDashboardAction(
+          id: 'wash_log',
+          title: 'سجل الغسل',
+          subtitle: 'آخر العمليات',
+          icon: Icons.water_drop_outlined,
+          routeId: 'car_wash_log',
+          accentColor: _gold,
+        ),
       const HomeDashboardAction(
         id: 'oil_garage',
         title: 'السيارات الحالية',
@@ -211,6 +242,7 @@ final class OilChangeVerticalManifest extends VerticalManifest {
       OwnerCatalogIds.hybridRevenueSplit,
       OwnerCatalogIds.oilActiveCars,
       OwnerCatalogIds.oilChangesPeriod,
+      if (features.enableCarWash) OwnerCatalogIds.carWashPeriod,
       OwnerCatalogIds.oilStockShortages,
       OwnerCatalogIds.debtsSummary,
       if (features.enableInstallments) OwnerCatalogIds.installmentsSummary,
@@ -241,6 +273,7 @@ final class OilChangeVerticalManifest extends VerticalManifest {
     return [
       OwnerCatalogIds.oilActiveCars,
       OwnerCatalogIds.oilChangesPeriod,
+      if (features.enableCarWash) OwnerCatalogIds.carWashPeriod,
       OwnerCatalogIds.oilStockShortages,
       OwnerCatalogIds.debtsSummary,
       if (features.enableInstallments) OwnerCatalogIds.installmentsSummary,
@@ -260,6 +293,11 @@ final class OilChangeVerticalManifest extends VerticalManifest {
           sectionId: _oilReportsSectionId,
           titleAr: 'غيار الزيت',
           requiredFeatureKey: BusinessSetupKeys.enableOilChange,
+        ),
+        ReportSectionSpec(
+          sectionId: _carWashReportsSectionId,
+          titleAr: 'غسل السيارات',
+          requiredFeatureKey: BusinessSetupKeys.enableCarWash,
         ),
       ];
 
@@ -300,6 +338,20 @@ final class OilChangeVerticalManifest extends VerticalManifest {
           range: range,
           staffName: context.staffName,
         );
+      case OwnerSectionIds.carWashCount:
+        final range = context.range;
+        if (range == null) return null;
+        final start = range.startLocal;
+        final end = range.endExclusiveLocal;
+        final agg = await CarWashOrdersRepository.instance.aggregateInRange(
+          startLocal: start,
+          endExclusiveLocal: end,
+        );
+        return OilChangesKpi(
+          changeCount: agg.count,
+          revenueFils: agg.revenueFils,
+          range: range,
+        );
       default:
         return null;
     }
@@ -335,15 +387,26 @@ final class OilChangeVerticalManifest extends VerticalManifest {
     int sectionId,
     ReportDateRange range,
   ) async {
-    if (sectionId != _oilReportsSectionId) return null;
-    return OilChangeReportsRepository.instance.loadSnapshot(range);
+    if (sectionId == _oilReportsSectionId) {
+      return OilChangeReportsRepository.instance.loadSnapshot(range);
+    }
+    if (sectionId == _carWashReportsSectionId) {
+      return CarWashReportsRepository.instance.loadSnapshot(range);
+    }
+    return null;
   }
 
   @override
   Widget? buildReportSectionPanel(int sectionId, Object? snapshot) {
-    if (sectionId != _oilReportsSectionId) return null;
-    if (snapshot is! OilChangeReportsSnapshot) return null;
-    return OilChangeReportsPanel(data: snapshot);
+    if (sectionId == _oilReportsSectionId) {
+      if (snapshot is! OilChangeReportsSnapshot) return null;
+      return OilChangeReportsPanel(data: snapshot);
+    }
+    if (sectionId == _carWashReportsSectionId) {
+      if (snapshot is! CarWashReportsSnapshot) return null;
+      return CarWashReportsPanel(data: snapshot);
+    }
+    return null;
   }
 
   @override

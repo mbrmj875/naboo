@@ -1,3 +1,4 @@
+import '../models/oil_change_filter_catalog_entry.dart';
 import '../models/oil_change_filter_kind.dart';
 import '../../../utils/iqd_money.dart';
 import '../../../utils/iraqi_currency_format.dart';
@@ -7,15 +8,33 @@ String _priceLabel(int fils) {
   return IraqiCurrencyFormat.formatIqd(IqdMoney.fromFils(fils));
 }
 
-/// سطر عرض واحد: «فلتر المحرك: تويوتا أصلي — 15,000 د.ع».
+/// عنوان عرض لصنف الكتالوج (السعر إن خلا الاسم).
+String oilFilterCatalogEntryTitle(OilChangeFilterCatalogEntry e) {
+  final n = e.name.trim();
+  if (n.isNotEmpty) return n;
+  final price = _priceLabel(e.priceFils);
+  return price.isEmpty ? '—' : price;
+}
+
+/// تسمية كاملة للقائمة: «اسم — سعر» أو السعر فقط.
+String oilFilterCatalogEntryLabel(OilChangeFilterCatalogEntry e) {
+  final n = e.name.trim();
+  final price = _priceLabel(e.priceFils);
+  if (n.isEmpty) return price.isEmpty ? '—' : price;
+  if (price.isEmpty) return n;
+  return '$n — $price';
+}
+
+/// سطر عرض واحد: «فلتر المحرك: تويوتا أصلي — 15,000 د.ع» أو «فلتر المحرك: 15,000 د.ع».
 String? oilFilterLineLabel({
   required String kindLabel,
   required String name,
   int priceFils = 0,
 }) {
   final n = name.trim();
-  if (n.isEmpty) return null;
   final price = _priceLabel(priceFils);
+  if (n.isEmpty && price.isEmpty) return null;
+  if (n.isEmpty) return '$kindLabel: $price';
   if (price.isEmpty) return '$kindLabel: $n';
   return '$kindLabel: $n — $price';
 }
@@ -24,8 +43,8 @@ List<String> oilFilterLinesFromRow(Map<String, dynamic> row) {
   final out = <String>[];
   for (final kind in OilChangeFilterKind.all) {
     final name = (row[kind.nameColumnKey] ?? '').toString().trim();
-    if (name.isEmpty) continue;
     final fils = (row[kind.priceColumnKey] as num?)?.toInt() ?? 0;
+    if (name.isEmpty && fils <= 0) continue;
     final line = oilFilterLineLabel(
       kindLabel: kind.label,
       name: name,
@@ -49,11 +68,13 @@ extension OilChangeFilterKindRowKeys on OilChangeFilterKind {
         OilChangeFilterKind.engine => 'engineFilterName',
         OilChangeFilterKind.air => 'airFilterName',
         OilChangeFilterKind.gear => 'gearFilterName',
+        OilChangeFilterKind.cooling => 'coolingFilterName',
       };
 
   String get priceColumnKey => switch (this) {
         OilChangeFilterKind.engine => 'engineFilterPriceFils',
         OilChangeFilterKind.air => 'airFilterPriceFils',
         OilChangeFilterKind.gear => 'gearFilterPriceFils',
+        OilChangeFilterKind.cooling => 'coolingFilterPriceFils',
       };
 }

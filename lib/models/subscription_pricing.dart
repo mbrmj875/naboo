@@ -58,7 +58,8 @@ abstract class SubscriptionPricingCatalog {
   }
 
   static SubscriptionBillingCycle billingCycleFromPlanKey(String? planKey) {
-    if (planKey == 'annual') return SubscriptionBillingCycle.annual;
+    final key = (planKey ?? '').toLowerCase().trim();
+    if (key == 'annual') return SubscriptionBillingCycle.annual;
     return SubscriptionBillingCycle.monthly;
   }
 

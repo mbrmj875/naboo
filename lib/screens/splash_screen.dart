@@ -7,6 +7,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:audioplayers/audioplayers.dart';
+import 'package:flutter_native_splash/flutter_native_splash.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -14,10 +15,12 @@ import '../providers/business_features_provider.dart';
 import '../providers/auth_provider.dart';
 import '../services/app_session_lifecycle.dart';
 import '../services/app_remote_config_service.dart';
+import '../services/app_in_app_update_service.dart';
 import '../services/app_settings_repository.dart';
 import '../services/business_setup_settings.dart';
 import '../services/license_service.dart';
 import '../theme/design_tokens.dart';
+import '../widgets/app_update_progress_dialog.dart';
 import '../widgets/glass/glass_surface.dart';
 import '../utils/app_logger.dart';
 import '../utils/screen_layout.dart';
@@ -53,44 +56,13 @@ class _SplashScreenState extends State<SplashScreen>
       duration: const Duration(milliseconds: 1300),
     );
 
-    // انتقال سلس من الـ native splash: نبدأ بحجم قريب من النهائي بدل 0.3
-    // (تفادي إحساس «أيقونة صغيرة ثم تحميل فوقها»).
-    _logoScale = TweenSequence<double>([
-      TweenSequenceItem<double>(
-        tween: Tween<double>(
-          begin: 0.92,
-          end: 1.0,
-        ).chain(CurveTween(curve: Curves.easeOutCubic)),
-        weight: 700,
-      ),
-      TweenSequenceItem<double>(
-        tween: Tween<double>(
-          begin: 1.0,
-          end: 1.04,
-        ).chain(CurveTween(curve: Curves.easeInOut)),
-        weight: 300,
-      ),
-      TweenSequenceItem<double>(
-        tween: Tween<double>(
-          begin: 1.04,
-          end: 1.0,
-        ).chain(CurveTween(curve: Curves.easeInOut)),
-        weight: 300,
-      ),
-    ]).animate(_stampCtrl);
-
-    // لا تبدأ الشفافية من 0 — وإلا يظهر إطار Flutter فوق الـ native splash
-    // (شاشة الأيقونة السوداء) ثم «يطفو» التحميل فوقها.
+    // شاشة التحميل الكاملة ظاهرة من أول إطار — بدون مرحلة «شعار فقط».
+    _logoScale = const AlwaysStoppedAnimation<double>(1.0);
     _logoOpacity = const AlwaysStoppedAnimation<double>(1.0);
+    _textOpacity = const AlwaysStoppedAnimation<double>(1.0);
 
-    // النص ومؤشر التحميل يظهران بعد استقرار الختم بقليل.
-    _textOpacity = CurvedAnimation(
-      parent: _stampCtrl,
-      curve: const Interval(400 / 1300, 1.0, curve: Curves.easeIn),
-    );
-
+    // صوت الختم بعد لحظة قصيرة دون إخفاء عناصر الشاشة.
     _stampCtrl.addListener(() {
-      // Play sound around 750ms when the logo "settles" near 1.0.
       if (_stampSoundPlayed) return;
       if (_stampCtrl.value < (750 / 1300)) return;
       _stampSoundPlayed = true;
@@ -98,6 +70,10 @@ class _SplashScreenState extends State<SplashScreen>
     });
 
     _stampCtrl.forward();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_handoffFromNativeSplash());
+    });
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_bootGeneration != AppSessionLifecycle.splashBootstrapGeneration) {
@@ -112,12 +88,32 @@ class _SplashScreenState extends State<SplashScreen>
       if (AppSessionLifecycle.splashNavigationCompleted) return;
       AppLogger.warn('Splash', 'failsafe — الإقلاع تجاوز 22 ثانية');
       AppSessionLifecycle.splashNavigationCompleted = true;
-      unawaited(Navigator.of(context).pushReplacementNamed('/login'));
+      // جهاز مربوط → بوابة PIN وليس شاشة Google (حتى لو بطُؤ الإقلاع بعد قتل التطبيق).
+      final auth = context.read<AuthProvider>();
+      final target = auth.deviceOwnerBound ? '/employee-gate' : '/login';
+      unawaited(Navigator.of(context).pushReplacementNamed(target));
     });
   }
 
   bool _bootStillActive() =>
       mounted && _bootGeneration == AppSessionLifecycle.splashBootstrapGeneration;
+
+  /// يبقي شاشة النظام ظاهرة حتى تُحمَّل أصول Flutter — يمنع وميض اللون الكحلي الفارغ.
+  Future<void> _handoffFromNativeSplash() async {
+    try {
+      await Future.wait<void>([
+        precacheImage(const AssetImage('assets/images/splash_bg.png'), context),
+        precacheImage(
+          const AssetImage('assets/images/splash_logo_mark.png'),
+          context,
+        ),
+      ]);
+    } catch (e) {
+      AppLogger.warn('Splash', 'precache splash assets: $e');
+    }
+    if (!mounted) return;
+    FlutterNativeSplash.remove();
+  }
 
   Future<void> _playStampSound() async {
     try {
@@ -201,63 +197,40 @@ class _SplashScreenState extends State<SplashScreen>
 
     final pkg = await PackageInfo.fromPlatform();
     final v = pkg.version;
+    final downloadUrl = cfg.updateDownloadUrl.isNotEmpty
+        ? cfg.updateDownloadUrl
+        : AppInAppUpdateService.fallbackApkUrl;
+    final updateMsg = cfg.updateMessageAr.isNotEmpty
+        ? cfg.updateMessageAr
+        : 'يتوفر تحديث جديد للتطبيق. اضغط «تحديث التطبيق الآن» ليُنزَّل ويُثبَّت تلقائياً.';
+
     if (cfg.forceUpdate &&
         AppRemoteConfigService.compareVersions(v, cfg.minSupportedVersion) <
             0) {
       if (!_bootStillActive()) return;
-      final msg = cfg.updateMessageAr.isNotEmpty
-          ? cfg.updateMessageAr
-          : 'يجب تحديث التطبيق للمتابعة.';
-      await showDialog<void>(
-        context: context,
-        barrierDismissible: false,
-        builder: (ctx) => AlertDialog(
-          title: const Text('تحديث مطلوب'),
-          content: SingleChildScrollView(child: Text(msg)),
-          actions: [
-            if (cfg.updateDownloadUrl.isNotEmpty)
-              TextButton(
-                onPressed: () async {
-                  final u = Uri.tryParse(cfg.updateDownloadUrl);
-                  if (u != null) {
-                    await launchUrl(u, mode: LaunchMode.externalApplication);
-                  }
-                },
-                child: const Text('تحميل التحديث'),
-              ),
-          ],
-        ),
+      await showAppUpdateAndInstallDialog(
+        context,
+        title: 'تحديث مطلوب',
+        message: updateMsg,
+        downloadUrl: downloadUrl,
+        force: true,
       );
       return;
     }
 
-    if (cfg.updateMessageAr.isNotEmpty &&
-        AppRemoteConfigService.compareVersions(v, cfg.latestVersion) < 0) {
+    final hasNewer = AppRemoteConfigService.compareVersions(
+          v,
+          cfg.latestVersion,
+        ) <
+        0;
+    if (hasNewer && cfg.latestVersion != '0.0.0') {
       if (!_bootStillActive()) return;
-      await showDialog<void>(
-        context: context,
-        barrierDismissible: true,
-        builder: (ctx) => AlertDialog(
-          title: const Text('تحديث متوفر'),
-          content: SingleChildScrollView(child: Text(cfg.updateMessageAr)),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('لاحقاً'),
-            ),
-            if (cfg.updateDownloadUrl.isNotEmpty)
-              TextButton(
-                onPressed: () async {
-                  Navigator.of(ctx).pop();
-                  final u = Uri.tryParse(cfg.updateDownloadUrl);
-                  if (u != null) {
-                    await launchUrl(u, mode: LaunchMode.externalApplication);
-                  }
-                },
-                child: const Text('تحميل'),
-              ),
-          ],
-        ),
+      await showAppUpdateAndInstallDialog(
+        context,
+        title: 'تحديث التطبيق',
+        message: updateMsg,
+        downloadUrl: downloadUrl,
+        force: false,
       );
     }
 
@@ -299,10 +272,27 @@ class _SplashScreenState extends State<SplashScreen>
       }
     }
 
+    // ربط الجهاز يُقرأ أولاً وبمعزل عن بقية الاستعادة — وإلا مؤقت قصير
+    // أو بطء بعد مسح التطبيق من «التطبيقات الحديثة» يوجّه خطأً لشاشة Google.
+    try {
+      await auth.loadPersistedDeviceOwnerBinding().timeout(
+        const Duration(seconds: 3),
+      );
+    } catch (e, st) {
+      AppLogger.error('Splash', 'فشل loadPersistedDeviceOwnerBinding', e, st);
+    }
+    if (!_bootStillActive()) return;
+
     try {
       await auth.restoreSession().timeout(
-        const Duration(seconds: 6),
-        onTimeout: () {},
+        const Duration(seconds: 12),
+        onTimeout: () {
+          AppLogger.warn(
+            'Splash',
+            'restoreSession timed out — binding kept '
+            '(deviceOwnerBound=${auth.deviceOwnerBound})',
+          );
+        },
       );
     } catch (e, st) {
       AppLogger.error('Splash', 'فشل restoreSession', e, st);
@@ -485,9 +475,10 @@ class _SplashScreenState extends State<SplashScreen>
         ),
       );
     } catch (e, st) {
-      AppLogger.error('Splash', 'فشل التنقل بعد الإقلاع — fallback /login', e, st);
+      AppLogger.error('Splash', 'فشل التنقل بعد الإقلاع — fallback', e, st);
       if (!_bootStillActive()) return;
-      unawaited(Navigator.of(context).pushReplacementNamed('/login'));
+      final fallback = auth.deviceOwnerBound ? '/employee-gate' : '/login';
+      unawaited(Navigator.of(context).pushReplacementNamed(fallback));
     }
   }
 

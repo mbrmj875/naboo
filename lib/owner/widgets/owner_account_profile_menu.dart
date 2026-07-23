@@ -255,6 +255,9 @@ class _OwnerAccountProfileMenuState extends State<OwnerAccountProfileMenu> {
     if (lic.status == LicenseStatus.trial) {
       return _fmtDate(lic.trialEndsAt);
     }
+    if (lic.plan?.isLifetime == true) {
+      return 'بلا انتهاء';
+    }
     if (lic.status == LicenseStatus.active) {
       return _fmtDate(lic.expiresAt);
     }

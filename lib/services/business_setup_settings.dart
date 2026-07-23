@@ -52,6 +52,10 @@ abstract class BusinessSetupKeys {
   static const enableOilChange = 'biz.feature.oil_change';
   static const enableRepairServices = 'biz.feature.repair_services';
   static const enablePos = 'biz.feature.pos';
+  static const enableCarWash = 'biz.feature.car_wash';
+
+  /// ترحيل لمرة واحدة: غسل السيارات معطّل افتراضياً حتى يُفعَّل من الإعدادات.
+  static const carWashDefaultOffV1 = 'biz.migration.car_wash_default_off_v1';
 }
 
 class BusinessSetupSettingsData {
@@ -69,6 +73,7 @@ class BusinessSetupSettingsData {
     required this.enableOilChange,
     required this.enableRepairServices,
     required this.enablePos,
+    required this.enableCarWash,
     required this.enableServices,
   });
 
@@ -85,6 +90,7 @@ class BusinessSetupSettingsData {
   final bool enableOilChange;
   final bool enableRepairServices;
   final bool enablePos;
+  final bool enableCarWash;
 
   /// مرآة للمفتاح القديم `biz.feature.services` — يُحفظ كـ (oil ∨ repair).
   final bool enableServices;
@@ -148,6 +154,7 @@ class BusinessSetupSettingsData {
         enableOilChange: true,
         enableRepairServices: true,
         enablePos: true,
+        enableCarWash: false,
         enableServices: true,
       );
 
@@ -178,6 +185,7 @@ class BusinessSetupSettingsData {
           enableOilChange: true,
           enableRepairServices: false,
           enablePos: false,
+          enableCarWash: false,
           enableServices: true,
         );
       case BusinessVertical.supermarket:
@@ -195,6 +203,7 @@ class BusinessSetupSettingsData {
           enableOilChange: false,
           enableRepairServices: false,
           enablePos: true,
+          enableCarWash: false,
           enableServices: false,
         );
       case BusinessVertical.clothingStore:
@@ -212,6 +221,7 @@ class BusinessSetupSettingsData {
           enableOilChange: false,
           enableRepairServices: false,
           enablePos: true,
+          enableCarWash: false,
           enableServices: false,
         );
       case BusinessVertical.pharmacy:
@@ -229,6 +239,7 @@ class BusinessSetupSettingsData {
           enableOilChange: false,
           enableRepairServices: false,
           enablePos: true,
+          enableCarWash: false,
           enableServices: false,
         );
       case BusinessVertical.restaurantCafe:
@@ -246,6 +257,7 @@ class BusinessSetupSettingsData {
           enableOilChange: false,
           enableRepairServices: false,
           enablePos: true,
+          enableCarWash: false,
           enableServices: true,
         );
       case BusinessVertical.generalRetail:
@@ -264,6 +276,7 @@ class BusinessSetupSettingsData {
           enableOilChange: false,
           enableRepairServices: false,
           enablePos: true,
+          enableCarWash: false,
           enableServices: false,
         );
     }
@@ -296,6 +309,7 @@ class BusinessSetupSettingsData {
     bool? enableOilChange,
     bool? enableRepairServices,
     bool? enablePos,
+    bool? enableCarWash,
     bool? enableServices,
   }) {
     final oil = enableOilChange ?? this.enableOilChange;
@@ -316,6 +330,7 @@ class BusinessSetupSettingsData {
       enableOilChange: oil,
       enableRepairServices: repair,
       enablePos: enablePos ?? this.enablePos,
+      enableCarWash: enableCarWash ?? this.enableCarWash,
       enableServices: enableServices ?? (oil || repair),
     );
   }
@@ -376,6 +391,7 @@ class BusinessSetupSettingsData {
         enableOilChange: true,
         enableRepairServices: true,
         enablePos: true,
+        enableCarWash: false,
         enableServices: true,
       );
     } else {
@@ -418,7 +434,33 @@ class BusinessSetupSettingsData {
       BusinessFeaturesRevision.bump();
       data = normalized;
     }
+    data = await _runCarWashDefaultOffMigrationIfNeeded(repo, data);
     return data;
+  }
+
+  /// يغلق غسل السيارات مرة واحدة إن كان مفعّلاً تلقائياً سابقاً.
+  static Future<BusinessSetupSettingsData> _runCarWashDefaultOffMigrationIfNeeded(
+    AppSettingsRepository repo,
+    BusinessSetupSettingsData data,
+  ) async {
+    final tenantId = await repo.getActiveTenantId();
+    final flag = await repo.getForTenant(
+      BusinessSetupKeys.carWashDefaultOffV1,
+      tenantId: tenantId,
+    );
+    if (flag == 'done') return data;
+    var next = data;
+    if (next.enableCarWash) {
+      next = next.copyWith(enableCarWash: false);
+      await next.save(repo);
+      BusinessFeaturesRevision.bump();
+    }
+    await repo.setForTenant(
+      BusinessSetupKeys.carWashDefaultOffV1,
+      'done',
+      tenantId: tenantId,
+    );
+    return next;
   }
 
   static Future<bool> isCompleted(AppSettingsRepository repo) async {
@@ -486,6 +528,7 @@ class BusinessSetupSettingsData {
       't:$t:${BusinessSetupKeys.enableOilChange}',
       't:$t:${BusinessSetupKeys.enableRepairServices}',
       't:$t:${BusinessSetupKeys.enablePos}',
+      't:$t:${BusinessSetupKeys.enableCarWash}',
     ];
   }
 
@@ -524,6 +567,13 @@ class BusinessSetupSettingsData {
         ? b('t:$t:${BusinessSetupKeys.enablePos}')
         : resolvedVertical != BusinessVertical.oilChange;
 
+    // معطّل افتراضياً — يُفعَّل يدوياً من «تخصيص الشاشة الرئيسية».
+    final hasWashKey =
+        raw.containsKey('t:$t:${BusinessSetupKeys.enableCarWash}');
+    final enableCarWash = hasWashKey
+        ? b('t:$t:${BusinessSetupKeys.enableCarWash}')
+        : false;
+
     return BusinessSetupSettingsData(
       onboardingCompleted:
           b('t:$t:${BusinessSetupKeys.onboardingCompleted}'),
@@ -545,6 +595,7 @@ class BusinessSetupSettingsData {
       enableOilChange: enableOilChange,
       enableRepairServices: enableRepairServices,
       enablePos: enablePos,
+      enableCarWash: enableCarWash,
       enableServices: enableOilChange || enableRepairServices,
     );
   }
@@ -646,6 +697,11 @@ class BusinessSetupSettingsData {
     await repo.setForTenant(
       BusinessSetupKeys.enablePos,
       normalized.enablePos ? '1' : '0',
+      tenantId: tenantId,
+    );
+    await repo.setForTenant(
+      BusinessSetupKeys.enableCarWash,
+      normalized.enableCarWash ? '1' : '0',
       tenantId: tenantId,
     );
     await repo.setForTenant(

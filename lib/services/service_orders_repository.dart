@@ -230,6 +230,8 @@ class ServiceOrdersRepository {
     int? airFilterPriceFils,
     String? gearFilterName,
     int? gearFilterPriceFils,
+    String? coolingFilterName,
+    int? coolingFilterPriceFils,
     String? requestedServices,
     String? customerPhone,
     String orderKind = ServiceOrderKinds.repair,
@@ -259,17 +261,53 @@ class ServiceOrdersRepository {
     final tid = await _tenantId();
     final db = await _db;
 
+    // تجنّب FOREIGN KEY: معرّفات يتيمة من زيارة سابقة/مزامنة.
+    var safeCustomerId = customerId;
+    if (safeCustomerId != null && safeCustomerId > 0) {
+      final rows = await db.query(
+        'customers',
+        columns: ['id'],
+        where: 'id = ?',
+        whereArgs: [safeCustomerId],
+        limit: 1,
+      );
+      if (rows.isEmpty) {
+        AppLogger.warn(
+          'service_orders',
+          'dropping stale customerId=$safeCustomerId before insert',
+        );
+        safeCustomerId = null;
+      }
+    }
+    var safeServiceId = serviceId;
+    if (safeServiceId != null && safeServiceId > 0) {
+      final rows = await db.query(
+        'products',
+        columns: ['id'],
+        where: 'id = ?',
+        whereArgs: [safeServiceId],
+        limit: 1,
+      );
+      if (rows.isEmpty) {
+        AppLogger.warn(
+          'service_orders',
+          'dropping stale serviceId=$safeServiceId before insert',
+        );
+        safeServiceId = null;
+      }
+    }
+
     final now = DateTime.now().toUtc().toIso8601String();
     final gid = const Uuid().v4();
     final kind = orderKind.trim().isEmpty ? ServiceOrderKinds.repair : orderKind.trim();
     final payload = <String, dynamic>{
       'global_id': gid,
       'orderKind': kind,
-      'customerId': customerId,
+      'customerId': safeCustomerId,
       'customerNameSnapshot': customerNameSnapshot.trim(),
       'deviceName': deviceName.trim(),
       'deviceSerial': deviceSerial?.trim().isEmpty == true ? null : deviceSerial?.trim(),
-      'serviceId': serviceId,
+      'serviceId': safeServiceId,
       'estimatedPriceFils': estimatedPriceFils < 0 ? 0 : estimatedPriceFils,
       'agreedPriceFils': agreedPriceFils,
       'advancePaymentFils': advancePaymentFils < 0 ? 0 : advancePaymentFils,
@@ -301,6 +339,10 @@ class ServiceOrdersRepository {
         'gearFilterName': gearFilterName.trim(),
       if (gearFilterPriceFils != null && gearFilterPriceFils > 0)
         'gearFilterPriceFils': gearFilterPriceFils,
+      if (coolingFilterName != null && coolingFilterName.trim().isNotEmpty)
+        'coolingFilterName': coolingFilterName.trim(),
+      if (coolingFilterPriceFils != null && coolingFilterPriceFils > 0)
+        'coolingFilterPriceFils': coolingFilterPriceFils,
       'requestedServices': requestedServices?.trim(),
       'customerPhone': customerPhone?.trim(),
       if (oilProductId != null && oilProductId > 0) 'oilProductId': oilProductId,
@@ -400,6 +442,8 @@ class ServiceOrdersRepository {
     int? airFilterPriceFils,
     String? gearFilterName,
     int? gearFilterPriceFils,
+    String? coolingFilterName,
+    int? coolingFilterPriceFils,
     String? requestedServices,
     String? customerPhone,
     bool patchOilStockFields = false,
@@ -472,6 +516,13 @@ class ServiceOrdersRepository {
             gearFilterName.trim().isEmpty ? null : gearFilterName.trim(),
       if (gearFilterPriceFils != null)
         'gearFilterPriceFils': gearFilterPriceFils > 0 ? gearFilterPriceFils : null,
+      if (coolingFilterName != null)
+        'coolingFilterName': coolingFilterName.trim().isEmpty
+            ? null
+            : coolingFilterName.trim(),
+      if (coolingFilterPriceFils != null)
+        'coolingFilterPriceFils':
+            coolingFilterPriceFils > 0 ? coolingFilterPriceFils : null,
       if (requestedServices != null) 'requestedServices': requestedServices.trim(),
       if (customerPhone != null) 'customerPhone': customerPhone.trim(),
       'updatedAt': now,

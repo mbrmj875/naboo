@@ -9,6 +9,8 @@ enum OilChangeWhatsappNotifyReason {
   whatsappDisconnected,
   evolutionError,
   invalidPhone,
+  /// رقم الزبون = رقم واتساب المحل — واتساب لا يُظهر الرسالة كواردة عادية.
+  sameAsShopPhone,
   serverError,
   unknown,
 }

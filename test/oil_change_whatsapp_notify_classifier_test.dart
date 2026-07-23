@@ -22,12 +22,13 @@ void main() {
       expect(outcome.marksGatewayDisconnected, isTrue);
     });
 
-    test('429 → rateLimited', () {
+    test('empty 200 body → unauthorized (not fake sent)', () {
       final outcome = classifyWhatsappWebhookResponse(
-        statusCode: 429,
+        statusCode: 200,
         body: '',
       );
-      expect(outcome.reason, OilChangeWhatsappNotifyReason.rateLimited);
+      expect(outcome.reason, OilChangeWhatsappNotifyReason.unauthorized);
+      expect(outcome.isSent, isFalse);
     });
   });
 

@@ -102,8 +102,10 @@ class OilChangeFilterCatalogRepository {
     final db = await _db;
     await ensureSchema();
     final label = name.trim();
-    if (label.isEmpty) throw StateError('name_required');
-    if (await existsActiveKindName(kind: kind, name: label)) {
+    final fils = priceFils < 0 ? 0 : priceFils;
+    if (fils <= 0) throw StateError('price_required');
+    if (label.isNotEmpty &&
+        await existsActiveKindName(kind: kind, name: label)) {
       throw StateError('duplicate_kind_name');
     }
     final now = DateTime.now().toUtc().toIso8601String();
@@ -117,7 +119,7 @@ class OilChangeFilterCatalogRepository {
       'tenantId': tid,
       'filterKind': kind.code,
       'name': label,
-      'priceFils': priceFils < 0 ? 0 : priceFils,
+      'priceFils': fils,
       'sortOrder': nextSort,
       'createdAt': now,
       'updatedAt': now,
@@ -136,11 +138,14 @@ class OilChangeFilterCatalogRepository {
     final db = await _db;
     await ensureSchema();
     final label = name.trim();
-    if (await existsActiveKindName(
-      kind: kind,
-      name: label,
-      excludeId: id,
-    )) {
+    final fils = priceFils < 0 ? 0 : priceFils;
+    if (fils <= 0) throw StateError('price_required');
+    if (label.isNotEmpty &&
+        await existsActiveKindName(
+          kind: kind,
+          name: label,
+          excludeId: id,
+        )) {
       throw StateError('duplicate_kind_name');
     }
     await db.update(
@@ -148,7 +153,7 @@ class OilChangeFilterCatalogRepository {
       {
         'filterKind': kind.code,
         'name': label,
-        'priceFils': priceFils < 0 ? 0 : priceFils,
+        'priceFils': fils,
         'updatedAt': DateTime.now().toUtc().toIso8601String(),
       },
       where: 'id = ? AND tenantId = ? AND deletedAt IS NULL',

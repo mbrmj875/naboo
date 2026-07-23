@@ -46,6 +46,18 @@ abstract final class OwnerKpiCatalog {
       childSectionIds: [OwnerSectionIds.salesSparkline],
     ),
     OwnerKpiCatalogEntry(
+      id: OwnerCatalogIds.carWashPeriod,
+      titleKey: OwnerDashboardL10nKeys.carWashPeriodTitle,
+      sectionId: OwnerSectionIds.carWashCount,
+      verticalAllowList: _oilVerticals,
+      requiredFeatures: [
+        OwnerFeatureRequirement.oilChange,
+        OwnerFeatureRequirement.carWash,
+      ],
+      requiredPermissionKey: PermissionKeys.ownerKpiFinancial,
+      heroEligible: true,
+    ),
+    OwnerKpiCatalogEntry(
       id: OwnerCatalogIds.hybridRevenueSplit,
       titleKey: OwnerDashboardL10nKeys.hybridRevenueSplitTitle,
       sectionId: OwnerSectionIds.hybridRevenueSplit,
@@ -488,6 +500,8 @@ abstract final class OwnerKpiCatalog {
         return features.enablePos;
       case OwnerFeatureRequirement.oilChange:
         return features.enableOilChange;
+      case OwnerFeatureRequirement.carWash:
+        return features.enableCarWash;
       case OwnerFeatureRequirement.loyalty:
         return features.enableLoyalty;
       case OwnerFeatureRequirement.weightSales:

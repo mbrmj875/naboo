@@ -15,7 +15,7 @@ abstract class OilChangeWhatsappUserMessages {
       case OilChangeWhatsappNotifyReason.timeout:
         return 'السيرفر لم يستجب — أعد المحاولة لاحقاً';
       case OilChangeWhatsappNotifyReason.unauthorized:
-        return 'فشل التحقق من أمان الإرسال — تواصل مع دعم نابو';
+        return 'فشل التحقق من أمان الإرسال — السر غير مقبول على السيرفر أو الإعداد ناقص';
       case OilChangeWhatsappNotifyReason.rateLimited:
         return 'تم إرسال رسائل كثيرة — انتظر قليلاً ثم أعد المحاولة';
       case OilChangeWhatsappNotifyReason.whatsappDisconnected:
@@ -24,6 +24,8 @@ abstract class OilChangeWhatsappUserMessages {
         return 'تعذّر الإرسال من رقم المحل — تحقق من اتصال واتساب المحل';
       case OilChangeWhatsappNotifyReason.invalidPhone:
         return 'رقم الزبون غير صالح — أضف رقماً صحيحاً';
+      case OilChangeWhatsappNotifyReason.sameAsShopPhone:
+        return 'رقم الزبون هو نفسه رقم واتساب المحل — غيّر رقم الزبون في البطاقة ثم أعد الإرسال';
       case OilChangeWhatsappNotifyReason.serverError:
         return 'خطأ في إعداد n8n — راجع عقدة Respond to Webhook ثم أعد المحاولة';
       case OilChangeWhatsappNotifyReason.unknown:
@@ -44,6 +46,11 @@ abstract class OilChangeWhatsappUserMessages {
   static const gatewayDisconnectedBanner =
       'واتساب المحل غير متصل — الرسائل التلقائية متوقفة. '
       'أعد ربط QR من الإعدادات.';
+
+  /// QR متصل لكن خيار الإرسال التلقائي مطفأ (شائع بعد جهاز جديد / إعادة تثبيت).
+  static const gatewayConnectedAutoOffBanner =
+      'واتساب المحل متصل، لكن «الإرسال التلقائي» مطفأ. '
+      'فعّله من الإعدادات وإلا لن تُرسل رسائل بعد حفظ البطاقة.';
 
   /// تلميح قصير تحت مفتاح الإرسال التلقائي.
   static const settingsWhatsappAutoHintConnected =

@@ -5,6 +5,7 @@ abstract class OwnerDashboardL10nKeys {
   // ── KPI titles ──
   static const oilActiveCarsTitle = 'owner.kpi.oil_active_cars.title';
   static const oilChangesPeriodTitle = 'owner.kpi.oil_changes_period.title';
+  static const carWashPeriodTitle = 'owner.kpi.car_wash_period.title';
   static const oilStockShortagesTitle = 'owner.kpi.oil_stock_shortages.title';
   static const oilAvgTicketTitle = 'owner.kpi.oil_avg_ticket.title';
   static const hybridRevenueSplitTitle = 'owner.kpi.hybrid_revenue_split.title';
@@ -66,6 +67,7 @@ String ownerDashboardL10n(String key) {
 const Map<String, String> _fallbackAr = {
   OwnerDashboardL10nKeys.oilActiveCarsTitle: 'سيارات في الورشة',
   OwnerDashboardL10nKeys.oilChangesPeriodTitle: 'غيارات الفترة',
+  OwnerDashboardL10nKeys.carWashPeriodTitle: 'غسل الفترة',
   OwnerDashboardL10nKeys.oilStockShortagesTitle: 'نواقص زيوت وفلاتر',
   OwnerDashboardL10nKeys.oilAvgTicketTitle: 'متوسط قيمة الغيار',
   OwnerDashboardL10nKeys.hybridRevenueSplitTitle: 'إجمالي الإيرادات',

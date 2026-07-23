@@ -1,9 +1,12 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
+import '../../../config/oil_change_whatsapp_config.dart';
 import '../../../navigation/app_route_observer.dart';
 import '../../../navigation/content_navigation.dart';
+import '../../../providers/auth_provider.dart';
 import '../../../services/cloud_sync_service.dart';
 import '../../../services/database_helper.dart';
 import '../services/oil_change_settings.dart';
@@ -25,6 +28,7 @@ import '../widgets/oil_change_log_detail_sheet.dart';
 import '../widgets/oil_change_log_stitch.dart';
 import '../widgets/oil_change_whatsapp_campaign_progress.dart';
 import 'oil_change_whatsapp_campaign_screen.dart';
+import 'oil_change_whatsapp_resend_screen.dart';
 import 'oil_change_form_screen.dart';
 
 /// سجل غيارات الزيت: بطاقة جديدة + جدول تفصيلي + واتساب.
@@ -380,15 +384,25 @@ class _OilChangeHubScreenState extends State<OilChangeHubScreen>
     }
   }
 
-  Future<void> _openWhatsAppCampaign() async {
+  /// زر واتساب في السجل:
+  /// - حملة جماعية: فقط إذا الـ flag مفتوح + المستخدم مالك
+  /// - وإلا: قائمة إعادة إرسال فردية (موظف ومالك)
+  Future<void> _openWhatsAppEntry() async {
     if (_showSuspendedLog) return;
-    final printData = await PrintSettingsRepository.instance.load();
-    if (!mounted) return;
-    await OilChangeWhatsappCampaignScreen.open(
-      context,
-      storeTitle: printData.storeTitleLine,
-      gatewayConnected: !_waGatewayDisconnected,
-    );
+    final isOwner = context.read<AuthProvider>().isOwner;
+    final openCampaign =
+        OilChangeWhatsappConfig.campaignUiEnabled && isOwner;
+    if (openCampaign) {
+      final printData = await PrintSettingsRepository.instance.load();
+      if (!mounted) return;
+      await OilChangeWhatsappCampaignScreen.open(
+        context,
+        storeTitle: printData.whatsappStoreTitle,
+        gatewayConnected: !_waGatewayDisconnected,
+      );
+      return;
+    }
+    await OilChangeWhatsappResendScreen.open(context);
   }
 
   Future<void> _openWhatsappConnect() async {
@@ -877,7 +891,7 @@ class _OilChangeHubScreenState extends State<OilChangeHubScreen>
     if (_showSuspendedLog) return const SizedBox.shrink();
     return OilChangeLogStitchActionButtons(
       onNewCard: _openNewCard,
-      onWhatsApp: _openWhatsAppCampaign,
+      onWhatsApp: _openWhatsAppEntry,
       stacked: layout.isPhoneXS,
       compactWhatsAppLabel: layout.isPhoneVariant,
     );
@@ -1253,7 +1267,8 @@ class _OilChangeHubScreenState extends State<OilChangeHubScreen>
             ),
         ],
         ),
-            const OilChangeWhatsappCampaignProgressLayer(),
+            if (OilChangeWhatsappConfig.campaignUiEnabled)
+              const OilChangeWhatsappCampaignProgressLayer(),
           ],
         ),
       ),

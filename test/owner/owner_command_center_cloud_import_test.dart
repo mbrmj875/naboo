@@ -22,6 +22,7 @@ BusinessSetupSettingsData _featuresWithDebts() {
     enableOilChange: true,
     enableRepairServices: true,
     enablePos: true,
+      enableCarWash: false,
     enableServices: true,
   );
 }

@@ -16,6 +16,7 @@ class OilChangeWhatsappCampaignProgressLayer extends StatelessWidget {
         final q = OilChangeWhatsappCampaignQueue.instance;
         if (!q.isActive &&
             q.phase != OilChangeCampaignPhase.completed &&
+            q.phase != OilChangeCampaignPhase.handedOff &&
             q.phase != OilChangeCampaignPhase.paused &&
             q.phase != OilChangeCampaignPhase.cancelled) {
           return const SizedBox.shrink();
@@ -32,6 +33,7 @@ class OilChangeWhatsappCampaignProgressLayer extends StatelessWidget {
         }
 
         if (q.phase == OilChangeCampaignPhase.completed ||
+            q.phase == OilChangeCampaignPhase.handedOff ||
             q.phase == OilChangeCampaignPhase.cancelled ||
             q.phase == OilChangeCampaignPhase.paused) {
           return _ResultBanner(queue: q);
@@ -64,7 +66,6 @@ class _MinimizedChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final done = queue.sent + queue.failed + queue.skipped;
     return Material(
       elevation: 8,
       borderRadius: BorderRadius.circular(999),
@@ -72,23 +73,23 @@ class _MinimizedChip extends StatelessWidget {
       child: InkWell(
         onTap: () => queue.setMinimized(false),
         borderRadius: BorderRadius.circular(999),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        child: const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 14, vertical: 8),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Container(
-                width: 8,
-                height: 8,
-                decoration: const BoxDecoration(
+              SizedBox(
+                width: 14,
+                height: 14,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
                   color: Colors.white,
-                  shape: BoxShape.circle,
                 ),
               ),
-              const SizedBox(width: 8),
+              SizedBox(width: 8),
               Text(
-                'إرسال $done/${queue.total}',
-                style: const TextStyle(
+                'تسليم للسيرفر…',
+                style: TextStyle(
                   color: Colors.white,
                   fontWeight: FontWeight.w700,
                   fontSize: 12,
@@ -107,16 +108,9 @@ class _ProgressCard extends StatelessWidget {
 
   final OilChangeWhatsappCampaignQueue queue;
 
-  String _formatCountdown(int seconds) {
-    final m = seconds ~/ 60;
-    final s = seconds % 60;
-    return '${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
-  }
-
   @override
   Widget build(BuildContext context) {
     final pct = (queue.progressFraction * 100).round();
-    final done = queue.sent + queue.failed + queue.skipped;
 
     return Material(
       elevation: 18,
@@ -138,14 +132,18 @@ class _ProgressCard extends StatelessWidget {
                       alignment: Alignment.center,
                       children: [
                         CircularProgressIndicator(
-                          value: queue.progressFraction,
+                          value: queue.progressFraction > 0
+                              ? queue.progressFraction
+                              : null,
                           strokeWidth: 7,
                           color: AppColors.accentGold,
                           backgroundColor:
                               OilChangeLogStitchMetrics.surfaceContainerHigh,
                         ),
                         Text(
-                          '$pct%',
+                          queue.phase == OilChangeCampaignPhase.submitting
+                              ? '…'
+                              : '$pct%',
                           style: const TextStyle(
                             fontWeight: FontWeight.w800,
                             fontSize: 18,
@@ -156,7 +154,7 @@ class _ProgressCard extends StatelessWidget {
                   ),
                   const SizedBox(height: 12),
                   const Text(
-                    'جاري الإرسال صامتاً…',
+                    'جارٍ تسليم الحملة للسيرفر…',
                     style: TextStyle(
                       fontWeight: FontWeight.w800,
                       fontSize: 17,
@@ -164,102 +162,21 @@ class _ProgressCard extends StatelessWidget {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'لا تغلق التطبيق — يمكنك متابعة العمل',
+                    'بعد التسليم يكمل الإرسال حتى لو أغلقت التطبيق',
+                    textAlign: TextAlign.center,
                     style: TextStyle(
                       fontSize: 12,
                       color: OilChangeLogStitchMetrics.textMuted,
                     ),
                   ),
                   const SizedBox(height: 16),
-                  Row(
-                    children: [
-                      _StatCell(
-                        label: 'نُجح',
-                        value: '${queue.sent}',
-                        color: OilChangeLogStitchMetrics.success,
-                      ),
-                      _StatCell(
-                        label: 'فشل',
-                        value: '${queue.failed}',
-                        color: OilChangeLogStitchMetrics.error,
-                      ),
-                      _StatCell(
-                        label: 'متبقي',
-                        value: '${queue.pending}',
-                        color: OilChangeLogStitchMetrics.outline,
-                      ),
-                    ],
+                  Text(
+                    '${queue.total} رسالة جاهزة',
+                    style: const TextStyle(fontSize: 13),
                   ),
-                  const SizedBox(height: 12),
-                  LinearProgressIndicator(value: queue.progressFraction),
-                  const SizedBox(height: 6),
-                  Align(
-                    alignment: AlignmentDirectional.centerStart,
-                    child: Text(
-                      '$done / ${queue.total} رسالة',
-                      style: const TextStyle(fontSize: 11),
-                    ),
-                  ),
-                  if (queue.currentCustomerName != null) ...[
-                    const SizedBox(height: 12),
-                    ListTile(
-                      dense: true,
-                      contentPadding: EdgeInsets.zero,
-                      leading: CircleAvatar(
-                        child: Text(
-                          queue.currentCustomerName!.characters.first,
-                        ),
-                      ),
-                      title: Text(queue.currentCustomerName!),
-                      subtitle: Text(queue.currentCarLabel ?? ''),
-                      trailing: Text(
-                        queue.lastOutcomeLabel ?? '',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: OilChangeLogStitchMetrics.success,
-                        ),
-                      ),
-                    ),
-                  ],
-                  if (queue.phase ==
-                          OilChangeCampaignPhase.waitingInterval &&
-                      queue.secondsUntilNext > 0)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 8),
-                      child: Text(
-                        'الرسالة التالية خلال ${_formatCountdown(queue.secondsUntilNext)}',
-                        style: const TextStyle(fontSize: 12),
-                      ),
-                    ),
                 ],
               ),
             ),
-            if (queue.phase == OilChangeCampaignPhase.resting)
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(14),
-                color: AppColors.accentGold.withValues(alpha: 0.18),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'استراحة أمان',
-                      style: TextStyle(fontWeight: FontWeight.w800),
-                    ),
-                    Text(
-                      queue.pauseReason ?? '',
-                      style: const TextStyle(fontSize: 12),
-                    ),
-                    Text(
-                      '${_formatCountdown(queue.restSecondsRemaining)} متبقية',
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w700,
-                        fontSize: 13,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
             Padding(
               padding: const EdgeInsets.all(12),
               child: Row(
@@ -277,7 +194,7 @@ class _ProgressCard extends StatelessWidget {
                         backgroundColor: OilChangeLogStitchMetrics.error,
                       ),
                       onPressed: queue.requestCancel,
-                      child: const Text('إيقاف'),
+                      child: const Text('إلغاء'),
                     ),
                   ),
                 ],
@@ -285,43 +202,6 @@ class _ProgressCard extends StatelessWidget {
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _StatCell extends StatelessWidget {
-  const _StatCell({
-    required this.label,
-    required this.value,
-    required this.color,
-  });
-
-  final String label;
-  final String value;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return Expanded(
-      child: Column(
-        children: [
-          Text(
-            value,
-            style: TextStyle(
-              fontWeight: FontWeight.w800,
-              fontSize: 18,
-              color: color,
-            ),
-          ),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 11,
-              color: OilChangeLogStitchMetrics.textMuted,
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -335,6 +215,9 @@ class _ResultBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final msg = switch (queue.phase) {
+      OilChangeCampaignPhase.handedOff =>
+        queue.pauseReason ??
+            'تم التسليم للسيرفر — الإرسال يكمل بعد إغلاق التطبيق',
       OilChangeCampaignPhase.completed =>
         'اكتملت الحملة — نجح ${queue.sent} · فشل ${queue.failed}',
       OilChangeCampaignPhase.cancelled => 'تم إيقاف الحملة',
@@ -343,24 +226,39 @@ class _ResultBanner extends StatelessWidget {
       _ => '',
     };
 
+    final bg = queue.phase == OilChangeCampaignPhase.paused ||
+            queue.phase == OilChangeCampaignPhase.cancelled
+        ? OilChangeLogStitchMetrics.error
+        : OilChangeLogStitchMetrics.success;
+
     return Align(
       alignment: AlignmentDirectional.topCenter,
-      child: Material(
-        elevation: 6,
-        borderRadius: BorderRadius.circular(8),
-        color: OilChangeLogStitchMetrics.primaryContainer,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Flexible(child: Text(msg, style: const TextStyle(color: Colors.white))),
-              const SizedBox(width: 8),
-              TextButton(
-                onPressed: queue.resetToIdle,
-                child: const Text('إغلاق', style: TextStyle(color: Colors.white)),
-              ),
-            ],
+      child: SafeArea(
+        child: Material(
+          elevation: 6,
+          borderRadius: BorderRadius.circular(8),
+          color: bg,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Flexible(
+                  child: Text(
+                    msg,
+                    style: const TextStyle(color: Colors.white),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                TextButton(
+                  onPressed: queue.resetToIdle,
+                  child: const Text(
+                    'إغلاق',
+                    style: TextStyle(color: Colors.white),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),

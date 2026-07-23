@@ -16,6 +16,7 @@ import '../utils/oil_change_log_format.dart';
 import '../models/oil_change_filter_kind.dart';
 import '../utils/oil_change_customer_debt.dart';
 import '../utils/oil_service_whatsapp_message.dart';
+import '../utils/oil_change_service_pdf.dart';
 import 'oil_change_form_screen.dart';
 import '../widgets/oil_change_form_theme.dart';
 
@@ -107,20 +108,31 @@ class _OilChangeDetailScreenState extends State<OilChangeDetailScreen> {
       return;
     }
     final printData = await PrintSettingsRepository.instance.load();
-    final visitRem = oilChangeVisitRemainderFils(o);
-    final priorDebt = await loadCustomerPriorOpenDebtFils(
-      customerId: (o['customerId'] as num?)?.toInt(),
-      customerName: (o['customerNameSnapshot'] ?? '').toString(),
-      visitRemainderFils: visitRem,
-    );
-    final msg = buildOilServiceWhatsAppMessage(
-      order: o,
-      storeTitle: printData.storeTitleLine,
-      storeFooter: printData.footerExtra,
-      priorOpenDebtFils: priorDebt,
-    );
-    if (!mounted) return;
-    await launchWhatsAppWithMessage(context, phone: phone, message: msg);
+    try {
+      await OilChangeServicePdf.share(
+        order: o,
+        printSettings: printData,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      final visitRem = oilChangeVisitRemainderFils(o);
+      final priorDebt = await loadCustomerPriorOpenDebtFils(
+        customerId: (o['customerId'] as num?)?.toInt(),
+        customerName: (o['customerNameSnapshot'] ?? '').toString(),
+        visitRemainderFils: visitRem,
+      );
+      final msg = buildOilServiceWhatsAppMessage(
+        order: o,
+        storeTitle: printData.whatsappStoreTitle,
+        storeFooter: printData.whatsappStoreFooter,
+        priorOpenDebtFils: priorDebt,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('تعذّر إنشاء ملف PDF، سيتم فتح واتساب بالنص: $e')),
+      );
+      await launchWhatsAppWithMessage(context, phone: phone, message: msg);
+    }
   }
 
   Future<void> _openInvoice() async {

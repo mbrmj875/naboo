@@ -147,10 +147,17 @@ class _ReportsScreenState extends State<ReportsScreen> {
       icon: Icons.medication_liquid_rounded,
       subtitle: 'مخزون، مبيعات، مالي، موردين',
     ),
+    _ReportsSection(
+      id: 10,
+      label: 'غسل السيارات',
+      icon: Icons.local_car_wash_rounded,
+      subtitle: 'عدد وإيراد الغسل',
+    ),
   ];
 
   static const int _oilReportsSectionId = 8;
   static const int _pharmacyReportsSectionId = 9;
+  static const int _carWashReportsSectionId = 10;
 
   VerticalManifest? get _oilReportsManifest =>
       VerticalRegistry.instance.manifestFor(BusinessVertical.oilChange);
@@ -160,10 +167,14 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
   bool _isVerticalReportSection(int sectionId) =>
       sectionId == _oilReportsSectionId ||
-      sectionId == _pharmacyReportsSectionId;
+      sectionId == _pharmacyReportsSectionId ||
+      sectionId == _carWashReportsSectionId;
 
   VerticalManifest? _manifestForVerticalSection(int sectionId) {
-    if (sectionId == _oilReportsSectionId) return _oilReportsManifest;
+    if (sectionId == _oilReportsSectionId ||
+        sectionId == _carWashReportsSectionId) {
+      return _oilReportsManifest;
+    }
     if (sectionId == _pharmacyReportsSectionId) return _pharmacyReportsManifest;
     return null;
   }
@@ -307,6 +318,10 @@ class _ReportsScreenState extends State<ReportsScreen> {
       if (s.id == _oilReportsSectionId && !features.data.enableOilChange) {
         return false;
       }
+      if (s.id == _carWashReportsSectionId &&
+          !(features.data.enableOilChange && features.data.enableCarWash)) {
+        return false;
+      }
       if (s.id == _pharmacyReportsSectionId &&
           features.data.businessVertical != BusinessVertical.pharmacy) {
         return false;
@@ -375,6 +390,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
       if (panel != null) return panel;
       if (_section == _pharmacyReportsSectionId) {
         return const Center(child: Text('لا توجد بيانات لتقارير الصيدلية'));
+      }
+      if (_section == _carWashReportsSectionId) {
+        return const Center(child: Text('لا توجد بيانات لغسل السيارات'));
       }
       return const Center(child: Text('لا توجد بيانات لغيار الزيت'));
     }

@@ -292,7 +292,15 @@ class _AccountSubscriptionScreenState extends State<AccountSubscriptionScreen> {
                           style: TextStyle(fontWeight: FontWeight.bold),
                         ),
                         const SizedBox(height: 8),
-                        if (lic.expiresAt != null) ...[
+                        if (displayPlan?.isLifetime == true) ...[
+                          const Text(
+                            'اشتراك مدى الحياة — بلا تاريخ انتهاء',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ] else if (lic.expiresAt != null) ...[
                           Text(
                             'ينتهي الاشتراك في: ${_fmtDate(lic.expiresAt)}',
                             style: const TextStyle(

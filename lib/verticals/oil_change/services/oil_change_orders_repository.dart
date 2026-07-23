@@ -5,6 +5,7 @@ import '../../../services/service_order_kinds.dart';
 import '../../../services/service_orders_repository.dart';
 import '../../../services/service_orders_sql_ops.dart';
 import '../../../services/tenant_context_service.dart';
+import '../models/oil_change_wa_notify_status.dart';
 import '../utils/oil_change_order_status.dart';
 
 /// واجهة بطاقات غيار الزيت فوق `service_orders` — بدون جدول جديد (v1).
@@ -145,6 +146,8 @@ class OilChangeOrdersRepository {
     int? airFilterPriceFils,
     String? gearFilterName,
     int? gearFilterPriceFils,
+    String? coolingFilterName,
+    int? coolingFilterPriceFils,
     String? requestedServices,
     String? customerPhone,
     int? oilProductId,
@@ -199,6 +202,8 @@ class OilChangeOrdersRepository {
       airFilterPriceFils: airFilterPriceFils,
       gearFilterName: gearFilterName,
       gearFilterPriceFils: gearFilterPriceFils,
+      coolingFilterName: coolingFilterName,
+      coolingFilterPriceFils: coolingFilterPriceFils,
       requestedServices: requestedServices,
       customerPhone: customerPhone,
       orderKind: ServiceOrderKinds.oilChange,
@@ -263,6 +268,8 @@ class OilChangeOrdersRepository {
     int? airFilterPriceFils,
     String? gearFilterName,
     int? gearFilterPriceFils,
+    String? coolingFilterName,
+    int? coolingFilterPriceFils,
     String? requestedServices,
     String? customerPhone,
     bool patchOilStockFields = false,
@@ -327,6 +334,8 @@ class OilChangeOrdersRepository {
       airFilterPriceFils: airFilterPriceFils,
       gearFilterName: gearFilterName,
       gearFilterPriceFils: gearFilterPriceFils,
+      coolingFilterName: coolingFilterName,
+      coolingFilterPriceFils: coolingFilterPriceFils,
       requestedServices: requestedServices,
       customerPhone: customerPhone,
       patchOilStockFields: patchOilStockFields,
@@ -354,6 +363,38 @@ class OilChangeOrdersRepository {
       powerHydraulicCustomerProvided: powerHydraulicCustomerProvided,
       powerHydraulicWarehouseId: powerHydraulicWarehouseId,
       powerHydraulicStockVoucherId: powerHydraulicStockVoucherId,
+    );
+  }
+
+  /// يحدّث حالة إرسال واتساب لبطاقة غيار زيت (tenant-scoped).
+  Future<void> setWaNotifyStatus({
+    required int orderId,
+    required OilChangeWaNotifyStatus status,
+    String? lastError,
+  }) async {
+    if (orderId <= 0) return;
+    final tid = await _tenantId();
+    final db = await _db;
+    await _dbHelper.ensureServiceOrdersReadRepair();
+    final now = DateTime.now().toUtc().toIso8601String();
+    await db.rawUpdate(
+      '''
+      UPDATE service_orders
+      SET waNotifyStatus = ?,
+          waNotifyUpdatedAt = ?,
+          waNotifyLastError = ?,
+          waNotifyAttempts = COALESCE(waNotifyAttempts, 0) + 1
+      WHERE id = ?
+        AND tenantId = ?
+        AND deletedAt IS NULL
+      ''',
+      [
+        status.dbValue,
+        now,
+        lastError,
+        orderId,
+        tid,
+      ],
     );
   }
 

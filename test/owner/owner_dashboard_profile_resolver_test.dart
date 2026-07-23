@@ -36,6 +36,7 @@ void main() {
         enableOilChange: true,
         enableRepairServices: false,
         enablePos: true,
+      enableCarWash: false,
         enableServices: true,
       );
       fullAccess = OwnerDashboardAccessContext.fullAccess(tenantId: 7);
@@ -60,6 +61,7 @@ void main() {
         enableOilChange: true,
         enableRepairServices: false,
         enablePos: false,
+      enableCarWash: false,
         enableServices: true,
       );
       expect(misconfigured.routingVertical, BusinessVertical.oilChange);

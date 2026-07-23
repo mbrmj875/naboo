@@ -8,9 +8,10 @@ import '../services/oil_change_filter_catalog_repository.dart';
 import '../../../theme/sale_brand.dart';
 import '../../../utils/iraqi_currency_format.dart';
 import '../../../utils/iqd_money.dart';
+import '../utils/oil_change_filter_format.dart';
 import 'oil_change_royal_card.dart';
 
-/// إدارة كتالوج الفلاتر (فئة + اسم + سعر) أو اختيار صنف للبطاقة.
+/// إدارة كتالوج الفلاتر (فئة + اسم اختياري + سعر) أو اختيار صنف للبطاقة.
 Future<OilChangeFilterPick?> showOilChangeFilterCatalogSheet(
   BuildContext context, {
   bool manageOnly = false,
@@ -98,12 +99,6 @@ class _OilChangeFilterCatalogSheetBodyState
     final name = _nameCtrl.text.trim();
     final priceDinars = IraqiCurrencyFormat.parseIqdInt(_priceCtrl.text);
     final priceFils = IqdMoney.toFils(priceDinars.toDouble());
-    if (name.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('أدخل اسم الفلتر')),
-      );
-      return;
-    }
     if (priceFils <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('أدخل السعر')),
@@ -122,14 +117,19 @@ class _OilChangeFilterCatalogSheetBodyState
       setState(() => _adding = false);
       await _load();
       if (!mounted) return;
+      final label = name.isEmpty
+          ? IraqiCurrencyFormat.formatIqd(IqdMoney.fromFils(priceFils))
+          : name;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('تمت إضافة «$name» لـ ${_kind.label}')),
+        SnackBar(content: Text('تمت إضافة «$label» لـ ${_kind.label}')),
       );
     } on StateError catch (e) {
       if (!mounted) return;
       final msg = e.message == 'duplicate_kind_name'
           ? 'نفس الاسم موجود لهذه الفئة'
-          : 'تعذّر الحفظ';
+          : e.message == 'price_required'
+              ? 'أدخل السعر'
+              : 'تعذّر الحفظ';
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(msg)),
       );
@@ -146,7 +146,9 @@ class _OilChangeFilterCatalogSheetBodyState
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('حذف الصنف؟'),
-        content: Text('«${e.name}» لن يظهر في القوائم الجديدة.'),
+        content: Text(
+          '«${oilFilterCatalogEntryLabel(e)}» لن يظهر في القوائم الجديدة.',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -179,13 +181,23 @@ class _OilChangeFilterCatalogSheetBodyState
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final bottom = MediaQuery.paddingOf(context).bottom;
-    final maxH = MediaQuery.sizeOf(context).height * 0.88;
+    final mq = MediaQuery.of(context);
+    final viewInsets = mq.viewInsets.bottom;
+    final bottomPad = mq.padding.bottom;
+    // ارتفاع الورقة نسبةً للمساحة الظاهرة فوق لوحة المفاتيح (لا الشاشة كاملة).
+    final availableH =
+        (mq.size.height - viewInsets - mq.padding.top).clamp(240.0, mq.size.height);
+    final sheetH = (availableH * 0.92).clamp(240.0, availableH);
 
     return Padding(
-      padding: EdgeInsetsDirectional.fromSTEB(12, 0, 12, 12 + bottom),
+      padding: EdgeInsetsDirectional.fromSTEB(
+        12,
+        0,
+        12,
+        12 + bottomPad + viewInsets,
+      ),
       child: SizedBox(
-        height: maxH,
+        height: sheetH,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -193,7 +205,7 @@ class _OilChangeFilterCatalogSheetBodyState
               padding: const EdgeInsetsDirectional.fromSTEB(8, 4, 8, 8),
               child: Row(
                 children: [
-                  Icon(Icons.filter_alt_outlined, color: _gold, size: 22),
+                  const Icon(Icons.filter_alt_outlined, color: _gold, size: 22),
                   const SizedBox(width: 8),
                   const Expanded(
                     child: Text(
@@ -214,8 +226,8 @@ class _OilChangeFilterCatalogSheetBodyState
             ),
             Text(
               widget.manageOnly
-                  ? 'أضف لكل فئة (محرك، هواء، كير) أسماء فلاتر بأسعارها. الاختيار في البطاقة من القوائم فقط.'
-                  : 'اختر صنفاً للبطاقة أو أضف أسماء جديدة بأسعارها.',
+                  ? 'أضف لكل فئة أسماء فلاتر (اختياري) بأسعارها. يمكن الحفظ بالسعر فقط. الاختيار في البطاقة من القوائم.'
+                  : 'اختر صنفاً للبطاقة أو أضف سعراً (والاسم اختياري).',
               style: TextStyle(
                 fontSize: 12.5,
                 color: cs.onSurfaceVariant,
@@ -224,22 +236,21 @@ class _OilChangeFilterCatalogSheetBodyState
               textAlign: TextAlign.start,
             ),
             const SizedBox(height: 10),
-            SegmentedButton<OilChangeFilterKind>(
-              segments: [
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              alignment: WrapAlignment.start,
+              children: [
                 for (final k in OilChangeFilterKind.all)
-                  ButtonSegment(
-                    value: k,
+                  ChoiceChip(
                     label: Text(
                       k.label.replaceFirst('فلتر ', ''),
-                      style: const TextStyle(fontSize: 12),
+                      style: const TextStyle(fontSize: 12.5),
                     ),
+                    selected: _kind == k,
+                    onSelected: (_) => setState(() => _kind = k),
                   ),
               ],
-              selected: {_kind},
-              onSelectionChanged: (s) {
-                if (s.isEmpty) return;
-                setState(() => _kind = s.first);
-              },
             ),
             const SizedBox(height: 10),
             Align(
@@ -259,10 +270,10 @@ class _OilChangeFilterCatalogSheetBodyState
                     flex: 2,
                     child: TextField(
                       controller: _nameCtrl,
-                      decoration: InputDecoration(
-                        labelText: 'اسم الفلتر',
+                      decoration: const InputDecoration(
+                        labelText: 'اسم الفلتر (اختياري)',
                         hintText: 'مثال: تويوتا أصلي',
-                        border: const OutlineInputBorder(),
+                        border: OutlineInputBorder(),
                         isDense: true,
                       ),
                     ),
@@ -310,14 +321,18 @@ class _OilChangeFilterCatalogSheetBodyState
                               ),
                             )
                           : ListView.separated(
+                              keyboardDismissBehavior:
+                                  ScrollViewKeyboardDismissBehavior.onDrag,
                               itemCount: _kindEntries.length,
                               separatorBuilder: (_, __) =>
                                   const SizedBox(height: 8),
                               itemBuilder: (context, i) {
                                 final e = _kindEntries[i];
+                                final title = oilFilterCatalogEntryTitle(e);
                                 final price = IraqiCurrencyFormat.formatIqd(
                                   IqdMoney.fromFils(e.priceFils),
                                 );
+                                final nameEmpty = e.name.trim().isEmpty;
                                 return OilChangeRoyalCard.listTileCard(
                                   cs: cs,
                                   onTap: widget.manageOnly
@@ -325,16 +340,22 @@ class _OilChangeFilterCatalogSheetBodyState
                                       : () => _pick(e),
                                   child: ListTile(
                                     title: Text(
-                                      e.name,
+                                      title,
                                       style: const TextStyle(
                                         fontWeight: FontWeight.w700,
                                       ),
-                                    ),
-                                    subtitle: Text(
-                                      price,
-                                      textDirection: TextDirection.ltr,
+                                      textDirection: nameEmpty
+                                          ? TextDirection.ltr
+                                          : null,
                                       textAlign: TextAlign.start,
                                     ),
+                                    subtitle: nameEmpty
+                                        ? null
+                                        : Text(
+                                            price,
+                                            textDirection: TextDirection.ltr,
+                                            textAlign: TextAlign.start,
+                                          ),
                                     trailing: widget.manageOnly
                                         ? IconButton(
                                             icon: const Icon(

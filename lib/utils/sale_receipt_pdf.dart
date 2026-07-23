@@ -42,6 +42,19 @@ List<pw.Widget> _receiptStoreHeaderBlock(
   required pw.Font fontBold,
 }) {
   final out = <pw.Widget>[];
+  final logo = s.storeLogoBytes;
+  if (logo != null && logo.isNotEmpty) {
+    out.add(
+      pw.Center(
+        child: pw.Image(
+          pw.MemoryImage(logo),
+          height: 42,
+          fit: pw.BoxFit.contain,
+        ),
+      ),
+    );
+    out.add(pw.SizedBox(height: 6));
+  }
   final title = _receiptSafe(s.storeTitleLine);
   if (title.isNotEmpty) {
     out.add(

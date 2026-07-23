@@ -236,6 +236,183 @@ class _OilChangeOilCatalogSheetBodyState
     });
   }
 
+  Future<void> _confirmDelete(OilChangeOilCatalogEntry e) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('حذف اللزوجة؟'),
+        content: Text(
+          '«${e.brandName} — ${e.viscosity}» لن تظهر في القوائم الجديدة.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('حذف'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await OilChangeOilCatalogRepository.instance.softDeleteById(e.id);
+      if (mounted) await _load();
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تعذّر الحذف')),
+      );
+    }
+  }
+
+  Future<void> _editEntry(OilChangeOilCatalogEntry e) async {
+    final brandCtrl = TextEditingController(text: e.brandName);
+    final visCtrl = TextEditingController(text: e.viscosity);
+    final priceCtrl = TextEditingController(
+      text: IraqiCurrencyFormat.formatInt(
+        IqdMoney.fromFils(e.sellPerLiterFils).round(),
+      ),
+    );
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: const Text('تعديل اللزوجة'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: brandCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'اسم / ماركة الزيت',
+                    border: OutlineInputBorder(),
+                  ),
+                  textAlign: TextAlign.start,
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: visCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'اللزوجة',
+                    border: OutlineInputBorder(),
+                  ),
+                  textAlign: TextAlign.start,
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: priceCtrl,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [IraqiCurrencyFormat.moneyInputFormatter()],
+                  decoration: const InputDecoration(
+                    labelText: 'سعر البيع / لتر (د.ع)',
+                    border: OutlineInputBorder(),
+                  ),
+                  textDirection: TextDirection.ltr,
+                  textAlign: TextAlign.start,
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('إلغاء'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('حفظ'),
+            ),
+          ],
+        );
+      },
+    );
+    final brand = brandCtrl.text.trim();
+    final vis = visCtrl.text.trim();
+    final priceDinars = IraqiCurrencyFormat.parseIqdInt(priceCtrl.text);
+    brandCtrl.dispose();
+    visCtrl.dispose();
+    priceCtrl.dispose();
+    if (saved != true) return;
+
+    final priceFils = IqdMoney.toFils(priceDinars.toDouble());
+    if (brand.isEmpty || vis.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('أدخل اسم الزيت واللزوجة')),
+      );
+      return;
+    }
+    if (priceFils <= 0) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('أدخل سعر البيع للتر')),
+      );
+      return;
+    }
+    try {
+      await OilChangeOilCatalogRepository.instance.updateById(
+        id: e.id,
+        brandName: brand,
+        viscosity: vis,
+        sellPerLiterFils: priceFils,
+      );
+      if (mounted) await _load();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تم تحديث الصنف')),
+      );
+    } on StateError catch (err) {
+      if (!mounted) return;
+      final msg = err.message == 'duplicate_brand_viscosity'
+          ? 'نفس الماركة ونفس اللزوجة موجودة مسبقاً'
+          : 'تعذّر الحفظ';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تعذّر الحفظ')),
+      );
+    }
+  }
+
+  Widget _entryActionsMenu(OilChangeOilCatalogEntry e) {
+    return PopupMenuButton<String>(
+      tooltip: 'خيارات',
+      icon: const Icon(Icons.more_vert_rounded),
+      onSelected: (value) {
+        if (value == 'edit') {
+          unawaited(_editEntry(e));
+        } else if (value == 'delete') {
+          unawaited(_confirmDelete(e));
+        }
+      },
+      itemBuilder: (ctx) => const [
+        PopupMenuItem(
+          value: 'edit',
+          child: ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.edit_outlined),
+            title: Text('تعديل'),
+            dense: true,
+          ),
+        ),
+        PopupMenuItem(
+          value: 'delete',
+          child: ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.delete_outline_rounded),
+            title: Text('حذف'),
+            dense: true,
+          ),
+        ),
+      ],
+    );
+  }
+
   List<OilChangeOilCatalogEntry> _entriesForLockedBrand() {
     final b = _brandCtrl.text.trim();
     if (b.isEmpty) return const [];
@@ -413,12 +590,17 @@ class _OilChangeOilCatalogSheetBodyState
                                     '${IraqiCurrencyFormat.formatIqd(IqdMoney.fromFils(e.sellPerLiterFils))} / لتر',
                                     textAlign: TextAlign.start,
                                   ),
-                                  trailing: widget.manageOnly
-                                      ? null
-                                      : Icon(
+                                  trailing: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      if (!widget.manageOnly)
+                                        Icon(
                                           Icons.check_circle_outline,
                                           color: _gold,
                                         ),
+                                      _entryActionsMenu(e),
+                                    ],
+                                  ),
                                 ),
                               ),
                           ],

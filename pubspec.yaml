@@ -1,7 +1,7 @@
 name: naboo
 description: Naboo — multi-vertical store management (pharmacy, retail, oil change, and more)
 publish_to: 'none'
-version: 1.0.0+1
+version: 2.2.8+231
 
 environment:
   sdk: ^3.11.4
@@ -72,26 +72,27 @@ dependencies:
   latlong2: ^0.9.1
   geolocator: ^14.0.2
   speech_to_text: ^7.4.0
+  flutter_native_splash: ^2.4.6
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
   flutter_launcher_icons: ^0.14.4
-  flutter_native_splash: ^2.4.6
 
 flutter_native_splash:
-  # لون فقط أثناء إقلاع المحرك — الشعار + مؤشر التحميل يظهران في SplashScreen (Flutter).
-  # Android 12+ يفرض شاشة نظام؛ نستخدم أيقونة شفافة كي لا تُرى شاشة شعار ثابتة منفصلة.
-  color: "#071A36"
+  # شاشة إقلاع أصلية = نفس مظهر التحميل (خلفية + شعار + مؤشر + نص).
+  # Android 12+ يقيّد الشكل، لذلك نستخدم صورة كاملة مدمجة كأيقونة الإقلاع.
+  background_image: assets/images/splash_native_full.png
   android: true
   ios: true
   web: false
   android_12:
     color: "#071A36"
-    image: assets/images/splash_transparent.png
+    image: assets/images/splash_a12_full.png
     icon_background_color: "#071A36"
-  ios_content_mode: scaleAspectFit
+  ios_content_mode: scaleAspectFill
+  fullscreen: true
 
 flutter:
   uses-material-design: true
@@ -101,7 +102,11 @@ flutter:
     - assets/images/splash_bg.png
     - assets/images/splash_logo_mark.png
     - assets/images/splash_transparent.png
+    - assets/images/splash_native_full.png
+    - assets/images/splash_logo_native.png
+    - assets/images/splash_a12_full.png
     - assets/sounds/stamp_sound.mp3
+    - assets/sounds/success_chime.wav
     - assets/data/market_pos_seed.db.gz
     - assets/pharmacy/drug_reference_import_template.csv
   fonts:

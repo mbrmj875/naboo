@@ -396,6 +396,18 @@ Future<void> applyUserProfilesIntoUsersTransaction(Transaction txn) async {
     }
 
     final userId = existing['id'] as int;
+    final oldGid = (existing['global_id'] ?? '').toString().trim();
+    if (userHasGlobalId &&
+        profileGlobalId.isNotEmpty &&
+        oldGid.isNotEmpty &&
+        oldGid != profileGlobalId) {
+      await UserStoreBrandingRepository.migrateBrandingGlobalId(
+        db: txn,
+        fromGlobalId: oldGid,
+        toGlobalId: profileGlobalId,
+        localUserId: userId,
+      );
+    }
     await txn.update(
       'users',
       rowToApply,

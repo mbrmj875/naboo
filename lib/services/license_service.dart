@@ -49,6 +49,7 @@ class SubscriptionPlan {
 
   String get priceLabel {
     if (isIntroTrialTier) return 'مجاناً — 15 يوماً';
+    if (key == 'lifetime') return 'مدى الحياة — حسب الاتفاق';
     final cycle = billingCycle ?? SubscriptionBillingCycle.monthly;
     return '${SubscriptionPricingCatalog.formatIqd(priceIQD)} د.ع / ${cycle.periodSuffixAr}';
   }
@@ -98,6 +99,20 @@ class SubscriptionPlan {
     ],
   );
 
+  /// ترخيص مدى الحياة — يُصدر من لوحة الإدارة (بلا تاريخ انتهاء في السحابة).
+  static const lifetime = SubscriptionPlan(
+    key: 'lifetime',
+    nameAr: 'مدى الحياة',
+    priceIQD: 0,
+    maxDevices: 2,
+    computerCount: 1,
+    features: [
+      'ترخيص مدى الحياة — بدون تجديد دوري',
+      'هاتف واحد + حاسوب واحد (أو حسب ما تحدده الإدارة)',
+      'جميع ميزات المخزون والفواتير والتقارير',
+    ],
+  );
+
   /// خطط قديمة — للتراخيص السابقة فقط.
   static const basic = SubscriptionPlan(
     key: 'basic',
@@ -143,12 +158,13 @@ class SubscriptionPlan {
     final name = billingCycle == SubscriptionBillingCycle.annual
         ? 'اشتراك سنوي'
         : 'اشتراك شهري';
-    final extraComputerNote = count > 1
-        ? ' (+${count - 1} ${count == 2 ? 'حاسوب' : 'حاسبات'} إضافية)'
-        : '';
+    // واضح: إجمالي الأجهزة = هاتف + عدد الحواسيب (ليس «إضافية» مربكة).
+    final devicesNote =
+        ' — ${SubscriptionPricingCatalog.devicesBreakdownAr(count)}'
+        ' (${devices} أجهزة)';
     return SubscriptionPlan(
       key: key,
-      nameAr: '$name$extraComputerNote',
+      nameAr: '$name$devicesNote',
       priceIQD: price,
       maxDevices: devices,
       billingCycle: billingCycle,
@@ -169,6 +185,7 @@ class SubscriptionPlan {
     'trial' => trial,
     'monthly' => monthly,
     'annual' => annual,
+    'lifetime' => lifetime,
     'basic' => basic,
     'pro' => pro,
     'unlimited' => unlimited,
@@ -176,20 +193,48 @@ class SubscriptionPlan {
   };
 
   /// يطابق JWT: يستنتج عدد الحاسبات من [maxDevices] ودورة الفوترة من [planKey].
+  /// [endsAt] اختياري: تاريخ بعيد جداً (مثلاً 2099) يُعامل كمدى الحياة حتى لو غاب المفتاح.
   static SubscriptionPlan fromLicenseClaims({
     required String? planKey,
     required int maxDevices,
+    DateTime? endsAt,
   }) {
-    if (planKey == 'trial') return trial;
+    final key = (planKey ?? '').toLowerCase().trim();
+    if (key == 'trial') return trial;
     if (maxDevices == 0) return unlimited;
-    if (SubscriptionPricingCatalog.isLegacyPlanKey(planKey)) {
-      return fromKey(planKey);
+
+    final lifetimeByDate =
+        endsAt != null && endsAt.toUtc().year >= 2090;
+    if (key == 'lifetime' || lifetimeByDate) {
+      final computers =
+          SubscriptionPricingCatalog.computersFromMaxDevices(maxDevices);
+      final breakdown =
+          SubscriptionPricingCatalog.devicesBreakdownAr(computers);
+      final total =
+          SubscriptionPricingCatalog.maxDevicesForComputers(computers);
+      return SubscriptionPlan(
+        key: 'lifetime',
+        nameAr: 'مدى الحياة — $breakdown ($total أجهزة)',
+        priceIQD: 0,
+        maxDevices: total,
+        computerCount: computers,
+        features: const [
+          'ترخيص مدى الحياة — بدون تجديد دوري',
+          'جميع ميزات NaBoo ERP',
+          'دعم فني',
+        ],
+      );
     }
-    final cycle = SubscriptionPricingCatalog.billingCycleFromPlanKey(planKey);
+    if (SubscriptionPricingCatalog.isLegacyPlanKey(key)) {
+      return fromKey(key);
+    }
+    final cycle = SubscriptionPricingCatalog.billingCycleFromPlanKey(key);
     final computers =
         SubscriptionPricingCatalog.computersFromMaxDevices(maxDevices);
     return quote(billingCycle: cycle, computers: computers);
   }
+
+  bool get isLifetime => key == 'lifetime';
 }
 
 // ── مفاتيح الكاش ─────────────────────────────────────────────────────────────
@@ -456,6 +501,9 @@ class LicenseService extends ChangeNotifier {
     }
     final prefs = await SharedPreferences.getInstance();
     final user = Supabase.instance.client.auth.currentUser;
+    if (user != null) {
+      await _maybePullAssignedLicenseJwtFromCloud();
+    }
     final tok = await _v2Activator.loadAndVerifyStoredToken();
     if (tok == null) {
       if (user != null) {
@@ -475,6 +523,9 @@ class LicenseService extends ChangeNotifier {
       _setState(LicenseState.checking);
     }
     final prefs = await SharedPreferences.getInstance();
+    // اسحب أحدث JWT من السحابة (إن وُجد) قبل التحقق المحلي — يحدّث حد الأجهزة
+    // بعد إعادة التوقيع من لوحة الإدارة بدون لصق يدوي.
+    await _maybePullAssignedLicenseJwtFromCloud();
     final tok = await _v2Activator.loadAndVerifyStoredToken();
     if (tok == null) {
       final user = Supabase.instance.client.auth.currentUser;
@@ -493,6 +544,54 @@ class LicenseService extends ChangeNotifier {
     // الإدارية لها أولوية على قرارات حد الأجهزة.
     await _maybeApplyTenantAccessOverlay(forceRemote: forceRemote);
     await _maybeApplyServerDeviceLimitOverlay(forceRemote: forceRemote);
+  }
+
+  /// يجلب JWT التفعيل للحساب عبر RPC `app_my_license_jwt` (ليس استعلام licenses مباشرة).
+  Future<void> _maybePullAssignedLicenseJwtFromCloud() async {
+    final user = Supabase.instance.client.auth.currentUser;
+    if (user == null) return;
+    try {
+      final res = await Supabase.instance.client.rpc('app_my_license_jwt');
+      Map<String, dynamic>? row;
+      if (res is List && res.isNotEmpty && res.first is Map) {
+        row = Map<String, dynamic>.from(res.first as Map);
+      } else if (res is Map) {
+        row = Map<String, dynamic>.from(res);
+      }
+      if (row == null) return;
+      final jwt = (row['jwt'] ?? '').toString().trim();
+      if (jwt.isEmpty || jwt.split('.').length != 3) return;
+
+      final incoming = _v2Activator.verifyToken(jwt);
+      if (incoming == null) return;
+      if (incoming.tenantId.trim() != user.id) {
+        AppLogger.warn(
+          'LicenseService',
+          'ignored cloud jwt: tenant_id mismatch',
+        );
+        return;
+      }
+
+      final current = await _v2Activator.loadAndVerifyStoredToken();
+      final shouldReplace = current == null ||
+          current.licenseId != incoming.licenseId ||
+          current.maxDevices != incoming.maxDevices ||
+          current.plan != incoming.plan ||
+          current.endsAt.toUtc() != incoming.endsAt.toUtc() ||
+          current.isTrial != incoming.isTrial;
+      if (!shouldReplace) return;
+
+      final r = await _v2Activator.activateLicense(jwt);
+      if (!r.ok) {
+        AppLogger.warn('LicenseService', 'cloud jwt activate failed: ${r.message}');
+      }
+    } on PostgrestException catch (e) {
+      // الدالة غير منشورة بعد في بعض البيئات — لا نكسر التدفق.
+      AppLogger.warn('LicenseService', 'app_my_license_jwt unavailable: $e');
+    } catch (e, st) {
+      AppLogger.warn('LicenseService', 'pull assigned jwt failed: $e');
+      AppLogger.error('LicenseService', 'pull assigned jwt stack', null, st);
+    }
   }
 
   // ── معرّف الجهاز ──────────────────────────────────────────────────────────
@@ -857,23 +956,26 @@ class LicenseService extends ChangeNotifier {
     }
     final trustedNow = (await _trustedTime.currentTrustedTime()).toLocal();
     final endsLocal = tok.endsAt.toLocal();
+    final resolvedPlan = tok.isTrial
+        ? SubscriptionPlan.trial
+        : SubscriptionPlan.fromLicenseClaims(
+            planKey: tok.plan,
+            maxDevices: tok.maxDevices,
+            endsAt: tok.endsAt,
+          );
     _setState(
       LicenseState(
         status: tok.isTrial ? LicenseStatus.trial : LicenseStatus.active,
         lockReason: null,
         message: null,
-        plan: tok.isTrial
-            ? SubscriptionPlan.trial
-            : SubscriptionPlan.fromLicenseClaims(
-                planKey: tok.plan,
-                maxDevices: tok.maxDevices,
-              ),
+        plan: resolvedPlan,
         maxDevices: tok.maxDevices,
         trialEndsAt: tok.isTrial ? endsLocal : null,
         daysLeft: tok.isTrial
             ? trialDaysLeftCalendar(endsLocal, trustedNow).clamp(0, 15)
             : null,
-        expiresAt: tok.isTrial ? null : endsLocal,
+        // مدى الحياة: لا نعرض تاريخ 2099 الرمزي للمستخدم
+        expiresAt: tok.isTrial || resolvedPlan.isLifetime ? null : endsLocal,
       ),
     );
   }

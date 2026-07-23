@@ -295,6 +295,8 @@ class OwnerCommandCenterProvider extends ChangeNotifier {
         return _snapshot.oilActiveCars;
       case OwnerSectionIds.oilChangesCount:
         return _snapshot.oilChangesCount;
+      case OwnerSectionIds.carWashCount:
+        return _snapshot.carWashCount;
       case OwnerSectionIds.oilStockShortages:
         return _snapshot.oilStockShortages;
       case OwnerSectionIds.oilAvgTicket:
@@ -431,6 +433,14 @@ class OwnerCommandCenterProvider extends ChangeNotifier {
           await _loadTrendForSection(
             sectionId,
             () => _loadOilOwnerSectionTrend(sectionId, tenantId: tenantId),
+          );
+        case OwnerSectionIds.carWashCount:
+          final washData = await _loadOilOwnerSection(
+            sectionId,
+            tenantId: tenantId,
+          ) as OilChangesKpi;
+          _snapshot = _snapshot.copyWith(
+            carWashCount: _dataResult(washData, fetchedAt, offline: offline),
           );
         case OwnerSectionIds.oilStockShortages:
           final data = await _loadOilOwnerSection(
@@ -609,6 +619,10 @@ class OwnerCommandCenterProvider extends ChangeNotifier {
         _snapshot = _snapshot.copyWith(
           oilChangesCount: const OwnerSectionResult.loading(),
         );
+      case OwnerSectionIds.carWashCount:
+        _snapshot = _snapshot.copyWith(
+          carWashCount: const OwnerSectionResult.loading(),
+        );
       case OwnerSectionIds.oilStockShortages:
         _snapshot = _snapshot.copyWith(
           oilStockShortages: const OwnerSectionResult.loading(),
@@ -695,6 +709,10 @@ class OwnerCommandCenterProvider extends ChangeNotifier {
       case OwnerSectionIds.oilChangesCount:
         _snapshot = _snapshot.copyWith(
           oilChangesCount: err(_snapshot.oilChangesCount?.data),
+        );
+      case OwnerSectionIds.carWashCount:
+        _snapshot = _snapshot.copyWith(
+          carWashCount: err(_snapshot.carWashCount?.data),
         );
       case OwnerSectionIds.oilStockShortages:
         _snapshot = _snapshot.copyWith(

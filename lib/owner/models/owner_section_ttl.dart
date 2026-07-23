@@ -38,6 +38,8 @@ class OwnerSectionTtl {
         return openShifts;
       case OwnerSectionIds.oilChangesCount:
         return sales;
+      case OwnerSectionIds.carWashCount:
+        return sales;
       case OwnerSectionIds.oilStockShortages:
         return inventoryShortages;
       case OwnerSectionIds.oilAvgTicket:
@@ -102,6 +104,7 @@ abstract class OwnerSectionIds {
   static const oilStockShortages = 'oilStockShortages';
   static const oilAvgTicket = 'oilAvgTicket';
   static const hybridRevenueSplit = 'hybridRevenueSplit';
+  static const carWashCount = 'carWashCount';
 
   // ── v3.1 supermarket ──
   static const retailTopSellers = 'retailTopSellers';

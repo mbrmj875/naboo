@@ -57,8 +57,11 @@ class OilChangeWhatsappGatewayRepository {
     return fetchForCurrentUser();
   }
 
-  Future<void> reportDisconnected() async {
-    if (!hasCloudSession) return;
-    await OilChangeWhatsappGatewayService.instance.reportDisconnected();
+  /// بلاغ انقطاع مع نتيجة حية (false_alarm / confirmed).
+  Future<WhatsappReportDisconnectedResult> reportDisconnected() async {
+    if (!hasCloudSession) {
+      return const WhatsappReportDisconnectedResult(ok: false);
+    }
+    return OilChangeWhatsappGatewayService.instance.reportDisconnected();
   }
 }

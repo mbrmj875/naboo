@@ -45,9 +45,11 @@ void main() {
   }
 
   group('OwnerDashboardV3Panel layout (Stitch)', () {
-    testWidgets('mobile — staff activity before operational KPI grid', (tester) async {
+    testWidgets('mobile — staff activity after KPI and before sensitive edits', (
+      tester,
+    ) async {
       addTearDown(tester.view.resetPhysicalSize);
-      tester.view.physicalSize = const Size(390, 1400);
+      tester.view.physicalSize = const Size(390, 1800);
       tester.view.devicePixelRatio = 1;
 
       final harness = OilChangeTestHarness.instance;
@@ -86,12 +88,13 @@ void main() {
               activeShiftStaffNames: const {},
             ),
           ),
-          viewport: const Size(390, 1400),
+          viewport: const Size(390, 1800),
         ),
       );
       await tester.pump();
 
       expect(find.text('نشاط الموظفين'), findsOneWidget);
+      expect(find.text('تعديلات حساسة'), findsOneWidget);
 
       final shortagesLabel = ownerDashboardL10n(
         OwnerDashboardL10nKeys.oilStockShortagesTitle,
@@ -100,7 +103,9 @@ void main() {
 
       final staffY = tester.getTopLeft(find.text('نشاط الموظفين')).dy;
       final kpiY = tester.getTopLeft(find.text(shortagesLabel)).dy;
-      expect(staffY, lessThan(kpiY));
+      final sensitiveY = tester.getTopLeft(find.text('تعديلات حساسة')).dy;
+      expect(kpiY, lessThan(staffY));
+      expect(staffY, lessThan(sensitiveY));
     });
 
     testWidgets('renders hero KPI for oil service profile', (tester) async {

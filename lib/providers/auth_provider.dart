@@ -459,6 +459,13 @@ class AuthProvider extends ChangeNotifier {
     return emails;
   }
 
+  /// يقرأ ربط الجهاز بالمالك من التخزين المحلي فقط — سريع ويجب أن يكتمل
+  /// قبل أي قرار تنقّل (لا يعتمد على الشبكة أو قاعدة البيانات).
+  Future<void> loadPersistedDeviceOwnerBinding() async {
+    final prefs = await SharedPreferences.getInstance();
+    _deviceOwnerBound = prefs.getBool(_prefDeviceOwnerBound) ?? false;
+  }
+
   /// استعادة الجلسة بعد إعادة تشغيل التطبيق.
   Future<void> restoreSession() async {
     final prefs = await SharedPreferences.getInstance();
@@ -796,8 +803,9 @@ class AuthProvider extends ChangeNotifier {
       }
       await LicenseService.instance.applyTrialFromSupabaseProfile();
       final maxDevices =
-          LicenseService.instance.state.plan?.maxDevices ??
-          SubscriptionPlan.monthly.maxDevices;
+          LicenseService.instance.state.effectiveMaxDevices > 0
+              ? LicenseService.instance.state.effectiveMaxDevices
+              : SubscriptionPlan.monthly.maxDevices;
       final limitError = await CloudSyncService.instance.enforcePlanDeviceLimit(
         maxDevices: maxDevices,
       );

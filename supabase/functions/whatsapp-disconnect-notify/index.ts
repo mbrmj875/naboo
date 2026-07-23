@@ -1,5 +1,6 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
 import { sendFcmDataMessage } from '../owner-alert-push-cron/fcm.ts';
+import { writeDiagnostic } from '../whatsapp-gateway/diagnostics.ts';
 
 type Body = {
   instance_name?: string;
@@ -49,16 +50,29 @@ Deno.serve(async (req) => {
   }
 
   const now = new Date().toISOString();
+  const resolvedInstance =
+    instanceName || `shop_${userId.replace(/-/g, '_')}`;
   await sb.from('tenant_whatsapp_gateways').upsert(
     {
       user_id: userId,
-      evolution_instance_name: instanceName || `shop_${userId.replace(/-/g, '_')}`,
+      evolution_instance_name: resolvedInstance,
       status: 'disconnected',
       last_disconnected_at: now,
       updated_at: now,
     },
     { onConflict: 'user_id' },
   );
+
+  await writeDiagnostic({
+    userId,
+    instanceName: resolvedInstance,
+    eventType: 'connection',
+    severity: 'error',
+    connectionState: 'disconnected',
+    outcome: 'disconnected',
+    reasonCode: body.reason?.trim() || 'disconnect_notify',
+    technicalDetail: 'whatsapp-disconnect-notify',
+  });
 
   const tenantId = body.local_tenant_id ?? 1;
   const { data: tokens } = await sb
@@ -80,6 +94,17 @@ Deno.serve(async (req) => {
     const ok = await sendFcmDataMessage(row.token, alert);
     if (ok) sent += 1;
   }
+
+  await writeDiagnostic({
+    userId,
+    instanceName: resolvedInstance,
+    eventType: 'alert_push',
+    severity: 'warn',
+    connectionState: 'disconnected',
+    outcome: sent > 0 ? 'notified' : 'no_tokens',
+    reasonCode: 'disconnect_notify',
+    meta: { push_sent: sent },
+  });
 
   return Response.json({ ok: true, push_sent: sent, user_id: userId });
 });

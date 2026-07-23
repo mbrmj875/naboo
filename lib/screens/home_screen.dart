@@ -1453,6 +1453,26 @@ class _HomeScreenState extends State<HomeScreen>
           );
         }
         break;
+      case 'car_wash_create':
+        final washCreate = _oilRouteBuilder(AppContentRoutes.carWashCreate);
+        if (washCreate != null) {
+          _pushInContentTagged(
+            AppContentRoutes.carWashCreate,
+            'غسل سيارة',
+            washCreate,
+          );
+        }
+        break;
+      case 'car_wash_log':
+        final washLog = _oilRouteBuilder(AppContentRoutes.carWashLog);
+        if (washLog != null) {
+          _pushInContentTagged(
+            AppContentRoutes.carWashLog,
+            'سجل الغسل',
+            washLog,
+          );
+        }
+        break;
       case 'oil_services_log':
         _openOilChangeHubSearch();
         break;
@@ -2786,7 +2806,22 @@ class _HomeScreenState extends State<HomeScreen>
       title: 'مسح QR / Barcode',
     );
     if (!mounted || code == null || code.trim().isEmpty) return;
-    await _applyScannedCode(code.trim());
+    final raw = code.trim();
+
+    // صفحة البحث تُدفع فوق المحتوى — إن بقيت بعد المسح تغطي
+    // شاشة البيع/إضافة المنتج. أغلقها أولاً ثم نفّذ مسار الباركود.
+    if (_isMobileSearchPageOpen) {
+      _searchFocusNode.unfocus();
+      Navigator.of(context).pop();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _clearGlobalSearch();
+        unawaited(_applyScannedCode(raw));
+      });
+      return;
+    }
+
+    await _applyScannedCode(raw);
   }
 
   // ── الشريط الجانبي الثابت ──────────────────────────────────────────────────

@@ -1,0 +1,28 @@
+# Evolution HTTPS (Traefik) — نشر دائم
+
+## الهدف
+- `https://evo-nrwn.srv1769126.hstgr.cloud` → Evolution API
+- `:8080` غير مكشوف للإنترنت
+- `/manager` محمي بـ Basic Auth
+- n8n يبقى `EVOLUTION_BASE_URL=http://naboo-evolution:8080`
+
+## قبل التشغيل
+في جدار حماية Hostinger افتح: `22`, `80`, `443`.
+
+## تشغيل
+```bash
+bash infra/hostinger/deploy-evolution-https.sh
+# أو من سطح المكتب بعد scp إلى /tmp
+```
+
+## بعد النجاح — Supabase
+```bash
+supabase secrets set EVOLUTION_BASE_URL=https://evo-nrwn.srv1769126.hstgr.cloud
+supabase secrets set EVOLUTION_API_KEY=Ev0_Naboo_72aB91cD3eF4gH5iJ
+supabase functions deploy whatsapp-gateway
+```
+
+## Manager
+- URL: `https://evo-nrwn.srv1769126.hstgr.cloud/manager`
+- User: `naboo_admin`
+- Pass: `NaBoo_EvoMgr_2026!Secure`

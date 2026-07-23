@@ -118,85 +118,97 @@ class _OilChangeHomeDashboardState extends State<OilChangeHomeDashboard> {
     final sl = ScreenLayout.of(context);
     final gold = OilChangeRoyalCard.gold;
     final primary = widget.spec.primaryCta;
-    final tiles = widget.spec.secondaryTiles;
+    final allTiles = widget.spec.secondaryTiles;
+    final primaryExtras =
+        allTiles.where((t) => t.isPrimary).toList(growable: false);
+    final tiles =
+        allTiles.where((t) => !t.isPrimary).toList(growable: false);
+
+    Widget buildPrimaryCta(HomeDashboardAction action, {required Color fill}) {
+      return Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => widget.onAction(action),
+          borderRadius: ac.md,
+          child: Container(
+            width: double.infinity,
+            padding: EdgeInsets.symmetric(
+              horizontal: sl.isHandsetForLayout ? 16 : 20,
+              vertical: sl.isHandsetForLayout ? 16 : 18,
+            ),
+            decoration: BoxDecoration(
+              borderRadius: ac.md,
+              gradient: LinearGradient(
+                begin: AlignmentDirectional.topStart,
+                end: AlignmentDirectional.bottomEnd,
+                colors: [
+                  fill.withValues(alpha: 0.92),
+                  fill.withValues(alpha: 0.72),
+                ],
+              ),
+              border: Border.all(
+                color: fill.withValues(alpha: 0.95),
+                width: 1.75,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: fill.withValues(alpha: 0.28),
+                  blurRadius: 14,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: Row(
+              children: [
+                Icon(action.icon, color: Colors.white, size: 32),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        action.title,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w900,
+                          fontSize: 18,
+                          color: Colors.white,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        action.subtitle,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 13,
+                          color: Colors.white.withValues(alpha: 0.9),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Icon(
+                  Icons.arrow_forward_rounded,
+                  color: Colors.white.withValues(alpha: 0.95),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         if (primary != null) ...[
-          Material(
-            color: Colors.transparent,
-            child: InkWell(
-              onTap: () => widget.onAction(primary),
-              borderRadius: ac.md,
-              child: Container(
-                width: double.infinity,
-                padding: EdgeInsets.symmetric(
-                  horizontal: sl.isHandsetForLayout ? 16 : 20,
-                  vertical: sl.isHandsetForLayout ? 16 : 18,
-                ),
-                decoration: BoxDecoration(
-                  borderRadius: ac.md,
-                  gradient: LinearGradient(
-                    begin: AlignmentDirectional.topStart,
-                    end: AlignmentDirectional.bottomEnd,
-                    colors: [
-                      gold.withValues(alpha: 0.92),
-                      gold.withValues(alpha: 0.72),
-                    ],
-                  ),
-                  border: Border.all(
-                    color: gold.withValues(alpha: 0.95),
-                    width: 1.75,
-                  ),
-                  boxShadow: const [
-                    BoxShadow(
-                      color: AppGlass.goldGlow,
-                      blurRadius: 14,
-                      offset: Offset(0, 4),
-                    ),
-                  ],
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      primary.icon,
-                      color: Colors.white,
-                      size: 32,
-                    ),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            primary.title,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w900,
-                              fontSize: 18,
-                              color: Colors.white,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            primary.subtitle,
-                            style: TextStyle(
-                              fontWeight: FontWeight.w600,
-                              fontSize: 13,
-                              color: Colors.white.withValues(alpha: 0.9),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Icon(
-                      Icons.arrow_forward_rounded,
-                      color: Colors.white.withValues(alpha: 0.95),
-                    ),
-                  ],
-                ),
-              ),
-            ),
+          buildPrimaryCta(primary, fill: gold),
+          const SizedBox(height: 12),
+        ],
+        for (final extra in primaryExtras) ...[
+          // بطاقة الغسل بنفس ذهب غيار الزيت (فاتح/داكن).
+          buildPrimaryCta(
+            extra,
+            fill: extra.id == 'wash_new' ? gold : extra.accentColor,
           ),
           const SizedBox(height: 12),
         ],
@@ -277,7 +289,6 @@ class _OilKpiTile extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     final ac = context.appCorners;
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final accent = action.accentColor;
     final alert = showAlert && action.id == 'oil_stock';
 
     final tileBg = alert

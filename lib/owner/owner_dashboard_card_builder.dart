@@ -34,6 +34,8 @@ abstract final class OwnerDashboardCardBuilder {
         return snapshot.oilActiveCars;
       case OwnerSectionIds.oilChangesCount:
         return snapshot.oilChangesCount;
+      case OwnerSectionIds.carWashCount:
+        return snapshot.carWashCount;
       case OwnerSectionIds.oilStockShortages:
         return snapshot.oilStockShortages;
       case OwnerSectionIds.oilAvgTicket:
@@ -71,6 +73,8 @@ abstract final class OwnerDashboardCardBuilder {
         return Icons.directions_car_filled_outlined;
       case OwnerCatalogIds.oilChangesPeriod:
         return Icons.oil_barrel_outlined;
+      case OwnerCatalogIds.carWashPeriod:
+        return Icons.local_car_wash_rounded;
       case OwnerCatalogIds.oilStockShortages:
         return Icons.inventory_2_outlined;
       case OwnerCatalogIds.oilAvgTicket:
@@ -451,6 +455,8 @@ abstract final class OwnerDashboardCardBuilder {
         return (data) => (data as OilActiveCarsKpi).activeCount <= 0;
       case OwnerCatalogIds.oilChangesPeriod:
         return (data) => (data as OilChangesKpi).changeCount <= 0;
+      case OwnerCatalogIds.carWashPeriod:
+        return (data) => (data as OilChangesKpi).changeCount <= 0;
       case OwnerCatalogIds.oilStockShortages:
         return (data) => (data as InventoryAlert).shortageCount <= 0;
       case OwnerCatalogIds.retailStockShortages:
@@ -497,6 +503,12 @@ abstract final class OwnerDashboardCardBuilder {
           IqdMoney.fromFils(kpi.revenueFils),
         );
         return '${kpi.changeCount} · $amount';
+      case OwnerCatalogIds.carWashPeriod:
+        final wash = data as OilChangesKpi;
+        final washAmount = IraqiCurrencyFormat.formatIqd(
+          IqdMoney.fromFils(wash.revenueFils),
+        );
+        return '${wash.changeCount} · $washAmount';
       case OwnerCatalogIds.oilStockShortages:
         return '${(data as InventoryAlert).shortageCount} صنف';
       case OwnerCatalogIds.oilAvgTicket:

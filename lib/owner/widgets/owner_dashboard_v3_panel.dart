@@ -17,6 +17,7 @@ import '../specs/owner_catalog_pinned_grid_spec.dart';
 import '../specs/owner_dashboard_profile.dart';
 import '../specs/owner_kpi_catalog.dart';
 import '../specs/owner_kpi_catalog_entry.dart';
+import '../utils/owner_activity_navigation.dart';
 import '../utils/owner_shortcut_navigation.dart';
 import '../models/owner_section_ttl.dart';
 import 'owner_catalog_pinned_grid.dart';
@@ -173,7 +174,8 @@ class OwnerDashboardV3Panel extends StatelessWidget {
           ? 360
           : (portraitTablet ? 420 : 560),
       compact: isHandset,
-      onEntryTap: (_) {},
+      onEntryTap: (entry) =>
+          OwnerActivityNavigation.openRecentActivity(context, entry),
     );
 
     final Widget kpiSection;
@@ -225,27 +227,17 @@ class OwnerDashboardV3Panel extends StatelessWidget {
 
     final sensitive = OwnerSensitiveActionsPanel(
       tenantId: TenantContextService.instance.activeTenantId,
-      maxHeight: isHandset ? 220 : 280,
+      maxHeight: isHandset ? 280 : 340,
+      compact: isHandset,
+      onEventTap: (event) =>
+          OwnerActivityNavigation.openAuditEvent(context, event),
     );
 
-    Widget mainColumn() {
+    Widget feedTail() {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          summary,
-          if (!isOilProfile && _buildHero(context) != null) ...[
-            const SizedBox(height: _sectionGap),
-            _buildHero(context)!,
-          ],
-          if (verticalKpiPanel != null) ...[
-            const SizedBox(height: _sectionGap),
-            verticalKpiPanel,
-          ],
-          const SizedBox(height: _sectionGap),
-          kpiSection,
-          if (overflowOnly != null) overflowOnly,
-          const SizedBox(height: _sectionGap),
-          analytics,
+          staff,
           const SizedBox(height: _sectionGap),
           sensitive,
         ],
@@ -258,42 +250,55 @@ class OwnerDashboardV3Panel extends StatelessWidget {
       return Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(child: mainColumn()),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                summary,
+                if (!isOilProfile && _buildHero(context) != null) ...[
+                  const SizedBox(height: _sectionGap),
+                  _buildHero(context)!,
+                ],
+                if (verticalKpiPanel != null) ...[
+                  const SizedBox(height: _sectionGap),
+                  verticalKpiPanel,
+                ],
+                const SizedBox(height: _sectionGap),
+                kpiSection,
+                if (overflowOnly != null) overflowOnly,
+                const SizedBox(height: _sectionGap),
+                analytics,
+                const SizedBox(height: _sectionGap),
+                sensitive,
+              ],
+            ),
+          ),
           SizedBox(width: gap),
           SizedBox(width: staffW, child: staff),
         ],
       );
     }
 
-    if (portraitTablet) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          mainColumn(),
-          const SizedBox(height: _sectionGap),
-          staff,
-        ],
-      );
-    }
-
-    // هاتف: ملخص → نشاط الموظفين → KPI bento → رسوم.
+    // هاتف / تابلت بالطول: ملخص → KPI → رسوم → نشاط الموظفين → تعديلات حساسة.
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         summary,
-        const SizedBox(height: _sectionGap),
-        staff,
-        const SizedBox(height: _sectionGap),
-        kpiSection,
-        if (overflowOnly != null) overflowOnly,
+        if (!isOilProfile && _buildHero(context) != null) ...[
+          const SizedBox(height: _sectionGap),
+          _buildHero(context)!,
+        ],
         if (verticalKpiPanel != null) ...[
           const SizedBox(height: _sectionGap),
           verticalKpiPanel,
         ],
         const SizedBox(height: _sectionGap),
+        kpiSection,
+        if (overflowOnly != null) overflowOnly,
+        const SizedBox(height: _sectionGap),
         analytics,
         const SizedBox(height: _sectionGap),
-        sensitive,
+        feedTail(),
       ],
     );
   }

@@ -22,6 +22,7 @@ import '../../../screens/customers/customer_form_screen.dart';
 import '../../../services/database_helper.dart';
 import '../../../services/tenant_context_service.dart';
 import '../../../services/product_repository.dart';
+import '../models/oil_change_wa_notify_status.dart';
 import '../services/oil_change_orders_repository.dart';
 import '../services/oil_change_settings.dart';
 import '../services/oil_change_services_repository.dart';
@@ -38,6 +39,7 @@ import '../widgets/oil_change_products_card.dart';
 import '../widgets/oil_change_royal_card.dart';
 import '../widgets/product_picker_dialog.dart';
 import '../widgets/oil_change_form_theme.dart';
+import '../widgets/oil_change_save_success_overlay.dart';
 import '../../../theme/sale_brand.dart';
 import '../widgets/oil_change_filter_catalog_sheet.dart';
 import '../widgets/oil_change_hydraulic_catalog_sheet.dart';
@@ -60,6 +62,7 @@ import '../../../utils/customer_phone_launch.dart';
 import '../../../utils/iqd_money.dart';
 import '../../../utils/iraqi_currency_format.dart';
 import '../utils/oil_service_whatsapp_message.dart';
+import '../utils/oil_change_service_pdf.dart';
 import '../../../utils/sale_receipt_pdf.dart';
 import '../../../utils/screen_layout.dart';
 import '../../../widgets/adaptive/adaptive_form_container.dart';
@@ -168,6 +171,8 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   int _basePriceFils = 0;
   bool _agreedTotalManual = false;
   bool _advanceManuallyEdited = false;
+  /// يمنع اعتبار التعديلات البرمجية على `_agreed` / `_advance` تعديلاً يدوياً.
+  bool _syncingCheckoutControllers = false;
 
   bool _oilCustomerProvided = false;
   /// إعداد المحل: ربط بطاقة الغيار بأصناف المخزون (زيت المحل).
@@ -199,6 +204,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   final _engineFilter = OilChangeFilterSlot();
   final _airFilter = OilChangeFilterSlot();
   final _gearFilter = OilChangeFilterSlot();
+  final _coolingFilter = OilChangeFilterSlot();
   List<OilPickLine> _hydraulicStockPickLines = const [];
   bool _hydraulicStockPickLinesLoading = false;
 
@@ -344,10 +350,35 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       OilChangeSettings.whatsappAutoAfterSaveEnabled(),
       OilChangeSettings.whatsappManualAfterSaveEnabled(),
     ]);
-    if (!mounted) return;
+    // حتى لو أُغلقت الشاشة، احتفظ بالإعدادات لمهمة ما بعد الحفظ.
     _cachedPrintSettings = results[0] as PrintSettingsData;
     _waAutoAfterSave = results[1] as bool;
     _waManualAfterSave = results[2] as bool;
+  }
+
+  /// رقم واتساب جاهز للإرسال: من الحقل أو البطاقة أو سجل العميل.
+  Future<String> _resolveWhatsappPhoneForPostSave({
+    required String preferredRaw,
+    Map<String, dynamic>? order,
+  }) async {
+    String normalize(String? raw) {
+      final western = OilChangeLookupNormalize.toWesternDigits(
+        (raw ?? '').trim(),
+      );
+      return CustomerValidation.normalizePhoneDigits(western) ?? '';
+    }
+
+    var phone = normalize(preferredRaw);
+    if (phone.isEmpty) {
+      phone = normalize((order?['customerPhone'] ?? '').toString());
+    }
+    if (phone.isEmpty && _customerId != null && _customerId! > 0) {
+      try {
+        final row = await _customersDb.getCustomerById(_customerId!);
+        phone = normalize((row?['phone'] ?? '').toString());
+      } catch (_) {}
+    }
+    return phone;
   }
 
   Future<void> _loadFluidStockSettings({bool awaitStockLoads = false}) async {
@@ -422,14 +453,22 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   }
 
   void _onAgreedManualEdit() {
+    if (_syncingCheckoutControllers) {
+      _onOilCheckoutFieldsChanged();
+      return;
+    }
     _agreedTotalManual = true;
     if (!_advanceManuallyEdited) {
-      _syncAdvanceFromTotal(_parseFils(_agreed));
+      _syncAdvanceFromTotal(_oilCheckoutTotalFils());
     }
     _onOilCheckoutFieldsChanged();
   }
 
   void _onAdvanceManualEdit() {
+    if (_syncingCheckoutControllers) {
+      _onOilCheckoutFieldsChanged();
+      return;
+    }
     _advanceManuallyEdited = true;
     _onOilCheckoutFieldsChanged();
   }
@@ -438,7 +477,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     final label = totalFils <= 0
         ? IraqiCurrencyFormat.formatDecimal2(0)
         : IraqiCurrencyFormat.formatDecimal2(IqdMoney.fromFils(totalFils));
-    _assignControllerText(_advance, label);
+    _assignCheckoutControllerText(_advance, label);
   }
 
   void _resetOilCheckoutAutoAdvance() {
@@ -454,6 +493,20 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   void _assignControllerText(TextEditingController controller, String value) {
     if (controller.text == value) return;
     controller.text = value;
+  }
+
+  /// تعيين نص حقول السعر/الدفع دون تفعيل أعلام «تعديل يدوي».
+  void _assignCheckoutControllerText(
+    TextEditingController controller,
+    String value,
+  ) {
+    if (controller.text == value) return;
+    _syncingCheckoutControllers = true;
+    try {
+      controller.text = value;
+    } finally {
+      _syncingCheckoutControllers = false;
+    }
   }
 
   static final _carModelDigitFormatters = [
@@ -1072,9 +1125,18 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
 
 
   void _recalculateOilTotal() {
-    if (_agreedTotalManual) return;
+    if (_agreedTotalManual) {
+      // الإجمالي الظاهر قد يكون من بنود البطاقة حتى لو بقي مبلغ الخدمات فارغاً.
+      if (!_advanceManuallyEdited) {
+        _syncAdvanceFromTotal(_oilCheckoutTotalFils());
+      }
+      return;
+    }
     final total = _cardGrandTotalFils();
-    _agreed.text = IraqiCurrencyFormat.formatDecimal2(IqdMoney.fromFils(total));
+    _assignCheckoutControllerText(
+      _agreed,
+      IraqiCurrencyFormat.formatDecimal2(IqdMoney.fromFils(total)),
+    );
     if (!_advanceManuallyEdited) {
       _syncAdvanceFromTotal(total);
     }
@@ -1107,6 +1169,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       OilChangeFilterKind.engine => _engineFilter,
       OilChangeFilterKind.air => _airFilter,
       OilChangeFilterKind.gear => _gearFilter,
+      OilChangeFilterKind.cooling => _coolingFilter,
     };
   }
 
@@ -1178,7 +1241,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       if (!slot.hasSelection) continue;
       final line = oilFilterLineLabel(
         kindLabel: kind.label,
-        name: slot.name!,
+        name: slot.name ?? '',
         priceFils: slot.priceFils,
       );
       if (line != null) parts.add(line);
@@ -1187,24 +1250,16 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   }
 
   void _loadFiltersFromRow(Map<String, dynamic> row) {
-    _engineFilter.loadFromRow(
-      row,
-      nameKey: OilChangeFilterKind.engine.nameColumnKey,
-      priceKey: OilChangeFilterKind.engine.priceColumnKey,
-    );
-    _airFilter.loadFromRow(
-      row,
-      nameKey: OilChangeFilterKind.air.nameColumnKey,
-      priceKey: OilChangeFilterKind.air.priceColumnKey,
-    );
-    _gearFilter.loadFromRow(
-      row,
-      nameKey: OilChangeFilterKind.gear.nameColumnKey,
-      priceKey: OilChangeFilterKind.gear.priceColumnKey,
-    );
-    if (!_engineFilter.hasSelection &&
-        !_airFilter.hasSelection &&
-        !_gearFilter.hasSelection) {
+    for (final kind in OilChangeFilterKind.all) {
+      _filterSlotFor(kind).loadFromRow(
+        row,
+        nameKey: kind.nameColumnKey,
+        priceKey: kind.priceColumnKey,
+      );
+    }
+    final anySelected =
+        OilChangeFilterKind.all.any((k) => _filterSlotFor(k).hasSelection);
+    if (!anySelected) {
       final legacy = (row['filterType'] ?? '').toString().trim();
       if (legacy.isNotEmpty) {
         _engineFilter.name = legacy;
@@ -1481,11 +1536,17 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
         IqdMoney.fromFils((r['estimatedPriceFils'] as num?)?.toInt() ?? 0),
       );
       final agreedF = (r['agreedPriceFils'] as num?)?.toInt();
-      _agreed.text = agreedF == null
-          ? ''
-          : IraqiCurrencyFormat.formatDecimal2(IqdMoney.fromFils(agreedF));
-      _advance.text = IraqiCurrencyFormat.formatDecimal2(
-        IqdMoney.fromFils((r['advancePaymentFils'] as num?)?.toInt() ?? 0),
+      _assignCheckoutControllerText(
+        _agreed,
+        agreedF == null
+            ? ''
+            : IraqiCurrencyFormat.formatDecimal2(IqdMoney.fromFils(agreedF)),
+      );
+      _assignCheckoutControllerText(
+        _advance,
+        IraqiCurrencyFormat.formatDecimal2(
+          IqdMoney.fromFils((r['advancePaymentFils'] as num?)?.toInt() ?? 0),
+        ),
       );
       _serviceId = (r['serviceId'] as num?)?.toInt();
       final req = parseOilRequestedServices(r['requestedServices']?.toString());
@@ -1495,8 +1556,10 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       if (_agreed.text.trim().isEmpty) {
         final agreedF = (r['agreedPriceFils'] as num?)?.toInt();
         if (agreedF != null) {
-          _agreed.text =
-              IraqiCurrencyFormat.formatDecimal2(IqdMoney.fromFils(agreedF));
+          _assignCheckoutControllerText(
+            _agreed,
+            IraqiCurrencyFormat.formatDecimal2(IqdMoney.fromFils(agreedF)),
+          );
         }
       }
       if (_selectedOilServiceIds.isEmpty) {
@@ -1850,7 +1913,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     setState(() {
       _customerId = null;
       _linkedCustomerName = null;
-      _customerPhone.clear();
+      // لا تمسح رقم الهاتف — المستخدم غالباً يكتبه في البطاقة مباشرة.
       _lastAutoSyncedCustomerKey = null;
     });
     unawaited(_refreshCustomerOpenDebt());
@@ -1965,6 +2028,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       }
       if (exact == null || !mounted) return false;
       final phone = exact.phone?.trim() ?? '';
+      _suspendCustomerIdClear = true;
       setState(() {
         _customerId = exact!.id;
         _linkedCustomerName = exact.name.trim();
@@ -1972,6 +2036,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
           _customerPhone.text = phone;
         }
       });
+      _suspendCustomerIdClear = false;
       return true;
     } catch (_) {
       return false;
@@ -2124,12 +2189,16 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
           IqdMoney.fromFils((row['estimatedPriceFils'] as num?)?.toInt() ?? 0),
         );
         final agreedF = (row['agreedPriceFils'] as num?)?.toInt();
-        _agreed.text = agreedF == null
-            ? ''
-            : IraqiCurrencyFormat.formatDecimal2(IqdMoney.fromFils(agreedF));
+        _assignCheckoutControllerText(
+          _agreed,
+          agreedF == null
+              ? ''
+              : IraqiCurrencyFormat.formatDecimal2(IqdMoney.fromFils(agreedF)),
+        );
         final advF = (row['advancePaymentFils'] as num?)?.toInt() ?? 0;
-        _advance.text = IraqiCurrencyFormat.formatDecimal2(
-          IqdMoney.fromFils(advF),
+        _assignCheckoutControllerText(
+          _advance,
+          IraqiCurrencyFormat.formatDecimal2(IqdMoney.fromFils(advF)),
         );
         _issue.text = (row['issueDescription'] ?? '').toString();
         _technicianName.text = (row['technicianName'] ?? '').toString();
@@ -2401,15 +2470,40 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     if (raw.contains('no such table') || raw.contains('no such column')) {
       return 'قاعدة البيانات تحتاج تهيئة/تحديث. أعد فتح التطبيق ثم حاول مرة أخرى.';
     }
+    if (e is StateError) {
+      final msg = e.message.trim();
+      if (msg.isNotEmpty) {
+        if (msg.contains('تعذّر صرف الزيت') || msg.contains('تعذر صرف الزيت')) {
+          return 'تعذّر صرف الزيت من المخزون. تحقق من الرصيد والمستودع.';
+        }
+        return msg;
+      }
+    }
     if (raw.contains('الرصيد غير كافٍ') || raw.contains('رصيد غير كاف')) {
       return raw.replaceFirst('StateError: ', '').trim();
     }
-    if (raw.contains('تعذّر صرف الزيت')) {
+    if (raw.contains('تعذّر صرف الزيت') || raw.contains('تعذر صرف الزيت')) {
       return 'تعذّر صرف الزيت من المخزون. تحقق من الرصيد والمستودع.';
     }
     if (raw.contains('CHECK constraint failed') &&
         raw.toLowerCase().contains('status')) {
       return 'تعذّر حفظ حالة «معلّقة». أغلق التطبيق وافتحه من جديد لتحديث قاعدة البيانات.';
+    }
+    if (raw.contains('FOREIGN KEY') ||
+        raw.contains('SQLITE_CONSTRAINT_FOREIGNKEY')) {
+      return 'تعذّر الحفظ: بيانات العميل أو الخدمة غير موجودة في الجهاز. '
+          'أعد اختيار العميل أو اكتب الاسم والهاتف ثم احفظ مجدداً.';
+    }
+    final cleaned = raw
+        .replaceFirst(RegExp(r'^(Exception|Error|StateError|ArgumentError):\s*'), '')
+        .split('\n')
+        .first
+        .trim();
+    if (cleaned.isNotEmpty &&
+        cleaned.length <= 140 &&
+        cleaned != 'Null' &&
+        !cleaned.startsWith('Instance of')) {
+      return 'تعذّر الحفظ: $cleaned';
     }
     return 'حدث خطأ غير متوقع أثناء الحفظ.';
   }
@@ -2455,6 +2549,110 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     await _applyCustomerSelection(rec);
   }
 
+  /// عند الحفظ: إن لم يكن العميل مربوطاً (أو الربط قديم/محذوف)، اربط أو أنشئ من الاسم/الهاتف.
+  Future<String?> _ensureCustomerLinkedForSave(String customerNameOut) async {
+    if (!widget.oilChangeMode) return null;
+
+    if (_customerId != null && _customerId! > 0) {
+      final existing = await _customersDb.getCustomerById(_customerId!);
+      if (existing != null) return null;
+      AppLogger.warn(
+        'oil_change_customer',
+        'stale customerId=$_customerId — re-resolve by name/phone',
+      );
+      if (mounted) {
+        _suspendCustomerIdClear = true;
+        setState(() {
+          _customerId = null;
+          _linkedCustomerName = null;
+        });
+        _suspendCustomerIdClear = false;
+      } else {
+        _customerId = null;
+        _linkedCustomerName = null;
+      }
+    }
+
+    final name = customerNameOut.trim();
+    if (name.isEmpty || name == '—') return null;
+
+    final nameErr = CustomerValidation.name(name);
+    if (nameErr != null) return nameErr;
+
+    final phoneRaw = OilChangeLookupNormalize.toWesternDigits(
+      _customerPhone.text.trim(),
+    );
+    if (phoneRaw.isNotEmpty) {
+      final phoneErr = CustomerValidation.iraqiMobilePhone(phoneRaw);
+      if (phoneErr != null) return phoneErr;
+    }
+    final phone = CustomerValidation.normalizePhoneDigits(phoneRaw);
+
+    Future<void> bind(int cid) async {
+      if (!mounted) {
+        _customerId = cid;
+        _linkedCustomerName = name;
+        if (phone != null && phone.isNotEmpty) {
+          _customerPhone.text = phone;
+        }
+        return;
+      }
+      _suspendCustomerIdClear = true;
+      setState(() {
+        _customerId = cid;
+        _linkedCustomerName = name;
+        if (phone != null && phone.isNotEmpty) {
+          _customerPhone.text = phone;
+        }
+      });
+      _suspendCustomerIdClear = false;
+      unawaited(_refreshCustomerOpenDebt());
+    }
+
+    try {
+      int? cid;
+      if (phone != null && phone.isNotEmpty) {
+        cid = await _customersDb.findCustomerIdOwningNormalizedPhoneAnywhere(
+          phone,
+        );
+      }
+      cid ??= await _customersDb.tryResolveCustomerIdByExactName(name);
+
+      if (cid == null) {
+        final tenantCtx = TenantContextService.instance;
+        if (!tenantCtx.loaded) await tenantCtx.load();
+        cid = await _customersDb.insertCustomer(
+          name: name,
+          phone: phone,
+          tenantId: tenantCtx.activeTenantId,
+        );
+        AppLogger.info(
+          'oil_change_customer',
+          'auto-created customer id=$cid name=$name',
+        );
+      }
+
+      if (cid <= 0) return 'تعذّر ربط العميل';
+      await bind(cid);
+      return null;
+    } on DuplicateCustomerPhoneException catch (e) {
+      if (phone != null && phone.isNotEmpty) {
+        final existing =
+            await _customersDb.findCustomerIdOwningNormalizedPhoneAnywhere(
+          phone,
+        );
+        if (existing != null && existing > 0) {
+          await bind(existing);
+          return null;
+        }
+      }
+      return e.toString().replaceFirst('Exception: ', '');
+    } catch (e, st) {
+      AppLogger.error('oil_change_customer', 'auto link/create failed', e, st);
+      return 'تعذّر حفظ العميل في قاعدة البيانات';
+    }
+  }
+
 
   Future<void> _openDurationWheel() async {
     throw UnimplementedError('shared: _openDurationWheel');
@@ -2473,7 +2671,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     final sp = (row?['sellPrice'] as num?)?.toDouble() ?? 0.0;
     setState(() {
       _estimated.text = IraqiCurrencyFormat.formatDecimal2(sp);
-      _agreed.clear();
+      _assignCheckoutControllerText(_agreed, '');
     });
   }
 
@@ -2485,6 +2683,9 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   Map<String, dynamic> _orderSnapshotFromForm() {
     final sizeAmt = _oilSizeAmount.text.trim();
     final sizeVal = sizeAmt.isEmpty ? null : '$sizeAmt $_selectedSizeUnit';
+    final cardTotal = _cardGrandTotalFils();
+    final estimatedFils =
+        cardTotal > 0 ? cardTotal : _parseFils(_estimated);
     return {
       if (_customerId != null && _customerId! > 0) 'customerId': _customerId,
       'customerNameSnapshot': _customerName.text.trim(),
@@ -2514,6 +2715,8 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       'airFilterPriceFils': _airFilter.priceFils,
       'gearFilterName': _gearFilter.name,
       'gearFilterPriceFils': _gearFilter.priceFils,
+      'coolingFilterName': _coolingFilter.name,
+      'coolingFilterPriceFils': _coolingFilter.priceFils,
       'requestedServices': widget.oilChangeMode
           ? _oilServiceNamesForSave()
           : _selectedServices.join(','),
@@ -2521,7 +2724,8 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       'issueDescription': _issue.text.trim(),
       'agreedPriceFils': _oilCheckoutTotalFils(),
       'advancePaymentFils': _oilCheckoutPaidFils(),
-      'estimatedPriceFils': _parseFils(_estimated),
+      // سعر البنود قبل أي تعديل يدوي على مبلغ الخدمات (للتخفيض في واتساب).
+      'estimatedPriceFils': estimatedFils,
       'createdAt': DateTime.now().toUtc().toIso8601String(),
     };
   }
@@ -2674,11 +2878,24 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
         _cachedPrintSettings ?? await PrintSettingsRepository.instance.load();
     _cachedPrintSettings = printData;
 
+    final waPhone = await _resolveWhatsappPhoneForPostSave(
+      preferredRaw: _customerPhone.text,
+      order: order,
+    );
+    if (waPhone.isNotEmpty) {
+      order['customerPhone'] = waPhone;
+      if (_customerPhone.text.trim() != waPhone) {
+        _suspendCustomerIdClear = true;
+        _customerPhone.text = waPhone;
+        _suspendCustomerIdClear = false;
+      }
+    }
+
     return _OilPostSaveJob(
       order: order,
       orderId: orderId,
       invoiceId: invoiceId,
-      customerPhone: _customerPhone.text.trim(),
+      customerPhone: waPhone,
       printSettings: printData,
       waAuto: _waAutoAfterSave ?? false,
       waManual: _waManualAfterSave ?? false,
@@ -2730,8 +2947,39 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   }
 
   Future<void> _runOilPostSaveWhatsapp(_OilPostSaveJob job) async {
-    final phone = job.customerPhone;
-    if (job.isEdit || phone.isEmpty) return;
+    final phone = job.customerPhone.trim().isNotEmpty
+        ? job.customerPhone.trim()
+        : CustomerValidation.normalizePhoneDigits(
+              OilChangeLookupNormalize.toWesternDigits(
+                (job.order['customerPhone'] ?? '').toString(),
+              ),
+            ) ??
+            '';
+    if (job.isEdit || phone.isEmpty) {
+      if (!job.isEdit &&
+          (job.waAuto || job.waManual) &&
+          phone.isEmpty) {
+        AppLogger.warn(
+          'oil_change_wa',
+          'skip whatsapp after save — empty customer phone',
+        );
+        final oid = job.orderId;
+        if (oid != null && oid > 0) {
+          try {
+            await OilChangeOrdersRepository.instance.setWaNotifyStatus(
+              orderId: oid,
+              status: OilChangeWaNotifyStatus.notApplicable,
+              lastError: 'empty_phone',
+            );
+          } catch (_) {}
+        }
+        _showRootSnackBar(
+          'لم يُرسل واتساب: أدخل رقم هاتف الزبون في البطاقة',
+          duration: const Duration(seconds: 6),
+        );
+      }
+      return;
+    }
     if (!job.waAuto && !job.waManual) return;
 
     if (job.waAuto) {
@@ -2740,17 +2988,19 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
             .notifyAfterOilChangeSave(
           customerPhone: phone,
           order: job.order,
-          storeTitle: job.printSettings.storeTitleLine,
-          storeFooter: job.printSettings.footerExtra,
+          printSettings: job.printSettings,
           orderId: job.orderId,
           invoiceId: job.invoiceId,
         );
-        final err = OilChangeWhatsappUserMessages.errorSnackbarForOutcome(
-          outcome,
+        // أظهر دائماً نتيجة الإرسال (نجاح أو فشل) حتى لا يُظن أن النظام «صامت».
+        final base = OilChangeWhatsappUserMessages.snackbarForOutcome(outcome);
+        final msg = outcome.isSent
+            ? base
+            : '$base — أعد الإرسال من قائمة واتساب عند توفر الإنترنت';
+        _showRootSnackBar(
+          msg,
+          duration: Duration(seconds: outcome.isSent ? 4 : 8),
         );
-        if (err != null) {
-          _showRootSnackBar(err, duration: const Duration(seconds: 8));
-        }
       } catch (e) {
         _showRootSnackBar('تعذّر إرسال واتساب: $e');
       }
@@ -2759,19 +3009,28 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
 
     if (!job.waManual) return;
 
-    final msg = buildOilServiceWhatsAppMessage(
-      order: job.order,
-      storeTitle: job.printSettings.storeTitleLine,
-      storeFooter: job.printSettings.footerExtra,
-      priorOpenDebtFils: job.priorOpenDebtFils,
-    );
     final ctx = appRootNavigatorKey.currentContext;
     if (ctx == null || !ctx.mounted) return;
-    await launchWhatsAppWithMessage(
-      ctx,
-      phone: phone,
-      message: msg,
-    );
+    try {
+      await OilChangeServicePdf.share(
+        order: job.order,
+        printSettings: job.printSettings,
+      );
+    } catch (e) {
+      _showRootSnackBar('تعذّر إنشاء ملف PDF: $e');
+      final msg = buildOilServiceWhatsAppMessage(
+        order: job.order,
+        storeTitle: job.printSettings.whatsappStoreTitle,
+        storeFooter: job.printSettings.whatsappStoreFooter,
+        priorOpenDebtFils: job.priorOpenDebtFils,
+      );
+      if (!ctx.mounted) return;
+      await launchWhatsAppWithMessage(
+        ctx,
+        phone: phone,
+        message: msg,
+      );
+    }
   }
 
   Future<bool> _validateHydraulicStockBeforeSave({
@@ -2983,17 +3242,28 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     final hydSizeVal = _hydraulicSizeValueForSaveFor(_gearHydraulic);
     final powerHydSizeVal = _hydraulicSizeValueForSaveFor(_powerHydraulic);
 
-    final estF = _parseFils(_estimated);
+    final cardTotal = _cardGrandTotalFils();
+    // تقديري = مجموع البنود؛ عند التخفيض اليدوي يبقى أعلى من السعر المتفق عليه.
+    final estF = cardTotal > 0 ? cardTotal : _parseFils(_estimated);
     final agreedRaw = _agreed.text.trim().replaceAll(',', '');
     final agreedD = agreedRaw.isEmpty ? null : double.tryParse(agreedRaw);
     var agreedF = agreedD == null ? null : IqdMoney.toFils(agreedD);
-        {
-      final cardTotal = _cardGrandTotalFils();
+    {
       if (agreedF == null || agreedF <= 0) {
         agreedF = cardTotal > 0 ? cardTotal : null;
       }
     }
     final advF = _parseFils(_advance);
+
+    final customerLinkErr = await _ensureCustomerLinkedForSave(customerNameOut);
+    if (customerLinkErr != null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(customerLinkErr)),
+        );
+      }
+      return;
+    }
 
     if (openInvoice) {
       final totalF = agreedF ?? _cardGrandTotalFils();
@@ -3003,7 +3273,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
               content: Text(
-                'لتسجيل المتبقي كدين: اختر عميلاً مسجّلاً من القائمة قبل «حفظ وبيع».',
+                'لتسجيل المتبقي كدين: أدخل اسم العميل ورقم هاتفه أو اختره من القائمة قبل «حفظ وبيع».',
               ),
               duration: Duration(seconds: 6),
             ),
@@ -3073,10 +3343,10 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     if (!suspending &&
         _stockFromWarehouseEnabled &&
         !oilCustomer &&
-        !_usesCatalogOilPricing &&
         oilLiters > 0 &&
         oilWh != null &&
-        oilPid != null) {
+        oilPid != null &&
+        oilPid > 0) {
       var creditLiters = 0.0;
       if (widget.isEdit &&
           _editInvoiceId <= 0 &&
@@ -3143,6 +3413,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     setState(() {
       _saving = true;
       _error = null;
+      _errorText = null;
     });
     try {
       await postSaveWarmup;
@@ -3175,19 +3446,28 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
           oilSize: sizeVal,
           filterType: _filterTypeSummaryForSave(),
           engineFilterName:
-              _engineFilter.hasSelection ? _engineFilter.name : null,
+              _engineFilter.hasSelection ? (_engineFilter.name ?? '') : null,
           engineFilterPriceFils:
               _engineFilter.hasSelection ? _engineFilter.priceFils : null,
-          airFilterName: _airFilter.hasSelection ? _airFilter.name : null,
+          airFilterName: _airFilter.hasSelection ? (_airFilter.name ?? '') : null,
           airFilterPriceFils:
               _airFilter.hasSelection ? _airFilter.priceFils : null,
-          gearFilterName: _gearFilter.hasSelection ? _gearFilter.name : null,
+          gearFilterName: _gearFilter.hasSelection ? (_gearFilter.name ?? '') : null,
           gearFilterPriceFils:
               _gearFilter.hasSelection ? _gearFilter.priceFils : null,
+          coolingFilterName:
+              _coolingFilter.hasSelection ? (_coolingFilter.name ?? '') : null,
+          coolingFilterPriceFils:
+              _coolingFilter.hasSelection ? _coolingFilter.priceFils : null,
           requestedServices: widget.oilChangeMode
               ? _oilServiceNamesForSave()
               : _selectedServices.join(','),
-          customerPhone: _customerPhone.text.trim(),
+          customerPhone: CustomerValidation.normalizePhoneDigits(
+                OilChangeLookupNormalize.toWesternDigits(
+                  _customerPhone.text.trim(),
+                ),
+              ) ??
+              _customerPhone.text.trim(),
           technicianName: _technicianName.text.trim(),
           patchOilStockFields: true,
           oilProductId: oilPid,
@@ -3337,17 +3617,26 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
           oilSize: sizeVal,
           filterType: _filterTypeSummaryForSave(),
           engineFilterName:
-              _engineFilter.hasSelection ? _engineFilter.name : null,
+              _engineFilter.hasSelection ? (_engineFilter.name ?? '') : null,
           engineFilterPriceFils:
               _engineFilter.hasSelection ? _engineFilter.priceFils : null,
-          airFilterName: _airFilter.hasSelection ? _airFilter.name : null,
+          airFilterName: _airFilter.hasSelection ? (_airFilter.name ?? '') : null,
           airFilterPriceFils:
               _airFilter.hasSelection ? _airFilter.priceFils : null,
-          gearFilterName: _gearFilter.hasSelection ? _gearFilter.name : null,
+          gearFilterName: _gearFilter.hasSelection ? (_gearFilter.name ?? '') : null,
           gearFilterPriceFils:
               _gearFilter.hasSelection ? _gearFilter.priceFils : null,
+          coolingFilterName:
+              _coolingFilter.hasSelection ? (_coolingFilter.name ?? '') : null,
+          coolingFilterPriceFils:
+              _coolingFilter.hasSelection ? _coolingFilter.priceFils : null,
           requestedServices: _oilServiceNamesForSave(),
-          customerPhone: _customerPhone.text.trim(),
+          customerPhone: CustomerValidation.normalizePhoneDigits(
+                OilChangeLookupNormalize.toWesternDigits(
+                  _customerPhone.text.trim(),
+                ),
+              ) ??
+              _customerPhone.text.trim(),
           technicianName: _technicianName.text.trim(),
           oilProductId: oilPid,
           oilLitersUsed: oilLiters > 0 ? oilLiters : null,
@@ -3423,11 +3712,23 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       }
 
       setState(() => _saving = false);
-      Navigator.pop(context, true);
+
+      final celebrateSale = openInvoice &&
+          postSaveJob != null &&
+          postSaveJob.checkoutError == null &&
+          (postSaveJob.invoiceId ?? 0) > 0;
+      if (celebrateSale && mounted) {
+        await showOilChangeSaveSuccessOverlay(context);
+      }
+      if (!mounted) return;
+
+      // ابدأ واتساب/الطباعة قبل إغلاق الشاشة حتى لا يُفقد الرقم مع dispose.
       if (postSaveJob != null) {
         _scheduleOilPostSaveJob(postSaveJob);
       }
-    } catch (e) {
+      Navigator.pop(context, true);
+    } catch (e, st) {
+      AppLogger.error('oil_change_save', 'submitOilChangeOrder failed', e, st);
       if (!mounted) return;
       setState(() {
         _error = e;
@@ -3461,7 +3762,8 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     }
     if (_engineFilter.hasSelection ||
         _airFilter.hasSelection ||
-        _gearFilter.hasSelection) {
+        _gearFilter.hasSelection ||
+        _coolingFilter.hasSelection) {
       _expandedOptional.add(_OilFormOptionalSection.filters);
     }
     if (_hydraulicSlotHasData(_gearHydraulic)) {
@@ -4325,10 +4627,11 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
                     (e) => DropdownMenuItem(
                       value: e.id,
                       child: Text(
-                        e.priceFils > 0
-                            ? '${e.name} — ${_formatFilsLabel(e.priceFils)}'
-                            : e.name,
+                        oilFilterCatalogEntryLabel(e),
                         textAlign: TextAlign.start,
+                        textDirection: e.name.trim().isEmpty
+                            ? TextDirection.ltr
+                            : null,
                       ),
                     ),
                   ),
@@ -4784,6 +5087,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
             if (_engineFilter.hasSelection) _engineFilter.name,
             if (_airFilter.hasSelection) _airFilter.name,
             if (_gearFilter.hasSelection) _gearFilter.name,
+            if (_coolingFilter.hasSelection) _coolingFilter.name,
           ].whereType<String>().length;
           if (n == 0) return null;
           return '$n فلتر محدد';
@@ -5830,17 +6134,51 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
                             keyboardType: TextInputType.phone,
                             textDirection: TextDirection.ltr,
                             textAlign: TextAlign.start,
+                            inputFormatters: [
+                              FilteringTextInputFormatter.allow(
+                                RegExp(r'[0-9٠-٩۰-۹+\s-]'),
+                              ),
+                            ],
+                            onChanged: (v) {
+                              final western =
+                                  OilChangeLookupNormalize.toWesternDigits(v);
+                              if (western == v) return;
+                              final cursor = _customerPhone.selection.baseOffset;
+                              _customerPhone.value = TextEditingValue(
+                                text: western,
+                                selection: TextSelection.collapsed(
+                                  offset: cursor.clamp(0, western.length),
+                                ),
+                              );
+                            },
                           ),
                         ),
                         const SizedBox(width: 4),
                         IconButton.filledTonal(
-                          tooltip: 'عميل جديد',
+                          tooltip: 'عميل جديد من النموذج الكامل',
                           onPressed: busy ? null : _openNewCustomer,
                           icon: const Icon(Icons.person_add_alt_rounded),
                         ),
                       ],
-                    )
-                  else ...[
+                    ),
+                  if (widget.oilChangeMode)
+                    Padding(
+                      padding: const EdgeInsetsDirectional.only(top: 8),
+                      child: Text(
+                        'اكتب الاسم ورقم الواتساب — يُحفظ العميل تلقائياً إن لم يكن مسجّلاً، '
+                        'أو ابحث واختر من القائمة، أو استخدم زر الإضافة للتفاصيل الكاملة.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          height: 1.35,
+                          color: Theme.of(context)
+                              .colorScheme
+                              .onSurface
+                              .withValues(alpha: 0.65),
+                        ),
+                        textAlign: TextAlign.start,
+                      ),
+                    ),
+                  if (!widget.oilChangeMode) ...[
                     _responsivePair(
                       context,
                       first: OilChangeCustomerNameField(

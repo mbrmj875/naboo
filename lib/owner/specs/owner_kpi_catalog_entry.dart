@@ -7,6 +7,7 @@ import 'owner_dashboard_profile.dart';
 abstract class OwnerCatalogIds {
   static const oilActiveCars = 'oil_active_cars';
   static const oilChangesPeriod = 'oil_changes_period';
+  static const carWashPeriod = 'car_wash_period';
   static const oilStockShortages = 'oil_stock_shortages';
   static const oilAvgTicket = 'oil_avg_ticket';
   static const hybridRevenueSplit = 'hybrid_revenue_split';
@@ -55,6 +56,7 @@ enum OwnerFeatureRequirement {
   installments,
   pos,
   oilChange,
+  carWash,
   loyalty,
   weightSales,
   clothingVariants,

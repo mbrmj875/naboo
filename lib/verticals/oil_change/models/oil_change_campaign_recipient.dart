@@ -1,4 +1,5 @@
 import '../utils/oil_change_log_format.dart';
+import 'oil_change_wa_notify_status.dart';
 
 /// عميل واحد في حملة واتساب — آخر زيارة غيار زيت (بدون تكرار بالهاتف).
 class OilChangeCampaignRecipient {
@@ -11,6 +12,7 @@ class OilChangeCampaignRecipient {
     required this.engineSize,
     required this.lastVisitIso,
     required this.orderRow,
+    this.waNotifyStatus = OilChangeWaNotifyStatus.unknown,
   });
 
   final int orderId;
@@ -21,6 +23,23 @@ class OilChangeCampaignRecipient {
   final String engineSize;
   final String? lastVisitIso;
   final Map<String, dynamic> orderRow;
+  final OilChangeWaNotifyStatus waNotifyStatus;
+
+  OilChangeCampaignRecipient copyWith({
+    OilChangeWaNotifyStatus? waNotifyStatus,
+  }) {
+    return OilChangeCampaignRecipient(
+      orderId: orderId,
+      customerName: customerName,
+      phone: phone,
+      deviceName: deviceName,
+      carModel: carModel,
+      engineSize: engineSize,
+      lastVisitIso: lastVisitIso,
+      orderRow: orderRow,
+      waNotifyStatus: waNotifyStatus ?? this.waNotifyStatus,
+    );
+  }
 
   String get displayCar {
     final parts = <String>[
@@ -49,6 +68,7 @@ class OilChangeCampaignRecipient {
       engineSize: (r['engineSize'] ?? '').toString().trim(),
       lastVisitIso: (r['createdAt'] ?? r['updatedAt'])?.toString(),
       orderRow: r,
+      waNotifyStatus: OilChangeWaNotifyStatusDb.fromDb(r['waNotifyStatus']),
     );
   }
 

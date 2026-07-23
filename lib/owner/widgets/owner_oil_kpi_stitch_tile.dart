@@ -14,10 +14,11 @@ abstract final class OwnerOilKpiStitchMetrics {
   OwnerOilKpiStitchMetrics._();
 
   static const double gap = 12;
-  static const double padding = 14;
+  static const double padding = 12;
   static const double heroHeight = 120;
-  static const double compactHeight = 96;
-  static const double inventoryHeight = 96;
+  /// هامش إضافي يمنع تجاوز 1px مع خط Tajawal + عنوان بسطرين.
+  static const double compactHeight = 102;
+  static const double inventoryHeight = 102;
   static const Color navy = Color(0xFF1B2B4B);
   static const Color alertAmber = Color(0xFFFFBF00);
 }
@@ -206,7 +207,6 @@ class _CompactTile extends StatelessWidget {
           padding: const EdgeInsets.all(OwnerOilKpiStitchMetrics.padding),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Padding(
                 padding: const EdgeInsetsDirectional.only(end: 36),
@@ -220,10 +220,11 @@ class _CompactTile extends StatelessWidget {
                     color: alert
                         ? OwnerOilKpiStitchMetrics.navy
                         : cs.onSurfaceVariant,
-                    height: 1.2,
+                    height: 1.15,
                   ),
                 ),
               ),
+              const Spacer(flex: 1),
               _StitchBody(
                 section: section,
                 sectionId: sectionId,
@@ -234,16 +235,17 @@ class _CompactTile extends StatelessWidget {
                   fontSize: 20,
                   fontWeight: FontWeight.w800,
                   color: alert ? cs.error : OwnerOilKpiStitchMetrics.navy,
-                  height: 1.1,
+                  height: 1.05,
                 ),
                 subtitleStyle: TextStyle(
                   fontSize: 11,
                   fontWeight: FontWeight.w500,
+                  height: 1.1,
                   color: alert
                       ? OwnerOilKpiStitchMetrics.navy.withValues(alpha: 0.75)
                       : cs.onSurfaceVariant,
                 ),
-                skeletonHeight: 28,
+                skeletonHeight: 26,
               ),
             ],
           ),

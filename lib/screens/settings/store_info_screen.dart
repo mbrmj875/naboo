@@ -1,15 +1,20 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
+import '../../models/print_settings_data.dart';
 import '../../providers/print_settings_provider.dart';
+import '../../services/cloud_sync_service.dart';
 import '../../services/print_settings_repository.dart';
 import '../../utils/screen_layout.dart';
+import '../../utils/store_logo_codec.dart';
 import '../../verticals/oil_change/widgets/oil_change_form_theme.dart';
 
-/// بيانات المتجر — تُحفظ في [print_settings] وتظهر على إيصال البيع.
+/// بيانات المتجر — تُحفظ محلياً وتُزامن للحساب، وتُستخدم في الإيصال وواتساب.
 class StoreInfoScreen extends StatefulWidget {
   const StoreInfoScreen({super.key});
 
@@ -21,48 +26,105 @@ class _StoreInfoScreenState extends State<StoreInfoScreen> {
   final _name = TextEditingController();
   final _address = TextEditingController();
   final List<TextEditingController> _phones = [TextEditingController()];
+  final _picker = ImagePicker();
 
   bool _loading = true;
   bool _saving = false;
+  bool _pickingLogo = false;
+  /// تعديلات محلية لم تُحفظ بعد — لا نسمح للمزامنة بمسح النموذج.
+  bool _dirty = false;
   String? _error;
+
+  /// شعار مؤقت قبل الحفظ (أو من الإعدادات المحمّلة).
+  Uint8List? _logoBytes;
+  String? _logoMime;
+  bool _logoCleared = false;
 
   @override
   void initState() {
     super.initState();
-    unawaited(_load());
+    _name.addListener(_markDirty);
+    _address.addListener(_markDirty);
+    for (final c in _phones) {
+      c.addListener(_markDirty);
+    }
+    CloudSyncService.instance.remoteImportGeneration.addListener(_onCloudImport);
+    unawaited(_load(initial: true));
   }
 
   @override
   void dispose() {
+    CloudSyncService.instance.remoteImportGeneration.removeListener(
+      _onCloudImport,
+    );
+    _name.removeListener(_markDirty);
+    _address.removeListener(_markDirty);
     _name.dispose();
     _address.dispose();
     for (final c in _phones) {
+      c.removeListener(_markDirty);
       c.dispose();
     }
     super.dispose();
   }
 
-  Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+  void _markDirty() {
+    if (_loading || _dirty) return;
+    _dirty = true;
+  }
+
+  void _onCloudImport() {
+    // أثناء الكتابة أو اختيار الشعار: إعادة التحميل كانت تمسح الحقول.
+    if (!mounted || _saving || _pickingLogo || _dirty) return;
+    unawaited(_load(initial: false));
+  }
+
+  TextEditingController _phoneController([String text = '']) {
+    final c = TextEditingController(text: text);
+    c.addListener(_markDirty);
+    return c;
+  }
+
+  Future<void> _load({required bool initial}) async {
+    if (initial) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
     try {
-      final p = await PrintSettingsRepository.instance.load();
+      final p = await PrintSettingsRepository.instance
+          .loadStoreIdentityForActiveUser();
       if (!mounted) return;
+      // استيراد سحابي وصل بعد أن بدأ المستخدم بالتعديل — لا نمسّ النموذج.
+      if (!initial && (_dirty || _pickingLogo || _saving)) return;
+
+      _name.removeListener(_markDirty);
+      _address.removeListener(_markDirty);
       _name.text = p.storeTitleLine.trim();
       _address.text = p.storeAddress.trim();
+      _name.addListener(_markDirty);
+      _address.addListener(_markDirty);
+
       for (final c in _phones) {
+        c.removeListener(_markDirty);
         c.dispose();
       }
       _phones
         ..clear()
         ..addAll(
           p.storePhones.isEmpty
-              ? [TextEditingController()]
-              : p.storePhones.map((p) => TextEditingController(text: p)),
+              ? [_phoneController()]
+              : p.storePhones.map((phone) => _phoneController(phone)),
         );
-      setState(() => _loading = false);
+      setState(() {
+        _logoBytes = p.storeLogoBytes;
+        _logoMime = p.storeLogoMime;
+        _logoCleared = false;
+        _dirty = false;
+        _loading = false;
+        _error = null;
+      });
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -73,21 +135,76 @@ class _StoreInfoScreenState extends State<StoreInfoScreen> {
   }
 
   void _addPhoneField() {
-    setState(() => _phones.add(TextEditingController()));
+    setState(() {
+      _phones.add(_phoneController());
+      _dirty = true;
+    });
   }
 
   void _removePhoneField(int index) {
     if (_phones.length <= 1) {
       _phones.first.clear();
+      _dirty = true;
       return;
     }
     setState(() {
-      _phones.removeAt(index).dispose();
+      final c = _phones.removeAt(index);
+      c.removeListener(_markDirty);
+      c.dispose();
+      _dirty = true;
     });
   }
 
   List<String> _collectPhones() =>
       _phones.map((c) => c.text.trim()).where((p) => p.isNotEmpty).toList();
+
+  Future<void> _pickLogo() async {
+    if (_saving || _pickingLogo) return;
+    setState(() => _pickingLogo = true);
+    try {
+      final x = await _picker.pickImage(
+        source: ImageSource.gallery,
+        // لا نفرض جودة ضعيفة — الضغط يتم عبر StoreLogoCodec مع الحفاظ على الشفافية.
+        requestFullMetadata: false,
+      );
+      if (x == null) return;
+      final raw = await x.readAsBytes();
+      final prepared = StoreLogoCodec.prepare(raw);
+      if (!mounted) return;
+      if (prepared == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'تعذّر استخدام الصورة. اختر PNG أو JPG بحجم مناسب كشعار',
+            ),
+          ),
+        );
+        return;
+      }
+      setState(() {
+        _logoBytes = prepared.bytes;
+        _logoMime = prepared.mime;
+        _logoCleared = false;
+        _dirty = true;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تعذّر اختيار الشعار')),
+      );
+    } finally {
+      if (mounted) setState(() => _pickingLogo = false);
+    }
+  }
+
+  void _clearLogo() {
+    setState(() {
+      _logoBytes = null;
+      _logoMime = null;
+      _logoCleared = true;
+      _dirty = true;
+    });
+  }
 
   Future<void> _save() async {
     final name = _name.text.trim();
@@ -103,31 +220,48 @@ class _StoreInfoScreenState extends State<StoreInfoScreen> {
       _error = null;
     });
     try {
-      final current = await PrintSettingsRepository.instance.load();
       final phones = _collectPhones();
-      final next = current.copyWith(
+      PrintSettingsData next = PrintSettingsData.defaults().copyWith(
         storeTitleLine: name,
         storeAddress: _address.text.trim(),
         storePhones: phones,
       );
+      if (_logoCleared) {
+        next = next.copyWith(clearStoreLogo: true);
+      } else if (_logoBytes != null && _logoBytes!.isNotEmpty) {
+        next = next.copyWith(
+          storeLogoBase64: base64Encode(_logoBytes!),
+          storeLogoMime: _logoMime ?? 'image/png',
+        );
+      }
       if (mounted) {
-        await context.read<PrintSettingsProvider>().save(next);
+        await context.read<PrintSettingsProvider>().saveStoreIdentity(next);
       } else {
-        await PrintSettingsRepository.instance.save(next);
+        await PrintSettingsRepository.instance
+            .saveStoreIdentityForActiveUser(next);
       }
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('تم حفظ بيانات المتجر — ستظهر على إيصال البيع'),
+          content: Text(
+            'تم حفظ بيانات المتجر لهذا الموظف ورفعها للسحابة — '
+            'ستظهر على أجهزتك عند دخوله بعد المزامنة',
+          ),
         ),
       );
       Navigator.pop(context, true);
     } catch (e) {
       if (!mounted) return;
+      final noStaff = e is StateError;
       setState(() {
-        _error = 'تعذّر الحفظ. حاول مرة أخرى.';
+        _error = noStaff
+            ? 'اختر موظفاً من شاشة «من سيبدأ العمل؟» ثم أعد الحفظ'
+            : 'تعذّر الحفظ. حاول مرة أخرى.';
         _saving = false;
       });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_error!)),
+      );
     }
   }
 
@@ -136,6 +270,7 @@ class _StoreInfoScreenState extends State<StoreInfoScreen> {
     final cs = Theme.of(context).colorScheme;
     final layout = ScreenLayout.of(context);
     final pad = layout.pageHorizontalGap;
+    final hasLogo = _logoBytes != null && _logoBytes!.isNotEmpty;
 
     return Theme(
       data: OilChangeFormTheme.wrap(context, Theme.of(context)),
@@ -167,7 +302,9 @@ class _StoreInfoScreenState extends State<StoreInfoScreen> {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       Text(
-                        'تُستخدم هذه البيانات على إيصال البيع بعد كل عملية طباعة.',
+                        'لكل موظف من شاشة «من سيبدأ العمل؟» اسم وشعار وعنوان خاص به فقط. '
+                        'لا تُشارك بين محمد والقبلة أو أي موظف آخر. '
+                        'تُحفظ على السحابة وتبقى بعد حذف التطبيق عند الدخول بنفس الرمز.',
                         style: TextStyle(
                           color: OilChangeFormTheme.secondaryText(context),
                           height: 1.4,
@@ -187,22 +324,88 @@ class _StoreInfoScreenState extends State<StoreInfoScreen> {
                       ],
                       const SizedBox(height: 20),
                       Center(
-                        child: Container(
-                          width: 88,
-                          height: 88,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: OilChangeFormTheme.gold.withValues(alpha: 0.12),
-                            border: Border.all(
-                              color: OilChangeFormTheme.gold.withValues(alpha: 0.55),
-                              width: 1.5,
+                        child: Column(
+                          children: [
+                            Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                onTap: _saving || _pickingLogo ? null : _pickLogo,
+                                customBorder: const CircleBorder(),
+                                child: Ink(
+                                  width: 96,
+                                  height: 96,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: OilChangeFormTheme.gold
+                                        .withValues(alpha: 0.12),
+                                    border: Border.all(
+                                      color: OilChangeFormTheme.gold
+                                          .withValues(alpha: 0.55),
+                                      width: 1.5,
+                                    ),
+                                    image: hasLogo
+                                        ? DecorationImage(
+                                            image: MemoryImage(_logoBytes!),
+                                            fit: BoxFit.cover,
+                                          )
+                                        : null,
+                                  ),
+                                  child: hasLogo
+                                      ? (_pickingLogo
+                                          ? const Center(
+                                              child: SizedBox(
+                                                width: 28,
+                                                height: 28,
+                                                child:
+                                                    CircularProgressIndicator(
+                                                  strokeWidth: 2.5,
+                                                ),
+                                              ),
+                                            )
+                                          : null)
+                                      : Center(
+                                          child: _pickingLogo
+                                              ? const SizedBox(
+                                                  width: 28,
+                                                  height: 28,
+                                                  child:
+                                                      CircularProgressIndicator(
+                                                    strokeWidth: 2.5,
+                                                  ),
+                                                )
+                                              : const Icon(
+                                                  Icons.add_a_photo_rounded,
+                                                  size: 36,
+                                                  color:
+                                                      OilChangeFormTheme.gold,
+                                                ),
+                                        ),
+                                ),
+                              ),
                             ),
-                          ),
-                          child: Icon(
-                            Icons.store_rounded,
-                            size: 42,
-                            color: OilChangeFormTheme.gold,
-                          ),
+                            const SizedBox(height: 8),
+                            Text(
+                              hasLogo
+                                  ? 'اضغط لتغيير الشعار'
+                                  : 'اضغط لإضافة شعار المتجر',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color:
+                                    OilChangeFormTheme.secondaryText(context),
+                              ),
+                            ),
+                            if (hasLogo)
+                              TextButton(
+                                onPressed: _saving ? null : _clearLogo,
+                                child: Text(
+                                  'إزالة الشعار',
+                                  style: TextStyle(
+                                    color: cs.error.withValues(alpha: 0.9),
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                          ],
                         ),
                       ),
                       const SizedBox(height: 24),

@@ -3,6 +3,25 @@ import '../../../utils/iraqi_currency_format.dart';
 import '../models/oil_change_filter_kind.dart';
 import 'oil_change_filter_format.dart';
 
+String _two(int n) => n < 10 ? '0$n' : '$n';
+
+DateTime _serviceDateTime(Map<String, dynamic> order) {
+  final raw = (order['createdAt'] ?? order['updatedAt'] ?? '').toString().trim();
+  return DateTime.tryParse(raw)?.toLocal() ?? DateTime.now();
+}
+
+/// تاريخ خدمة غيار الزيت للعرض في واتساب/PDF — أرقام غربية.
+String oilChangeServiceDateDisplay(Map<String, dynamic> order) {
+  final dt = _serviceDateTime(order);
+  return '${_two(dt.day)}/${_two(dt.month)}/${dt.year}';
+}
+
+/// اسم ملف PDF يتضمن تاريخ الخدمة.
+String oilChangeServicePdfFilename(Map<String, dynamic> order) {
+  final dt = _serviceDateTime(order);
+  return 'oil_change_${dt.year}-${_two(dt.month)}-${_two(dt.day)}.pdf';
+}
+
 /// رسالة واتساب تلقائية بعد حفظ بطاقة غيار الزيت — الحقول التي يطلبها صاحب المحل فقط.
 ///
 /// بدون رقم فاتورة، بدون فني/ملاحظات/دين سابق.
@@ -17,6 +36,7 @@ String buildOilChangeAutoWhatsAppMessage({
           ? 'عميلنا الكريم'
           : (order['customerNameSnapshot'] ?? '').toString().trim();
 
+  final serviceDate = oilChangeServiceDateDisplay(order);
   final car = (order['deviceName'] ?? '').toString().trim();
   final model = (order['carModel'] ?? '').toString().trim();
   final engineSize = (order['engineSize'] ?? '').toString().trim();
@@ -59,7 +79,8 @@ String buildOilChangeAutoWhatsAppMessage({
   final buf = StringBuffer()
     ..writeln('مرحباً $customer،')
     ..writeln('شكراً لزيارتكم *$shop* لغيار الزيت 🙏')
-    ..writeln();
+    ..writeln()
+    ..writeln('📅 *تاريخ الخدمة:* $serviceDate');
 
   _line(buf, '🚗', 'السيارة', car);
   _line(buf, '📅', 'موديل السيارة', model);
@@ -104,10 +125,26 @@ String buildOilChangeAutoWhatsAppMessage({
   final totalLine = money(totalF);
   final paidLine = money(paidF);
   final remLine = money(remainderF);
-  if (totalLine != null || paidLine != null || remLine != null) {
+  final listPriceF = estF > 0 ? estF : totalF;
+  final discountF =
+      (listPriceF > totalF && totalF > 0) ? (listPriceF - totalF) : 0;
+  final listPriceLine = money(listPriceF);
+  final discountLine = money(discountF);
+
+  if (totalLine != null ||
+      paidLine != null ||
+      remLine != null ||
+      discountLine != null) {
     buf.writeln();
     buf.writeln('💰 *السعر والدفع:*');
-    if (totalLine != null) buf.writeln('• *الإجمالي:* $totalLine');
+    if (discountLine != null && listPriceLine != null && totalLine != null) {
+      buf.writeln(
+        '• كان السعر *$listPriceLine* وتم خصم *$discountLine* بتخفيض '
+        'وأصبح السعر *$totalLine*',
+      );
+    } else if (totalLine != null) {
+      buf.writeln('• *الإجمالي:* $totalLine');
+    }
     if (paidLine != null) {
       buf.writeln('• *المدفوع:* $paidLine');
     } else if (totalLine != null) {

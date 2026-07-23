@@ -49,7 +49,8 @@ class OilChangeFilterSlot {
   String? name;
   int priceFils = 0;
 
-  bool get hasSelection => (name ?? '').trim().isNotEmpty;
+  bool get hasSelection =>
+      (name ?? '').trim().isNotEmpty || priceFils > 0;
 
   void clear() {
     catalogEntryId = null;
@@ -59,7 +60,7 @@ class OilChangeFilterSlot {
 
   void applyEntry(OilChangeFilterCatalogEntry e) {
     catalogEntryId = e.id;
-    name = e.name;
+    name = e.name.trim().isEmpty ? null : e.name.trim();
     priceFils = e.priceFils;
   }
 
@@ -70,12 +71,12 @@ class OilChangeFilterSlot {
   }) {
     final n = (row[nameKey] ?? '').toString().trim();
     final p = (row[priceKey] as num?)?.toInt() ?? 0;
-    if (n.isEmpty) {
+    if (n.isEmpty && p <= 0) {
       clear();
       return;
     }
     catalogEntryId = null;
-    name = n;
+    name = n.isEmpty ? null : n;
     priceFils = p < 0 ? 0 : p;
   }
 }

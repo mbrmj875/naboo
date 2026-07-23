@@ -8,6 +8,7 @@ import 'utils/app_logger.dart';
 import 'config/google_oauth_config.dart';
 import 'storage/sqlite_desktop_init.dart'
     if (dart.library.html) 'storage/sqlite_desktop_init_web.dart';
+import 'package:flutter_native_splash/flutter_native_splash.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:provider/provider.dart';
 import 'package:app_links/app_links.dart';
@@ -174,7 +175,8 @@ void _registerTenantRevokeHandler() {
 }
 
 void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
+  final widgetsBinding = WidgetsFlutterBinding.ensureInitialized();
+  FlutterNativeSplash.preserve(widgetsBinding: widgetsBinding);
   if (kDebugMode) {
     // #region agent log
     DebugNdjsonLogger.log(
@@ -315,7 +317,14 @@ class MyApp extends StatelessWidget {
         // توفير خدمة الترخيص عالمياً لاستخدامها في البانر/التعطيل داخل Restricted Mode.
         ChangeNotifierProvider.value(value: LicenseService.instance),
         ChangeNotifierProvider(create: (_) => AuthProvider()),
-        ChangeNotifierProvider(create: (_) => BusinessFeaturesProvider()),
+        ChangeNotifierProxyProvider<AuthProvider, BusinessFeaturesProvider>(
+          create: (_) => BusinessFeaturesProvider(),
+          update: (_, auth, previous) {
+            final provider = previous ?? BusinessFeaturesProvider();
+            provider.onActiveStaffChanged(auth.userId);
+            return provider;
+          },
+        ),
         ChangeNotifierProvider.value(value: TenantContextService.instance),
         ChangeNotifierProvider(create: (_) => OwnerCommandCenterProvider()),
         ChangeNotifierProxyProvider<TenantContextService,
@@ -366,7 +375,14 @@ class MyApp extends StatelessWidget {
           ),
           update: (context, auth, shift, previous) => previous ?? PermissionsProvider(auth, shift),
         ),
-        ChangeNotifierProvider(create: (_) => PrintSettingsProvider()),
+        ChangeNotifierProxyProvider<AuthProvider, PrintSettingsProvider>(
+          create: (_) => PrintSettingsProvider(),
+          update: (_, auth, previous) {
+            final provider = previous ?? PrintSettingsProvider();
+            provider.onActiveStaffChanged(auth.userId);
+            return provider;
+          },
+        ),
         ChangeNotifierProvider(create: (_) => LoyaltySettingsProvider()),
         ChangeNotifierProvider(create: (_) => NotificationProvider()),
         ChangeNotifierProvider(create: (_) => SalePosSettingsProvider()),

@@ -1,6 +1,8 @@
 # Evolution API + PostgreSQL — واتساب Gateway لـ NaBoo
 # مشروع Docker: naboo-evolution على Hostinger VPS
-# المرجع: docs/specs/oil_change_n8n_whatsapp_setup_guide_ar.md
+# الوصول العام: HTTPS عبر Traefik فقط (لا فتح 8080 للإنترنت)
+# النطاق: https://evo-nrwn.srv1769126.hstgr.cloud
+# n8n يبقى على http://naboo-evolution:8080 داخل Docker
 
 services:
   postgres:
@@ -13,6 +15,8 @@ services:
       POSTGRES_DB: evolution
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    networks:
+      - default
 
   evolution-api:
     image: evoapicloud/evolution-api:v2.3.7
@@ -20,11 +24,13 @@ services:
     restart: unless-stopped
     depends_on:
       - postgres
-    ports:
-      - "8080:8080"
+    # لا ننشر 8080 على 0.0.0.0 — الوصول عبر Traefik + شبكة Docker فقط
+    expose:
+      - "8080"
     environment:
+      # يجب أن يطابق n8n EVOLUTION_API_KEY + Supabase secret
       AUTHENTICATION_API_KEY: "Ev0_Naboo_72aB91cD3eF4gH5iJ"
-      SERVER_URL: "http://72.61.191.237:8080"
+      SERVER_URL: "https://evo-nrwn.srv1769126.hstgr.cloud"
       SERVER_TYPE: "http"
       DATABASE_ENABLED: "true"
       DATABASE_PROVIDER: "postgresql"
@@ -34,7 +40,32 @@ services:
       NODE_OPTIONS: "--dns-result-order=ipv4first"
     volumes:
       - evolution_data:/evolution/instances
+    networks:
+      - default
+      - traefik_proxy
+    labels:
+      - traefik.enable=true
+      # API (Supabase / تكاملات) — بدون Basic Auth
+      - traefik.http.routers.evo-api.rule=Host(`evo-nrwn.srv1769126.hstgr.cloud`) && !PathPrefix(`/manager`)
+      - traefik.http.routers.evo-api.entrypoints=websecure
+      - traefik.http.routers.evo-api.tls.certresolver=letsencrypt
+      - traefik.http.routers.evo-api.service=evo-api
+      - traefik.http.services.evo-api.loadbalancer.server.port=8080
+      # Manager UI — Basic Auth
+      - traefik.http.routers.evo-mgr.rule=Host(`evo-nrwn.srv1769126.hstgr.cloud`) && PathPrefix(`/manager`)
+      - traefik.http.routers.evo-mgr.entrypoints=websecure
+      - traefik.http.routers.evo-mgr.tls.certresolver=letsencrypt
+      - traefik.http.routers.evo-mgr.service=evo-api
+      - traefik.http.routers.evo-mgr.middlewares=evo-mgr-auth
+      - traefik.http.middlewares.evo-mgr-auth.basicauth.users=naboo_admin:$$2y$$05$$yotxxRLiggsFf/dd.vVybuqTWKQeAmiG.lcguF/MfIgyAoXvLk8Me
 
 volumes:
   postgres_data:
   evolution_data:
+
+networks:
+  default:
+    name: naboo-evolution_default
+  traefik_proxy:
+    external: true
+    name: traefik_proxy

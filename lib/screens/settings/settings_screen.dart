@@ -159,7 +159,7 @@ class SettingsScreen extends StatelessWidget {
                                 iconColor: _kBlue,
                                 title: 'تخصيص الشاشة الرئيسية',
                                 subtitle:
-                                    'إظهار أو إخفاء أقسام لوحة التحكم وترتيبها بالسحب',
+                                    'أقسام اللوحة، وتفعيل غسل السيارات لكل مستخدم على حدة',
                                 onTap: () => _goTo(
                                   context,
                                   const DashboardLayoutSettingsScreen(),
@@ -445,7 +445,20 @@ class _CompanyCard extends StatelessWidget {
                     color: cs.onPrimary.withValues(alpha: 0.18),
                     borderRadius: ac.md,
                   ),
-                  child: Icon(Icons.store_rounded, color: cs.onPrimary, size: 30),
+                  clipBehavior: Clip.antiAlias,
+                  child: store.storeLogoBytes != null
+                      ? Image.memory(
+                          store.storeLogoBytes!,
+                          fit: BoxFit.cover,
+                          width: 60,
+                          height: 60,
+                          gaplessPlayback: true,
+                        )
+                      : Icon(
+                          Icons.store_rounded,
+                          color: cs.onPrimary,
+                          size: 30,
+                        ),
                 ),
                 const SizedBox(width: 14),
                 Expanded(
@@ -473,23 +486,31 @@ class _CompanyCard extends StatelessWidget {
                         overflow: TextOverflow.ellipsis,
                       ),
                       const SizedBox(height: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 4,
-                        ),
-                        decoration: BoxDecoration(
-                          color: cs.onPrimary.withValues(alpha: 0.18),
-                          borderRadius: ac.sm,
-                        ),
-                        child: Text(
-                          'نسخة تجريبية',
-                          style: TextStyle(
-                            color: cs.onPrimary,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
+                      ListenableBuilder(
+                        listenable: LicenseService.instance,
+                        builder: (context, _) {
+                          final label = _subscriptionBadgeLabel(
+                            LicenseService.instance.state,
+                          );
+                          return Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              color: cs.onPrimary.withValues(alpha: 0.18),
+                              borderRadius: ac.sm,
+                            ),
+                            child: Text(
+                              label,
+                              style: TextStyle(
+                                color: cs.onPrimary,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          );
+                        },
                       ),
                     ],
                   ),
@@ -506,6 +527,27 @@ class _CompanyCard extends StatelessWidget {
       },
     );
   }
+}
+
+/// نفس مصدر الحقيقة لشارة الاشتراك في بطاقة المتجر وصف الاشتراك.
+String _subscriptionBadgeLabel(LicenseState s) {
+  if (s.status == LicenseStatus.active) {
+    return s.plan?.nameAr ?? 'اشتراك مفعّل';
+  }
+  if (s.status == LicenseStatus.trial) {
+    return 'نسخة تجريبية';
+  }
+  if (s.status == LicenseStatus.expired ||
+      s.status == LicenseStatus.suspended) {
+    return 'اشتراك غير نشط';
+  }
+  if (s.status == LicenseStatus.offline) {
+    return 'غير متصل — تحقق لاحقاً';
+  }
+  if (s.status == LicenseStatus.checking) {
+    return 'جاري التحقق…';
+  }
+  return 'بدون ترخيص';
 }
 
 // ── مجموعة إعدادات ────────────────────────────────────────────────────────────
@@ -588,32 +630,25 @@ class _SubscriptionPlanTrailingBadge extends StatelessWidget {
       listenable: LicenseService.instance,
       builder: (context, _) {
         final s = LicenseService.instance.state;
-        late final String label;
         late final Color fg;
         late final Color bg;
         if (s.status == LicenseStatus.active) {
-          label = s.plan?.nameAr ?? 'مفعّل';
           fg = cs.primary;
           bg = cs.primary.withValues(alpha: 0.12);
         } else if (s.status == LicenseStatus.trial) {
-          label = 'تجريبية';
           fg = cs.tertiary;
           bg = cs.tertiary.withValues(alpha: 0.22);
         } else if (s.status == LicenseStatus.expired ||
             s.status == LicenseStatus.suspended) {
-          label = 'غير نشط';
           fg = _kRed;
           bg = _kRed.withValues(alpha: 0.12);
         } else if (s.status == LicenseStatus.offline) {
-          label = 'غير متصّل';
           fg = Colors.orange.shade800;
           bg = Colors.orange.withValues(alpha: 0.18);
         } else if (s.status == LicenseStatus.checking) {
-          label = '…';
           fg = Colors.grey.shade700;
           bg = Colors.grey.withValues(alpha: 0.2);
         } else {
-          label = 'بدون ترخيص';
           fg = Colors.grey.shade700;
           bg = Colors.grey.withValues(alpha: 0.2);
         }
@@ -621,7 +656,7 @@ class _SubscriptionPlanTrailingBadge extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
           decoration: BoxDecoration(color: bg, borderRadius: ac.sm),
           child: Text(
-            label,
+            _subscriptionBadgeLabel(s),
             style: TextStyle(
               color: fg,
               fontSize: 11,

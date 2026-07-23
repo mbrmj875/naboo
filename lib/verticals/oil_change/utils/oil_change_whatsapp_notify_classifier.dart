@@ -70,9 +70,13 @@ OilChangeWhatsappNotifyOutcome classifyWhatsappWebhookResponse({
     }
   }
 
-  if (statusCode >= 200 && statusCode < 300 && json == null) {
-    return const OilChangeWhatsappNotifyOutcome(
-      reason: OilChangeWhatsappNotifyReason.sent,
+  // رد 200 بجسم فارغ أو غير JSON — غالباً رفض سر/workflow بدون JSON.
+  // سابقاً كان يُصنَّف خطأً كـ «تم الإرسال» فيظهر نجاح وهمي.
+  final trimmed = body.trim();
+  if (statusCode >= 200 && statusCode < 300 && trimmed.isEmpty) {
+    return OilChangeWhatsappNotifyOutcome(
+      reason: OilChangeWhatsappNotifyReason.unauthorized,
+      httpStatus: statusCode,
     );
   }
 
@@ -96,6 +100,9 @@ OilChangeWhatsappNotifyReason? _mapServerReason(String reason) {
   }
   if (r.contains('unauthorized') || r.contains('secret')) {
     return OilChangeWhatsappNotifyReason.unauthorized;
+  }
+  if (r.contains('same_as_shop') || r.contains('sameasshop')) {
+    return OilChangeWhatsappNotifyReason.sameAsShopPhone;
   }
   if (r.contains('evolution') || r.contains('instance')) {
     return OilChangeWhatsappNotifyReason.evolutionError;

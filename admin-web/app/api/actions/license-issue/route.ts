@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { maxDevicesForPlan, PLAN_KEYS, type PlanKey } from "@/lib/plan-presets";
+import {
+  LIFETIME_JWT_ENDS_AT,
+  maxDevicesForPlan,
+  PLAN_KEYS,
+  type PlanKey,
+} from "@/lib/plan-presets";
 import { importRsaPrivateKeyFromPem, signLicenseJwt } from "@/lib/license-jwt-sign";
 import {
   expandLicensePrivateKeyPath,
@@ -86,11 +91,17 @@ export async function POST(req: Request) {
     const startsAt = body.starts_at?.trim()
       ? new Date(body.starts_at.trim())
       : now;
+    const isLifetime = plan === "lifetime";
     const defaultEndOffsetMs =
-      plan === "annual" ? 365 * 24 * 60 * 60 * 1000 : 30 * 24 * 60 * 60 * 1000;
-    const endsAt = body.ends_at?.trim()
-      ? new Date(body.ends_at.trim())
-      : new Date(now.getTime() + defaultEndOffsetMs);
+      plan === "annual"
+        ? 365 * 24 * 60 * 60 * 1000
+        : 30 * 24 * 60 * 60 * 1000;
+    // JWT دائماً يحتاج ends_at — لمدى الحياة نستخدم تاريخاً بعيداً رمزياً
+    const endsAt = isLifetime
+      ? LIFETIME_JWT_ENDS_AT
+      : body.ends_at?.trim()
+        ? new Date(body.ends_at.trim())
+        : new Date(now.getTime() + defaultEndOffsetMs);
 
     if (Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime())) {
       return NextResponse.json(
@@ -124,7 +135,8 @@ export async function POST(req: Request) {
     const licenseKeyPlaceholder = `V2-${randomUUID()}`;
     const status = isTrial ? "trial" : "active";
     const trialStartedAt = isTrial ? startsAt.toISOString() : null;
-    const expiresAt = endsAt.toISOString();
+    /** مدى الحياة: بلا نهاية في قاعدة البيانات */
+    const expiresAt = isLifetime ? null : endsAt.toISOString();
 
     const supabase = getSupabaseAdmin();
     const row: Record<string, unknown> = {
@@ -152,6 +164,16 @@ export async function POST(req: Request) {
       );
     }
     insertedId = inserted.id as number;
+
+    // تجنّب لخبطة التطبيق/اللوحة: حساب واحد = ترخيص نشط واحد (الأحدث).
+    if (assignedUserId) {
+      await supabase
+        .from("licenses")
+        .update({ status: "suspended" })
+        .eq("assigned_user_id", assignedUserId)
+        .eq("status", "active")
+        .neq("id", insertedId);
+    }
 
     const privateKey = await importRsaPrivateKeyFromPem(pem);
     const issuedAt = new Date();

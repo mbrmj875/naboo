@@ -5,12 +5,16 @@ import 'package:flutter/foundation.dart';
 import '../models/sale_pos_settings_data.dart';
 import '../services/app_settings_repository.dart';
 import '../services/business_setup_settings.dart';
+import '../services/car_wash_user_preference.dart';
 import '../services/loyalty_settings_repository.dart';
 import '../services/cloud_sync_service.dart';
 import '../owner/services/owner_alert_cloud_sync_service.dart';
 import '../utils/app_logger.dart';
 
 /// مصدر الحقيقة الواحد لبوابة ميزات المتجر (Feature Gate — المرحلة 1).
+///
+/// ملاحظة: [BusinessSetupSettingsData.enableCarWash] في الواجهة = تفضيل
+/// **المستخدم النشط** فقط (لكل موظف/فرع على حدة)، وليس إعداد المستأجر كله.
 class BusinessFeaturesProvider extends ChangeNotifier {
   BusinessFeaturesProvider() {
     BusinessFeaturesRevision.instance.addListener(_onExternalRevision);
@@ -26,11 +30,21 @@ class BusinessFeaturesProvider extends ChangeNotifier {
   bool _loaded = false;
   bool get isLoaded => _loaded;
 
+  int? _activeUserId;
+  int? get activeUserId => _activeUserId;
+
   void _onExternalRevision() {
     unawaited(refresh());
   }
 
   void _onCloudImport() {
+    unawaited(refresh());
+  }
+
+  /// يُستدعى عند تبديل الموظف في «من سيبدأ العمل؟» لإعادة تحميل تفضيلاته.
+  void onActiveStaffChanged(int? userId) {
+    if (_activeUserId == userId) return;
+    _activeUserId = userId;
     unawaited(refresh());
   }
 
@@ -45,7 +59,17 @@ class BusinessFeaturesProvider extends ChangeNotifier {
 
   Future<void> refresh() async {
     try {
-      _data = await BusinessSetupSettingsData.load(AppSettingsRepository.instance);
+      final base =
+          await BusinessSetupSettingsData.load(AppSettingsRepository.instance);
+      final uid = _activeUserId;
+      final userWash = uid != null && uid > 0
+          ? await CarWashUserPreference.isEnabledForUser(
+              AppSettingsRepository.instance,
+              userId: uid,
+            )
+          : false;
+      // تفضيل المستخدم يغطي العلم القديم للمستأجر في الواجهة والبوابات.
+      _data = base.copyWith(enableCarWash: userWash);
     } catch (e, st) {
       AppLogger.error(
         'BusinessFeatures',
@@ -59,15 +83,42 @@ class BusinessFeaturesProvider extends ChangeNotifier {
     }
   }
 
+  /// تفعيل/تعطيل غسل السيارات **لهذا المستخدم فقط**.
+  Future<void> setCarWashEnabledForActiveUser(bool enabled) async {
+    final uid = _activeUserId;
+    if (uid == null || uid <= 0) {
+      throw StateError('سجّل الدخول أولاً لحفظ إعداد غسل السيارات.');
+    }
+    await CarWashUserPreference.setEnabledForUser(
+      AppSettingsRepository.instance,
+      userId: uid,
+      enabled: enabled,
+    );
+    _data = _data.copyWith(enableCarWash: enabled);
+    notifyListeners();
+  }
+
   Future<void> save(BusinessSetupSettingsData next) async {
     final previous = _data;
-    final guarded = next.withVerticalGuardsApplied();
+    // لا نكتب تفضيل الغسل على مستوى المستأجر — يبقى لكل مستخدم.
+    final guarded = next
+        .copyWith(enableCarWash: false)
+        .withVerticalGuardsApplied()
+        .copyWith(enableCarWash: false);
     await guarded.save(AppSettingsRepository.instance);
     await _applyCascadingSync(previous: previous, guarded: guarded);
     CloudSyncService.instance.scheduleSyncSoon();
     OwnerAlertCloudSyncService.scheduleResyncActiveTenantPreferences();
     BusinessFeaturesRevision.bump();
-    _data = guarded;
+    // أعد دمج تفضيل المستخدم الحالي بعد الحفظ العام.
+    final uid = _activeUserId;
+    final userWash = uid != null && uid > 0
+        ? await CarWashUserPreference.isEnabledForUser(
+            AppSettingsRepository.instance,
+            userId: uid,
+          )
+        : false;
+    _data = guarded.copyWith(enableCarWash: userWash);
     notifyListeners();
   }
 

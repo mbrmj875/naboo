@@ -308,6 +308,7 @@ class _BusinessSetupWizardScreenState extends State<BusinessSetupWizardScreen> {
       enableWeightSales: _enableWeightSales,
       enableClothingVariants: _enableClothingVariants,
       enableOilChange: _enableServices && _businessVertical == BusinessVertical.oilChange,
+      enableCarWash: false,
       enableRepairServices: _enableServices && _businessVertical != BusinessVertical.oilChange,
       enablePos: _enablePos,
       enableServices: _enableServices,

@@ -343,6 +343,7 @@ BusinessSetupSettingsData _copyWithPos(
     enableOilChange: base.enableOilChange,
     enableRepairServices: base.enableRepairServices,
     enablePos: enablePos,
+      enableCarWash: false,
     enableServices: base.enableServices,
   );
 }

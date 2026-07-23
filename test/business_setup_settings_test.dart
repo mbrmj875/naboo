@@ -12,6 +12,7 @@ void main() {
       expect(d.enableRepairServices, isFalse);
       expect(d.enablePos, isFalse);
       expect(d.enableInstallments, isFalse);
+      expect(d.enableCarWash, isFalse);
       expect(d.enableDebts, isTrue);
       expect(d.enableCustomers, isTrue);
     });
@@ -59,6 +60,7 @@ void main() {
         enableOilChange: true,
         enableRepairServices: false,
         enablePos: false,
+      enableCarWash: false,
         enableServices: true,
       );
       expect(d.routingVertical, BusinessVertical.oilChange);

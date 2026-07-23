@@ -12,6 +12,7 @@ import 'customer_delete_guard.dart';
 import 'password_hashing.dart';
 import 'sync_queue_service.dart';
 import 'tenant_context.dart';
+import 'user_store_branding_repository.dart';
 import '../models/invoice.dart';
 import '../models/installment.dart';
 import '../models/installment_settings_data.dart';
@@ -266,6 +267,7 @@ class DatabaseHelper {
     await _ensureServiceOrdersCamelDeletedAt(db);
     await _ensureServiceOrdersOilChangeColumns(db);
     await _ensureServiceOrdersOrderKind(db);
+    await _ensureServiceOrdersWaNotifyColumns(db);
     await _ensureServiceOrderItemsSchema(db);
     await _ensureServiceOrderItemsCamelDeletedAt(db);
     await _migrateServiceOrdersAllowSuspendedStatus(db);
@@ -275,6 +277,12 @@ class DatabaseHelper {
   Future<void> ensureOilChangeServicesSchema() async {
     final db = await database;
     await _ensureOilChangeServicesTable(db);
+  }
+
+  /// جدول أنواع/خدمات الغسل (اسم + سعر).
+  Future<void> ensureCarWashServicesSchema() async {
+    final db = await database;
+    await _ensureCarWashServicesTable(db);
   }
 
   Future<void> ensureOilChangeOilCatalogSchema() async {
@@ -291,6 +299,7 @@ class DatabaseHelper {
     final db = await database;
     await _ensureOilChangeFilterCatalogTable(db);
     await _ensureServiceOrdersOilChangeFilterColumns(db);
+    await _ensureServiceOrdersWaNotifyColumns(db);
   }
 
   /// Migration 49: Pharmacy vertical catalog
@@ -318,6 +327,27 @@ class DatabaseHelper {
       await db.execute(
         'CREATE INDEX IF NOT EXISTS idx_oil_change_services_tenant '
         'ON oil_change_services(tenantId, deletedAt, sortOrder)',
+      );
+    } catch (_) {}
+  }
+
+  Future<void> _ensureCarWashServicesTable(Database db) async {
+    try {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS car_wash_services (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tenantId INTEGER NOT NULL,
+          name TEXT NOT NULL,
+          priceFils INTEGER NOT NULL DEFAULT 0,
+          sortOrder INTEGER NOT NULL DEFAULT 0,
+          createdAt TEXT NOT NULL,
+          updatedAt TEXT NOT NULL,
+          deletedAt TEXT
+        )
+      ''');
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_car_wash_services_tenant '
+        'ON car_wash_services(tenantId, deletedAt, sortOrder)',
       );
     } catch (_) {}
   }
@@ -408,6 +438,9 @@ class DatabaseHelper {
         'ON oil_change_filter_catalog(tenantId, deletedAt, filterKind)',
       );
       try {
+        await db.execute(
+          'DROP INDEX IF EXISTS uq_oil_change_filter_catalog_kind_name',
+        );
         await db.execute('''
           CREATE UNIQUE INDEX IF NOT EXISTS uq_oil_change_filter_catalog_kind_name
           ON oil_change_filter_catalog(
@@ -415,7 +448,7 @@ class DatabaseHelper {
             filterKind,
             LOWER(TRIM(name))
           )
-          WHERE deletedAt IS NULL
+          WHERE deletedAt IS NULL AND LENGTH(TRIM(name)) > 0
         ''');
       } catch (_) {}
     } catch (_) {}
@@ -430,6 +463,8 @@ class DatabaseHelper {
         ('airFilterPriceFils', 'INTEGER'),
         ('gearFilterName', 'TEXT'),
         ('gearFilterPriceFils', 'INTEGER'),
+        ('coolingFilterName', 'TEXT'),
+        ('coolingFilterPriceFils', 'INTEGER'),
       ];
       for (final (col, type) in cols) {
         if (!await _tableHasColumn(db, 'service_orders', col)) {
@@ -441,11 +476,34 @@ class DatabaseHelper {
     } catch (_) {}
   }
 
+  /// حالة إرسال واتساب لبطاقة غيار الزيت (إعادة الإرسال / بدون نت).
+  Future<void> _ensureServiceOrdersWaNotifyColumns(Database db) async {
+    try {
+      final cols = <(String, String)>[
+        ('waNotifyStatus', 'TEXT'),
+        ('waNotifyUpdatedAt', 'TEXT'),
+        ('waNotifyLastError', 'TEXT'),
+        ('waNotifyAttempts', 'INTEGER NOT NULL DEFAULT 0'),
+      ];
+      for (final (col, type) in cols) {
+        if (!await _tableHasColumn(db, 'service_orders', col)) {
+          await db.execute(
+            'ALTER TABLE service_orders ADD COLUMN $col $type',
+          );
+        }
+      }
+      await db.execute('''
+        CREATE INDEX IF NOT EXISTS idx_service_orders_wa_notify
+        ON service_orders(tenantId, waNotifyStatus, deletedAt)
+      ''');
+    } catch (_) {}
+  }
+
   Future<Database> _initDatabase() async {
     String path = join(await getDatabasesPath(), 'business_app.db');
     return await openDatabase(
       path,
-      version: 49,
+      version: 51,
       onConfigure: (db) async {
         await db.execute('PRAGMA foreign_keys = ON');
         // Reduce "database locked" warnings under concurrent access.
@@ -479,6 +537,7 @@ class DatabaseHelper {
     await _ensureInstallmentSettingsTable(db);
     await _ensureDebtSettingsTable(db);
     await _ensureCustomerDebtPaymentsTable(db);
+    await ensureFinancialGlobalIdSchema(db);
     await _ensureSupplierApTables(db);
     await _ensureSupplierBillStockLinkColumns(db);
     await _ensureInstallmentFinanceColumns(db);
@@ -520,10 +579,43 @@ class DatabaseHelper {
     await _ensureOilChangeHydraulicCatalogTable(db);
     await _ensureOilChangeFilterCatalogTable(db);
     await _ensureServiceOrdersOilChangeFilterColumns(db);
+    await _ensureServiceOrdersWaNotifyColumns(db);
     await ensureOilProductGradesSchema(db);
     await ensureBusinessAuditEventsTable(db);
     await ensureOwnerDashboardQueryIndexes(db);
     await ensurePharmacyCatalogTables(db);
+    await ensureUserStoreBrandingTable(db);
+  }
+
+  /// هوية المتجر لكل موظف (global_id + user_id المحلي) — إيصال / واتساب / PDF.
+  Future<void> ensureUserStoreBrandingTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS user_store_branding (
+        global_id TEXT PRIMARY KEY NOT NULL,
+        user_id INTEGER,
+        payload TEXT NOT NULL,
+        updatedAt TEXT NOT NULL
+      )
+    ''');
+    try {
+      final cols = await db.rawQuery('PRAGMA table_info(user_store_branding)');
+      final hasUserId = cols.any(
+        (r) => (r['name'] ?? '').toString().toLowerCase() == 'user_id',
+      );
+      if (!hasUserId) {
+        await db.execute(
+          'ALTER TABLE user_store_branding ADD COLUMN user_id INTEGER',
+        );
+      }
+    } catch (_) {}
+    try {
+      await db.execute('''
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_user_store_branding_user_id
+        ON user_store_branding(user_id)
+        WHERE user_id IS NOT NULL AND user_id > 0
+      ''');
+    } catch (_) {}
+    await UserStoreBrandingRepository.rebindLocalUserIds(db);
   }
 
   /// ربط بطاقة الغيار بصرف المخزون (زيت المحل).
@@ -655,6 +747,7 @@ class DatabaseHelper {
         );
       }
       await _ensureServiceOrdersOilChangeFilterColumns(db);
+      await _ensureServiceOrdersWaNotifyColumns(db);
     } catch (_) {}
   }
 
@@ -2309,9 +2402,11 @@ class DatabaseHelper {
       await _ensureOilChangeHydraulicCatalogTable(db);
       await _ensureOilChangeFilterCatalogTable(db);
       await _ensureServiceOrdersOilChangeFilterColumns(db);
+      await _ensureServiceOrdersWaNotifyColumns(db);
     }
     if (oldVersion < 46) {
       await _ensureServiceOrdersOilChangeFilterColumns(db);
+      await _ensureServiceOrdersWaNotifyColumns(db);
       await _migrateServiceOrdersAllowSuspendedStatus(db);
     }
     if (oldVersion < 47) {
@@ -2323,8 +2418,22 @@ class DatabaseHelper {
     if (oldVersion < 49) {
       await ensurePharmacyCatalogTables(db);
     }
+    if (oldVersion < 50) {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS user_store_branding (
+          global_id TEXT PRIMARY KEY NOT NULL,
+          user_id INTEGER,
+          payload TEXT NOT NULL,
+          updatedAt TEXT NOT NULL
+        )
+      ''');
+    }
+    if (oldVersion < 51) {
+      await _ensureCarWashServicesTable(db);
+    }
     await _ensureRbacFoundation(db);
     await _ensureBranchTopology(db);
+    await ensureUserStoreBrandingTable(db);
   }
 
   // ── Schema helpers (ensure/create) ────────────────────────────────────────
@@ -2862,6 +2971,15 @@ class DatabaseHelper {
         note TEXT
       )
     ''');
+    // جداول قديمة أُنشئت قبل المزامنة — أضف أعمدة sync إن نقصت.
+    await ensureFinancialGlobalIdSchema(db);
+    if (!await _tableHasColumn(db, 'customer_debt_payments', 'tenantId')) {
+      try {
+        await db.execute(
+          'ALTER TABLE customer_debt_payments ADD COLUMN tenantId INTEGER NOT NULL DEFAULT 1',
+        );
+      } catch (_) {}
+    }
   }
 
   /// موردون + وصولاتهم (ذمم دائنة AP) + دفعات للمورد.

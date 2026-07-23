@@ -40,6 +40,16 @@ class AppSettingsRepository {
     return get(_tenantScopedKey(key, tenantId));
   }
 
+  /// إعداد خاص بمستخدم داخل المستأجر: `t:{tenant}:u:{userId}:{key}`.
+  Future<String?> getForTenantUser(
+    String key, {
+    required int userId,
+    int tenantId = 1,
+  }) {
+    if (userId <= 0) return Future<String?>.value(null);
+    return get(_tenantUserScopedKey(key, tenantId: tenantId, userId: userId));
+  }
+
   Future<void> set(String key, String value) async {
     final db = await _db;
     await _ensureSettingsTable(db);
@@ -55,6 +65,21 @@ class AppSettingsRepository {
     return set(_tenantScopedKey(key, tenantId), value);
   }
 
+  Future<void> setForTenantUser(
+    String key,
+    String value, {
+    required int userId,
+    int tenantId = 1,
+  }) {
+    if (userId <= 0) {
+      throw ArgumentError.value(userId, 'userId', 'must be > 0');
+    }
+    return set(
+      _tenantUserScopedKey(key, tenantId: tenantId, userId: userId),
+      value,
+    );
+  }
+
   Future<int> getActiveTenantId() async {
     final raw = await get(_activeTenantIdKey);
     return int.tryParse(raw ?? '') ?? 1;
@@ -68,6 +93,15 @@ class AppSettingsRepository {
   String _tenantScopedKey(String key, int tenantId) {
     final v = tenantId <= 0 ? 1 : tenantId;
     return 't:$v:$key';
+  }
+
+  String _tenantUserScopedKey(
+    String key, {
+    required int tenantId,
+    required int userId,
+  }) {
+    final t = tenantId <= 0 ? 1 : tenantId;
+    return 't:$t:u:$userId:$key';
   }
 
   Future<Map<String, String>> getKeys(Iterable<String> keys) async {

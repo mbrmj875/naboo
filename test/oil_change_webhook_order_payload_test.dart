@@ -23,6 +23,7 @@ void main() {
     'requestedServices': 'غيار زيت,فحص',
     'agreedPriceFils': 75000000,
     'advancePaymentFils': 25000000,
+    'createdAt': '2026-07-19T10:00:00.000Z',
   };
 
   test('auto whatsapp message includes requested fields without invoice', () {
@@ -46,8 +47,38 @@ void main() {
     expect(msg.contains('غيار زيت'), isTrue);
     expect(msg.contains('75,000'), isTrue);
     expect(msg.contains('25,000'), isTrue);
+    expect(msg.contains('تاريخ الخدمة'), isTrue);
+    expect(msg.contains('19/07/2026'), isTrue);
     expect(msg.contains('فاتورة'), isFalse);
     expect(msg.contains('invoice'), isFalse);
+    expect(msg.contains('تخفيض'), isFalse);
+  });
+
+  test('pdf filename includes service date', () {
+    expect(
+      oilChangeServicePdfFilename(sampleOrder),
+      'oil_change_2026-07-19.pdf',
+    );
+  });
+
+  test('auto whatsapp message describes discount when agreed below estimate', () {
+    final msg = buildOilChangeAutoWhatsAppMessage(
+      storeTitle: 'مركز النجوم',
+      order: {
+        ...sampleOrder,
+        'estimatedPriceFils': 30000000,
+        'agreedPriceFils': 20000000,
+        'advancePaymentFils': 20000000,
+      },
+    );
+
+    expect(msg, contains('كان السعر'));
+    expect(msg, contains('30,000'));
+    expect(msg, contains('وتم خصم'));
+    expect(msg, contains('10,000'));
+    expect(msg, contains('بتخفيض'));
+    expect(msg, contains('وأصبح السعر'));
+    expect(msg, contains('20,000'));
   });
 
   test('webhook payload mirrors auto message fields', () {

@@ -147,6 +147,7 @@ extension on BusinessSetupSettingsData {
       enableOilChange: enableOilChange,
       enableRepairServices: enableRepairServices,
       enablePos: enablePos ?? this.enablePos,
+      enableCarWash: false,
       enableServices: enableServices,
     );
   }

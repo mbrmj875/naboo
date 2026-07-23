@@ -1,0 +1,117 @@
+{
+  "name": "NaBoo Oil Change — WhatsApp Campaign Batch",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "oil-change-campaign",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-campaign",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        320
+      ],
+      "webhookId": "oil-change-campaign"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body ?? $input.first().json;\n\nconst secretNew = ($env.WEBHOOK_SECRET || '').toString();\nconst secretOld = ($env.WEBHOOK_SECRET_OLD || '').toString();\nconst webhookSecret = (body.webhook_secret ?? '').toString().trim();\nif (!secretNew) throw new Error('MISSING WEBHOOK_SECRET_env');\nif (!webhookSecret) throw new Error('MISSING webhook_secret');\nlet secret_used = '';\nif (webhookSecret === secretNew) secret_used = 'new';\nelse if (secretOld && webhookSecret === secretOld) secret_used = 'old';\nelse throw new Error('UNAUTHORIZED');\n\nconst tenantId = (body.tenant_id ?? '').toString().trim();\nconst instanceFromBody = (body.instance_name ?? '').toString().trim();\nconst instanceName = instanceFromBody;\nif (!instanceName) throw new Error('MISSING instance_name');\n\nconst raw = Array.isArray(body.messages) ? body.messages : [];\nif (raw.length === 0) throw new Error('MISSING messages');\n\nconst intervalSeconds = Math.max(5, Number(body.interval_seconds) || 30);\nconst restEvery = Math.max(0, Number(body.rest_every_messages) || 25);\nconst restMinutes = Math.max(1, Number(body.rest_minutes) || 5);\n\nconst messages = [];\nfor (const m of raw) {\n  const phoneRaw = (m.customer_phone ?? '').toString().trim();\n  let digits = phoneRaw.replace(/\\D/g, '');\n  if (digits.startsWith('0')) digits = '964' + digits.slice(1);\n  else if (digits.length === 10 && digits.startsWith('7')) digits = '964' + digits;\n  const text = (m.message_text ?? '').toString().trim();\n  if (!digits || !text) continue;\n  messages.push({\n    phone: digits,\n    message_text: text,\n    order_id: m.order_id ?? null,\n    customer_name: (m.customer_name ?? '').toString(),\n  });\n}\n\nif (messages.length === 0) throw new Error('NO_VALID_MESSAGES');\n\nreturn [{\n  json: {\n    instanceName,\n    secret_used,\n    tenant_id: tenantId,\n    accepted: messages.length,\n    interval_seconds: intervalSeconds,\n    rest_every_messages: restEvery,\n    rest_minutes: restMinutes,\n    messages,\n  },\n}];"
+      },
+      "id": "validate-batch",
+      "name": "Validate Batch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"ok\": true,\n  \"accepted\": {{ $json.accepted }},\n  \"instanceName\": {{ JSON.stringify($json.instanceName) }},\n  \"secret_used\": {{ JSON.stringify($json.secret_used || '') }}\n}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "respond-accepted",
+      "name": "Respond Accepted",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        640,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const root = $input.first().json;\nconst messages = Array.isArray(root.messages) ? root.messages : [];\nconst instance = (root.instanceName || '').toString();\nconst evolutionBase = ($env.EVOLUTION_BASE_URL || 'http://72.61.191.237:8080').replace(/\\/$/, '');\nconst apiKey = $env.EVOLUTION_API_KEY;\n\nconst intervalMs = Math.max(5, Number(root.interval_seconds) || 30) * 1000;\nconst restEvery = Math.max(0, Number(root.rest_every_messages) || 25);\nconst restMs = Math.max(1, Number(root.rest_minutes) || 5) * 60 * 1000;\n\nconst sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));\n\nconst results = [];\nfor (let i = 0; i < messages.length; i++) {\n  const item = messages[i] || {};\n  const phone = (item.phone || '').toString();\n  const text = (item.message_text || '').toString();\n  let ok = false;\n  let reason = '';\n  try {\n    if (!phone || !text) {\n      reason = 'missing_phone_or_text';\n    } else {\n      await this.helpers.httpRequest({\n        method: 'POST',\n        url: `${evolutionBase}/message/sendText/${instance}`,\n        headers: {\n          apikey: apiKey,\n          'Content-Type': 'application/json',\n        },\n        body: { number: phone, text },\n        json: true,\n        timeout: 30000,\n      });\n      ok = true;\n    }\n  } catch (e) {\n    reason = (e.message || String(e)).slice(0, 200);\n  }\n\n  results.push({\n    json: {\n      phone,\n      message_text: text,\n      order_id: item.order_id ?? null,\n      customer_name: item.customer_name ?? '',\n      instanceName: instance,\n      send_ok: ok,\n      send_reason: reason,\n      index: i + 1,\n      total: messages.length,\n    },\n  });\n\n  if (i < messages.length - 1) {\n    let waitMs = intervalMs;\n    if (restEvery > 0 && (i + 1) % restEvery === 0) {\n      waitMs += restMs;\n    }\n    await sleep(waitMs);\n  }\n}\n\nreturn results;"
+      },
+      "id": "send-all-sequentially",
+      "name": "Send All Sequentially",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        320
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate Batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Batch": {
+      "main": [
+        [
+          {
+            "node": "Respond Accepted",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond Accepted": {
+      "main": [
+        [
+          {
+            "node": "Send All Sequentially",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": [
+    {
+      "name": "naboo"
+    },
+    {
+      "name": "oil-change"
+    },
+    {
+      "name": "whatsapp-campaign"
+    }
+  ]
+}

@@ -67,6 +67,10 @@ secrets/
 # Cursor MCP — قد يحتوي مفاتيح Stitch وغيرها
 .cursor/mcp.json
 
+# ملفات تحوي أسرار السيرفر — لا تُرفع إطلاقاً
+infra/hostinger/ACCESS_REFERENCE_AR.md
+infra/hostinger/SECRETS_ROTATION_2026-07-19.md
+
 # Local backup snapshots (do not push to GitHub)
 *.backup
 /backup/

@@ -45,9 +45,14 @@ android {
         applicationId = "com.basra.storemanager"
         minSdk = flutter.minSdkVersion
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = flutter.versionCode
+        versionName = flutter.versionName
         manifestPlaceholders["googleMapsApiKey"] = googleMapsApiKey
+        // هواتف أندرويد القديمة (32-bit) والجديدة (64-bit) في حزمة واحدة.
+        ndk {
+            abiFilters.clear()
+            abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a"))
+        }
     }
 
     signingConfigs {
@@ -74,6 +79,7 @@ android {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+    implementation("androidx.core:core-splashscreen:1.0.1")
 }
 
 flutter {

@@ -4,6 +4,7 @@ import '../models/oil_change_service_item.dart';
 import '../../../services/product_repository.dart';
 import '../../../services/service_orders_repository.dart';
 import '../../../utils/iqd_money.dart';
+import '../../../utils/iraqi_currency_format.dart';
 import '../utils/oil_change_filter_format.dart';
 import '../utils/oil_change_log_format.dart';
 import 'oil_change_services_repository.dart';
@@ -233,15 +234,20 @@ class OilChangeInvoiceBuilder {
     final out = <InvoiceItem>[];
     for (final kind in OilChangeFilterKind.all) {
       final name = (order[kind.nameColumnKey] ?? '').toString().trim();
-      if (name.isEmpty) continue;
-      final fils = (order[kind.priceColumnKey] as num?)?.toInt() ?? 0;
-      if (fils <= 0) continue;
+      final priceFils = (order[kind.priceColumnKey] as num?)?.toInt() ?? 0;
+      if (priceFils <= 0) continue;
       final line = oilFilterLineLabel(
         kindLabel: kind.label,
         name: name,
-        priceFils: fils,
+        priceFils: priceFils,
       );
-      out.add(_filsLine(name: line ?? '${kind.label}: $name', fils: fils));
+      out.add(
+        _filsLine(
+          name: line ??
+              '${kind.label}: ${IraqiCurrencyFormat.formatIqd(IqdMoney.fromFils(priceFils))}',
+          fils: priceFils,
+        ),
+      );
     }
     return out;
   }

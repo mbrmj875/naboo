@@ -92,6 +92,8 @@ abstract class AppContentRoutes {
   static const oilChangeServiceCreate = 'app_oil_change_service_create';
   static const oilChangeServiceEditPrefix = 'app_oil_change_service_edit_';
   static const oilInvoices = 'app_oil_invoices';
+  static const carWashCreate = 'app_car_wash_create';
+  static const carWashLog = 'app_car_wash_log';
   static const pharmacyInvoices = 'app_pharmacy_invoices';
   static const pharmacyInvoiceDetailPrefix = 'app_pharmacy_invoice_detail_';
 
@@ -132,6 +134,7 @@ enum FeatureGateId {
   debts,
   pos,
   oilChange,
+  carWash,
   repairServices,
   customers,
   loyalty,
@@ -178,6 +181,10 @@ const Map<FeatureGateId, List<String>> featureRouteMapping = {
     AppContentRoutes.oilChangeHub,
     AppContentRoutes.oilChangeCreate,
     AppContentRoutes.oilInvoices,
+  ],
+  FeatureGateId.carWash: [
+    AppContentRoutes.carWashCreate,
+    AppContentRoutes.carWashLog,
   ],
   FeatureGateId.repairServices: [
     AppContentRoutes.servicesHub,
@@ -289,6 +296,8 @@ bool _isBusinessFeatureEnabled(
   switch (featureKey) {
     case BusinessSetupKeys.enableOilChange:
       return data.enableOilChange;
+    case BusinessSetupKeys.enableCarWash:
+      return data.enableCarWash;
     case BusinessSetupKeys.enableInstallments:
       return data.enableInstallments;
     case BusinessSetupKeys.enableDebts:
@@ -328,6 +337,8 @@ bool _isFeatureGateEnabled(FeatureGateId id, BusinessSetupSettingsData data) {
       return data.enablePos;
     case FeatureGateId.oilChange:
       return data.enableOilChange;
+    case FeatureGateId.carWash:
+      return data.enableCarWash && data.enableOilChange;
     case FeatureGateId.repairServices:
       return data.enableRepairServices;
     case FeatureGateId.customers:
@@ -608,6 +619,10 @@ String breadcrumbFallbackTitleForRouteId(String id) {
       return 'إضافة خدمة غيار زيت';
     case AppContentRoutes.oilChangeCreate:
       return 'بطاقة غيار زيت جديدة';
+    case AppContentRoutes.carWashCreate:
+      return 'غسل سيارة';
+    case AppContentRoutes.carWashLog:
+      return 'سجل الغسل';
     case AppContentRoutes.oilInvoices:
       return 'فواتير غيار الزيت';
     case AppContentRoutes.pharmacyInvoices:
@@ -728,6 +743,9 @@ IconData breadcrumbIconForRouteId(String id) {
     case AppContentRoutes.oilChangeServiceCreate:
     case AppContentRoutes.oilInvoices:
       return Icons.opacity_rounded;
+    case AppContentRoutes.carWashCreate:
+    case AppContentRoutes.carWashLog:
+      return Icons.local_car_wash_rounded;
     case AppContentRoutes.pharmacyInvoices:
       return Icons.medication_liquid_rounded;
     default:
@@ -823,6 +841,8 @@ const Map<String, String> routeParentMapping = {
   AppContentRoutes.oilChangeServices: AppContentRoutes.oilChangeHub,
   AppContentRoutes.oilChangeServiceCreate: AppContentRoutes.oilChangeServices,
   AppContentRoutes.oilChangeCreate: AppContentRoutes.oilChangeHub,
+  AppContentRoutes.carWashCreate: AppContentRoutes.oilChangeHub,
+  AppContentRoutes.carWashLog: AppContentRoutes.oilChangeHub,
   AppContentRoutes.oilInvoices: AppContentRoutes.oilChangeHub,
   AppContentRoutes.pharmacyInvoices: AppContentRoutes.invoices,
 };

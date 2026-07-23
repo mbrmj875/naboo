@@ -105,10 +105,20 @@ Future<NativeGoogleIdTokenSignInResult> signInWithGoogleNativeIdToken() async {
   }
 
   final googleAuth = await account.authentication;
+  final idToken = googleAuth.idToken;
+  if (idToken == null || idToken.isEmpty) {
+    AppLogger.warn(
+      'NativeGoogleIdToken',
+      'idToken empty after GoogleSignIn — check Android SHA-1 and serverClientId',
+    );
+    return NativeGoogleIdTokenSignInResult.error(
+      'تعذر الحصول على رمز Google. تأكد من إعداد SHA-1 وGOOGLE_WEB_CLIENT_ID.',
+    );
+  }
   final ok = await _exchangeGoogleIdTokenForSupabaseSession(googleAuth);
   if (!ok) {
     return NativeGoogleIdTokenSignInResult.error(
-      'تعذر الحصول على رمز Google. تأكد من إعداد SHA-1 وGOOGLE_WEB_CLIENT_ID.',
+      'تعذر إكمال الدخول عبر Google. حاول مرة أخرى أو استخدم البريد ورمز PIN.',
     );
   }
   return NativeGoogleIdTokenSignInResult.success();

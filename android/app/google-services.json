@@ -14,6 +14,14 @@
       },
       "oauth_client": [
         {
+          "client_id": "281392172783-qe0s87g7ru4sgtvei3logu5v43sqr2dk.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.basra.storemanager",
+            "certificate_hash": "79440d68200a115276a90ee1b40d119307ef713d"
+          }
+        },
+        {
           "client_id": "281392172783-t4urj8tpd85sig8osv2te2aefvk18stb.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {

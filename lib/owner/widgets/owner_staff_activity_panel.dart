@@ -690,9 +690,10 @@ class _FintrackActivityRow extends StatelessWidget {
           : (showStaffBadge && entry.title.trim().isNotEmpty
               ? entry.title.trim()
               : '');
-      final description = entry.subtitle.trim().isNotEmpty
-          ? entry.subtitle.trim()
-          : entry.title.trim();
+      final actionTitle = entry.title.trim();
+      final description = entry.subtitle.trim();
+      final kindLabel = _kindLabelAr(entry.kind);
+      final clock = _clockLabel(entry.at);
 
       return Material(
         color: Colors.transparent,
@@ -717,35 +718,75 @@ class _FintrackActivityRow extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      if (staffLine.isNotEmpty)
-                        Text(
-                          staffLine,
-                          style: TextStyle(
-                            fontWeight: FontWeight.w800,
-                            fontSize: 13.5,
-                            color: scheme.onSurface,
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              staffLine.isNotEmpty ? staffLine : actionTitle,
+                              style: TextStyle(
+                                fontWeight: FontWeight.w800,
+                                fontSize: 13.5,
+                                color: scheme.onSurface,
+                              ),
+                            ),
                           ),
-                        ),
-                      if (staffLine.isNotEmpty) const SizedBox(height: 2),
+                          Container(
+                            padding: const EdgeInsetsDirectional.symmetric(
+                              horizontal: 7,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: accent.withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              kindLabel,
+                              style: TextStyle(
+                                fontSize: 10.5,
+                                fontWeight: FontWeight.w800,
+                                color: accent,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 3),
                       Text(
-                        entry.relativeTimeLabel,
+                        '$clock · ${entry.relativeTimeLabel}',
                         style: TextStyle(
                           fontSize: 11.5,
                           color: scheme.onSurfaceVariant,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
-                      if (description.isNotEmpty) ...[
+                      if (staffLine.isNotEmpty &&
+                          actionTitle.isNotEmpty &&
+                          actionTitle != staffLine) ...[
                         const SizedBox(height: 4),
                         Text(
-                          description,
-                          maxLines: 2,
+                          actionTitle,
+                          maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             fontSize: 12.5,
                             height: 1.25,
                             color: scheme.onSurface,
-                            fontWeight: FontWeight.w600,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                      if (description.isNotEmpty &&
+                          description != actionTitle) ...[
+                        const SizedBox(height: 3),
+                        Text(
+                          description,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12,
+                            height: 1.25,
+                            color: scheme.onSurfaceVariant,
+                            fontWeight: FontWeight.w500,
                           ),
                         ),
                       ],
@@ -763,6 +804,13 @@ class _FintrackActivityRow extends StatelessWidget {
                           ? scheme.error
                           : scheme.primary,
                     ),
+                  ),
+                ] else if (onTap != null) ...[
+                  const SizedBox(width: 4),
+                  Icon(
+                    Icons.chevron_left_rounded,
+                    size: 20,
+                    color: scheme.onSurfaceVariant.withValues(alpha: 0.5),
                   ),
                 ],
               ],
@@ -891,6 +939,34 @@ class _FintrackActivityRow extends StatelessWidget {
       case RecentActivityKind.workShift:
         return Icons.schedule_rounded;
     }
+  }
+
+  static String _kindLabelAr(RecentActivityKind kind) {
+    switch (kind) {
+      case RecentActivityKind.invoice:
+        return 'فاتورة';
+      case RecentActivityKind.cashMovement:
+        return 'صندوق';
+      case RecentActivityKind.parkedSale:
+        return 'معلّقة';
+      case RecentActivityKind.loyalty:
+        return 'ولاء';
+      case RecentActivityKind.stockVoucher:
+        return 'مخزون';
+      case RecentActivityKind.customerCreated:
+        return 'عميل';
+      case RecentActivityKind.productCreated:
+        return 'صنف';
+      case RecentActivityKind.workShift:
+        return 'وردية';
+    }
+  }
+
+  static String _clockLabel(DateTime at) {
+    final local = at.toLocal();
+    final h = local.hour.toString().padLeft(2, '0');
+    final m = local.minute.toString().padLeft(2, '0');
+    return '$h:$m';
   }
 
   static Color _accentForKind(RecentActivityKind kind) {

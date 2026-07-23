@@ -82,6 +82,7 @@ void main() {
         enableOilChange: false,
         enableRepairServices: false,
         enablePos: true,
+      enableCarWash: false,
         enableServices: true,
       );
       final snapshot = OwnerCommandCenterSnapshot(
@@ -127,6 +128,7 @@ void main() {
         enableOilChange: true,
         enableRepairServices: false,
         enablePos: false,
+      enableCarWash: false,
         enableServices: true,
       );
       final snapshot = OwnerCommandCenterSnapshot(

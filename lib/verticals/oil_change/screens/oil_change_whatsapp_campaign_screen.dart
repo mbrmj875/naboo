@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../../config/oil_change_whatsapp_config.dart';
 import '../../../theme/design_tokens.dart';
 import '../../../widgets/inputs/arabic_speech_mic_button.dart';
 import '../models/oil_change_campaign_recipient.dart';
@@ -30,6 +31,9 @@ class OilChangeWhatsappCampaignScreen extends StatefulWidget {
     required String storeTitle,
     required bool gatewayConnected,
   }) {
+    if (!OilChangeWhatsappConfig.campaignUiEnabled) {
+      return Future<void>.value();
+    }
     return Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
         fullscreenDialog: true,
@@ -239,8 +243,9 @@ class _OilChangeWhatsappCampaignScreenState
       builder: (ctx) => AlertDialog(
         title: const Text('بدء الحملة'),
         content: Text(
-          'سيتم إرسال ${recipients.length} رسالة '
-          'بفاصل ${_settings.intervalSeconds} ثانية بين كل رسالة.\n'
+          'سيتم تسليم ${recipients.length} رسالة إلى السيرفر، '
+          'ثم يُرسلها تلقائياً بفاصل ${_settings.intervalSeconds} ثانية.\n\n'
+          'يمكنك إغلاق التطبيق بعد التسليم — الإرسال يكمل على السيرفر.\n'
           'الوقت التقريبي: ${_formatEta(_settings.estimatedSecondsForCount(recipients.length))}',
           textAlign: TextAlign.start,
         ),

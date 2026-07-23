@@ -2,7 +2,8 @@
 enum OilChangeFilterKind {
   engine('engine', 'فلتر المحرك'),
   air('air', 'فلتر الهواء'),
-  gear('gear', 'فلتر الكير');
+  gear('gear', 'فلتر الكير'),
+  cooling('cooling', 'فلتر التبريد');
 
   const OilChangeFilterKind(this.code, this.label);
 

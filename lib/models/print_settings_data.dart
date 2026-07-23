@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:pdf/pdf.dart';
 
@@ -29,6 +30,8 @@ class PrintSettingsData {
     required this.storeAddress,
     required this.storePhones,
     required this.footerExtra,
+    this.storeLogoBase64,
+    this.storeLogoMime,
   });
 
   factory PrintSettingsData.defaults() => const PrintSettingsData(
@@ -44,6 +47,8 @@ class PrintSettingsData {
         storeAddress: '',
         storePhones: [],
         footerExtra: '',
+        storeLogoBase64: null,
+        storeLogoMime: null,
       );
 
   final PrintPaperFormat paperFormat;
@@ -69,6 +74,23 @@ class PrintSettingsData {
   /// أسطر إضافية أسفل الإيصال (شروط، شكر، ملاحظات).
   final String footerExtra;
 
+  /// شعار المتجر (Base64) — يظهر أعلى الإيصال وPDF واتساب.
+  final String? storeLogoBase64;
+
+  /// نوع MIME للشعار (مثل image/png).
+  final String? storeLogoMime;
+
+  /// بايتات الشعار للعرض/الطباعة (أو null إن لم يُضبط).
+  Uint8List? get storeLogoBytes {
+    final b64 = storeLogoBase64?.trim();
+    if (b64 == null || b64.isEmpty) return null;
+    try {
+      return base64Decode(b64);
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// أسطر تحت اسم المتجر في الإيصال (عنوان + هواتف).
   List<String> get receiptStoreContactLines {
     final out = <String>[];
@@ -79,6 +101,26 @@ class PrintSettingsData {
       if (t.isNotEmpty) out.add(t);
     }
     return out;
+  }
+
+  /// تذييل واتساب من بيانات المتجر: عنوان + هواتف + التذييل الإضافي إن وُجد.
+  String get whatsappStoreFooter {
+    final parts = <String>[];
+    final addr = storeAddress.trim();
+    if (addr.isNotEmpty) parts.add(addr);
+    for (final p in storePhones) {
+      final t = p.trim();
+      if (t.isNotEmpty) parts.add(t);
+    }
+    final extra = footerExtra.trim();
+    if (extra.isNotEmpty) parts.add(extra);
+    return parts.join('\n');
+  }
+
+  /// اسم المتجر للعرض في الرسائل (فارغ → المحل).
+  String get whatsappStoreTitle {
+    final t = storeTitleLine.trim();
+    return t.isEmpty ? 'المحل' : t;
   }
 
   /// تنسيق صفحة PDF للمعاينة والطباعة.
@@ -107,6 +149,10 @@ class PrintSettingsData {
         'storeAddress': storeAddress,
         'storePhones': storePhones,
         'footerExtra': footerExtra,
+        if (storeLogoBase64 != null && storeLogoBase64!.trim().isNotEmpty)
+          'storeLogoBase64': storeLogoBase64,
+        if (storeLogoMime != null && storeLogoMime!.trim().isNotEmpty)
+          'storeLogoMime': storeLogoMime,
       };
 
   factory PrintSettingsData.fromJson(Map<String, dynamic> m) {
@@ -138,7 +184,15 @@ class PrintSettingsData {
       storeAddress: m['storeAddress'] as String? ?? d.storeAddress,
       storePhones: _phonesFromJson(m['storePhones']),
       footerExtra: m['footerExtra'] as String? ?? d.footerExtra,
+      storeLogoBase64: _optionalTrimmedString(m['storeLogoBase64']),
+      storeLogoMime: _optionalTrimmedString(m['storeLogoMime']),
     );
+  }
+
+  static String? _optionalTrimmedString(Object? raw) {
+    if (raw == null) return null;
+    final t = raw.toString().trim();
+    return t.isEmpty ? null : t;
   }
 
   static List<String> _phonesFromJson(Object? raw) {
@@ -207,6 +261,9 @@ class PrintSettingsData {
     String? storeAddress,
     List<String>? storePhones,
     String? footerExtra,
+    String? storeLogoBase64,
+    String? storeLogoMime,
+    bool clearStoreLogo = false,
   }) {
     return PrintSettingsData(
       paperFormat: paperFormat ?? this.paperFormat,
@@ -222,6 +279,10 @@ class PrintSettingsData {
       storeAddress: storeAddress ?? this.storeAddress,
       storePhones: storePhones ?? this.storePhones,
       footerExtra: footerExtra ?? this.footerExtra,
+      storeLogoBase64:
+          clearStoreLogo ? null : (storeLogoBase64 ?? this.storeLogoBase64),
+      storeLogoMime:
+          clearStoreLogo ? null : (storeLogoMime ?? this.storeLogoMime),
     );
   }
 }

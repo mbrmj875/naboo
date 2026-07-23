@@ -15,6 +15,7 @@ class OwnerCommandCenterSnapshot {
     this.salesSparkline = const OwnerSectionResult.idle(),
     this.oilActiveCars,
     this.oilChangesCount,
+    this.carWashCount,
     this.oilStockShortages,
     this.oilAvgTicket,
     this.hybridRevenueSplit,
@@ -34,6 +35,7 @@ class OwnerCommandCenterSnapshot {
   final OwnerSectionResult<List<int>>? salesSparkline;
   final OwnerSectionResult<OilActiveCarsKpi>? oilActiveCars;
   final OwnerSectionResult<OilChangesKpi>? oilChangesCount;
+  final OwnerSectionResult<OilChangesKpi>? carWashCount;
   final OwnerSectionResult<InventoryAlert>? oilStockShortages;
   final OwnerSectionResult<OilAvgTicketKpi>? oilAvgTicket;
   final OwnerSectionResult<HybridRevenueKpi>? hybridRevenueSplit;
@@ -55,6 +57,7 @@ class OwnerCommandCenterSnapshot {
     if (salesSparkline != null) yield salesSparkline!;
     if (oilActiveCars != null) yield oilActiveCars!;
     if (oilChangesCount != null) yield oilChangesCount!;
+    if (carWashCount != null) yield carWashCount!;
     if (oilStockShortages != null) yield oilStockShortages!;
     if (oilAvgTicket != null) yield oilAvgTicket!;
     if (hybridRevenueSplit != null) yield hybridRevenueSplit!;
@@ -101,6 +104,7 @@ class OwnerCommandCenterSnapshot {
     add('مخطط المبيعات', salesSparkline);
     add('سيارات قيد الخدمة', oilActiveCars);
     add('تغييرات الزيت', oilChangesCount);
+    add('غسل السيارات', carWashCount);
     add('مخزون مواد الزيت', oilStockShortages);
     add('متوسط الفاتورة (زيت)', oilAvgTicket);
     add('توزيع الإيرادات الهجين', hybridRevenueSplit);
@@ -122,6 +126,7 @@ class OwnerCommandCenterSnapshot {
     OwnerSectionResult<List<int>>? salesSparkline,
     OwnerSectionResult<OilActiveCarsKpi>? oilActiveCars,
     OwnerSectionResult<OilChangesKpi>? oilChangesCount,
+    OwnerSectionResult<OilChangesKpi>? carWashCount,
     OwnerSectionResult<InventoryAlert>? oilStockShortages,
     OwnerSectionResult<OilAvgTicketKpi>? oilAvgTicket,
     OwnerSectionResult<HybridRevenueKpi>? hybridRevenueSplit,
@@ -150,6 +155,7 @@ class OwnerCommandCenterSnapshot {
       oilActiveCars: clearCatalog ? null : (oilActiveCars ?? this.oilActiveCars),
       oilChangesCount:
           clearCatalog ? null : (oilChangesCount ?? this.oilChangesCount),
+      carWashCount: clearCatalog ? null : (carWashCount ?? this.carWashCount),
       oilStockShortages:
           clearCatalog ? null : (oilStockShortages ?? this.oilStockShortages),
       oilAvgTicket: clearCatalog ? null : (oilAvgTicket ?? this.oilAvgTicket),

@@ -19,11 +19,16 @@ class OwnerSensitiveActionsPanel extends StatefulWidget {
     required this.tenantId,
     this.maxHeight = 320,
     this.fullScreen = false,
+    this.compact = false,
+    this.onEventTap,
   });
 
   final int tenantId;
   final double maxHeight;
   final bool fullScreen;
+  /// معاينة مختصرة: آخر 3 أحداث فقط (مثل نشاط الموظفين).
+  final bool compact;
+  final void Function(BusinessAuditEvent event)? onEventTap;
 
   @override
   State<OwnerSensitiveActionsPanel> createState() =>
@@ -31,6 +36,8 @@ class OwnerSensitiveActionsPanel extends StatefulWidget {
 }
 
 class _OwnerSensitiveActionsPanelState extends State<OwnerSensitiveActionsPanel> {
+  static const int _previewCount = 3;
+
   final List<BusinessAuditEvent> _events = [];
   bool _loading = false;
   bool _loadingMore = false;
@@ -44,6 +51,14 @@ class _OwnerSensitiveActionsPanelState extends State<OwnerSensitiveActionsPanel>
     return _events.where((e) => e.category == filter).toList(growable: false);
   }
 
+  List<BusinessAuditEvent> get _displayEvents {
+    final visible = _visibleEvents;
+    if (widget.fullScreen || !widget.compact) return visible;
+    return visible.take(_previewCount).toList(growable: false);
+  }
+
+  bool get _showCategoryFilters => widget.fullScreen || !widget.compact;
+
   void _openFullScreen() {
     openOwnerDashboardFullScreenPanel(
       context,
@@ -51,6 +66,7 @@ class _OwnerSensitiveActionsPanelState extends State<OwnerSensitiveActionsPanel>
       body: OwnerSensitiveActionsPanel(
         fullScreen: true,
         tenantId: widget.tenantId,
+        onEventTap: widget.onEventTap,
       ),
     );
   }
@@ -139,7 +155,7 @@ class _OwnerSensitiveActionsPanelState extends State<OwnerSensitiveActionsPanel>
   }
 
   Widget _buildListSection(BuildContext context, ColorScheme cs) {
-    final visible = _visibleEvents;
+    final visible = _displayEvents;
 
     if (_loading) {
       return const OwnerKpiCardSkeleton(height: 120);
@@ -153,11 +169,28 @@ class _OwnerSensitiveActionsPanelState extends State<OwnerSensitiveActionsPanel>
         icon: Icons.shield_outlined,
       );
     }
-    if (visible.isEmpty) {
+    if (_visibleEvents.isEmpty) {
       return OwnerSectionEmpty(
         message: 'لا سجلات في هذا التصنيف.',
         icon: Icons.filter_alt_outlined,
         onRetry: () => setState(() => _categoryFilter = null),
+      );
+    }
+
+    if (!widget.fullScreen && widget.compact) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (var i = 0; i < visible.length; i++) ...[
+            if (i > 0) const SizedBox(height: 6),
+            _AuditEventTile(
+              event: visible[i],
+              onTap: widget.onEventTap == null
+                  ? null
+                  : () => widget.onEventTap!(visible[i]),
+            ),
+          ],
+        ],
       );
     }
 
@@ -177,7 +210,13 @@ class _OwnerSensitiveActionsPanelState extends State<OwnerSensitiveActionsPanel>
                 : const Text('عرض المزيد'),
           );
         }
-        return _AuditEventTile(event: visible[index]);
+        final event = visible[index];
+        return _AuditEventTile(
+          event: event,
+          onTap: widget.onEventTap == null
+              ? null
+              : () => widget.onEventTap!(event),
+        );
       },
     );
 
@@ -271,11 +310,13 @@ class _OwnerSensitiveActionsPanelState extends State<OwnerSensitiveActionsPanel>
           ],
         ),
         const SizedBox(height: 6),
-        _AuditFilterBar(
-          selected: _categoryFilter,
-          onSelected: (value) => setState(() => _categoryFilter = value),
-        ),
-        const SizedBox(height: 8),
+        if (_showCategoryFilters) ...[
+          _AuditFilterBar(
+            selected: _categoryFilter,
+            onSelected: (value) => setState(() => _categoryFilter = value),
+          ),
+          const SizedBox(height: 8),
+        ],
         _buildListSection(context, cs),
       ],
     );
@@ -407,9 +448,10 @@ class _AuditFilterChip extends StatelessWidget {
 }
 
 class _AuditEventTile extends StatelessWidget {
-  const _AuditEventTile({required this.event});
+  const _AuditEventTile({required this.event, this.onTap});
 
   final BusinessAuditEvent event;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -420,84 +462,114 @@ class _AuditEventTile extends StatelessWidget {
     final actor = event.actorLabelAr;
     final time = _auditTimeFmt.format(event.createdAt);
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 6),
-      decoration: BoxDecoration(
-        color: sensitive
-            ? cs.errorContainer.withValues(alpha: 0.22)
-            : cs.surfaceContainerHighest.withValues(alpha: 0.35),
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: sensitive
-              ? cs.error.withValues(alpha: 0.35)
-              : OwnerDashboardGoldBorder.borderColor(cs: cs),
-        ),
-      ),
-      child: ListTile(
-        dense: true,
-        contentPadding: const EdgeInsetsDirectional.fromSTEB(10, 6, 10, 6),
-        leading: Icon(event.icon, color: accent, size: 22),
-        title: Row(
-          children: [
-            Expanded(
-              child: Text(
-                event.labelAr,
-                style: TextStyle(
-                  fontWeight: FontWeight.w800,
-                  fontSize: 14,
-                  color: cs.onSurface,
-                ),
-              ),
+        child: Container(
+          margin: const EdgeInsets.only(bottom: 6),
+          decoration: BoxDecoration(
+            color: sensitive
+                ? cs.errorContainer.withValues(alpha: 0.22)
+                : cs.surfaceContainerHighest.withValues(alpha: 0.35),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: sensitive
+                  ? cs.error.withValues(alpha: 0.35)
+                  : OwnerDashboardGoldBorder.borderColor(cs: cs),
             ),
-            if (sensitive)
-              Container(
-                padding: const EdgeInsetsDirectional.symmetric(
-                  horizontal: 6,
-                  vertical: 2,
+          ),
+          child: Padding(
+            padding: const EdgeInsetsDirectional.fromSTEB(10, 10, 10, 10),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: accent.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Icon(event.icon, color: accent, size: 20),
                 ),
-                decoration: BoxDecoration(
-                  color: cs.error.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Text(
-                  'حساس',
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w800,
-                    color: cs.error,
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              event.labelAr,
+                              style: TextStyle(
+                                fontWeight: FontWeight.w800,
+                                fontSize: 13.5,
+                                color: cs.onSurface,
+                              ),
+                            ),
+                          ),
+                          if (sensitive)
+                            Container(
+                              padding: const EdgeInsetsDirectional.symmetric(
+                                horizontal: 6,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: cs.error.withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                'حساس',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w800,
+                                  color: cs.error,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                      if (detail.isNotEmpty) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          detail,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w600,
+                            color: cs.onSurface,
+                            height: 1.3,
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 6),
+                      Text(
+                        '$actor · $time',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w600,
+                          color: cs.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-              ),
-          ],
-        ),
-        subtitle: Padding(
-          padding: const EdgeInsetsDirectional.only(top: 4),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              if (detail.isNotEmpty)
-                Text(
-                  detail,
-                  maxLines: 3,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: cs.onSurfaceVariant,
-                    height: 1.35,
+                if (onTap != null) ...[
+                  const SizedBox(width: 4),
+                  Icon(
+                    Icons.chevron_left_rounded,
+                    color: cs.onSurfaceVariant.withValues(alpha: 0.55),
+                    size: 20,
                   ),
-                ),
-              const SizedBox(height: 2),
-              Text(
-                '$actor · $time',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 11.5,
-                  color: cs.onSurfaceVariant.withValues(alpha: 0.85),
-                ),
-              ),
-            ],
+                ],
+              ],
+            ),
           ),
         ),
       ),

@@ -87,10 +87,12 @@ export function defaultAppRemoteConfig(): AppRemoteConfigPayload {
     sync_paused_globally: false,
     sync_paused_message_ar: "المزامنة موقوفة مؤقتاً من الخادم.",
     min_supported_version: "1.0.0",
-    latest_version: "2.0.1",
-    update_message_ar: "",
+    latest_version: "2.2.8",
+    update_message_ar:
+      "يتوفر تحديث جديد. اضغط «تحديث التطبيق الآن» ليُنزَّل ويُثبَّت تلقائياً.",
     force_update: false,
-    update_download_url: "",
+    update_download_url:
+      "https://github.com/mbrmj875/naboo/releases/latest/download/naboo.apk",
     announcement_title_ar: "",
     announcement_body_ar: "",
     announcement_url: "",
@@ -221,6 +223,18 @@ function displayNameFromUser(u: User): string | null {
   return null;
 }
 
+function phoneFromUserMetadata(u: User): string | null {
+  const direct = u.phone?.trim();
+  if (direct) return direct;
+  const metadata = u.user_metadata as Record<string, unknown> | undefined;
+  if (!metadata) return null;
+  for (const key of ["phone", "phone_number"]) {
+    const raw = metadata[key];
+    if (typeof raw === "string" && raw.trim()) return raw.trim();
+  }
+  return null;
+}
+
 export async function loadDashboardData(): Promise<{
   users: UserRow[];
   devices: DeviceRow[];
@@ -295,6 +309,23 @@ export async function loadDashboardData(): Promise<{
     profileById.set(row.id as string, row as ProfileRow);
   }
 
+  // الرقم الذي يطلبه التطبيق بعد Google/إنشاء الحساب يُحفظ هنا أيضاً.
+  // نقرأ الهاتف فقط؛ لا نجلب PIN hash/salt إلى لوحة الإدارة.
+  const ownerPhoneByUserId = new Map<string, string>();
+  {
+    const { data: ownerPhones, error: ownerPhoneErr } = await supabase
+      .from("owner_auth_secrets")
+      .select("user_id,phone");
+    if (ownerPhoneErr) {
+      errors.push(`owner_auth_secrets (أرقام الهواتف): ${ownerPhoneErr.message}`);
+    }
+    for (const row of ownerPhones ?? []) {
+      const userId = String(row.user_id ?? "").trim();
+      const phone = String(row.phone ?? "").trim();
+      if (userId && phone) ownerPhoneByUserId.set(userId, phone);
+    }
+  }
+
   const userRows: UserRow[] = users.map((u) => {
     const p = profileById.get(u.id);
     let trialEnds: string | null = null;
@@ -309,12 +340,12 @@ export async function loadDashboardData(): Promise<{
       const ms = end.getTime() - now;
       daysLeft = ms <= 0 ? 0 : Math.ceil(ms / 86400000);
     }
-    const licVerRaw = (p?.license_system_version ?? "v1").toString().trim().toLowerCase();
-    const license_system_version: "v1" | "v2" = licVerRaw === "v2" ? "v2" : "v1";
+    // v2 هو النظام الوحيد المعتمد. حتى الملف القديم/الناقص يُعرض v2.
+    const license_system_version: "v1" | "v2" = "v2";
     return {
       id: u.id,
       email: u.email ?? p?.email ?? null,
-      phone: u.phone ?? null,
+      phone: phoneFromUserMetadata(u) ?? ownerPhoneByUserId.get(u.id) ?? null,
       created_at: u.created_at,
       last_sign_in_at: u.last_sign_in_at ?? null,
       providers: userProviders(u),

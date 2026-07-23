@@ -23,6 +23,7 @@ import 'auth/ensure_fresh_session.dart';
 import 'snapshot_push_guards.dart';
 import 'snapshot_race_guard.dart';
 import 'sync_entity_types.dart';
+import 'user_store_branding_repository.dart';
 
 /// ضغط UTF-8 bytes فقط (بدون Base64) لاستخدامه في chunk v2.
 Uint8List gzipSnapshotUtf8(Uint8List raw) {
@@ -3013,6 +3014,7 @@ class CloudSyncService {
     } finally {
       await db.execute('PRAGMA foreign_keys = ON');
     }
+    await UserStoreBrandingRepository.rebindLocalUserIds(db);
     await _dbHelper.reconcileUserDirectoryAfterCloudImport();
   }
 
@@ -3870,10 +3872,64 @@ class CloudSyncService {
         );
         continue;
       }
-      if (table == 'print_settings' &&
-          _printSettingsLocalIdentityWins(current, incomingRaw)) {
-        // لا تستبدل اسم/شعار/هاتف المحل بصف فارغ أحدث زمنياً (إعادة تثبيت / جهاز جديد).
-        continue;
+      if (table == 'print_settings') {
+        final localBlank = _printSettingsPayloadIsBlank(current);
+        final remoteBlank = _printSettingsPayloadIsBlank(incomingRaw);
+        // جهاز جديد: صف محلي فارغ بتاريخ أحدث لا يجب أن يمنع بيانات المتجر من السحابة.
+        if (localBlank && !remoteBlank) {
+          await txn.insert(
+            table,
+            incoming,
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          );
+          continue;
+        }
+        // لا تستبدل اسم/شعار/هاتف المحل بصف فارغ أحدث زمنياً.
+        if (!localBlank && remoteBlank) {
+          continue;
+        }
+        // كلاهما معبّأ: ادمج حقول الهوية ثم طبّق الأحدث لباقي الإعدادات.
+        if (!localBlank && !remoteBlank) {
+          final merged = _mergePrintSettingsRow(
+            current: current,
+            incomingRaw: incomingRaw,
+            incomingPrepared: incoming,
+          );
+          await txn.insert(
+            table,
+            merged,
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          );
+          continue;
+        }
+      }
+      if (table == 'user_store_branding') {
+        final localBlank = _printSettingsPayloadIsBlank(current);
+        final remoteBlank = _printSettingsPayloadIsBlank(incomingRaw);
+        if (localBlank && !remoteBlank) {
+          await txn.insert(
+            table,
+            incoming,
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          );
+          continue;
+        }
+        if (!localBlank && remoteBlank) {
+          continue;
+        }
+        if (!localBlank && !remoteBlank) {
+          final merged = _mergeUserStoreBrandingRow(
+            current: current,
+            incomingRaw: incomingRaw,
+            incomingPrepared: incoming,
+          );
+          await txn.insert(
+            table,
+            merged,
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          );
+          continue;
+        }
       }
       if (_incomingWins(current, incomingRaw)) {
         if (_isGenericLwwBlockedForTable(table)) {
@@ -3914,14 +3970,152 @@ class CloudSyncService {
     }
   }
 
-  /// احتفظ بالمحل المحلي المعبأ أمام لقطة بعيدة فارغة (حتى لو أحدث updatedAt).
-  bool _printSettingsLocalIdentityWins(
-    Map<String, dynamic> current,
-    Map<String, dynamic> incoming,
-  ) {
-    final localFilled = !_printSettingsPayloadIsBlank(current);
-    final remoteBlank = _printSettingsPayloadIsBlank(incoming);
-    return localFilled && remoteBlank;
+  Map<String, dynamic> _decodePrintSettingsPayloadMap(Map<String, dynamic> row) {
+    final raw = (row['payload'] ?? '').toString();
+    if (raw.trim().isEmpty) return <String, dynamic>{};
+    try {
+      final m = jsonDecode(raw);
+      if (m is Map) {
+        return m.map((k, v) => MapEntry(k.toString(), v));
+      }
+    } catch (_) {}
+    return <String, dynamic>{};
+  }
+
+  /// دمج صفّي print_settings: هوية المتجر غير الفارغة لا تُمحى، وباقي الحقول LWW.
+  Map<String, dynamic> _mergePrintSettingsRow({
+    required Map<String, dynamic> current,
+    required Map<String, dynamic> incomingRaw,
+    required Map<String, dynamic> incomingPrepared,
+  }) {
+    final incomingWins = _incomingWins(current, incomingRaw);
+    final baseRow = incomingWins ? incomingPrepared : current;
+    final otherRow = incomingWins ? current : incomingPrepared;
+    final base = _decodePrintSettingsPayloadMap(baseRow);
+    final other = _decodePrintSettingsPayloadMap(otherRow);
+
+    String pickStr(String key) {
+      final a = (base[key] ?? '').toString().trim();
+      final b = (other[key] ?? '').toString().trim();
+      if (a.isNotEmpty) return a;
+      return b;
+    }
+
+    List<String> pickPhones() {
+      List<String> read(Map<String, dynamic> m) {
+        final raw = m['storePhones'];
+        if (raw is! List) return const [];
+        return raw
+            .map((e) => e.toString().trim())
+            .where((e) => e.isNotEmpty)
+            .toList();
+      }
+
+      final a = read(base);
+      final b = read(other);
+      if (a.isNotEmpty) return a;
+      return b;
+    }
+
+    final mergedPayload = <String, dynamic>{
+      ...other,
+      ...base,
+      'storeTitleLine': pickStr('storeTitleLine'),
+      'storeAddress': pickStr('storeAddress'),
+      'footerExtra': pickStr('footerExtra'),
+      'storePhones': pickPhones(),
+    };
+    final logo = pickStr('storeLogoBase64');
+    final mime = pickStr('storeLogoMime');
+    if (logo.isNotEmpty) {
+      mergedPayload['storeLogoBase64'] = logo;
+      if (mime.isNotEmpty) mergedPayload['storeLogoMime'] = mime;
+    } else {
+      mergedPayload.remove('storeLogoBase64');
+      mergedPayload.remove('storeLogoMime');
+    }
+
+    final currTs = _bestTimestamp(current);
+    final inTs = _bestTimestamp(incomingRaw);
+    DateTime? best = currTs;
+    if (inTs != null && (best == null || inTs.isAfter(best))) best = inTs;
+    best ??= DateTime.now().toUtc();
+
+    return <String, dynamic>{
+      ...baseRow,
+      'id': 1,
+      'payload': jsonEncode(mergedPayload),
+      'updatedAt': best.toIso8601String(),
+    };
+  }
+
+  /// دمج صف [user_store_branding] حسب [global_id] مع حماية الهوية غير الفارغة.
+  Map<String, dynamic> _mergeUserStoreBrandingRow({
+    required Map<String, dynamic> current,
+    required Map<String, dynamic> incomingRaw,
+    required Map<String, dynamic> incomingPrepared,
+  }) {
+    final incomingWins = _incomingWins(current, incomingRaw);
+    final baseRow = incomingWins ? incomingPrepared : current;
+    final otherRow = incomingWins ? current : incomingPrepared;
+    final base = _decodePrintSettingsPayloadMap(baseRow);
+    final other = _decodePrintSettingsPayloadMap(otherRow);
+
+    String pickStr(String key) {
+      final a = (base[key] ?? '').toString().trim();
+      final b = (other[key] ?? '').toString().trim();
+      if (a.isNotEmpty) return a;
+      return b;
+    }
+
+    List<String> pickPhones() {
+      List<String> read(Map<String, dynamic> m) {
+        final raw = m['storePhones'];
+        if (raw is! List) return const [];
+        return raw
+            .map((e) => e.toString().trim())
+            .where((e) => e.isNotEmpty)
+            .toList();
+      }
+
+      final a = read(base);
+      final b = read(other);
+      if (a.isNotEmpty) return a;
+      return b;
+    }
+
+    final mergedPayload = <String, dynamic>{
+      'storeTitleLine': pickStr('storeTitleLine'),
+      'storeAddress': pickStr('storeAddress'),
+      'storePhones': pickPhones(),
+    };
+    final logo = pickStr('storeLogoBase64');
+    final mime = pickStr('storeLogoMime');
+    if (logo.isNotEmpty) {
+      mergedPayload['storeLogoBase64'] = logo;
+      if (mime.isNotEmpty) mergedPayload['storeLogoMime'] = mime;
+    }
+
+    final gid = (baseRow['global_id'] ??
+            current['global_id'] ??
+            incomingRaw['global_id'] ??
+            '')
+        .toString()
+        .trim();
+    final currTs = _bestTimestamp(current);
+    final inTs = _bestTimestamp(incomingRaw);
+    DateTime? best = currTs;
+    if (inTs != null && (best == null || inTs.isAfter(best))) best = inTs;
+    best ??= DateTime.now().toUtc();
+
+    return <String, dynamic>{
+      'global_id': gid,
+      'user_id': (baseRow['user_id'] ??
+              current['user_id'] ??
+              incomingRaw['user_id']),
+      'payload': jsonEncode(mergedPayload),
+      'updatedAt': best.toIso8601String(),
+    };
   }
 
   /// جداول لا يُطبَّق عليها LWW عام عند وجود صف محلي (تعارض id بين أجهزة).
