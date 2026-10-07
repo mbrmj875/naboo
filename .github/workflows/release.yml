@@ -41,7 +41,11 @@ jobs:
         run: flutter config --enable-windows-desktop
 
       - run: flutter pub get
-      - run: flutter build windows --release --dart-define=SUPABASE_URL="${{ secrets.SUPABASE_URL }}" --dart-define=SUPABASE_ANON_KEY="${{ secrets.SUPABASE_ANON_KEY }}"
+      # CMAKE_POLICY_VERSION_MINIMUM: firebase_cpp_sdk القديم يطلب CMake قديم على runners الحديثة
+      - name: Build Windows release
+        env:
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+        run: flutter build windows --release --dart-define=SUPABASE_URL="${{ secrets.SUPABASE_URL }}" --dart-define=SUPABASE_ANON_KEY="${{ secrets.SUPABASE_ANON_KEY }}"
 
       - name: Resolve build output path
         id: paths
@@ -100,7 +104,9 @@ jobs:
           gh release upload "$TAG" naboo-windows-setup.exe naboo-windows.zip --clobber --repo "$REPO"
           echo "OK: Windows assets on $TAG (existing APK untouched)"
 
+  # أندرويد يُرفع يدوياً من الجهاز (توقيع upload-keystore). لا تُبنَ هنا حتى لا يُستبدل APK بتوقيع CI.
   android:
+    if: false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

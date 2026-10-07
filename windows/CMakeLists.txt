@@ -1,5 +1,8 @@
 # Project-level configuration.
 cmake_minimum_required(VERSION 3.14)
+# firebase_cpp_sdk (وإضافات قديمة) قد تطلب CMake < 3.5؛ CMake الحديث يرفض ذلك
+# بدون هذا المتغير — مطلوب لبناء ويندوز على GitHub Actions.
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "" FORCE)
 project(naboo LANGUAGES CXX)
 
 # The name of the executable created for the application. Change this to change
