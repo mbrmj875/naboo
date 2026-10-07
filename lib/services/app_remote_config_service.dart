@@ -4,6 +4,8 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../utils/app_logger.dart';
+
 /// إعدادات من جدول [app_remote_config] (صف واحد id=1).
 /// تُقرأ بدون تسجيل دخول (سياسة RLS للجميع SELECT).
 class AppRemoteConfigData {
@@ -17,6 +19,7 @@ class AppRemoteConfigData {
     required this.updateMessageAr,
     required this.forceUpdate,
     required this.updateDownloadUrl,
+    required this.updateDownloadUrlWindows,
     required this.announcementTitleAr,
     required this.announcementBodyAr,
     required this.announcementUrl,
@@ -30,7 +33,10 @@ class AppRemoteConfigData {
   final String latestVersion;
   final String updateMessageAr;
   final bool forceUpdate;
+  /// رابط APK للأندرويد (والافتراضي إن لم يُحدَّد ويندوز).
   final String updateDownloadUrl;
+  /// رابط مُثبّت ويندوز (.exe) — إن وُجد يُستخدم على الحاسوب فقط.
+  final String updateDownloadUrlWindows;
   /// إعلان عام (أي مناسبة) — يُعرض عند تغيير النص/العنوان/الرابط.
   final String announcementTitleAr;
   final String announcementBodyAr;
@@ -46,10 +52,19 @@ class AppRemoteConfigData {
     updateMessageAr: '',
     forceUpdate: false,
     updateDownloadUrl: '',
+    updateDownloadUrlWindows: '',
     announcementTitleAr: '',
     announcementBodyAr: '',
     announcementUrl: '',
   );
+
+  /// رابط التحميل المناسب للمنصة الحالية (هاتف → APK، ويندوز → setup.exe).
+  String downloadUrlForPlatform({required bool isWindows}) {
+    if (isWindows && updateDownloadUrlWindows.isNotEmpty) {
+      return updateDownloadUrlWindows;
+    }
+    return updateDownloadUrl;
+  }
 
   /// بصمة المحتوى: عند تغييرك للنص في اللوحة تتغير تلقائياً فيظهر الإعلان من جديد.
   String get announcementContentDigest {
@@ -77,6 +92,7 @@ class AppRemoteConfigData {
       updateMessageAr: s('update_message_ar'),
       forceUpdate: b('force_update'),
       updateDownloadUrl: s('update_download_url'),
+      updateDownloadUrlWindows: s('update_download_url_windows'),
       announcementTitleAr: s('announcement_title_ar'),
       announcementBodyAr: s('announcement_body_ar'),
       announcementUrl: s('announcement_url'),
@@ -93,10 +109,22 @@ class AppRemoteConfigService {
 
   AppRemoteConfigData get current => _cached;
 
+  /// تطبيع رقم الإصدار: يتجاهل لاحقة البناء (`2.2.27+250` → `2.2.27`)
+  /// وأي بادئة غير رقمية.
+  static String normalizeVersion(String raw) {
+    var v = raw.trim();
+    final plus = v.indexOf('+');
+    if (plus >= 0) v = v.substring(0, plus);
+    final dash = v.indexOf('-');
+    if (dash >= 0) v = v.substring(0, dash);
+    return v.trim();
+  }
+
   /// مقارنة إصدارات بسيطة major.minor.patch (أرقام فقط).
+  /// تُرجع سالباً إذا [a] < [b]، وصفر إذا تساويا، وموجباً إذا [a] > [b].
   static int compareVersions(String a, String b) {
     List<int> parts(String v) {
-      return v
+      return normalizeVersion(v)
           .split('.')
           .map((e) => int.tryParse(e.trim()) ?? 0)
           .toList();
@@ -104,12 +132,24 @@ class AppRemoteConfigService {
 
     final pa = parts(a);
     final pb = parts(b);
-    for (var i = 0; i < 3; i++) {
+    final n = pa.length > pb.length ? pa.length : pb.length;
+    for (var i = 0; i < n; i++) {
       final x = i < pa.length ? pa[i] : 0;
       final y = i < pb.length ? pb[i] : 0;
       if (x != y) return x.compareTo(y);
     }
     return 0;
+  }
+
+  /// هل نسخة الجهاز أقل من [latestVersion] على السيرفر؟
+  /// إذا كان [latestVersion] فارغاً أو `0.0.0` (fallback) لا يُطلب تحديث.
+  static bool isUpdateAvailable({
+    required String installedVersion,
+    required String latestVersion,
+  }) {
+    final latest = normalizeVersion(latestVersion);
+    if (latest.isEmpty || latest == '0.0.0') return false;
+    return compareVersions(installedVersion, latest) < 0;
   }
 
   /// يجلب الإعدادات ويخزّن نسخة في الذاكرة.
@@ -139,8 +179,13 @@ class AppRemoteConfigService {
           _cached = AppRemoteConfigData.fallback;
         }
       }
-    } catch (_) {
-      // بدون شبكة أو الجدول غير منشأ: لا نكسر التطبيق.
+    } catch (e, st) {
+      AppLogger.error(
+        'RemoteConfig',
+        'تعذّر جلب الإعدادات السحابية — استخدام fallback',
+        e,
+        st,
+      );
       _cached = AppRemoteConfigData.fallback;
     }
 
