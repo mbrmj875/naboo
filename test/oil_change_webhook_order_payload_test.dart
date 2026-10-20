@@ -21,6 +21,7 @@ void main() {
     'hydraulicCustomerProvided': 0,
     'powerHydraulicCustomerProvided': 1,
     'requestedServices': 'غيار زيت,فحص',
+    'technicianName': 'أبو علي',
     'agreedPriceFils': 75000000,
     'advancePaymentFils': 25000000,
   };
@@ -44,10 +45,23 @@ void main() {
     expect(msg.contains('هيدروليك القير'), isTrue);
     expect(msg.contains('هيدروليك الباور'), isTrue);
     expect(msg.contains('غيار زيت'), isTrue);
+    expect(msg.contains('أبو علي'), isTrue);
+    expect(msg.contains('الفني'), isTrue);
     expect(msg.contains('75,000'), isTrue);
     expect(msg.contains('25,000'), isTrue);
     expect(msg.contains('فاتورة'), isFalse);
     expect(msg.contains('invoice'), isFalse);
+    expect(msg.contains('تقييمكم يهمّنا'), isTrue);
+    expect(msg.contains('1 إلى 10'), isTrue);
+  });
+
+  test('auto whatsapp message can omit rating ask', () {
+    final msg = buildOilChangeAutoWhatsAppMessage(
+      storeTitle: 'مركز النجوم',
+      order: sampleOrder,
+      includeRatingAsk: false,
+    );
+    expect(msg.contains('تقييمكم يهمّنا'), isFalse);
   });
 
   test('webhook payload mirrors auto message fields', () {

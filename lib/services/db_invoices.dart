@@ -393,7 +393,7 @@ extension DbInvoices on DatabaseHelper {
     Transaction txn,
     Invoice invoice,
     LoyaltySettingsData loyaltySettings,
-    {required bool enforceStockNonZero}
+    {required bool enforceStockNonZero, bool syncWarehouseStock = false}
   ) async {
     _validateInvoiceForSave(invoice);
     final tenantId = await _resolveActiveTenantIdForLocalDb(txn);
@@ -565,7 +565,8 @@ extension DbInvoices on DatabaseHelper {
     }
 
     if (!invoice.isReturned) {
-      if (!serviceReceipt) {
+        final warehouseLines = <({int productId, double qty, double unitPrice})>[];
+        if (!serviceReceipt) {
         if (enforceStockNonZero) {
           // منع البيع عند مخزون 0 في الوضع المقيّد (طبقة الخدمة).
           for (final item in invoice.items) {
@@ -686,6 +687,32 @@ extension DbInvoices on DatabaseHelper {
           await txn.rawUpdate(
             'UPDATE products SET qty = qty - ? WHERE id = ?',
             [item.baseQtyResolved, pid],
+          );
+          if (syncWarehouseStock) {
+            final tracked = await txn.query(
+              'products',
+              columns: ['trackInventory'],
+              where: 'id = ? AND tenantId = ?',
+              whereArgs: [pid, tenantId],
+              limit: 1,
+            );
+            final tracks = tracked.isNotEmpty &&
+                ((tracked.first['trackInventory'] as num?)?.toInt() ?? 1) != 0;
+            if (tracks) {
+              warehouseLines.add((
+                productId: pid,
+                qty: item.baseQtyResolved,
+                unitPrice: item.price,
+              ));
+            }
+          }
+        }
+        if (syncWarehouseStock && warehouseLines.isNotEmpty) {
+          await _syncDirectSaleWarehouseOut(
+            txn,
+            tenantId: tenantId,
+            invoiceId: id,
+            lines: warehouseLines,
           );
         }
       }
@@ -904,9 +931,118 @@ extension DbInvoices on DatabaseHelper {
     return id;
   }
 
+  /// يخصم كمية البيع المباشر من رصيد المستودع حتى لو تجاوزت المتاح،
+  /// ويسجّل السند بالرصيد قبل وبعد حتى يطابق رقم المنتج.
+  Future<void> _syncDirectSaleWarehouseOut(
+    Transaction txn, {
+    required int tenantId,
+    required int invoiceId,
+    required List<({int productId, double qty, double unitPrice})> lines,
+  }) async {
+    final warehouses = await txn.query(
+      'warehouses',
+      columns: ['id'],
+      where: 'tenantId = ? AND isActive = 1',
+      whereArgs: [tenantId],
+      orderBy: 'isDefault DESC, id ASC',
+      limit: 1,
+    );
+    if (warehouses.isEmpty) return;
+    final fallbackWarehouseId = (warehouses.first['id'] as num).toInt();
+    final nowIso = DateTime.now().toIso8601String();
+    final voucherId = await txn.insert('stock_vouchers', {
+      'tenantId': tenantId,
+      'voucherNo': 'DS-$invoiceId',
+      'voucherType': 'out',
+      'voucherDate': nowIso,
+      'warehouseFromId': fallbackWarehouseId,
+      'warehouseToId': null,
+      'notes': 'بيع مباشر #$invoiceId',
+      'sourceType': 'oil_direct_sale',
+      'sourceName': 'بيع مباشر',
+      'sourceRefId': invoiceId,
+      'createdAt': nowIso,
+    });
+
+    for (final line in lines) {
+      if (line.qty <= 1e-12) continue;
+      final held = await txn.query(
+        'product_warehouse_stock',
+        columns: ['warehouseId', 'qty'],
+        where: 'tenantId = ? AND productId = ?',
+        whereArgs: [tenantId, line.productId],
+        orderBy: 'qty DESC',
+      );
+      if (held.isEmpty) {
+        final bookRows = await txn.query(
+          'products',
+          columns: ['qty'],
+          where: 'id = ?',
+          whereArgs: [line.productId],
+          limit: 1,
+        );
+        final book = bookRows.isEmpty
+            ? -line.qty
+            : (bookRows.first['qty'] as num?)?.toDouble() ?? -line.qty;
+        final before = book + line.qty;
+        await txn.insert('stock_voucher_items', {
+          'tenantId': tenantId,
+          'voucherId': voucherId,
+          'productId': line.productId,
+          'qty': line.qty,
+          'unitPrice': line.unitPrice,
+          'total': line.qty * line.unitPrice,
+          'stockBefore': before,
+          'stockAfter': book,
+          'baseQty': line.qty,
+        });
+        await txn.insert('product_warehouse_stock', {
+          'tenantId': tenantId,
+          'productId': line.productId,
+          'warehouseId': fallbackWarehouseId,
+          'qty': book,
+          'updatedAt': nowIso,
+        });
+        continue;
+      }
+      final warehouseId = (held.first['warehouseId'] as num).toInt();
+      final before = (held.first['qty'] as num?)?.toDouble() ?? 0.0;
+      final after = before - line.qty;
+      await txn.insert('stock_voucher_items', {
+        'tenantId': tenantId,
+        'voucherId': voucherId,
+        'productId': line.productId,
+        'qty': line.qty,
+        'unitPrice': line.unitPrice,
+        'total': line.qty * line.unitPrice,
+        'stockBefore': before,
+        'stockAfter': after,
+        'baseQty': line.qty,
+      });
+      final updated = await txn.rawUpdate(
+        '''
+        UPDATE product_warehouse_stock
+        SET qty = qty - ?, updatedAt = ?
+        WHERE tenantId = ? AND productId = ? AND warehouseId = ?
+        ''',
+        [line.qty, nowIso, tenantId, line.productId, warehouseId],
+      );
+      if (updated < 1) {
+        await txn.insert('product_warehouse_stock', {
+          'tenantId': tenantId,
+          'productId': line.productId,
+          'warehouseId': warehouseId,
+          'qty': after,
+          'updatedAt': nowIso,
+        });
+      }
+    }
+  }
+
   Future<int> insertInvoiceWithPolicy(
     Invoice invoice, {
     required bool enforceStockNonZero,
+    bool syncWarehouseStock = false,
   }) async {
     _validateInvoiceForSave(invoice);
     final db = await database;
@@ -917,6 +1053,7 @@ extension DbInvoices on DatabaseHelper {
         invoice,
         loyaltySettings,
         enforceStockNonZero: enforceStockNonZero,
+        syncWarehouseStock: syncWarehouseStock,
       ),
     );
     CloudSyncService.instance.scheduleSyncSoon();
@@ -1047,13 +1184,14 @@ extension DbInvoices on DatabaseHelper {
     }
   }
 
-  /// فاتورة واحدة مع بنودها.
+  /// فاتورة واحدة مع بنودها (نطاق المستأجر النشط + غير محذوفة).
   Future<Invoice?> getInvoiceById(int id) async {
     final db = await database;
+    final tenantId = await _resolveActiveTenantIdForLocalDb(db);
     final maps = await db.query(
       'invoices',
-      where: 'id = ?',
-      whereArgs: [id],
+      where: 'id = ? AND tenantId = ? AND deleted_at IS NULL',
+      whereArgs: [id, tenantId],
       limit: 1,
     );
     if (maps.isEmpty) return null;

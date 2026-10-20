@@ -47,6 +47,7 @@ abstract class OwnerShortcutIds {
   static const scReports = 'sc_reports';
   static const addInvoice = 'sc_add_invoice';
   static const users = 'sc_users';
+  static const oilRatings = 'sc_oil_ratings';
 }
 
 /// متطلبات بوابة الميزات على مستوى البطاقة.

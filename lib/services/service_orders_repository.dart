@@ -230,6 +230,7 @@ class ServiceOrdersRepository {
     int? airFilterPriceFils,
     String? gearFilterName,
     int? gearFilterPriceFils,
+    String? oilFiltersJson,
     String? requestedServices,
     String? customerPhone,
     String orderKind = ServiceOrderKinds.repair,
@@ -301,6 +302,8 @@ class ServiceOrdersRepository {
         'gearFilterName': gearFilterName.trim(),
       if (gearFilterPriceFils != null && gearFilterPriceFils > 0)
         'gearFilterPriceFils': gearFilterPriceFils,
+      if (oilFiltersJson != null && oilFiltersJson.trim().isNotEmpty)
+        'oilFiltersJson': oilFiltersJson.trim(),
       'requestedServices': requestedServices?.trim(),
       'customerPhone': customerPhone?.trim(),
       if (oilProductId != null && oilProductId > 0) 'oilProductId': oilProductId,
@@ -386,6 +389,8 @@ class ServiceOrdersRepository {
     String? promisedDeliveryAt,
     bool patchWorkStartedAt = false,
     String? workStartedAt,
+    /// عند إكمال معلّقة: ثبّت يوم السجل = يوم الحفظ والبيع.
+    bool stampCreatedAtAsNow = false,
     String? carModel,
     String? engineSize,
     String? odometerCurrent,
@@ -400,6 +405,7 @@ class ServiceOrdersRepository {
     int? airFilterPriceFils,
     String? gearFilterName,
     int? gearFilterPriceFils,
+    String? oilFiltersJson,
     String? requestedServices,
     String? customerPhone,
     bool patchOilStockFields = false,
@@ -472,8 +478,12 @@ class ServiceOrdersRepository {
             gearFilterName.trim().isEmpty ? null : gearFilterName.trim(),
       if (gearFilterPriceFils != null)
         'gearFilterPriceFils': gearFilterPriceFils > 0 ? gearFilterPriceFils : null,
+      if (oilFiltersJson != null)
+        'oilFiltersJson':
+            oilFiltersJson.trim().isEmpty ? null : oilFiltersJson.trim(),
       if (requestedServices != null) 'requestedServices': requestedServices.trim(),
       if (customerPhone != null) 'customerPhone': customerPhone.trim(),
+      if (stampCreatedAtAsNow) 'createdAt': now,
       'updatedAt': now,
     };
 

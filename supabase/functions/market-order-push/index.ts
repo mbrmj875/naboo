@@ -18,12 +18,13 @@ Deno.serve(async (req) => {
     return new Response('Method not allowed', { status: 405 });
   }
 
-  const webhookSecret = Deno.env.get('MARKET_ORDER_WEBHOOK_SECRET');
-  if (webhookSecret) {
-    const header = req.headers.get('x-webhook-secret');
-    if (header !== webhookSecret) {
-      return new Response('Unauthorized', { status: 401 });
-    }
+  const webhookSecret = (Deno.env.get('MARKET_ORDER_WEBHOOK_SECRET') ?? '').trim();
+  if (!webhookSecret) {
+    return new Response('Unauthorized', { status: 401 });
+  }
+  const header = req.headers.get('x-webhook-secret');
+  if (header !== webhookSecret) {
+    return new Response('Unauthorized', { status: 401 });
   }
 
   let payload: WebhookPayload;

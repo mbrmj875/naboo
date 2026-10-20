@@ -1,31 +1,41 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
+import '../../../guides/guide_anchor.dart';
+import '../../../guides/guide_controller.dart';
 import '../../../navigation/app_route_observer.dart';
 import '../../../navigation/content_navigation.dart';
+import '../../../providers/auth_provider.dart';
 import '../../../services/cloud_sync_service.dart';
+import '../../../services/customer_search_index.dart';
 import '../../../services/database_helper.dart';
+import '../services/oil_change_orders_repository.dart';
+import '../services/oil_change_post_sale_service.dart';
 import '../services/oil_change_settings.dart';
 import '../services/oil_change_whatsapp_status_store.dart';
 import 'oil_change_whatsapp_connect_screen.dart';
-import '../../../services/print_settings_repository.dart';
 import '../../../services/service_orders_repository.dart';
 import '../../../services/tenant_context_service.dart';
 import '../../../utils/app_logger.dart';
 import '../utils/oil_change_log_format.dart';
 import '../utils/oil_change_log_grouping.dart';
+import '../utils/oil_change_layout.dart';
 import '../utils/oil_change_whatsapp_user_messages.dart';
 import '../utils/oil_change_order_status.dart';
-import '../../../theme/design_tokens.dart';
 import '../../../theme/sale_brand.dart';
 import '../../../utils/screen_layout.dart';
 import '../widgets/oil_change_form_theme.dart';
+import '../widgets/whatsapp_glyph_icon.dart';
 import '../widgets/oil_change_log_detail_sheet.dart';
 import '../widgets/oil_change_log_stitch.dart';
-import '../widgets/oil_change_whatsapp_campaign_progress.dart';
-import 'oil_change_whatsapp_campaign_screen.dart';
+import '../widgets/oil_change_owner_pin_confirm_dialog.dart';
+import '../services/oil_change_whatsapp_outbox.dart';
+import '../services/oil_change_whatsapp_gateway_repository.dart';
+import 'oil_change_direct_sale_screen.dart';
 import 'oil_change_form_screen.dart';
+import 'oil_change_whatsapp_messages_screen.dart';
 
 /// سجل غيارات الزيت: بطاقة جديدة + جدول تفصيلي + واتساب.
 class OilChangeHubScreen extends StatefulWidget {
@@ -56,8 +66,20 @@ class _OilChangeHubScreenState extends State<OilChangeHubScreen>
   bool _hasMore = true;
   int? _highlightedId;
   bool _waGatewayDisconnected = false;
+  int _whatsappPending = 0;
   late final TabController _logTabController;
   static const double _phoneSearchHeaderExtent = 64;
+
+  /// كاش منفصل لكل تبويب — تبديل فوري بلا إعادة تحميل ثقيلة.
+  final _activeTabCache = _OilLogTabCache();
+  final _suspendedTabCache = _OilLogTabCache();
+  OilChangeLogStatusFilter _displayedFilter = OilChangeLogStatusFilter.active;
+  var _sqlitePrepared = false;
+  static const int _pageSize = 40;
+  bool _silentRefreshRunning = false;
+  bool _silentRefreshQueued = false;
+  /// بعد استكمال بطاقة نحدّث نحن — لا نكرّر الجلب من didPopNext.
+  bool _suppressNextPopRefresh = false;
 
   OilChangeLogStatusFilter get _logStatusFilter =>
       _logTabController.index == 1
@@ -67,17 +89,20 @@ class _OilChangeHubScreenState extends State<OilChangeHubScreen>
   bool get _showSuspendedLog =>
       _logStatusFilter == OilChangeLogStatusFilter.suspended;
 
-  void _rebuildDayGroups() {
+  _OilLogTabCache _cacheFor(OilChangeLogStatusFilter filter) =>
+      filter == OilChangeLogStatusFilter.suspended
+          ? _suspendedTabCache
+          : _activeTabCache;
+
+  void _rebuildDayGroups({bool resetExpanded = false}) {
     final groups = groupOilChangeLogsByDay(_logs);
-    final defaults = defaultExpandedOilChangeDayKeys(groups);
-    if (_expandedDayKeys.isEmpty) {
-      _expandedDayKeys = defaults;
-    } else {
       final valid = groups.map((g) => g.dayKey).toSet();
-      _expandedDayKeys = {
-        ..._expandedDayKeys.where(valid.contains),
-        ...defaults,
-      };
+    if (resetExpanded || _expandedDayKeys.isEmpty) {
+      // افتراضياً: اليوم (وأمس إن وُجد) مفتوحان؛ بقية الأيام مطوية.
+      _expandedDayKeys = defaultExpandedOilChangeDayKeys(groups);
+    } else {
+      // عند تحميل صفحات أقدم: احتفظ باختيار المستخدم ولا تُعِد فتح المطوي.
+      _expandedDayKeys = _expandedDayKeys.where(valid.contains).toSet();
     }
     _dayGroups = groups;
   }
@@ -99,6 +124,39 @@ class _OilChangeHubScreenState extends State<OilChangeHubScreen>
       _searchQuery = seed;
     }
     unawaited(_reload());
+    // لا تبدأ جولة TTS تلقائياً — تتنافس مع فتح الكيبورد وتسبب تأخيراً ملحوظاً.
+    // تسخين فهرس العملاء أثناء تصفّح السجل — قبل فتح البطاقة.
+    Future<void>.delayed(const Duration(milliseconds: 600), () {
+      if (!mounted) return;
+      unawaited(CustomerSearchIndex.instance.ensureFresh());
+    });
+  }
+
+  void _syncGuidePendingTab(GuideController guide) {
+    final action = guide.currentStep?.action;
+    if (action == 'oil.select_pending_tab' &&
+        _logTabController.index != 1 &&
+        !_logTabController.indexIsChanging) {
+      _logTabController.animateTo(1);
+    }
+  }
+
+  void _syncGuideHubSettings(GuideController guide) {
+    final step = guide.currentStep;
+    final needSheet = guide.isRunning &&
+        step != null &&
+        (step.action == 'oil.open_hub_settings' ||
+            step.anchorId.startsWith('oil.settings.'));
+    if (needSheet) {
+      if (!_hubSettingsSheetVisible) {
+        unawaited(_openHubSettings(fromGuide: true));
+      } else {
+        _hubSettingsOpenedByGuide = true;
+      }
+    } else if (_hubSettingsOpenedByGuide && _hubSettingsSheetVisible) {
+      // أغلق فقط الورقة التي فتحتها الجولة — لا تلمس فتح المستخدم اليدوي.
+      _closeHubSettingsIfOpen();
+    }
   }
 
   RouteObserver<PageRoute<dynamic>>? _homeInnerRouteObserver;
@@ -140,7 +198,75 @@ class _OilChangeHubScreenState extends State<OilChangeHubScreen>
 
   void _onLogTabChanged() {
     if (_logTabController.indexIsChanging) return;
-    unawaited(_reload());
+    final next = _logStatusFilter;
+    if (next == _displayedFilter) return;
+
+    _stashUiIntoCache(_displayedFilter);
+    final cached = _cacheFor(next);
+    if (cached.loadedOnce) {
+      setState(() {
+        _restoreUiFromCache(next);
+        _loading = false;
+        _loadingMore = false;
+        _error = cached.error;
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_scrollController.hasClients) return;
+        final max = _scrollController.position.maxScrollExtent;
+        _scrollController.jumpTo(cached.scrollOffset.clamp(0.0, max));
+      });
+      // تحديث هادئ بالخلفية — بدون شاشة تحميل.
+      unawaited(_refreshSilently());
+      return;
+    }
+
+    setState(() {
+      _displayedFilter = next;
+      _logs.clear();
+      _dayGroups = [];
+      _expandedDayKeys = {};
+      _hasMore = true;
+      _error = null;
+      _loading = true;
+      _loadingMore = false;
+    });
+    unawaited(_reload(showSpinner: true));
+  }
+
+  void _stashUiIntoCache(OilChangeLogStatusFilter filter) {
+    final cache = _cacheFor(filter);
+    cache.logs
+      ..clear()
+      ..addAll(_logs);
+    cache.dayGroups = List<OilChangeDayGroup>.of(_dayGroups);
+    cache.expandedDayKeys = Set<String>.of(_expandedDayKeys);
+    cache.hasMore = _hasMore;
+    cache.error = _error;
+    cache.loadedOnce = true;
+    if (_scrollController.hasClients) {
+      cache.scrollOffset = _scrollController.offset;
+    }
+  }
+
+  void _restoreUiFromCache(OilChangeLogStatusFilter filter) {
+    final cache = _cacheFor(filter);
+    _logs
+      ..clear()
+      ..addAll(cache.logs);
+    _dayGroups = List<OilChangeDayGroup>.of(cache.dayGroups);
+    _expandedDayKeys = Set<String>.of(cache.expandedDayKeys);
+    _hasMore = cache.hasMore;
+    _error = cache.error;
+    _displayedFilter = filter;
+  }
+
+  void _syncCurrentCacheFromUi() {
+    _stashUiIntoCache(_displayedFilter);
+  }
+
+  void _invalidateTabCaches() {
+    _activeTabCache.clear();
+    _suspendedTabCache.clear();
   }
 
   @override
@@ -152,6 +278,13 @@ class _OilChangeHubScreenState extends State<OilChangeHubScreen>
 
   @override
   void didPopNext() {
+    // التبويب الآخر قد تغيّر (تعليق/استكمال) — أعد جلبه عند زيارته التالية.
+    final other = _showSuspendedLog ? _activeTabCache : _suspendedTabCache;
+    other.clear();
+    if (_suppressNextPopRefresh) {
+      _suppressNextPopRefresh = false;
+      return;
+    }
     unawaited(_refreshSilently());
   }
 
@@ -167,7 +300,9 @@ class _OilChangeHubScreenState extends State<OilChangeHubScreen>
     _debounce = Timer(const Duration(milliseconds: 300), () {
       if (!mounted) return;
       setState(() => _searchQuery = _searchController.text.trim());
-      unawaited(_reload());
+      _invalidateTabCaches();
+      // إن كانت القائمة ظاهرة مسبقاً — حدّث بدون شاشة تحميل كاملة.
+      unawaited(_reload(showSpinner: _logs.isEmpty));
     });
   }
 
@@ -212,17 +347,22 @@ class _OilChangeHubScreenState extends State<OilChangeHubScreen>
   }
 
   Future<List<Map<String, dynamic>>> _fetchLogPage({int? afterId}) async {
+    // قراءة محلية من SQLite فقط — لا شبكة.
+    if (!_sqlitePrepared) {
     await DatabaseHelper().ensureDefaultTenantSeedIfNeeded();
+      // ensureServiceOrdersReadRepair مُخزَّن مرة واحدة داخل DatabaseHelper.
     await DatabaseHelper().ensureServiceOrdersReadRepair();
     final tenantCtx = TenantContextService.instance;
     if (!tenantCtx.loaded) {
       await tenantCtx.load();
+      }
+      _sqlitePrepared = true;
     }
 
     final rows = await ServiceOrdersRepository.instance.getOilChangeLogPage(
       searchQuery: _searchQuery.isEmpty ? null : _searchQuery,
       afterId: afterId,
-      limit: 50,
+      limit: _pageSize,
       statusFilter: _logStatusFilter,
     );
     return rows;
@@ -232,48 +372,114 @@ class _OilChangeHubScreenState extends State<OilChangeHubScreen>
     _logs
       ..clear()
       ..addAll(rows);
-    _hasMore = rows.length >= 50;
-    _rebuildDayGroups();
+    _hasMore = rows.length >= _pageSize;
+    _rebuildDayGroups(resetExpanded: true);
+    _displayedFilter = _logStatusFilter;
+    _syncCurrentCacheFromUi();
   }
 
   /// تحديث خلفي دون شاشة تحميل كاملة — عند العودة للسجل أو بعد المزامنة.
   Future<void> _refreshSilently() async {
     if (!mounted || _loading) return;
+    if (_silentRefreshRunning) {
+      _silentRefreshQueued = true;
+      return;
+    }
+    _silentRefreshRunning = true;
+    try {
+      do {
+        _silentRefreshQueued = false;
+        final filterAtStart = _logStatusFilter;
     try {
       final rows = await _fetchLogPage();
       if (!mounted) return;
+          // إن بدّل المستخدم التبويب أثناء الجلب — احفظ في كاش ذلك التبويب فقط.
+          if (filterAtStart != _logStatusFilter) {
+            final cache = _cacheFor(filterAtStart);
+            cache.logs
+              ..clear()
+              ..addAll(rows);
+            cache.hasMore = rows.length >= _pageSize;
+            cache.dayGroups = groupOilChangeLogsByDay(cache.logs);
+            cache.loadedOnce = true;
+            cache.error = null;
+          } else {
       setState(() => _replaceFirstPage(rows));
+          }
     } catch (e) {
       AppLogger.warn('oil_change_hub', 'silent refresh failed: $e');
+        }
+      } while (_silentRefreshQueued && mounted && !_loading);
+    } finally {
+      _silentRefreshRunning = false;
     }
   }
 
-  Future<void> _reload() async {
+  Future<void> _reload({bool showSpinner = true}) async {
+    if (showSpinner) {
     setState(() {
       _loading = true;
       _error = null;
       _hasMore = true;
     });
+    }
+    unawaited(_refreshWhatsappPending());
+    final filterAtStart = _logStatusFilter;
     try {
+      // السجل من SQLite المحلي أولاً — لا نعلّق الواجهة على شبكة واتساب.
       final rows = await _fetchLogPage();
-      final waDisconnected =
-          await OilChangeWhatsappStatusStore.instance.isDisconnectedBannerVisible();
-      await OilChangeWhatsappStatusStore.instance.syncFromCloudIfPossible();
-      final waDisconnectedAfterSync =
-          await OilChangeWhatsappStatusStore.instance.isDisconnectedBannerVisible();
+      final waLocal = await OilChangeWhatsappStatusStore.instance.readStatus(
+        refreshFromServer: false,
+      );
       if (!mounted) return;
+      if (filterAtStart != _logStatusFilter) {
+        final cache = _cacheFor(filterAtStart);
+        cache.logs
+          ..clear()
+          ..addAll(rows);
+        cache.hasMore = rows.length >= _pageSize;
+        cache.dayGroups = groupOilChangeLogsByDay(cache.logs);
+        cache.loadedOnce = true;
+        cache.error = null;
+        if (showSpinner && mounted) {
+          setState(() => _loading = false);
+        }
+        return;
+      }
       setState(() {
         _replaceFirstPage(rows);
-        _waGatewayDisconnected = waDisconnectedAfterSync || waDisconnected;
+        _waGatewayDisconnected =
+            waLocal == OilChangeWhatsappGatewayStatus.disconnected;
         _loading = false;
+        _error = null;
       });
+      unawaited(_syncWhatsappStatusInBackground());
     } catch (e, st) {
       AppLogger.error('oil_change_hub', 'reload failed', e, st);
       if (!mounted) return;
+      if (filterAtStart != _logStatusFilter) return;
       setState(() {
         _error = e;
         _loading = false;
       });
+      _cacheFor(filterAtStart).error = e;
+    }
+  }
+
+  /// مزامنة حالة واتساب بعد ظهور السجل — لا تحجب التحميل.
+  Future<void> _syncWhatsappStatusInBackground() async {
+    try {
+      await OilChangeWhatsappStatusStore.instance.syncFromCloudIfPossible();
+      if (!mounted) return;
+      final wa = await OilChangeWhatsappStatusStore.instance.readStatus(
+        refreshFromServer: false,
+      );
+      if (!mounted) return;
+      final disconnected = wa == OilChangeWhatsappGatewayStatus.disconnected;
+      if (disconnected == _waGatewayDisconnected) return;
+      setState(() => _waGatewayDisconnected = disconnected);
+    } catch (e) {
+      AppLogger.warn('oil_change_hub', 'whatsapp status background sync: $e');
     }
   }
 
@@ -286,9 +492,10 @@ class _OilChangeHubScreenState extends State<OilChangeHubScreen>
       if (!mounted) return;
       setState(() {
         _logs.addAll(rows);
-        _hasMore = rows.length >= 50;
+        _hasMore = rows.length >= _pageSize;
         _loadingMore = false;
         _rebuildDayGroups();
+        _syncCurrentCacheFromUi();
       });
     } catch (_) {
       if (mounted) setState(() => _loadingMore = false);
@@ -331,7 +538,7 @@ class _OilChangeHubScreenState extends State<OilChangeHubScreen>
       contentMaterialRoute(
         routeId: AppContentRoutes.oilChangeEditId(id),
         breadcrumbTitle: 'استكمال بطاقة معلّقة',
-        builder: (_) => OilChangeFormScreen(editOrderId: id),
+        builder: (_) => OilChangeFormScreen(editOrderId: id, prefillFromOrder: Map<String, dynamic>.from(r)),
       ),
     );
     if (!mounted) return;
@@ -339,7 +546,114 @@ class _OilChangeHubScreenState extends State<OilChangeHubScreen>
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('تم استكمال البطاقة وإنشاء الفاتورة')),
       );
-      unawaited(_reload());
+      _suppressNextPopRefresh = true;
+      _invalidateTabCaches();
+      unawaited(_reload(showSpinner: false));
+    }
+  }
+
+  Future<void> _confirmAndDiscardSuspended(Map<String, dynamic> r) async {
+    final id = _orderIdFromRow(r);
+    if (id == null || id <= 0) return;
+
+    final name = (r['customerNameSnapshot'] ?? '').toString().trim();
+    final plate = oilFormatPlate(r);
+    final subtitle = [
+      if (name.isNotEmpty) name,
+      if (plate.isNotEmpty && plate != '—') plate,
+    ].join(' · ');
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        final cs = Theme.of(ctx).colorScheme;
+        return Directionality(
+          textDirection: TextDirection.rtl,
+          child: AlertDialog(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            icon: Container(
+              width: 56,
+              height: 56,
+              decoration: BoxDecoration(
+                color: OilChangeLogStitchMetrics.error.withValues(alpha: 0.10),
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: OilChangeLogStitchMetrics.secondaryContainer
+                      .withValues(alpha: 0.55),
+                ),
+              ),
+              child: const Icon(
+                Icons.cancel_outlined,
+                color: OilChangeLogStitchMetrics.error,
+                size: 28,
+              ),
+            ),
+            title: const Text(
+              'هل تريد إسقاط هذه البطاقة؟',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 17),
+            ),
+            content: Text(
+              subtitle.isEmpty
+                  ? 'ستُزال من المعلّقة ولن يمكن استكمالها لاحقاً.'
+                  : 'ستُزال «$subtitle» من المعلّقة ولن يمكن استكمالها لاحقاً.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: cs.onSurfaceVariant,
+                height: 1.45,
+              ),
+            ),
+            actionsAlignment: MainAxisAlignment.spaceBetween,
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                style: TextButton.styleFrom(
+                  foregroundColor: OilChangeLogStitchMetrics.primaryContainer,
+                ),
+                child: const Text('لا'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(ctx).pop(true),
+                style: FilledButton.styleFrom(
+                  backgroundColor: OilChangeLogStitchMetrics.error,
+                  foregroundColor: Colors.white,
+                ),
+                child: const Text('نعم، إسقاط'),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+    if (!mounted || confirmed != true) return;
+
+    try {
+      final ok = await OilChangeOrdersRepository.instance
+          .discardSuspendedOilChangeOrder(id);
+      if (!mounted) return;
+      if (!ok) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'تعذّر إسقاط البطاقة — قد تكون غير معلّقة أو مرتبطة بفاتورة',
+            ),
+          ),
+        );
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تم إسقاط البطاقة المعلّقة')),
+      );
+      _invalidateTabCaches();
+      unawaited(_reload(showSpinner: false));
+    } catch (e, st) {
+      AppLogger.error('oil_hub', 'discard suspended failed', e, st);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تعذّر إسقاط البطاقة')),
+      );
     }
   }
 
@@ -380,20 +694,24 @@ class _OilChangeHubScreenState extends State<OilChangeHubScreen>
     }
   }
 
-  Future<void> _openWhatsAppCampaign() async {
+  Future<void> _openWhatsAppMessages() async {
     if (_showSuspendedLog) return;
-    final printData = await PrintSettingsRepository.instance.load();
-    if (!mounted) return;
-    await OilChangeWhatsappCampaignScreen.open(
-      context,
-      storeTitle: printData.storeTitleLine,
-      gatewayConnected: !_waGatewayDisconnected,
-    );
+    await OilChangeWhatsappMessagesScreen.open(context);
+      if (!mounted) return;
+    await _refreshWhatsappPending();
+  }
+
+  Future<void> _refreshWhatsappPending() async {
+    final count = await OilChangeWhatsappOutbox.instance.totalNotSentCount();
+    if (!mounted || count == _whatsappPending) return;
+    setState(() => _whatsappPending = count);
   }
 
   Future<void> _openWhatsappConnect() async {
     await Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(
+      contentMaterialRoute(
+        routeId: AppContentRoutes.oilWhatsappConnect,
+        breadcrumbTitle: 'ربط واتساب المحل',
         builder: (_) => const OilChangeWhatsappConnectScreen(),
       ),
     );
@@ -404,13 +722,40 @@ class _OilChangeHubScreenState extends State<OilChangeHubScreen>
     setState(() => _waGatewayDisconnected = disconnected);
   }
 
-  Future<void> _openHubSettings() async {
+  bool _hubSettingsSheetVisible = false;
+  bool _hubSettingsOpenedByGuide = false;
+  BuildContext? _hubSettingsSheetContext;
+
+  Future<void> _openHubSettings({bool fromGuide = false}) async {
+    if (_hubSettingsSheetVisible) {
+      if (fromGuide) _hubSettingsOpenedByGuide = true;
+      return;
+    }
+    _hubSettingsSheetVisible = true;
+    _hubSettingsOpenedByGuide = fromGuide;
+    try {
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (sheetCtx) => const _OilChangeHubSettingsSheet(),
-    );
+        builder: (sheetCtx) {
+          _hubSettingsSheetContext = sheetCtx;
+          return const _OilChangeHubSettingsSheet();
+        },
+      );
+    } finally {
+      _hubSettingsSheetContext = null;
+      _hubSettingsSheetVisible = false;
+      _hubSettingsOpenedByGuide = false;
+    }
+  }
+
+  void _closeHubSettingsIfOpen() {
+    final sheetCtx = _hubSettingsSheetContext;
+    if (sheetCtx == null) return;
+    if (Navigator.of(sheetCtx).canPop()) {
+      Navigator.of(sheetCtx).pop();
+    }
   }
 
   static const _tableRowHeight = 42.0;
@@ -676,14 +1021,14 @@ class _OilChangeHubScreenState extends State<OilChangeHubScreen>
       expanded: expanded,
       compact: !layout.isDesktopVariant,
       onToggle: () {
-        setState(() {
-          if (expanded) {
-            _expandedDayKeys.remove(group.dayKey);
-          } else {
-            _expandedDayKeys.add(group.dayKey);
-          }
-        });
-      },
+          setState(() {
+            if (expanded) {
+              _expandedDayKeys.remove(group.dayKey);
+            } else {
+              _expandedDayKeys.add(group.dayKey);
+            }
+          });
+        },
     );
   }
 
@@ -793,13 +1138,171 @@ class _OilChangeHubScreenState extends State<OilChangeHubScreen>
         row: r,
         selected: selected,
         showSuspended: _showSuspendedLog,
-        onTap: () => _onLogRowPrimaryAction(r),
+          onTap: () => _onLogRowPrimaryAction(r),
         onDetail: () => unawaited(_showLogRowDetail(r)),
         onResume: _showSuspendedLog
             ? () => unawaited(_openResumeSuspended(r))
             : null,
+        onDiscard: _showSuspendedLog
+            ? () => unawaited(_confirmAndDiscardSuspended(r))
+            : null,
+        onAmend: !_showSuspendedLog && _rowHasInvoice(r)
+            ? () => unawaited(_openAmendInvoiced(r))
+            : null,
+        onVoid: !_showSuspendedLog && _rowHasInvoice(r)
+            ? () => unawaited(_confirmAndVoidInvoiced(r))
+            : null,
       ),
     );
+  }
+
+  bool _rowHasInvoice(Map<String, dynamic> r) {
+    final invoiceId = (r['invoiceId'] as num?)?.toInt() ?? 0;
+    return invoiceId > 0;
+  }
+
+  Future<void> _openAmendInvoiced(Map<String, dynamic> r) async {
+    final id = _orderIdFromRow(r);
+    if (id == null || id <= 0) return;
+    if (!_rowHasInvoice(r)) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('هذه البطاقة غير مربوطة بفاتورة.')),
+      );
+      return;
+    }
+
+    final pinOk = await confirmOwnerPinForSensitiveAction(
+      context,
+      title: 'تعديل بطاقة غيار مكتملة',
+      message:
+          'يتطلب موافقة المالك. سيُعدَّل نفس الفاتورة وقيد الصندوق دون إنشاء فاتورة جديدة. '
+          'إن صحّحت رقم الهاتف فقط تُعاد إرسال بطاقة واتساب (قالب ميتا) للرقم الجديد.',
+      confirmLabel: 'متابعة التعديل',
+      bypassIfElevatedAccess: true,
+    );
+    if (!mounted || !pinOk) return;
+
+    setState(() => _highlightedId = id);
+    final saved = await Navigator.of(context).push<bool>(
+      contentMaterialRoute(
+        routeId: AppContentRoutes.oilChangeEditId(id),
+        breadcrumbTitle: 'تعديل بطاقة مكتملة',
+        builder: (_) => OilChangeFormScreen(
+          editOrderId: id,
+          amendInvoicedOrder: true,
+          prefillFromOrder: Map<String, dynamic>.from(r),
+        ),
+      ),
+    );
+    if (!mounted) return;
+    if (saved == true) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تم تعديل البطاقة والفاتورة والصندوق')),
+      );
+      _suppressNextPopRefresh = true;
+      _invalidateTabCaches();
+      unawaited(_reload(showSpinner: false));
+    }
+  }
+
+  Future<void> _confirmAndVoidInvoiced(Map<String, dynamic> r) async {
+    final id = _orderIdFromRow(r);
+    if (id == null || id <= 0) return;
+    if (!_rowHasInvoice(r)) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('هذه البطاقة غير مربوطة بفاتورة.')),
+      );
+      return;
+    }
+
+    final name = (r['customerNameSnapshot'] ?? '').toString().trim();
+    final plate = oilFormatPlate(r);
+    final subtitle = [
+      if (name.isNotEmpty) name,
+      if (plate.isNotEmpty && plate != '—') plate,
+    ].join(' · ');
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        final cs = Theme.of(ctx).colorScheme;
+        return Directionality(
+          textDirection: TextDirection.rtl,
+          child: AlertDialog(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            title: const Text(
+              'هل تريد حذف هذه البطاقة؟',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 17),
+            ),
+            content: Text(
+              subtitle.isEmpty
+                  ? 'سيُلغى السجل والفاتورة وقيد الصندوق المرتبط، ويُعاد المخزون إن وُجد.'
+                  : 'سيُلغى «$subtitle» من السجل مع الفاتورة وقيد الصندوق، ويُعاد المخزون إن وُجد.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: cs.onSurfaceVariant, height: 1.45),
+            ),
+            actionsAlignment: MainAxisAlignment.spaceBetween,
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: const Text('لا'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(ctx).pop(true),
+                style: FilledButton.styleFrom(
+                  backgroundColor: OilChangeLogStitchMetrics.error,
+                  foregroundColor: Colors.white,
+                ),
+                child: const Text('نعم، حذف'),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+    if (!mounted || confirmed != true) return;
+
+    final pinOk = await confirmOwnerPinForSensitiveAction(
+      context,
+      title: 'حذف بطاقة غيار مكتملة',
+      message:
+          'يتطلب موافقة المالك. سيُبطل الفاتورة والصندوق المرتبطين بهذه البطاقة.',
+      confirmLabel: 'تأكيد الحذف',
+      destructive: true,
+      bypassIfElevatedAccess: true,
+    );
+    if (!mounted || !pinOk) return;
+
+    try {
+      final auth = context.read<AuthProvider>();
+      await OilChangePostSaleService.instance.voidOrder(
+        orderId: id,
+        actorUsername: auth.username.trim().isEmpty ? null : auth.username.trim(),
+        actorUserId: auth.userId,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تم حذف البطاقة وإبطال الفاتورة والصندوق')),
+      );
+      _invalidateTabCaches();
+      unawaited(_reload(showSpinner: false));
+    } on OilChangePostSaleException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message)),
+      );
+    } catch (e, st) {
+      AppLogger.error('oil_hub', 'void invoiced failed', e, st);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تعذّر حذف البطاقة')),
+      );
+    }
   }
 
   int _phoneListItemCount() {
@@ -877,9 +1380,10 @@ class _OilChangeHubScreenState extends State<OilChangeHubScreen>
     if (_showSuspendedLog) return const SizedBox.shrink();
     return OilChangeLogStitchActionButtons(
       onNewCard: _openNewCard,
-      onWhatsApp: _openWhatsAppCampaign,
-      stacked: layout.isPhoneXS,
+      onWhatsApp: _openWhatsAppMessages,
+      stacked: oilChangePreferStackedFields(layout.size.width),
       compactWhatsAppLabel: layout.isPhoneVariant,
+      pendingCount: _whatsappPending,
     );
   }
 
@@ -904,9 +1408,12 @@ class _OilChangeHubScreenState extends State<OilChangeHubScreen>
         indicatorWeight: 3,
         dividerColor: OilChangeLogStitchMetrics.secondaryContainer
             .withValues(alpha: 0.40),
-        tabs: const [
-          Tab(text: 'السجل'),
-          Tab(text: 'المعلّقة'),
+        tabs: [
+          const Tab(text: 'السجل'),
+          GuideAnchor(
+            id: OilGuideAnchors.hubPendingTab,
+            child: const Tab(text: 'المعلّقة'),
+          ),
         ],
       ),
     );
@@ -940,7 +1447,7 @@ class _OilChangeHubScreenState extends State<OilChangeHubScreen>
       clipBehavior: Clip.antiAlias,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
+      children: [
           _buildLogPanelHeader(cs, layout, useMobileList),
           Expanded(
             child: LayoutBuilder(
@@ -1013,11 +1520,11 @@ class _OilChangeHubScreenState extends State<OilChangeHubScreen>
           SliverToBoxAdapter(
             child: Column(
               mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
                 _buildLogTabBar(),
                 if (!_showSuspendedLog)
-                  Padding(
+          Padding(
                     padding: EdgeInsetsDirectional.fromSTEB(pagePad, 8, pagePad, 8),
                     child: _buildActionButtons(cs, layout),
                   ),
@@ -1093,27 +1600,55 @@ class _OilChangeHubScreenState extends State<OilChangeHubScreen>
     if (_showSuspendedLog) {
       return _buildSearchField();
     }
+    final pill = RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(999),
+    );
     return Row(
       children: [
         Expanded(child: _buildSearchField()),
         const SizedBox(width: 12),
+        // نفس زر «إرسال واتساب» الموجود على الهاتف — سجل الإرسال والرسائل المعلّقة.
         FilledButton.icon(
-          onPressed: _openNewCard,
+          onPressed: () => unawaited(_openWhatsAppMessages()),
           style: FilledButton.styleFrom(
-            backgroundColor: OilChangeLogStitchMetrics.primaryContainer,
-            foregroundColor: Colors.white,
+            backgroundColor: OilChangeLogStitchMetrics.secondaryContainer,
+            foregroundColor: OilChangeLogStitchMetrics.onSecondaryContainer,
             padding: const EdgeInsetsDirectional.symmetric(
-              horizontal: 20,
+              horizontal: 18,
               vertical: 14,
             ),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(999),
-            ),
+            shape: pill,
           ),
-          icon: const Icon(Icons.add_circle_rounded),
+          icon: _whatsappPending > 0
+              ? Badge.count(
+                  count: _whatsappPending,
+                  child: const Icon(Icons.chat_rounded),
+                )
+              : const Icon(Icons.chat_rounded),
           label: const Text(
-            'سجل تبديل زيت جديد',
+            'إرسال واتساب',
             style: TextStyle(fontWeight: FontWeight.w800),
+          ),
+        ),
+        const SizedBox(width: 10),
+        GuideAnchor(
+          id: OilGuideAnchors.hubNewCard,
+          child: FilledButton.icon(
+            onPressed: _openNewCard,
+            style: FilledButton.styleFrom(
+              backgroundColor: OilChangeLogStitchMetrics.primaryContainer,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsetsDirectional.symmetric(
+                horizontal: 20,
+                vertical: 14,
+              ),
+              shape: pill,
+            ),
+            icon: const Icon(Icons.add_circle_rounded),
+            label: const Text(
+              'سجل تبديل زيت جديد',
+              style: TextStyle(fontWeight: FontWeight.w800),
+            ),
           ),
         ),
       ],
@@ -1131,35 +1666,59 @@ class _OilChangeHubScreenState extends State<OilChangeHubScreen>
       context: context,
       title: 'سجل غيارات الزيت',
       actions: [
+        GuideAnchor(
+          id: OilGuideAnchors.hubWhatsappConnect,
+          child: IconButton(
+            tooltip: 'ربط واتساب المحل',
+            onPressed: () => unawaited(_openWhatsappConnect()),
+            icon: const WhatsappGlyphIcon(),
+          ),
+        ),
         IconButton(
-          tooltip: 'ربط واتساب المحل',
-          onPressed: () => unawaited(_openWhatsappConnect()),
-          icon: const Icon(Icons.qr_code_2_rounded),
+          tooltip: 'بيع مباشر',
+          onPressed: () {
+            Navigator.of(context).push(
+              FastContentPageRoute<void>(
+                settings: const RouteSettings(
+                  name: AppContentRoutes.oilDirectSale,
+                ),
+                builder: (_) => const OilChangeDirectSaleScreen(),
+              ),
+            );
+          },
+          icon: const Icon(Icons.point_of_sale_rounded),
         ),
         IconButton(
           tooltip: 'تحديث السجل',
           onPressed: _loading ? null : () => unawaited(_reload()),
           icon: const Icon(Icons.refresh_rounded),
         ),
-        IconButton(
-          tooltip: 'إعدادات غيار الزيت',
-          onPressed: () => unawaited(_openHubSettings()),
-          icon: const Icon(Icons.tune_rounded),
+        GuideAnchor(
+          id: OilGuideAnchors.hubSettings,
+          child: IconButton(
+            tooltip: 'إعدادات غيار الزيت',
+            onPressed: () => unawaited(_openHubSettings()),
+            icon: const Icon(Icons.tune_rounded),
+          ),
         ),
       ],
     );
 
     return Theme(
       data: OilChangeFormTheme.wrap(context, Theme.of(context)),
-      child: Scaffold(
+      child: Consumer<GuideController>(
+        builder: (context, guide, _) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            _syncGuidePendingTab(guide);
+            _syncGuideHubSettings(guide);
+          });
+          return Scaffold(
         backgroundColor: OilChangeLogStitchMetrics.background,
         appBar: appBar,
-        body: Stack(
-          fit: StackFit.expand,
-          children: [
-            Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
+        body: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
           if (_waGatewayDisconnected)
             MaterialBanner(
               backgroundColor: cs.errorContainer,
@@ -1176,9 +1735,9 @@ class _OilChangeHubScreenState extends State<OilChangeHubScreen>
                 TextButton(
                   onPressed: () => unawaited(_openHubSettings()),
                   child: const Text('الإعدادات'),
-                ),
-              ],
-            ),
+                                                        ),
+                                                    ],
+                                                  ),
           if (useMobileList) ...[
             if (layout.isPhoneVariant)
               Expanded(child: _buildPhoneNestedBody(cs, layout, pagePad))
@@ -1192,32 +1751,29 @@ class _OilChangeHubScreenState extends State<OilChangeHubScreen>
                 Padding(
                   padding: EdgeInsetsDirectional.fromSTEB(pagePad, 8, pagePad, 8),
                   child: _buildActionButtons(cs, layout),
-                ),
-              Expanded(
+                                  ),
+                                  Expanded(
                 child: _buildMainLogSection(cs, layout, useMobileList),
               ),
             ],
           ] else
             Expanded(
               child: LayoutBuilder(
-                builder: (context, constraints) {
+                                            builder: (context, constraints) {
                   final keyboardOpen =
                       MediaQuery.viewInsetsOf(context).bottom > 0;
                   final showKpi =
-                      !keyboardOpen && constraints.maxHeight > 280;
+                      !keyboardOpen &&
+                      constraints.maxHeight > 280 &&
+                      !_showSuspendedLog &&
+                      _logs.isNotEmpty &&
+                      !_loading &&
+                      _error == null;
 
-                  if (_loading) {
-                    return const Center(child: CircularProgressIndicator());
-                  }
-                  if (_error != null) {
-                    return _buildErrorView(cs);
-                  }
-                  if (_logs.isEmpty) {
-                    return _buildEmptyView(cs, layout);
-                  }
-
+                  // دائماً أبقِ البحث + التبويبات ظاهرة — وإلا عند «لا معلّقات»
+                  // تختفي التبويبات ولا يمكن الرجوع للسجل بدون إغلاق الصفحة.
                   return ListView(
-                    controller: _scrollController,
+                                                controller: _scrollController,
                     padding: const EdgeInsetsDirectional.fromSTEB(
                       24,
                       12,
@@ -1229,33 +1785,67 @@ class _OilChangeHubScreenState extends State<OilChangeHubScreen>
                       const SizedBox(height: 8),
                       _buildLogTabBar(),
                       const SizedBox(height: 12),
-                      if (showKpi) ...[
-                        OilChangeLogStitchDesktopKpiRow(
-                          stats: OilChangeLogStitchTodayStats.fromDayGroups(
-                            _dayGroups,
+                      if (_loading)
+                                                        const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 48),
+                          child: Center(child: CircularProgressIndicator()),
+                        )
+                      else if (_error != null)
+                        _buildErrorView(cs)
+                      else if (_logs.isEmpty)
+                        _buildEmptyView(cs, layout)
+                      else ...[
+                        if (showKpi) ...[
+                          OilChangeLogStitchDesktopKpiRow(
+                            stats: OilChangeLogStitchTodayStats.fromDayGroups(
+                              _dayGroups,
+                            ),
                           ),
+                          const SizedBox(height: 16),
+                        ],
+                        OilChangeLogStitchDesktopTableCard(
+                          rows: _logs,
+                          highlightedId: _highlightedId,
+                          loadingMore: _loadingMore,
+                          loadedCount: _logs.length,
+                          showSuspended: _showSuspendedLog,
+                          onRowTap: _onLogRowPrimaryAction,
+                          onRowDetail: (r) =>
+                              unawaited(_showLogRowDetail(r)),
+                          onRefresh: () => unawaited(_reload()),
+                          onRowResume: _showSuspendedLog
+                              ? (r) => unawaited(_openResumeSuspended(r))
+                              : null,
+                          onRowDiscard: _showSuspendedLog
+                              ? (r) => unawaited(
+                                    _confirmAndDiscardSuspended(r),
+                                  )
+                              : null,
+                          onRowAmend: _showSuspendedLog
+                              ? null
+                              : (r) {
+                                  if (_rowHasInvoice(r)) {
+                                    unawaited(_openAmendInvoiced(r));
+                                  }
+                                },
+                          onRowVoid: _showSuspendedLog
+                              ? null
+                              : (r) {
+                                  if (_rowHasInvoice(r)) {
+                                    unawaited(_confirmAndVoidInvoiced(r));
+                                  }
+                                },
                         ),
-                        const SizedBox(height: 16),
                       ],
-                      OilChangeLogStitchDesktopTableCard(
-                        rows: _logs,
-                        highlightedId: _highlightedId,
-                        loadingMore: _loadingMore,
-                        loadedCount: _logs.length,
-                        onRowTap: _onLogRowPrimaryAction,
-                        onRowDetail: (r) => unawaited(_showLogRowDetail(r)),
-                        onRefresh: () => unawaited(_reload()),
-                      ),
                     ],
-                  );
-                },
-              ),
-            ),
-        ],
-        ),
-            const OilChangeWhatsappCampaignProgressLayer(),
-          ],
-        ),
+                                              );
+                                            },
+                                          ),
+                                  ),
+                                ],
+                              ),
+      );
+        },
       ),
     );
   }
@@ -1310,8 +1900,13 @@ class _OilChangeHubSettingsSheetState extends State<_OilChangeHubSettingsSheet> 
   bool _loading = true;
   bool _stockFromWarehouse = true;
   bool _hydraulicStockFromWarehouse = true;
+  final Map<OilOptionalExtraKind, bool> _optionalExtras = {
+    for (final k in OilOptionalExtraKind.values) k: true,
+  };
   bool _whatsappAutoAfterSave = false;
   bool _whatsappManualAfterSave = false;
+  bool _whatsappAskRating = true;
+  bool _whatsappAiAutoReply = true;
   bool _waGatewayConnected = false;
   String? _busyKey;
 
@@ -1322,29 +1917,68 @@ class _OilChangeHubSettingsSheetState extends State<_OilChangeHubSettingsSheet> 
   }
 
   Future<void> _load() async {
-    final stock = await OilChangeSettings.stockFromWarehouseEnabled();
-    final hydStock =
-        await OilChangeSettings.hydraulicStockFromWarehouseEnabled();
-    final waAuto = await OilChangeSettings.whatsappAutoAfterSaveEnabled();
-    var waManual = await OilChangeSettings.whatsappManualAfterSaveEnabled();
+    // إعدادات محلية فقط — لا نعلّق الورقة على شبكة واتساب.
+    final results = await Future.wait<Object?>([
+      OilChangeSettings.stockFromWarehouseEnabled(),
+      OilChangeSettings.hydraulicStockFromWarehouseEnabled(),
+      OilChangeSettings.loadOptionalExtraFlags(),
+      OilChangeSettings.whatsappAutoAfterSaveEnabled(),
+      OilChangeSettings.whatsappManualAfterSaveEnabled(),
+      OilChangeSettings.whatsappAskRatingAfterSaveEnabled(),
+      OilChangeWhatsappStatusStore.instance.readStatus(refreshFromServer: false),
+    ]);
+    if (!mounted) return;
+
+    var waAuto = results[3] as bool;
+    var waManual = results[4] as bool;
     if (waAuto && waManual) {
       await OilChangeSettings.setWhatsappManualAfterSave(false);
       waManual = false;
     }
-    await OilChangeWhatsappStatusStore.instance.syncFromCloudIfPossible();
-    final waStatus = await OilChangeWhatsappStatusStore.instance.readStatus(
-      refreshFromServer: true,
-    );
-    if (!mounted) return;
+    final waStatus = results[6] as OilChangeWhatsappGatewayStatus;
+    final extras =
+        Map<OilOptionalExtraKind, bool>.from(
+          results[2] as Map<OilOptionalExtraKind, bool>,
+        );
+
     setState(() {
-      _stockFromWarehouse = stock;
-      _hydraulicStockFromWarehouse = hydStock;
+      _stockFromWarehouse = results[0] as bool;
+      _hydraulicStockFromWarehouse = results[1] as bool;
+      _optionalExtras
+        ..clear()
+        ..addAll(extras);
       _whatsappAutoAfterSave = waAuto;
       _whatsappManualAfterSave = waManual;
+      _whatsappAskRating = results[5] as bool;
       _waGatewayConnected =
           waStatus == OilChangeWhatsappGatewayStatus.connected;
       _loading = false;
     });
+    unawaited(_refreshAiAutoReplyInBackground());
+    unawaited(_refreshWhatsappGatewayInBackground());
+  }
+
+  Future<void> _refreshAiAutoReplyInBackground() async {
+    try {
+      final enabled = await OilChangeWhatsappGatewayRepository.instance
+          .fetchRatingAutoReplyEnabled();
+      if (!mounted || enabled == _whatsappAiAutoReply) return;
+      setState(() => _whatsappAiAutoReply = enabled);
+    } catch (_) {}
+  }
+
+  Future<void> _refreshWhatsappGatewayInBackground() async {
+    try {
+      await OilChangeWhatsappStatusStore.instance.syncFromCloudIfPossible();
+      if (!mounted) return;
+      final waStatus = await OilChangeWhatsappStatusStore.instance.readStatus(
+        refreshFromServer: false,
+      );
+      if (!mounted) return;
+      final connected = waStatus == OilChangeWhatsappGatewayStatus.connected;
+      if (connected == _waGatewayConnected) return;
+      setState(() => _waGatewayConnected = connected);
+    } catch (_) {}
   }
 
   Future<void> _setStock(bool value) async {
@@ -1362,6 +1996,15 @@ class _OilChangeHubSettingsSheetState extends State<_OilChangeHubSettingsSheet> 
       _busyKey = 'hyd_stock';
     });
     await OilChangeSettings.setHydraulicStockFromWarehouse(value);
+    if (mounted) setState(() => _busyKey = null);
+  }
+
+  Future<void> _setOptionalExtra(OilOptionalExtraKind kind, bool value) async {
+    setState(() {
+      _optionalExtras[kind] = value;
+      _busyKey = kind.settingsKey;
+    });
+    await OilChangeSettings.setOptionalExtra(kind, value);
     if (mounted) setState(() => _busyKey = null);
   }
 
@@ -1385,9 +2028,42 @@ class _OilChangeHubSettingsSheetState extends State<_OilChangeHubSettingsSheet> 
     if (mounted) setState(() => _busyKey = null);
   }
 
+  Future<void> _setWhatsAppAskRating(bool value) async {
+    setState(() {
+      _whatsappAskRating = value;
+      _busyKey = 'wa_rating';
+    });
+    await OilChangeSettings.setWhatsappAskRatingAfterSave(value);
+    if (mounted) setState(() => _busyKey = null);
+  }
+
+  Future<void> _setWhatsAppAiAutoReply(bool value) async {
+    setState(() {
+      _whatsappAiAutoReply = value;
+      _busyKey = 'wa_ai_reply';
+    });
+    final ok = await OilChangeWhatsappGatewayRepository.instance
+        .setRatingAutoReplyEnabled(value);
+    if (!mounted) return;
+    if (!ok) {
+      setState(() {
+        _whatsappAiAutoReply = !value;
+        _busyKey = null;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('تعذّر حفظ إعداد الرد التلقائي — تحقق من الاتصال'),
+        ),
+      );
+      return;
+    }
+    setState(() => _busyKey = null);
+  }
+
   Widget _settingSwitch({
     required ColorScheme cs,
     required String key,
+    String? anchorId,
     required IconData icon,
     required String title,
     required String subtitleOn,
@@ -1396,27 +2072,31 @@ class _OilChangeHubSettingsSheetState extends State<_OilChangeHubSettingsSheet> 
     required ValueChanged<bool> onChanged,
   }) {
     final busy = _busyKey == key;
-    return SwitchListTile(
+    final tile = SwitchListTile(
       value: value,
       onChanged: busy ? null : onChanged,
       secondary: Icon(icon, color: value ? _royalGold : cs.onSurfaceVariant),
       title: Text(title, style: const TextStyle(fontWeight: FontWeight.w800)),
       subtitle: Text(
         value ? subtitleOn : subtitleOff,
-        style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant, height: 1.35),
+        style:
+            TextStyle(fontSize: 12, color: cs.onSurfaceVariant, height: 1.35),
         textAlign: TextAlign.start,
       ),
     );
+    final id = anchorId;
+    if (id == null || id.isEmpty) return tile;
+    return GuideAnchor(id: id, child: tile);
   }
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final mq = MediaQuery.of(context);
-    final bottom = mq.padding.bottom;
+    final bottom = MediaQuery.paddingOf(context).bottom;
     final layout = context.screenLayout;
     final maxW = layout.isHandsetForLayout ? double.infinity : 440.0;
-    final sheetMaxH = mq.size.height * (layout.isHandsetForLayout ? 0.92 : 0.85);
+    final sheetMaxH =
+        layout.size.height * (layout.isHandsetForLayout ? 0.92 : 0.85);
 
     return Padding(
       padding: EdgeInsetsDirectional.fromSTEB(12, 0, 12, 12 + bottom),
@@ -1436,13 +2116,11 @@ class _OilChangeHubSettingsSheetState extends State<_OilChangeHubSettingsSheet> 
                   color: _royalGold.withValues(alpha: 0.78),
                   width: 2,
                 ),
-                boxShadow: const [
-                  BoxShadow(
-                    color: AppGlass.goldGlow,
+                boxShadow: oilChangeGoldGlowOf(
+                  context,
                     blurRadius: 18,
-                    offset: Offset(0, 4),
+                  offset: const Offset(0, 4),
                   ),
-                ],
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1485,8 +2163,8 @@ class _OilChangeHubSettingsSheetState extends State<_OilChangeHubSettingsSheet> 
                   if (_loading)
                     const Expanded(
                       child: Padding(
-                        padding: EdgeInsets.all(28),
-                        child: Center(child: CircularProgressIndicator()),
+                      padding: EdgeInsets.all(28),
+                      child: Center(child: CircularProgressIndicator()),
                       ),
                     )
                   else
@@ -1497,59 +2175,99 @@ class _OilChangeHubSettingsSheetState extends State<_OilChangeHubSettingsSheet> 
                           mainAxisSize: MainAxisSize.min,
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            Padding(
+                    Padding(
                               padding: const EdgeInsetsDirectional.fromSTEB(
                                 12,
                                 0,
                                 12,
                                 16,
                               ),
-                              child: DecoratedBox(
-                                decoration: BoxDecoration(
-                                  color: _royalGold.withValues(alpha: 0.06),
-                                  borderRadius: BorderRadius.circular(14),
-                                  border: Border.all(
-                                    color: _royalGold.withValues(alpha: 0.28),
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: _royalGold.withValues(alpha: 0.06),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
+                            color: _royalGold.withValues(alpha: 0.28),
+                          ),
+                        ),
+                        child: Column(
+                          children: [
+                            _settingSwitch(
+                              cs: cs,
+                              key: 'stock',
+                                      anchorId: OilGuideAnchors.settingsStockOil,
+                              icon: Icons.inventory_2_outlined,
+                              title: 'صرف الزيت من المخزون',
+                              subtitleOn:
+                                  'اختيار صنف من المخزون وخصم اللترات عند الحفظ',
+                              subtitleOff:
+                                  'تسجيل الزيت يدوياً فقط — بدون خصم مخزون',
+                              value: _stockFromWarehouse,
+                              onChanged: (v) => unawaited(_setStock(v)),
+                            ),
+                            Divider(
+                              height: 1,
+                              color: _royalGold.withValues(alpha: 0.22),
+                            ),
+                            _settingSwitch(
+                              cs: cs,
+                              key: 'hyd_stock',
+                                      anchorId:
+                                          OilGuideAnchors.settingsStockHydraulic,
+                              icon: Icons.water_drop_outlined,
+                              title: 'صرف الهيدروليك من المخزون',
+                              subtitleOn:
+                                  'اختيار عائلة هيدروليك من المخزون وخصم اللترات عند الحفظ',
+                              subtitleOff:
+                                  'تسجيل الهيدروليك يدوياً فقط — بدون خصم مخزون',
+                              value: _hydraulicStockFromWarehouse,
+                              onChanged: (v) =>
+                                  unawaited(_setHydraulicStock(v)),
+                            ),
+                            Divider(
+                              height: 1,
+                              color: _royalGold.withValues(alpha: 0.22),
+                            ),
+                            ...[
+                              for (var i = 0;
+                                  i < OilOptionalExtraKind.values.length;
+                                  i++) ...[
+                                if (i > 0)
+                                  Divider(
+                                    height: 1,
+                                    color: _royalGold.withValues(alpha: 0.22),
                                   ),
-                                ),
-                                child: Column(
-                                  children: [
-                                    _settingSwitch(
+                                Builder(
+                                  builder: (context) {
+                                    final kind =
+                                        OilOptionalExtraKind.values[i];
+                                    return _settingSwitch(
                                       cs: cs,
-                                      key: 'stock',
-                                      icon: Icons.inventory_2_outlined,
-                                      title: 'صرف الزيت من المخزون',
-                                      subtitleOn:
-                                          'اختيار صنف من المخزون وخصم اللترات عند الحفظ',
-                                      subtitleOff:
-                                          'تسجيل الزيت يدوياً فقط — بدون خصم مخزون',
-                                      value: _stockFromWarehouse,
-                                      onChanged: (v) => unawaited(_setStock(v)),
-                                    ),
-                                    Divider(
-                                      height: 1,
-                                      color: _royalGold.withValues(alpha: 0.22),
-                                    ),
-                                    _settingSwitch(
-                                      cs: cs,
-                                      key: 'hyd_stock',
-                                      icon: Icons.water_drop_outlined,
-                                      title: 'صرف الهيدروليك من المخزون',
-                                      subtitleOn:
-                                          'اختيار عائلة هيدروليك من المخزون وخصم اللترات عند الحفظ',
-                                      subtitleOff:
-                                          'تسجيل الهيدروليك يدوياً فقط — بدون خصم مخزون',
-                                      value: _hydraulicStockFromWarehouse,
+                                      key: kind.settingsKey,
+                                      anchorId: i == 0
+                                          ? OilGuideAnchors
+                                              .settingsOptionalExtras
+                                          : null,
+                                      icon: kind.icon,
+                                      title: kind.titleAr,
+                                      subtitleOn: kind.subtitleOn,
+                                      subtitleOff: kind.subtitleOff,
+                                      value: _optionalExtras[kind] ?? true,
                                       onChanged: (v) =>
-                                          unawaited(_setHydraulicStock(v)),
-                                    ),
-                                    Divider(
-                                      height: 1,
-                                      color: _royalGold.withValues(alpha: 0.22),
-                                    ),
-                                    _settingSwitch(
-                                      cs: cs,
+                                          unawaited(_setOptionalExtra(kind, v)),
+                                    );
+                                  },
+                                ),
+                              ],
+                            ],
+                            Divider(
+                              height: 1,
+                              color: _royalGold.withValues(alpha: 0.22),
+                            ),
+                            _settingSwitch(
+                              cs: cs,
                                       key: 'wa_auto',
+                                      anchorId: OilGuideAnchors.settingsWaAuto,
                                       icon: Icons.send_rounded,
                                       title: 'إرسال تلقائي للزبون (واتساب المحل)',
                                       subtitleOn: _waGatewayConnected
@@ -1571,7 +2289,9 @@ class _OilChangeHubSettingsSheetState extends State<_OilChangeHubSettingsSheet> 
                                     _settingSwitch(
                                       cs: cs,
                                       key: 'wa_manual',
-                                      icon: Icons.chat_rounded,
+                                      anchorId:
+                                          OilGuideAnchors.settingsWaManual,
+                              icon: Icons.chat_rounded,
                                       title: 'فتح واتساب يدوياً بعد الحفظ',
                                       subtitleOn: OilChangeWhatsappUserMessages
                                           .settingsWhatsappManualHintOn,
@@ -1585,53 +2305,97 @@ class _OilChangeHubSettingsSheetState extends State<_OilChangeHubSettingsSheet> 
                                       height: 1,
                                       color: _royalGold.withValues(alpha: 0.22),
                                     ),
-                                    ListTile(
-                                      leading: Icon(
-                                        Icons.qr_code_2_rounded,
-                                        color: cs.primary,
-                                      ),
-                                      title: const Text('ربط واتساب المحل'),
-                                      subtitle: Text(
-                                        _waGatewayConnected
-                                            ? 'متصل — متاح لكل المستخدمين'
-                                            : 'غير متصل — اضغط لمسح QR',
-                                        textAlign: TextAlign.start,
-                                      ),
-                                      trailing: const Icon(Icons.chevron_left),
-                                      onTap: () {
-                                        Navigator.pop(context);
-                                        unawaited(
-                                          Navigator.of(context).push<void>(
-                                            MaterialPageRoute<void>(
-                                              builder: (_) =>
-                                                  const OilChangeWhatsappConnectScreen(),
-                                            ),
-                                          ),
-                                        );
-                                      },
+                                    _settingSwitch(
+                                      cs: cs,
+                                      key: 'wa_rating',
+                                      anchorId:
+                                          OilGuideAnchors.settingsWaRating,
+                                      icon: Icons.star_rate_rounded,
+                                      title: 'طلب تقييم من الزبون في الرسالة',
+                              subtitleOn:
+                                          'في نهاية الرسالة يُطلب تقييم من 1 إلى 10 أو ملاحظة قصيرة',
+                                      subtitleOff:
+                                          'بدون دعوة تقييم — الرسالة تنتهي بالخاتمة فقط',
+                                      value: _whatsappAskRating,
+                                      onChanged: (v) =>
+                                          unawaited(_setWhatsAppAskRating(v)),
                                     ),
-                                  ],
-                                ),
-                              ),
+                                    Divider(
+                                      height: 1,
+                                      color: _royalGold.withValues(alpha: 0.22),
+                                    ),
+                                    _settingSwitch(
+                                      cs: cs,
+                                      key: 'wa_ai_reply',
+                                      icon: Icons.smart_toy_rounded,
+                                      title: 'رد تلقائي ذكي داخل واتساب',
+                                      subtitleOn:
+                                          'يجاوب الزبون تلقائياً في المحادثة (تحية وأسئلة البطاقة)',
+                                      subtitleOff:
+                                          'الرد التلقائي متوقف — لا يجيب الذكاء الاصطناعي في واتساب',
+                                      value: _whatsappAiAutoReply,
+                                      onChanged: (v) =>
+                                          unawaited(_setWhatsAppAiAutoReply(v)),
+                                    ),
+                                    Divider(
+                                      height: 1,
+                                      color: _royalGold.withValues(alpha: 0.22),
+                                    ),
+                                    GuideAnchor(
+                                      id: OilGuideAnchors.settingsWaConnect,
+                                      child: ListTile(
+                                        leading: Icon(
+                                          Icons.qr_code_2_rounded,
+                                          color: cs.primary,
+                                        ),
+                                        title: const Text('ربط واتساب المحل'),
+                                        subtitle: Text(
+                                          _waGatewayConnected
+                                              ? 'متصل — متاح لكل المستخدمين'
+                                              : 'غير متصل — اضغط لمسح QR',
+                                          textAlign: TextAlign.start,
+                                        ),
+                                        trailing:
+                                            const Icon(Icons.chevron_left),
+                                        onTap: () {
+                                          Navigator.pop(context);
+                                          unawaited(
+                                            Navigator.of(context).push<void>(
+                                              contentMaterialRoute(
+                                                routeId: AppContentRoutes
+                                                    .oilWhatsappConnect,
+                                                breadcrumbTitle:
+                                                    'ربط واتساب المحل',
+                                                builder: (_) =>
+                                                    const OilChangeWhatsappConnectScreen(),
+                                              ),
+                                            ),
+                                          );
+                                        },
+                                      ),
                             ),
-                            Padding(
+                          ],
+                        ),
+                      ),
+                    ),
+                    Padding(
                               padding: const EdgeInsetsDirectional.fromSTEB(
                                 20,
                                 0,
                                 20,
                                 18,
                               ),
-                              child: Text(
-                                'تُطبَّق على بطاقات الغيار الجديدة في هذا المحل.',
-                                style: TextStyle(
-                                  fontSize: 11.5,
-                                  color: cs.onSurfaceVariant,
-                                  height: 1.35,
-                                ),
-                                textAlign: TextAlign.start,
-                              ),
-                            ),
-                          ],
+                      child: Text(
+                        'تُطبَّق على بطاقات الغيار الجديدة في هذا المحل.',
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          color: cs.onSurfaceVariant,
+                          height: 1.35,
+                        ),
+                        textAlign: TextAlign.start,
+                      ),
+                    ),
+                  ],
                         ),
                       ),
                     ),
@@ -1642,5 +2406,26 @@ class _OilChangeHubSettingsSheetState extends State<_OilChangeHubSettingsSheet> 
         ),
       ),
     );
+  }
+}
+
+/// كاش تبويب سجل غيار الزيت — للتبديل الفوري بين السجل والمعلّقة.
+class _OilLogTabCache {
+  final List<Map<String, dynamic>> logs = <Map<String, dynamic>>[];
+  List<OilChangeDayGroup> dayGroups = <OilChangeDayGroup>[];
+  Set<String> expandedDayKeys = <String>{};
+  bool hasMore = true;
+  bool loadedOnce = false;
+  Object? error;
+  double scrollOffset = 0;
+
+  void clear() {
+    logs.clear();
+    dayGroups = <OilChangeDayGroup>[];
+    expandedDayKeys = <String>{};
+    hasMore = true;
+    loadedOnce = false;
+    error = null;
+    scrollOffset = 0;
   }
 }

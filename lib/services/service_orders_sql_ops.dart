@@ -203,8 +203,10 @@ class ServiceOrdersSqlOps {
     required List<Object?> extraArgs,
     int? excludeOrderId,
   }) async {
+    // المعلّقة ليست «آخر زيارة» مكتملة — جلبها كان يفسد القراءة الحالية/اللاحقة.
     final where = StringBuffer(
-      'tenantId = ? AND deletedAt IS NULL AND orderKind = ? AND $extraWhere',
+      'tenantId = ? AND deletedAt IS NULL AND orderKind = ? '
+      "AND status != '${OilChangeOrderStatus.suspended}' AND $extraWhere",
     );
     final args = <Object?>[tenantId, ServiceOrderKinds.oilChange, ...extraArgs];
     if (excludeOrderId != null && excludeOrderId > 0) {
@@ -229,6 +231,7 @@ class ServiceOrdersSqlOps {
   }) async {
     final where = StringBuffer(
       'tenantId = ? AND deletedAt IS NULL AND orderKind = ? '
+      "AND status != '${OilChangeOrderStatus.suspended}' "
       "AND deviceSerial IS NOT NULL AND trim(deviceSerial) != ''",
     );
     final args = <Object?>[tenantId, ServiceOrderKinds.oilChange];
@@ -252,6 +255,65 @@ class ServiceOrdersSqlOps {
     return null;
   }
 
+  /// كل بطاقات غيار الزيت المرتبطة بعميل مسجّل (أو بنفس الاسم إن لم تُربط بـ id).
+  ///
+  /// ترقيم بمؤشر [afterId] تنازلي (بدون OFFSET).
+  static Future<List<Map<String, dynamic>>> listOilChangeOrdersForCustomer(
+    DatabaseExecutor db,
+    int tenantId, {
+    required int customerId,
+    String? customerName,
+    int? afterId,
+    int limit = 80,
+  }) async {
+    if (customerId <= 0) return const [];
+    final cap = limit < 1 ? 80 : (limit > 200 ? 200 : limit);
+    final nameKey = OilChangeLookupNormalize.normalizeNameKey(
+      (customerName ?? '').trim(),
+    );
+
+    final where = StringBuffer(
+      "tenantId = ? AND (deletedAt IS NULL OR TRIM(COALESCE(deletedAt,'')) = '') "
+      'AND orderKind = ? AND (customerId = ?',
+    );
+    final args = <Object?>[
+      tenantId,
+      ServiceOrderKinds.oilChange,
+      customerId,
+    ];
+    if (nameKey.isNotEmpty) {
+      where.write(
+        ' OR ('
+        '(customerId IS NULL OR customerId = 0) '
+        'AND LOWER(TRIM(COALESCE(customerNameSnapshot, \'\'))) = ?'
+        ')',
+      );
+      args.add(nameKey);
+    }
+    where.write(')');
+
+    // استبعاد المعلّقة والملغاة — السجل الحقيقي فقط.
+    where.write(
+      " AND (status IS NULL OR TRIM(COALESCE(status,'')) = '' "
+      'OR (status != ? AND status != ?))',
+    );
+    args.add(OilChangeOrderStatus.suspended);
+    args.add(OilChangeOrderStatus.cancelled);
+
+    if (afterId != null && afterId > 0) {
+      where.write(' AND id < ?');
+      args.add(afterId);
+    }
+
+    return db.query(
+      'service_orders',
+      where: where.toString(),
+      whereArgs: args,
+      orderBy: 'id DESC',
+      limit: cap,
+    );
+  }
+
   /// آخر بطاقة غيار زيت لنفس العميل (عند عدم وجود لوحة).
   static Future<Map<String, dynamic>?> getLatestOilChangeByCustomerId(
     DatabaseExecutor db,
@@ -261,7 +323,8 @@ class ServiceOrdersSqlOps {
   }) async {
     if (customerId <= 0) return null;
     final where = StringBuffer(
-      'tenantId = ? AND deletedAt IS NULL AND orderKind = ? AND customerId = ?',
+      'tenantId = ? AND deletedAt IS NULL AND orderKind = ? AND customerId = ? '
+      "AND status != '${OilChangeOrderStatus.suspended}'",
     );
     final args = <Object?>[tenantId, ServiceOrderKinds.oilChange, customerId];
     if (excludeOrderId != null && excludeOrderId > 0) {
@@ -315,6 +378,7 @@ class ServiceOrdersSqlOps {
   }) async {
     final where = StringBuffer(
       'tenantId = ? AND deletedAt IS NULL AND orderKind = ? '
+      "AND status != '${OilChangeOrderStatus.suspended}' "
       "AND customerNameSnapshot IS NOT NULL AND trim(customerNameSnapshot) != ''",
     );
     final args = <Object?>[tenantId, ServiceOrderKinds.oilChange];
@@ -338,16 +402,26 @@ class ServiceOrdersSqlOps {
     return null;
   }
 
+  static final Map<String, bool> _columnPresenceCache = {};
+
   static Future<bool> _tableHasColumn(
     DatabaseExecutor db,
     String table,
     String column,
   ) async {
+    final cacheKey = '$table.$column';
+    final cached = _columnPresenceCache[cacheKey];
+    if (cached != null) return cached;
     final info = await db.rawQuery('PRAGMA table_info($table)');
+    var found = false;
     for (final r in info) {
-      if ((r['name'] ?? '').toString() == column) return true;
+      if ((r['name'] ?? '').toString() == column) {
+        found = true;
+        break;
+      }
     }
-    return false;
+    _columnPresenceCache[cacheKey] = found;
+    return found;
   }
 
   static bool _rowNotDeleted(Map<String, dynamic> r) => _rowNotSoftDeleted(r);
@@ -471,10 +545,13 @@ class ServiceOrdersSqlOps {
         where.write(' AND status = ?');
         args.add(OilChangeOrderStatus.suspended);
       } else if (statusFilter == OilChangeLogStatusFilter.active) {
+        // السجل الحقيقي: استبعاد المعلّقة والملغاة (المحذوفة تُستبعد عبر deletedAt).
         where.write(
-          " AND (status IS NULL OR TRIM(COALESCE(status,'')) = '' OR status != ?)",
+          " AND (status IS NULL OR TRIM(COALESCE(status,'')) = '' "
+          'OR (status != ? AND status != ?))',
         );
         args.add(OilChangeOrderStatus.suspended);
+        args.add(OilChangeOrderStatus.cancelled);
       }
 
       final rows = await db.query(

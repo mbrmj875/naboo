@@ -37,5 +37,33 @@ void main() {
       expect(a, b);
       expect(a == c, isFalse);
     });
+
+    test('thisWeek covers last 7 local calendar days including today', () {
+      const range = OwnerDateRange.thisWeek();
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+      expect(range.startLocal, today.subtract(const Duration(days: 6)));
+      expect(range.endExclusiveLocal, today.add(const Duration(days: 1)));
+      expect(range.salesTitleAr, 'مبيعات الأسبوع');
+    });
+
+    test('today sales title and local day bounds', () {
+      const range = OwnerDateRange.today();
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+      expect(range.startLocal, today);
+      expect(range.endExclusiveLocal, today.add(const Duration(days: 1)));
+      expect(range.salesTitleAr, 'مبيعات اليوم');
+    });
+
+    test('utc bounds convert local midnight correctly', () {
+      const range = OwnerDateRange.today();
+      expect(range.startUtcIso, range.startLocal.toUtc().toIso8601String());
+      expect(
+        range.endExclusiveUtcIso,
+        range.endExclusiveLocal.toUtc().toIso8601String(),
+      );
+      expect(range.startUtcIso.endsWith('Z'), isTrue);
+    });
   });
 }

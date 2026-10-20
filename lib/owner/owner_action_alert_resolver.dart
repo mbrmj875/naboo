@@ -31,6 +31,7 @@ abstract final class OwnerActionAlertResolver {
         _appendClothingAlerts(alerts, snapshot, thresholds);
       case OwnerDashboardProfile.generalRetail:
       case OwnerDashboardProfile.pharmacy:
+      case OwnerDashboardProfile.restaurantCafe:
         _appendRetailShortageAlerts(alerts, snapshot, thresholds);
     }
 

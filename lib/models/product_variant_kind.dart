@@ -29,4 +29,11 @@ abstract class ProductVariantKind {
     final pid = (row['parentProductId'] as num?)?.toInt();
     return pid != null && pid > 0;
   }
+
+  /// المخزون يُتتبَّع على أصناف اللزوجة/الدرجة فقط — ليس صف العائلة.
+  static const String sqlNotFluidFamilyParent =
+      'IFNULL(variantKind, 0) NOT IN ($hydraulicFamily, $oilFamily)';
+
+  static String sqlNotFluidFamilyParentOf(String column) =>
+      'IFNULL($column, 0) NOT IN ($hydraulicFamily, $oilFamily)';
 }

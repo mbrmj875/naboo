@@ -3,6 +3,7 @@ import '../models/oil_change_filter_kind.dart';
 import '../models/oil_change_service_item.dart';
 import '../../../services/product_repository.dart';
 import '../../../services/service_orders_repository.dart';
+import '../../../utils/invoice_validation.dart';
 import '../../../utils/iqd_money.dart';
 import '../utils/oil_change_filter_format.dart';
 import '../utils/oil_change_log_format.dart';
@@ -12,6 +13,10 @@ import 'oil_change_settings.dart';
 /// بناء بنود فاتورة بيع من بطاقة غيار زيت (بدون خصم مخزون مكرر للزيت/الهيدروليك المُصرف مسبقاً).
 class OilChangeInvoiceBuilder {
   OilChangeInvoiceBuilder._();
+
+  /// يطابق [kInvoiceBalanceTolerance] (0.01 د.ع ≈ 10 فلس) حتى لا تُقبل بنود
+  /// ثم يرفضها [validateInvoiceBalance] بعد الصرف.
+  static final int _lineMatchTolFils = IqdMoney.toFils(kInvoiceBalanceTolerance);
 
   /// إجمالي البطاقة المتفق عليه (مصدر الحقيقة للفاتورة).
   static int orderTotalFils(Map<String, dynamic> order) {
@@ -43,13 +48,13 @@ class OilChangeInvoiceBuilder {
     if (targetF <= 0) return lines;
 
     var sumF = itemsTotalFils(lines);
-    if ((sumF - targetF).abs() <= 500) return lines;
+    if ((sumF - targetF).abs() <= _lineMatchTolFils) return lines;
 
     // إزالة سطر زيت المحل إن كان «زيت العميل» — شائع سبب مضاعفة الإجمالي.
     if (_oilCustomerProvided(order)) {
       lines = lines.where((i) => !_looksLikeOilMaterialLine(i)).toList();
       sumF = itemsTotalFils(lines);
-      if ((sumF - targetF).abs() <= 500) return lines;
+      if ((sumF - targetF).abs() <= _lineMatchTolFils) return lines;
     }
 
     // لا تزال البنود لا تطابق البطاقة: سطر واحد بإجمالي البطاقة (يتجنب 9000 بدل 4500).
@@ -231,17 +236,28 @@ class OilChangeInvoiceBuilder {
 
   static List<InvoiceItem> _filterItems(Map<String, dynamic> order) {
     final out = <InvoiceItem>[];
-    for (final kind in OilChangeFilterKind.all) {
-      final name = (order[kind.nameColumnKey] ?? '').toString().trim();
-      if (name.isEmpty) continue;
-      final fils = (order[kind.priceColumnKey] as num?)?.toInt() ?? 0;
-      if (fils <= 0) continue;
-      final line = oilFilterLineLabel(
-        kindLabel: kind.label,
-        name: name,
-        priceFils: fils,
+    final labelByCode = <String, String>{
+      for (final k in OilChangeFilterKind.builtins) k.code: k.label,
+    };
+    for (final line in oilFilterLinesDataFromRow(order)) {
+      if (line.priceFils <= 0) continue;
+      final kindLabel = (line.label?.trim().isNotEmpty == true)
+          ? line.label!.trim()
+          : (labelByCode[line.code] ?? 'فلتر');
+      final text = oilFilterLineLabel(
+        kindLabel: kindLabel,
+        name: line.name,
+        priceFils: line.priceFils,
       );
-      out.add(_filsLine(name: line ?? '${kind.label}: $name', fils: fils));
+      out.add(
+        _filsLine(
+          name: text ??
+              (line.name.isEmpty
+                  ? '$kindLabel — ${line.priceFils}'
+                  : '${kindLabel}: ${line.name}'),
+          fils: line.priceFils,
+        ),
+      );
     }
     return out;
   }

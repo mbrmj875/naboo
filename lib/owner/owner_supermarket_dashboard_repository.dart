@@ -62,8 +62,8 @@ class OwnerSupermarketDashboardRepository {
       ''';
       final args = <Object?>[
         tenantId,
-        range.startLocal.toIso8601String(),
-        range.endExclusiveLocal.toIso8601String(),
+        range.startLocalIso,
+        range.endExclusiveLocalIso,
       ];
       if (staffName != null && staffName.isNotEmpty) {
         sql += ' AND inv.createdByUserName = ?';

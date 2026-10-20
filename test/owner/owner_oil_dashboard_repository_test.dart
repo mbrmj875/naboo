@@ -152,6 +152,45 @@ void main() {
       expect(kpi.totalFils, 15000);
     });
 
+    test('listOilSalesInRange returns same revenue as aggregate', () async {
+      final db = await dbHelper.database;
+      final inRange = DateTime(2026, 5, 15, 12).toUtc().toIso8601String();
+      await _insertOilOrder(
+        db,
+        tenantId: tenantId,
+        status: 'completed',
+        createdAt: inRange,
+        agreedPriceFils: 15000,
+        globalIdSuffix: 'a',
+      );
+      await _insertOilOrder(
+        db,
+        tenantId: tenantId,
+        status: 'completed',
+        createdAt: inRange,
+        agreedPriceFils: 5000,
+        globalIdSuffix: 'b',
+      );
+
+      final range = OwnerDateRange.custom(
+        DateTime(2026, 5, 1),
+        DateTime(2026, 5, 31),
+      );
+      final kpi = await repo.loadOilChangesInRange(
+        tenantId: tenantId,
+        range: range,
+      );
+      final rows = await repo.listOilSalesInRange(
+        tenantId: tenantId,
+        range: range,
+      );
+      final sum = rows.fold<int>(0, (s, r) => s + r.amountFils);
+      expect(kpi.changeCount, 2);
+      expect(kpi.revenueFils, 20000);
+      expect(rows.length, 2);
+      expect(sum, kpi.revenueFils);
+    });
+
     test('ensureOwnerDashboardQueryIndexes creates composite indexes', () async {
       final db = await dbHelper.database;
       final indexes = await db.rawQuery('''
@@ -178,9 +217,11 @@ Future<void> _insertOilOrder(
   required String createdAt,
   int? invoiceId,
   int agreedPriceFils = 0,
+  String globalIdSuffix = '',
 }) async {
+  final suffix = globalIdSuffix.isEmpty ? '' : '-$globalIdSuffix';
   await db.insert('service_orders', {
-    'global_id': 'oc-$tenantId-$status-$createdAt',
+    'global_id': 'oc-$tenantId-$status-$createdAt$suffix',
     'tenantId': tenantId,
     'customerNameSnapshot': 'عميل',
     'deviceName': 'سيارة',

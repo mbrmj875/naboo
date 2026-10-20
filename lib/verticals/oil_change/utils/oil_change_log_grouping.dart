@@ -55,6 +55,7 @@ String _dayKey(DateTime d) =>
     '${d.day.toString().padLeft(2, '0')}';
 
 DateTime? _parseCreatedLocal(Map<String, dynamic> row) {
+  // يوم السجل = تاريخ إنشاء/تقديم البطاقة (عند إكمال معلّقة يُحدَّث createdAt ليوم البيع).
   final raw = (row['createdAt'] ?? '').toString();
   final dt = DateTime.tryParse(raw);
   if (dt == null) return null;

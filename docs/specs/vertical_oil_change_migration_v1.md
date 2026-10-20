@@ -204,7 +204,9 @@ service_order_form_screen.dart → ~1,420 سطر (تذاكر صيانة فقط،
 
 **مسار:** `app_oil_invoices` · Gate: `enableOilChange` (ليس `enablePos`)
 
-**بيانات:** فواتير مرتبطة بـ `service_orders.orderKind = 'oil_change'` عبر `OilChangeInvoicesRepository`.
+**بيانات:** فواتير مرتبطة بـ `service_orders.orderKind = 'oil_change'` عبر `OilChangeInvoicesRepository`، **أو** فواتير «بيع مباشر» الموسومة داخلياً (`deliveryAddress = oil_direct_sale`) بدون بطاقة غيار.
+
+**بيع مباشر أصلي:** مسار `app_oil_direct_sale` · Gate: `enableOilChange` (ليس `enablePos`) — بلاطة رئيسية دائمة؛ لا يستبدل ولا يفعّل POS العام.
 
 **Hybrid (`enablePos`):** فلتر «من بطاقة زيت / من POS» في شاشة واحدة (الخيار A).
 
@@ -284,6 +286,7 @@ service_order_form_screen.dart → ~1,420 سطر (تذاكر صيانة فقط،
 |--------|------|
 | `app_invoices` (POS) | `enablePos` |
 | `app_oil_invoices` 🆕 | `enableOilChange` |
+| `app_oil_direct_sale` 🆕 | `enableOilChange` |
 | `app_add_invoice` | `enablePos` |
 
 ---

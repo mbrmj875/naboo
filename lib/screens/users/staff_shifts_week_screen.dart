@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 
+import '../../guides/guide_anchor.dart';
 import '../../services/database_helper.dart';
 import '../../utils/screen_layout.dart';
 import '../../theme/design_tokens.dart';
@@ -643,11 +644,14 @@ class _StaffShiftsWeekScreenState extends State<StaffShiftsWeekScreen> {
           foregroundColor: Theme.of(context).colorScheme.onSurface,
           surfaceTintColor: Colors.transparent,
           elevation: 0,
-          title: Text(
-            'ورديات الموظفين — أسبوع',
-            style: TextStyle(
-              fontWeight: FontWeight.bold,
-              color: Theme.of(context).colorScheme.onSurface,
+          title: GuideAnchor(
+            id: OilGuideAnchors.usersShiftsTitle,
+            child: Text(
+              'ورديات الموظفين — أسبوع',
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                color: Theme.of(context).colorScheme.onSurface,
+              ),
             ),
           ),
         ),

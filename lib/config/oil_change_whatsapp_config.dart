@@ -1,6 +1,7 @@
-/// إعدادات إرسال واتساب تلقائي لقسم غيار الزيت عبر n8n.
+/// إعدادات إرسال واتساب تلقائي لقسم غيار الزيت عبر n8n (مسار احتياطي).
 ///
-/// للإنتاج يُفضّل تمرير الأسرار عبر `--dart-define` في CI:
+/// المسار الرسمي عبر WhatsApp Gateway لا يعتمد على هذه القيم.
+/// للتفعيل الاحتياطي يجب تمرير الأسرار عبر `--dart-define` في CI — لا قيم افتراضية في الـ APK:
 /// ```bash
 /// flutter build apk \
 ///   --dart-define=OIL_CHANGE_WA_WEBHOOK_URL=https://.../webhook/oil-change-notify \
@@ -12,19 +13,18 @@ class OilChangeWhatsappConfig {
 
   static const webhookUrl = String.fromEnvironment(
     'OIL_CHANGE_WA_WEBHOOK_URL',
-    defaultValue:
-        'https://n8n-nrwn.srv1769126.hstgr.cloud/webhook/oil-change-notify',
+    defaultValue: '',
   );
 
   static const webhookSecret = String.fromEnvironment(
     'OIL_CHANGE_WA_WEBHOOK_SECRET',
-    defaultValue: 'NaBoo_WA_2026_xK9mP2',
+    defaultValue: '',
   );
 
-  /// اسم جلسة Evolution — مرحلة 1 ثابت؛ لاحقاً يُشتق من tenant_id.
+  /// اسم جلسة Evolution — يُفضّل اشتقاقه من المستأجر عبر المستودع.
   static const instanceName = String.fromEnvironment(
     'OIL_CHANGE_WA_INSTANCE_NAME',
-    defaultValue: 'shop_basra_1',
+    defaultValue: '',
   );
 
   static const requestTimeout = Duration(seconds: 30);

@@ -88,11 +88,8 @@ class _CustomersScreenState extends State<CustomersScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       context.read<CustomersProvider>().refresh();
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && _searchFocus.canRequestFocus) {
-          _searchFocus.requestFocus();
-        }
-      });
+      // لا نطلب تركيز البحث تلقائياً على الهاتف: يفتح الكيبورد فور الدخول
+      // فيبطئ الرسم الأول ويخفي الشريط السفلي. التركيز يبقى يدوياً أو من اختصار.
     });
     _searchCtrl.addListener(_onSearchTextChanged);
     _searchFocus.addListener(_onSearchFocusChanged);
@@ -101,15 +98,14 @@ class _CustomersScreenState extends State<CustomersScreen> {
   void _onSearchTextChanged() {
     if (!mounted) return;
     _searchDebounce?.cancel();
-    _searchDebounce = Timer(const Duration(milliseconds: 150), () {
+    _searchDebounce = Timer(const Duration(milliseconds: 220), () {
       if (!mounted) return;
       _syncFilters();
     });
-    setState(() {});
   }
 
   void _onSearchFocusChanged() {
-    if (mounted) setState(() {});
+    // لا تعِد بناء الصفحة عند التركيز — كان يسبب إغلاق الكيبورد.
   }
 
   @override
@@ -307,10 +303,14 @@ class _CustomersScreenState extends State<CustomersScreen> {
   @override
   Widget build(BuildContext context) {
     return Consumer<CustomersProvider>(
-      builder: (context, prov, _) {
+      // حقل البحث في child — لا يُعاد بناؤه عند تغيّر نتائج القائمة.
+      child: _buildUnifiedSearchDock(),
+      builder: (context, prov, searchDock) {
         final visible = prov.items;
         final total = visible.length;
-        final loading = prov.isLoading && visible.isEmpty;
+        // لا تُظهر شاشة التحميل أثناء البحث — تُفرّغ الصفحة وتُغلق الكيبورد.
+        final loading =
+            prov.isLoading && visible.isEmpty && _searchCtrl.text.trim().isEmpty;
 
         final gap = ScreenLayout.of(context).pageHorizontalGap;
 
@@ -364,7 +364,6 @@ class _CustomersScreenState extends State<CustomersScreen> {
                 ),
               },
               child: Focus(
-                autofocus: true,
                 child: AppInlineToastHost(
                   child: Scaffold(
                   backgroundColor: _pageBg,
@@ -378,7 +377,15 @@ class _CustomersScreenState extends State<CustomersScreen> {
                   ),
                   body: loading
                       ? const Center(child: CircularProgressIndicator())
-                      : Builder(builder: (innerCtx) {
+                      : Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Padding(
+                              padding: EdgeInsets.fromLTRB(gap, 12, gap, 8),
+                              child: searchDock,
+                            ),
+                            Expanded(
+                              child: Builder(builder: (innerCtx) {
                   final isWide = innerCtx.screenLayout.isWideVariant;
                   final listBody = NotificationListener<ScrollNotification>(
                     onNotification: (n) {
@@ -390,17 +397,11 @@ class _CustomersScreenState extends State<CustomersScreen> {
                       return false;
                     },
                     child: CustomScrollView(
+                      keyboardDismissBehavior:
+                          ScrollViewKeyboardDismissBehavior.onDrag,
                       slivers: [
-                        // شريط KPIs العام (Golden Pattern §9.2) — يلخّص حالة العملاء
-                        // الكلية بصرف النظر عن الفلتر الحالي.
                         SliverPadding(
-                          padding: EdgeInsets.fromLTRB(gap, 12, gap, 12),
-                          sliver: SliverToBoxAdapter(
-                            child: _buildUnifiedSearchDock(),
-                          ),
-                        ),
-                        SliverPadding(
-                          padding: EdgeInsets.fromLTRB(gap, 12, gap, 24),
+                          padding: EdgeInsets.fromLTRB(gap, 4, gap, 24),
                           sliver: total == 0
                               ? SliverToBoxAdapter(child: _buildEmptyState())
                               : SliverToBoxAdapter(
@@ -487,6 +488,9 @@ class _CustomersScreenState extends State<CustomersScreen> {
                   }
                   return listBody;
                 }),
+                            ),
+                          ],
+                        ),
                 ),
                 ),
               ),
@@ -567,49 +571,62 @@ class _CustomersScreenState extends State<CustomersScreen> {
         final isNarrow = c.maxWidth < 600;
         final useGlassBlur = !ScreenLayout.of(context).isHandsetForLayout;
         final ac = context.appCorners;
-        final focused = _searchFocus.hasFocus;
         const royalGold = AppColors.accentGold;
 
         Widget dockBody = Padding(
           padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-          child: TextField(
-            controller: _searchCtrl,
-            focusNode: _searchFocus,
-            textInputAction: TextInputAction.search,
-            style: TextStyle(
-              fontSize: isNarrow ? 14 : 15,
-              color: _textPrimary,
-              fontWeight: FontWeight.w600,
-            ),
-            decoration: InputDecoration(
-              hintText: 'ابحث بالاسم، الهاتف، أو البريد…',
-              hintStyle: TextStyle(
-                color: _textSecondary.withValues(alpha: 0.75),
-                fontWeight: FontWeight.w500,
-              ),
-              prefixIcon: Icon(
-                Icons.search_rounded,
-                color: focused ? royalGold : _textSecondary,
-              ),
-              suffixIcon: _searchCtrl.text.trim().isEmpty
-                  ? null
-                  : IconButton(
-                      tooltip: 'مسح البحث',
-                      onPressed: () {
-                        _searchCtrl.clear();
-                        _syncFilters();
-                      },
-                      icon: const Icon(Icons.close_rounded, size: 20),
+          child: ListenableBuilder(
+            listenable: Listenable.merge([_searchCtrl, _searchFocus]),
+            builder: (context, _) {
+              final focused = _searchFocus.hasFocus;
+              final hasText = _searchCtrl.text.trim().isNotEmpty;
+              return TextField(
+                controller: _searchCtrl,
+                focusNode: _searchFocus,
+                textInputAction: TextInputAction.search,
+                style: TextStyle(
+                  fontSize: isNarrow ? 14 : 15,
+                  color: _textPrimary,
+                  fontWeight: FontWeight.w600,
+                ),
+                decoration: InputDecoration(
+                  hintText: 'ابحث بالاسم، الهاتف، أو البريد…',
+                  hintStyle: TextStyle(
+                    color: _textSecondary.withValues(alpha: 0.75),
+                    fontWeight: FontWeight.w500,
+                  ),
+                  prefixIcon: Icon(
+                    Icons.search_rounded,
+                    color: focused ? royalGold : _textSecondary,
+                  ),
+                  // مساحة ثابتة لزر المسح — حتى لا يتغيّر تخطيط الحقل ويُغلق الكيبورد.
+                  suffixIcon: IconButton(
+                    tooltip: hasText ? 'مسح البحث' : null,
+                    onPressed: hasText
+                        ? () {
+                            _searchCtrl.clear();
+                            _syncFilters();
+                          }
+                        : null,
+                    icon: Icon(
+                      Icons.close_rounded,
+                      size: 20,
+                      color: hasText
+                          ? _textSecondary
+                          : Colors.transparent,
                     ),
-              filled: false,
-              border: InputBorder.none,
-              enabledBorder: InputBorder.none,
-              focusedBorder: InputBorder.none,
-              contentPadding: EdgeInsets.symmetric(
-                horizontal: isNarrow ? 12 : 14,
-                vertical: isNarrow ? 14 : 16,
-              ),
-            ),
+                  ),
+                  filled: false,
+                  border: InputBorder.none,
+                  enabledBorder: InputBorder.none,
+                  focusedBorder: InputBorder.none,
+                  contentPadding: EdgeInsets.symmetric(
+                    horizontal: isNarrow ? 12 : 14,
+                    vertical: isNarrow ? 14 : 16,
+                  ),
+                ),
+              );
+            },
           ),
         );
 
@@ -626,19 +643,27 @@ class _CustomersScreenState extends State<CustomersScreen> {
           );
         }
 
-        return AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
-          curve: Curves.easeOutCubic,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(12),
-            color: useGlassBlur
-                ? AppGlass.surfaceTintStrong
-                : _filterBg.withValues(alpha: 0.92),
-            border: Border.all(
-              color: focused ? royalGold : royalGold.withValues(alpha: 0.5),
-              width: focused ? 2.0 : 1.0,
-            ),
-          ),
+        return ListenableBuilder(
+          listenable: _searchFocus,
+          builder: (context, child) {
+            final focused = _searchFocus.hasFocus;
+            return AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOutCubic,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                color: useGlassBlur
+                    ? AppGlass.surfaceTintStrong
+                    : _filterBg.withValues(alpha: 0.92),
+                border: Border.all(
+                  color:
+                      focused ? royalGold : royalGold.withValues(alpha: 0.5),
+                  width: focused ? 2.0 : 1.0,
+                ),
+              ),
+              child: child,
+            );
+          },
           child: dockBody,
         );
       },
@@ -748,15 +773,30 @@ class _CustomersScreenState extends State<CustomersScreen> {
 
   Widget _tableRow(
     CustomerRecord c, {
-    required Map<int, ({int creditInvoices, int installmentPlans})> finance,
+    required Map<
+            int,
+            ({
+              int creditInvoices,
+              int installmentPlans,
+              int openRemainingFils,
+            })>
+        finance,
   }) {
     final initial = c.name.isNotEmpty ? c.name.substring(0, 1) : '?';
     final idStr = '#${c.id.toString().padLeft(5, '0')}';
     final phone = (c.phone?.trim().isNotEmpty == true) ? c.phone! : '—';
     final selected = _selectedIds.contains(c.id);
     final av = _avatarColor(c.id);
-    final st = c.statusLabel;
-    final fin = finance[c.id] ?? (creditInvoices: 0, installmentPlans: 0);
+    final fin = finance[c.id] ??
+        (creditInvoices: 0, installmentPlans: 0, openRemainingFils: 0);
+    // حالة العرض: آجل مفتوح = مديون (نفس تعريف الديون)، لا رصيد البطاقة وحده.
+    final openDebtIqd = fin.openRemainingFils > 0
+        ? fin.openRemainingFils / 1000.0
+        : 0.0;
+    final hasOpenDebt = openDebtIqd > 0.01 || fin.creditInvoices > 0;
+    final st = hasOpenDebt
+        ? 'مديون'
+        : (c.balance < -0.01 ? 'دائن' : 'مميز');
 
     Widget statusBadge({double fontSize = 12}) => Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
@@ -881,7 +921,7 @@ class _CustomersScreenState extends State<CustomersScreen> {
                         color: _textSecondary.withValues(alpha: 0.75),
                       ),
                     ),
-                  if (c.balance.abs() > 0.01) ...[
+                  if (hasOpenDebt || c.balance.abs() > 0.01) ...[
                     const SizedBox(width: 12),
                     Icon(
                       Icons.account_balance_wallet_outlined,
@@ -890,9 +930,11 @@ class _CustomersScreenState extends State<CustomersScreen> {
                     ),
                     const SizedBox(width: 4),
                     Text(
-                      st == 'مديون'
-                          ? 'دين: ${IraqiCurrencyFormat.formatIqd(c.balance)}'
-                          : 'دائن: ${IraqiCurrencyFormat.formatIqd(c.balance.abs())}',
+                      hasOpenDebt
+                          ? 'دين: ${IraqiCurrencyFormat.formatIqd(openDebtIqd)}'
+                          : (c.balance > 0.01
+                              ? 'دين: ${IraqiCurrencyFormat.formatIqd(c.balance)}'
+                              : 'دائن: ${IraqiCurrencyFormat.formatIqd(c.balance.abs())}'),
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w700,
@@ -1108,20 +1150,20 @@ class _CustomersScreenState extends State<CustomersScreen> {
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
                               Text(
-                                c.balance.abs() < 0.01
-                                    ? 'لا ديون'
-                                    : (c.balance > 0.01
-                                          ? 'دين: ${IraqiCurrencyFormat.formatIqd(c.balance)}'
-                                          : 'دائن: ${IraqiCurrencyFormat.formatIqd(-c.balance)}'),
+                                hasOpenDebt
+                                    ? 'دين: ${IraqiCurrencyFormat.formatIqd(openDebtIqd)}'
+                                    : (c.balance < -0.01
+                                          ? 'دائن: ${IraqiCurrencyFormat.formatIqd(-c.balance)}'
+                                          : 'لا ديون'),
                                 textAlign: TextAlign.center,
                                 style: TextStyle(
                                   fontSize: 13,
                                   fontWeight: FontWeight.w700,
-                                  color: c.balance.abs() < 0.01
-                                      ? AppSemanticColors.success
-                                      : (c.balance > 0.01
-                                            ? AppSemanticColors.danger
-                                            : AppSemanticColors.info),
+                                  color: hasOpenDebt
+                                      ? AppSemanticColors.danger
+                                      : (c.balance < -0.01
+                                            ? AppSemanticColors.info
+                                            : AppSemanticColors.success),
                                 ),
                                 overflow: TextOverflow.ellipsis,
                               ),

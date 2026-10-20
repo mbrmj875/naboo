@@ -17,6 +17,11 @@ import '../services/global_search/global_search_matcher.dart';
 import '../services/global_search/global_search_tool_hit.dart';
 import '../services/global_search/global_search_tools_index.dart';
 import '../verticals/oil_change/screens/oil_change_hub_screen.dart';
+import '../verticals/oil_change/screens/oil_change_form_screen.dart';
+import '../verticals/oil_change/screens/oil_change_whatsapp_connect_screen.dart';
+import '../guides/guide_controller.dart';
+import '../guides/widgets/app_assistant_app_bar_button.dart';
+import '../services/tenant_context_service.dart';
 import '../services/business_setup_settings.dart';
 import '../services/app_settings_repository.dart';
 import '../services/license_service.dart';
@@ -31,6 +36,7 @@ import '../providers/sale_draft_provider.dart';
 import '../providers/parked_sales_provider.dart';
 import '../widgets/search_virtual_keyboard.dart';
 import '../widgets/virtual_keyboard_controller.dart';
+import '../widgets/raw_keyboard_inset.dart';
 import '../widgets/dashboard_view.dart';
 import '../widgets/home_glance_orbit.dart';
 import '../widgets/invoice_detail_sheet.dart';
@@ -39,6 +45,7 @@ import '../widgets/barcode_input_launcher.dart';
 import '../widgets/inputs/arabic_speech_mic_button.dart';
 import '../widgets/app_notifications_sheet.dart';
 import '../widgets/user_info_dialog.dart';
+import '../navigation/app_system_back.dart';
 import '../widgets/double_back_to_exit_scope.dart';
 import '../utils/app_logger.dart';
 import 'invoices/invoices_screen.dart';
@@ -61,6 +68,7 @@ import 'inventory/inventory_settings_screen.dart';
 import 'cash/cash_screen.dart';
 import 'printing/printing_screen.dart';
 import 'users/users_screen.dart';
+import 'users/user_form_screen.dart';
 import 'users/employee_identity_screen.dart';
 import 'users/staff_shifts_week_screen.dart';
 import 'reports/reports_screen.dart';
@@ -80,6 +88,7 @@ import 'customers/customer_contacts_screen.dart';
 import 'loyalty/loyalty_settings_screen.dart';
 import 'loyalty/loyalty_ledger_screen.dart';
 import 'settings/settings_screen.dart';
+import 'settings/dashboard_layout_settings_screen.dart';
 import '../widgets/floating_calculator_overlay.dart';
 import '../widgets/app_brand_mark.dart';
 import 'shift/close_shift_dialog.dart';
@@ -143,8 +152,8 @@ class _HomeScreenState extends State<HomeScreen>
   final ValueNotifier<bool> _isDrawerOpen = ValueNotifier(false);
   late AnimationController _nameAnimController;
 
-  /// Inner Navigator — واحد لجميع التخطيطات (هاتف / تابلت / سطح مكتب).
-  final GlobalKey<NavigatorState> _innerNavKey = GlobalKey<NavigatorState>();
+  /// Inner Navigator — مفتاح عام ليتعامل حرّاس الرجوع مع كل التطبيق.
+  GlobalKey<NavigatorState> get _innerNavKey => appHomeContentNavigatorKey;
 
   final RouteObserver<PageRoute<dynamic>> _homeRouteObserverLarge =
       RouteObserver<PageRoute<dynamic>>();
@@ -258,19 +267,19 @@ class _HomeScreenState extends State<HomeScreen>
   VerticalManifest? get _pharmacyVerticalManifest =>
       VerticalRegistry.instance.manifestFor(BusinessVertical.pharmacy);
 
+  VerticalManifest? get _restaurantVerticalManifest =>
+      VerticalRegistry.instance.manifestFor(BusinessVertical.restaurantCafe);
+
   WidgetBuilder? _oilRouteBuilder(String routeId) =>
       _oilVerticalManifest?.routes[routeId];
 
   WidgetBuilder? _pharmacyRouteBuilder(String routeId) =>
       _pharmacyVerticalManifest?.routes[routeId];
 
-  ModuleItem? _oilNavModuleFromManifest() {
-    final manifest = _oilVerticalManifest;
-    if (manifest == null) return null;
-    final specs = manifest.navModules;
-    if (specs.isEmpty) return null;
-
-    final spec = specs.first;
+  ModuleItem? _navModuleFromSpec(
+    VerticalManifest manifest,
+    NavModuleSpec spec,
+  ) {
     final routes = manifest.routes;
     final dest = routes[spec.routeId];
     if (dest == null) return null;
@@ -306,54 +315,40 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  ModuleItem? _pharmacyNavModuleFromManifest() {
-    final manifest = _pharmacyVerticalManifest;
+  ModuleItem? _navModuleFromManifest(VerticalManifest? manifest) {
     if (manifest == null) return null;
     final specs = manifest.navModules;
     if (specs.isEmpty) return null;
-
-    final spec = specs.first;
-    final routes = manifest.routes;
-    final dest = routes[spec.routeId];
-    if (dest == null) return null;
-
-    List<SubMenuItem>? subItems;
-    final rawSubs = spec.subItems;
-    if (rawSubs != null && rawSubs.isNotEmpty) {
-      subItems = [];
-      for (final s in rawSubs) {
-        final subDest = routes[s.routeId];
-        if (subDest == null) continue;
-        subItems.add(
-          SubMenuItem(
-            title: s.title,
-            routeId: s.routeId,
-            breadcrumbTitle: s.effectiveBreadcrumbTitle,
-            destination: (ctx) => subDest(ctx),
-            icon: s.icon,
-          ),
-        );
-      }
-      if (subItems.isEmpty) subItems = null;
-    }
-
-    return ModuleItem(
-      icon: spec.icon,
-      title: spec.title,
-      iconColor: spec.iconColor,
-      routeId: spec.routeId,
-      breadcrumbTitle: spec.effectiveBreadcrumbTitle,
-      destination: (ctx) => dest(ctx),
-      subItems: subItems,
-    );
+    return _navModuleFromSpec(manifest, specs.first);
   }
+
+  List<ModuleItem> _navModulesFromManifest(VerticalManifest? manifest) {
+    if (manifest == null) return const [];
+    final out = <ModuleItem>[];
+    for (final spec in manifest.navModules) {
+      final item = _navModuleFromSpec(manifest, spec);
+      if (item != null) out.add(item);
+    }
+    return out;
+  }
+
+  ModuleItem? _oilNavModuleFromManifest() =>
+      _navModuleFromManifest(_oilVerticalManifest);
+
+  ModuleItem? _pharmacyNavModuleFromManifest() =>
+      _navModuleFromManifest(_pharmacyVerticalManifest);
+
+  ModuleItem? _restaurantNavModuleFromManifest() =>
+      _navModuleFromManifest(_restaurantVerticalManifest);
 
   List<ModuleItem> _navSourceModules({
     required bool enableOilChange,
     required bool enablePharmacy,
+    required bool enableRestaurant,
   }) {
     final list = List<ModuleItem>.from(_orderedModules);
     list.removeWhere((m) => m.routeId == AppContentRoutes.oilServicesLog);
+    list.removeWhere((m) => m.routeId == AppContentRoutes.restaurantFloor);
     if (enableOilChange) {
       final oilMod = _oilNavModuleFromManifest();
       if (oilMod != null) {
@@ -401,6 +396,18 @@ class _HomeScreenState extends State<HomeScreen>
         }
       }
     }
+    if (enableRestaurant) {
+      final restaurantMods =
+          _navModulesFromManifest(_restaurantVerticalManifest);
+      final invIdx = list.indexWhere(
+        (m) => m.routeId == AppContentRoutes.invoices,
+      );
+      var insertAt = invIdx >= 0 ? invIdx + 1 : 1;
+      for (final restaurantMod in restaurantMods) {
+        list.insert(insertAt.clamp(0, list.length), restaurantMod);
+        insertAt++;
+      }
+    }
     return list;
   }
 
@@ -442,6 +449,8 @@ class _HomeScreenState extends State<HomeScreen>
     final enableRepairServices = biz.enableRepairServices;
     final enablePos = biz.enablePos;
     final enablePharmacy = biz.businessVertical == BusinessVertical.pharmacy;
+    final enableRestaurant = biz.enableRestaurantOs &&
+        biz.effectiveVertical == BusinessVertical.restaurantCafe;
 
     bool allow(String key) => perm.can(key);
 
@@ -450,6 +459,7 @@ class _HomeScreenState extends State<HomeScreen>
     final source = _navSourceModules(
       enableOilChange: enableOilChange,
       enablePharmacy: enablePharmacy,
+      enableRestaurant: enableRestaurant,
     );
     final out = <ModuleItem>[];
 
@@ -468,6 +478,12 @@ class _HomeScreenState extends State<HomeScreen>
         continue;
       }
       if (!enableOilChange && m.routeId == AppContentRoutes.oilServicesLog) {
+        continue;
+      }
+      if (!enableRestaurant &&
+          (m.routeId == AppContentRoutes.restaurantFloor ||
+              m.routeId == AppContentRoutes.restaurantMenu ||
+              m.routeId == AppContentRoutes.restaurantKds)) {
         continue;
       }
       if (m.routeId == AppContentRoutes.users) {
@@ -514,12 +530,37 @@ class _HomeScreenState extends State<HomeScreen>
       );
       if (gated == null) continue;
 
-      final key = _navPermissionKeyForMainRoute(gated.routeId);
+      // إخفاء بنود فرعية حسب hideNavRouteIds (بيع جديد / معلّقات / …)
+      ModuleItem filtered = gated;
+      if (gated.subItems != null && gated.subItems!.isNotEmpty) {
+        final kept = gated.subItems!
+            .where((s) => !hideNav.contains(s.routeId))
+            .toList(growable: false);
+        if (kept.isEmpty && hideNav.contains(gated.routeId)) continue;
+        if (kept.length != gated.subItems!.length) {
+          if (kept.isEmpty) {
+            // وحدة بلا بنود ظاهرة بعد الإخفاء — أسقطها إن كان كل المحتوى مخفياً
+            // إلا إذا كانت وجهة مباشرة بلا اعتماد على البنود
+            continue;
+          }
+          filtered = ModuleItem(
+            icon: gated.icon,
+            title: gated.title,
+            iconColor: gated.iconColor,
+            routeId: gated.routeId,
+            breadcrumbTitle: gated.breadcrumbTitle,
+            destination: gated.destination,
+            subItems: kept,
+          );
+        }
+      }
+
+      final key = _navPermissionKeyForMainRoute(filtered.routeId);
       if (key == null) {
-        out.add(gated);
+        out.add(filtered);
         continue;
       }
-      if (allow(key)) out.add(gated);
+      if (allow(key)) out.add(filtered);
     }
 
     if (!mounted) return;
@@ -566,12 +607,6 @@ class _HomeScreenState extends State<HomeScreen>
 
   NavigatorState? get _contentNavigator => _innerNavKey.currentState;
 
-  bool _innerNavCanPop() => _innerNavKey.currentState?.canPop() ?? false;
-
-  void _innerNavPop() {
-    _innerNavKey.currentState?.pop();
-  }
-
   Widget _buildHomeInnerNavigator() {
     return Navigator(
       key: _innerNavKey,
@@ -608,7 +643,20 @@ class _HomeScreenState extends State<HomeScreen>
 
   /// Active tab index for the bottom nav bar (small screens) ومزامنة تمييز الشريط الجانبي.
   int _activeBottomIndex = 0;
-  ModuleItem? _openBottomSubMenuModule;
+  /// حالة القائمة المنبثقة معزولة — فتح/إغلاق لا يعيد بناء HomeScreen كاملة.
+  final ValueNotifier<ModuleItem?> _bottomSubMenu = ValueNotifier<ModuleItem?>(
+    null,
+  );
+
+  /// صفحات الشريط السفلي/الجانبي تُبقى حيّة — تنقل فوري بلا إعادة إنشاء.
+  /// حد LRU يمنع تراكم الذاكرة/الانهيار على أجهزة ضعيفة دون تغيير الشكل.
+  static const int _kKeptModuleLruCap = 4;
+  final Map<String, WidgetBuilder> _keptModuleBuilders = {};
+  final Map<String, String> _keptModuleTitles = {};
+  /// الأقدم في البداية · الأحدث (MRU) في النهاية.
+  final List<String> _keptModuleOrder = [];
+  final Map<String, GlobalKey<NavigatorState>> _keptModuleNavKeys = {};
+  String? _keptModuleId;
 
   /// يطابق مسار المحتوى الحالي مع فهرس وحدة في [_orderedModules] لتمييز الشريط السفلي/الجانبي.
   int? _indexForContentRoute(String name) {
@@ -672,6 +720,19 @@ class _HomeScreenState extends State<HomeScreen>
             name.startsWith(AppContentRoutes.oilChangeServiceEditPrefix))) {
       return oilIdx;
     }
+    final restaurantIdx = _navForUi.indexWhere((m) {
+      if (m.routeId == name) return true;
+      return (m.subItems ?? const <SubMenuItem>[]).any((s) => s.routeId == name);
+    });
+    if (restaurantIdx >= 0 &&
+        (name == AppContentRoutes.restaurantFloor ||
+            name == AppContentRoutes.restaurantMenu ||
+            name == AppContentRoutes.restaurantRecipes ||
+            name == AppContentRoutes.restaurantKds ||
+            name == AppContentRoutes.restaurantCashier ||
+            name == AppContentRoutes.restaurantMenuTheme)) {
+      return restaurantIdx;
+    }
     return null;
   }
 
@@ -694,7 +755,7 @@ class _HomeScreenState extends State<HomeScreen>
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         setState(() {
-          _openBottomSubMenuModule = null;
+          _bottomSubMenu.value = null;
           for (final t in expandParents) {
             _expandedSubmenus.add(t);
           }
@@ -1002,6 +1063,7 @@ class _HomeScreenState extends State<HomeScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    AppSystemBack.register(_closeBottomSubMenuOnSystemBack);
     // تهيئة فورية — تمنع LateInitializationError قبل انتهاء الـ async
     _orderedModules = List.from(_originalModules);
     _nameAnimController = AnimationController(
@@ -1036,7 +1098,377 @@ class _HomeScreenState extends State<HomeScreen>
         unawaited(_refreshHomeAuxProviders());
         unawaited(_restorePersistedContentRouteIfAny());
       });
+      _bindGuideHost();
     });
+  }
+
+  void _bindGuideHost() {
+    if (!mounted) return;
+    final guide = context.read<GuideController>();
+    final auth = context.read<AuthProvider>();
+    final tenantId = context.read<TenantContextService>().activeTenantId;
+    final userKey = auth.userGlobalId.isNotEmpty
+        ? auth.userGlobalId
+        : 'u${auth.userId ?? 0}';
+    guide.configureIdentity(tenantId: tenantId, userKey: userKey);
+    guide.bindHost(
+      GuideHostBridge(
+        currentRouteId: () => _guideEffectiveRouteId(),
+        ensureRoute: _guideEnsureRoute,
+        runAction: _guideRunAction,
+      ),
+    );
+  }
+
+  /// يعتمد أعلى مسار في Navigator وليس فقط الحالة المخزّنة (قد تتأخر).
+  String _guideEffectiveRouteId() {
+    final nav = _contentNavigator;
+    if (nav != null) {
+      final top = peekTopContentRouteId(nav);
+      if (top != null && top.isNotEmpty) return top;
+    }
+    return _currentRouteId;
+  }
+
+  Future<void> _guideRunAction(String action) async {
+    if (!mounted) return;
+    if (action == 'oil.select_pending_tab' ||
+        action == 'wa.show_methods' ||
+        action == 'wa.show_connected' ||
+        action == 'oil.open_hub_settings' ||
+        action == 'oil.open_oil_catalog' ||
+        action == 'oil.open_filter_catalog' ||
+        action == 'oil.open_hydraulic_catalog' ||
+        action == 'oil.expand_extras' ||
+        action.startsWith('product.set_stock_type_')) {
+      // تلتقطها الشاشات عبر currentStep.action
+      context.read<GuideController>().bump();
+      await Future<void>.delayed(const Duration(milliseconds: 220));
+    }
+  }
+
+  Future<void> _guideEnsureRoute(String routeId) async {
+    if (!mounted) return;
+    final nav = _contentNavigator;
+
+    Future<void> waitUntilTopIs(bool Function(String id) match) async {
+      for (var i = 0; i < 24; i++) {
+        final top = nav != null
+            ? (peekTopContentRouteId(nav) ?? _currentRouteId)
+            : _currentRouteId;
+        if (match(top)) {
+          if (_currentRouteId != top) {
+            setState(() => _currentRouteId = top);
+          }
+          return;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+    }
+
+    bool isHub(String id) =>
+        id == AppContentRoutes.oilServicesLog ||
+        id == AppContentRoutes.oilChangeHub;
+
+    if (routeId == AppContentRoutes.oilServicesLog ||
+        routeId == AppContentRoutes.oilChangeHub) {
+      if (nav != null) {
+        final top = peekTopContentRouteId(nav) ?? _currentRouteId;
+        if (!isHub(top)) {
+          final atLog = popUntilContentRoute(
+            nav,
+            AppContentRoutes.oilServicesLog,
+          );
+          if (!atLog) {
+            final atHub = popUntilContentRoute(
+              nav,
+              AppContentRoutes.oilChangeHub,
+            );
+            if (!atHub) {
+              // لا يوجد سجل في المكدس — ادفعه
+              await _pushInContentTaggedAwait(
+                AppContentRoutes.oilServicesLog,
+                'سجل غيارات الزيت',
+                (_) => const OilChangeHubScreen(),
+              );
+            }
+          }
+        }
+      } else {
+        await _pushInContentTaggedAwait(
+          AppContentRoutes.oilServicesLog,
+          'سجل غيارات الزيت',
+          (_) => const OilChangeHubScreen(),
+        );
+      }
+      await waitUntilTopIs(isHub);
+      return;
+    }
+
+    if (routeId == AppContentRoutes.oilChangeCreate) {
+      final top = nav != null
+          ? (peekTopContentRouteId(nav) ?? _currentRouteId)
+          : _currentRouteId;
+      if (top == AppContentRoutes.oilChangeCreate) return;
+      // أخفِ الشريط السحري فوراً قبل الدفع — يقلّل ومضة التخطيط عند الفتح.
+      if (_currentRouteId != AppContentRoutes.oilChangeCreate) {
+        setState(() => _currentRouteId = AppContentRoutes.oilChangeCreate);
+      }
+      final builder = _oilRouteBuilder(AppContentRoutes.oilChangeCreate);
+      await _pushInContentTaggedAwait(
+        AppContentRoutes.oilChangeCreate,
+        'بطاقة غيار زيت جديدة',
+        builder ?? (_) => const OilChangeFormScreen(),
+      );
+      await waitUntilTopIs((id) => id == AppContentRoutes.oilChangeCreate);
+      return;
+    }
+
+    if (routeId == AppContentRoutes.oilChangeServices) {
+      final top = nav != null
+          ? (peekTopContentRouteId(nav) ?? _currentRouteId)
+          : _currentRouteId;
+      if (top == AppContentRoutes.oilChangeServices) return;
+      final builder = _oilRouteBuilder(AppContentRoutes.oilChangeServices);
+      if (builder == null) return;
+      await _pushInContentTaggedAwait(
+        AppContentRoutes.oilChangeServices,
+        'الخدمات وأسعارها',
+        builder,
+      );
+      await waitUntilTopIs((id) => id == AppContentRoutes.oilChangeServices);
+      return;
+    }
+
+    if (routeId == AppContentRoutes.home) {
+      if (_keptModuleId != null) {
+        _closeKeptModuleToHome();
+      } else if (nav != null) {
+        popUntilContentRoute(nav, AppContentRoutes.home);
+      }
+      if (_currentRouteId != AppContentRoutes.home) {
+        setState(() => _currentRouteId = AppContentRoutes.home);
+      }
+      await waitUntilTopIs((id) => id == AppContentRoutes.home || id.isEmpty);
+      return;
+    }
+
+    if (routeId == AppContentRoutes.settingsDashboardLayout) {
+      final top = nav != null
+          ? (peekTopContentRouteId(nav) ?? _currentRouteId)
+          : _currentRouteId;
+      if (top == AppContentRoutes.settingsDashboardLayout) return;
+      await _pushInContentTaggedAwait(
+        AppContentRoutes.settingsDashboardLayout,
+        'تخصيص الشاشة الرئيسية',
+        (_) => const DashboardLayoutSettingsScreen(),
+      );
+      await waitUntilTopIs(
+        (id) => id == AppContentRoutes.settingsDashboardLayout,
+      );
+      return;
+    }
+
+    if (routeId == AppContentRoutes.carWashCreate) {
+      final top = nav != null
+          ? (peekTopContentRouteId(nav) ?? _currentRouteId)
+          : _currentRouteId;
+      if (top == AppContentRoutes.carWashCreate) return;
+      final builder = _oilRouteBuilder(AppContentRoutes.carWashCreate);
+      if (builder == null) return;
+      await _pushInContentTaggedAwait(
+        AppContentRoutes.carWashCreate,
+        'بطاقة غسيل سيارة',
+        builder,
+      );
+      await waitUntilTopIs((id) => id == AppContentRoutes.carWashCreate);
+      return;
+    }
+
+    if (routeId == AppContentRoutes.users) {
+      final top = nav != null
+          ? (peekTopContentRouteId(nav) ?? _currentRouteId)
+          : _currentRouteId;
+      if (top == AppContentRoutes.users) return;
+      await _pushInContentTaggedAwait(
+        AppContentRoutes.users,
+        'المستخدمون',
+        (_) => const UsersScreen(),
+      );
+      await waitUntilTopIs((id) => id == AppContentRoutes.users);
+      return;
+    }
+
+    if (routeId == AppContentRoutes.userForm) {
+      final top = nav != null
+          ? (peekTopContentRouteId(nav) ?? _currentRouteId)
+          : _currentRouteId;
+      if (top == AppContentRoutes.userForm) return;
+      if (top != AppContentRoutes.users) {
+        await _pushInContentTaggedAwait(
+          AppContentRoutes.users,
+          'المستخدمون',
+          (_) => const UsersScreen(),
+        );
+        await waitUntilTopIs((id) => id == AppContentRoutes.users);
+      }
+      await _pushInContentTaggedAwait(
+        AppContentRoutes.userForm,
+        'مستخدم جديد',
+        (_) => const UserFormScreen(),
+      );
+      await waitUntilTopIs((id) => id == AppContentRoutes.userForm);
+      return;
+    }
+
+    if (routeId == AppContentRoutes.staffShiftsWeek) {
+      final top = nav != null
+          ? (peekTopContentRouteId(nav) ?? _currentRouteId)
+          : _currentRouteId;
+      if (top == AppContentRoutes.staffShiftsWeek) return;
+      await _pushInContentTaggedAwait(
+        AppContentRoutes.staffShiftsWeek,
+        'ورديات الموظفين',
+        (_) => const StaffShiftsWeekScreen(),
+      );
+      await waitUntilTopIs((id) => id == AppContentRoutes.staffShiftsWeek);
+      return;
+    }
+
+    if (routeId == AppContentRoutes.employeeIdentity) {
+      final top = nav != null
+          ? (peekTopContentRouteId(nav) ?? _currentRouteId)
+          : _currentRouteId;
+      if (top == AppContentRoutes.employeeIdentity) return;
+      await _pushInContentTaggedAwait(
+        AppContentRoutes.employeeIdentity,
+        'هويات الموظفين',
+        (_) => const EmployeeIdentityScreen(),
+      );
+      await waitUntilTopIs((id) => id == AppContentRoutes.employeeIdentity);
+      return;
+    }
+
+    if (routeId == AppContentRoutes.oilWhatsappConnect) {
+      final top = nav != null
+          ? (peekTopContentRouteId(nav) ?? _currentRouteId)
+          : _currentRouteId;
+      if (top == AppContentRoutes.oilWhatsappConnect) return;
+      // ارجع للسجل أولاً إن كنا داخل بطاقة، ثم افتح شاشة الربط فوقه
+      if (top == AppContentRoutes.oilChangeCreate ||
+          top.startsWith(AppContentRoutes.oilChangeEditPrefix)) {
+        if (nav != null) {
+          popUntilContentRoute(nav, AppContentRoutes.oilServicesLog);
+          await waitUntilTopIs(isHub);
+        }
+      } else if (!isHub(top) && top != AppContentRoutes.oilWhatsappConnect) {
+        if (nav != null) {
+          final atLog = popUntilContentRoute(
+            nav,
+            AppContentRoutes.oilServicesLog,
+          );
+          if (!atLog && !isHub(peekTopContentRouteId(nav) ?? '')) {
+            await _pushInContentTaggedAwait(
+              AppContentRoutes.oilServicesLog,
+              'سجل غيارات الزيت',
+              (_) => const OilChangeHubScreen(),
+            );
+            await waitUntilTopIs(isHub);
+          }
+        }
+      }
+      await _pushInContentTaggedAwait(
+        AppContentRoutes.oilWhatsappConnect,
+        'ربط واتساب المحل',
+        (_) => const OilChangeWhatsappConnectScreen(),
+      );
+      await waitUntilTopIs(
+        (id) => id == AppContentRoutes.oilWhatsappConnect,
+      );
+      return;
+    }
+
+    if (routeId == AppContentRoutes.inventoryProducts) {
+      final top = nav != null
+          ? (peekTopContentRouteId(nav) ?? _currentRouteId)
+          : _currentRouteId;
+      if (top == AppContentRoutes.inventoryProducts) return;
+      await _pushInContentTaggedAwait(
+        AppContentRoutes.inventoryProducts,
+        'قائمة المنتجات',
+        (_) => const InventoryProductsScreen(),
+      );
+      await waitUntilTopIs((id) => id == AppContentRoutes.inventoryProducts);
+      return;
+    }
+
+    if (routeId == AppContentRoutes.addProduct) {
+      final top = nav != null
+          ? (peekTopContentRouteId(nav) ?? _currentRouteId)
+          : _currentRouteId;
+      if (top == AppContentRoutes.addProduct) return;
+      if (top != AppContentRoutes.inventoryProducts) {
+        await _pushInContentTaggedAwait(
+          AppContentRoutes.inventoryProducts,
+          'قائمة المنتجات',
+          (_) => const InventoryProductsScreen(),
+        );
+        await waitUntilTopIs((id) => id == AppContentRoutes.inventoryProducts);
+      }
+      await _pushInContentTaggedAwait(
+        AppContentRoutes.addProduct,
+        'إضافة منتج',
+        (_) => const AddProductScreen(),
+      );
+      await waitUntilTopIs((id) => id == AppContentRoutes.addProduct);
+      return;
+    }
+  }
+
+  /// نسخة قابلة للانتظار من دفع مسار المحتوى (للجولة الإرشادية).
+  Future<void> _pushInContentTaggedAwait(
+    String routeId,
+    String breadcrumbTitle,
+    Widget Function(BuildContext) builder,
+  ) {
+    if (_isPrimaryModuleRoute(routeId)) {
+      if (mounted) {
+        _openKeptModule(routeId, breadcrumbTitle, builder);
+      }
+      return Future<void>.value();
+    }
+
+    if (_keptModuleId != null) {
+      setState(() => _keptModuleId = null);
+    }
+
+    final done = Completer<void>();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        if (!done.isCompleted) done.complete();
+        return;
+      }
+      final nav = _contentNavigator;
+      final observer = _activeHomeRouteObserver;
+      final route = contentMaterialRoute(
+        routeId: routeId,
+        breadcrumbTitle: breadcrumbTitle,
+        builder: (ctx) => _wrapHomeInnerRouteScope(
+          observer,
+          builder(ctx),
+        ),
+      );
+      if (nav != null) {
+        final alreadyThere = popUntilContentRoute(nav, routeId);
+        if (!alreadyThere) {
+          nav.push(route);
+        }
+      } else {
+        Navigator.of(context).push(route);
+      }
+      if (!done.isCompleted) done.complete();
+    });
+    return done.future;
   }
 
   @override
@@ -1045,6 +1477,19 @@ class _HomeScreenState extends State<HomeScreen>
     if (state == AppLifecycleState.resumed) {
       unawaited(_ensureActiveShiftGate());
     }
+  }
+
+  /// رجوع النظام يغلق القائمة الفرعية أولاً — وإلا يُفرَّغ مكدس Navigator
+  /// (يبدو للمستخدم أنه يحتاج «تراجع كثيراً» قبل أن تُفتح القائمة مجدداً).
+  bool _closeBottomSubMenuOnSystemBack() {
+    if (_bottomSubMenu.value == null) return false;
+    _bottomSubMenu.value = null;
+    return true;
+  }
+
+  void _dismissBottomSubMenu() {
+    if (_bottomSubMenu.value == null) return;
+    _bottomSubMenu.value = null;
   }
 
   /// قراءة [SharedPreferences] مرة واحدة لترتيب الوحدات والاختصارات — إعادة رسم واحدة.
@@ -1159,9 +1604,13 @@ class _HomeScreenState extends State<HomeScreen>
 
   @override
   void dispose() {
+    AppSystemBack.unregister(_closeBottomSubMenuOnSystemBack);
     if (_barcodeBridgeAttached) {
       _barcodeBridge?.detach();
     }
+    try {
+      context.read<GuideController>().unbindHost();
+    } catch (_) {}
     WidgetsBinding.instance.removeObserver(this);
     _permissionsProvider?.removeListener(_recomputeNavModules);
     _permissionsProvider = null;
@@ -1185,6 +1634,7 @@ class _HomeScreenState extends State<HomeScreen>
     _searchController.dispose();
     _searchFocusNode.dispose();
     _isDrawerOpen.dispose();
+    _bottomSubMenu.dispose();
     super.dispose();
   }
 
@@ -1446,10 +1896,24 @@ class _HomeScreenState extends State<HomeScreen>
       case 'oil_change_create':
         final createBuilder = _oilRouteBuilder(AppContentRoutes.oilChangeCreate);
         if (createBuilder != null) {
+          // أخفِ شريط الرئيسية فوراً — نفس مسار _openRoute لبطاقة الزيت.
+          if (_currentRouteId != AppContentRoutes.oilChangeCreate) {
+            setState(() => _currentRouteId = AppContentRoutes.oilChangeCreate);
+          }
           _pushInContentTagged(
             AppContentRoutes.oilChangeCreate,
             'بطاقة غيار زيت جديدة',
             createBuilder,
+          );
+        }
+        break;
+      case 'car_wash_create':
+        final washBuilder = _oilRouteBuilder(AppContentRoutes.carWashCreate);
+        if (washBuilder != null) {
+          _pushInContentTagged(
+            AppContentRoutes.carWashCreate,
+            'بطاقة غسيل سيارة',
+            washBuilder,
           );
         }
         break;
@@ -1469,6 +1933,16 @@ class _HomeScreenState extends State<HomeScreen>
           'الصندوق',
           (_) => const CashScreen(),
         );
+        break;
+      case 'oil_direct_sale':
+        final saleBuilder = _oilRouteBuilder(AppContentRoutes.oilDirectSale);
+        if (saleBuilder != null) {
+          _pushInContentTagged(
+            AppContentRoutes.oilDirectSale,
+            'بيع مباشر',
+            saleBuilder,
+          );
+        }
         break;
       case 'add_invoice':
         _pushInContentTagged(
@@ -1727,6 +2201,18 @@ class _HomeScreenState extends State<HomeScreen>
     String breadcrumbTitle,
     Widget Function(BuildContext) builder,
   ) {
+    // وحدات القائمة الرئيسية: طبقة keep-alive بدل push/pop (تنقل فوري).
+    if (_isPrimaryModuleRoute(routeId)) {
+      if (!mounted) return;
+      _openKeptModule(routeId, breadcrumbTitle, builder);
+      return;
+    }
+
+    // تفاصيل/شاشات فرعية: أخفِ الطبقة المحفوظة واستخدم الـ Navigator كالسابق.
+    if (_keptModuleId != null) {
+      setState(() => _keptModuleId = null);
+    }
+
     // تأجيل الدفع إلى ما بعد إطار الرسم حتى لا يُستدعى push أثناء قفل Navigator
     // (مثلاً من onTap في الشريط الجانبي أثناء معالجة الإيماءة).
     SchedulerBinding.instance.scheduleFrame();
@@ -1753,6 +2239,156 @@ class _HomeScreenState extends State<HomeScreen>
     });
   }
 
+  bool _isPrimaryModuleRoute(String routeId) {
+    if (routeId == AppContentRoutes.home) return false;
+    for (final m in _navForUi) {
+      if (m.routeId == routeId) return true;
+    }
+    for (final m in _orderedModules) {
+      if (m.routeId == routeId) return true;
+    }
+    return false;
+  }
+
+  void _evictKeptModule(String routeId) {
+    if (routeId.isEmpty) return;
+    // لا تُخلِ الوحدة الظاهرة حالياً.
+    if (_keptModuleId == routeId) return;
+    _keptModuleOrder.remove(routeId);
+    _keptModuleBuilders.remove(routeId);
+    _keptModuleTitles.remove(routeId);
+    _keptModuleNavKeys.remove(routeId);
+  }
+
+  /// يُبقي على الأكثر [_kKeptModuleLruCap] وحدات حيّة؛ يزيل الأقدم غير المحمي.
+  void _enforceKeptModuleLruCap({required String protect}) {
+    while (_keptModuleOrder.length > _kKeptModuleLruCap) {
+      final victimIndex = _keptModuleOrder.indexWhere((id) => id != protect);
+      if (victimIndex < 0) break;
+      _evictKeptModule(_keptModuleOrder[victimIndex]);
+    }
+  }
+
+  void _openKeptModule(
+    String routeId,
+    String breadcrumbTitle,
+    WidgetBuilder builder,
+  ) {
+    if (!mounted) return;
+    setState(() {
+      if (!_keptModuleBuilders.containsKey(routeId)) {
+        _keptModuleBuilders[routeId] = builder;
+        _keptModuleTitles[routeId] = breadcrumbTitle;
+        _keptModuleNavKeys.putIfAbsent(
+          routeId,
+          () => GlobalKey<NavigatorState>(),
+        );
+        _keptModuleOrder.add(routeId);
+        _enforceKeptModuleLruCap(protect: routeId);
+      } else {
+        _keptModuleTitles[routeId] = breadcrumbTitle;
+        // لمس MRU: انقل للمعروض أخيراً.
+        _keptModuleOrder.remove(routeId);
+        _keptModuleOrder.add(routeId);
+      }
+      _keptModuleId = routeId;
+      _currentRouteId = routeId;
+      _currentTitle = breadcrumbTitle;
+      _currentParentOverride = null;
+      _bottomSubMenu.value = null;
+      // فهرس الشريط في نفس الإطار — يتجنّب setState ثانياً من _syncActiveModuleIndexFromRoute.
+      final idx = _indexForContentRoute(routeId);
+      if (idx != null) {
+        _activeBottomIndex = idx;
+      }
+    });
+    _persistResumeContext(routeId);
+    unawaited(context.read<GuideController>().onRouteChanged(routeId));
+  }
+
+  void _closeKeptModuleToHome() {
+    if (_keptModuleId == null) return;
+    setState(() {
+      _keptModuleId = null;
+      _currentRouteId = AppContentRoutes.home;
+      _currentTitle = 'الرئيسية';
+      _currentParentOverride = null;
+      _activeBottomIndex = 0;
+      _bottomSubMenu.value = null;
+    });
+    final nav = _contentNavigator;
+    if (nav != null) {
+      popUntilContentRoute(nav, AppContentRoutes.home);
+    }
+    _persistResumeContext(AppContentRoutes.home);
+    unawaited(
+      context.read<GuideController>().onRouteChanged(AppContentRoutes.home),
+    );
+  }
+
+  Widget _buildKeptModulesLayer() {
+    if (_keptModuleOrder.isEmpty) return const SizedBox.shrink();
+    final activeId = _keptModuleId;
+    final index = activeId == null
+        ? 0
+        : _keptModuleOrder.indexOf(activeId).clamp(0, _keptModuleOrder.length - 1);
+    return Offstage(
+      offstage: activeId == null,
+      child: IndexedStack(
+        index: index,
+        sizing: StackFit.expand,
+        children: [
+          for (final id in _keptModuleOrder)
+            TickerMode(
+              // الوحدة الظاهرة فقط تحرّك المؤقتات — يقلّل الحمل دون تغيير الشكل.
+              enabled: activeId != null && id == activeId,
+              child: _buildKeptModuleNavigator(id),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildKeptModuleNavigator(String routeId) {
+    final navKey = _keptModuleNavKeys[routeId]!;
+    final builder = _keptModuleBuilders[routeId]!;
+    final title = _keptModuleTitles[routeId] ?? '';
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        if (_keptModuleId != routeId) return;
+        final nested = navKey.currentState;
+        if (nested != null && nested.canPop()) {
+          nested.pop();
+          return;
+        }
+        _closeKeptModuleToHome();
+      },
+      child: Navigator(
+        key: navKey,
+        observers: [_KeptModuleNavObserver(this)],
+        onGenerateInitialRoutes: (_, _) {
+          return [
+            FastContentPageRoute<void>(
+              settings: RouteSettings(
+                name: routeId,
+                arguments: BreadcrumbMeta(title),
+              ),
+              builder: (ctx) => FeatureRouteGuard(
+                routeId: routeId,
+                child: _wrapHomeInnerRouteScope(
+                  _activeHomeRouteObserver,
+                  builder(ctx),
+                ),
+              ),
+            ),
+          ];
+        },
+      ),
+    );
+  }
+
   /// [NavigatorObserver] يستدعي هذا عند تغيّر مسار الـ Navigator لمزامنة الملاحة الشجرية التلقائية.
   void _syncBreadcrumbForRoute(Route<dynamic> route) {
     final id = route.settings.name;
@@ -1769,6 +2405,7 @@ class _HomeScreenState extends State<HomeScreen>
         _currentParentOverride = parentOverride;
       });
       _persistResumeContext(id);
+      unawaited(context.read<GuideController>().onRouteChanged(id));
     });
   }
 
@@ -1811,6 +2448,24 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   void _onBreadcrumbSegmentTap(BreadcrumbSegment segment) {
+    if (segment.id == AppContentRoutes.home) {
+      _closeKeptModuleToHome();
+      return;
+    }
+    if (_isPrimaryModuleRoute(segment.id) &&
+        _keptModuleBuilders.containsKey(segment.id)) {
+      setState(() {
+        _keptModuleId = segment.id;
+        _currentRouteId = segment.id;
+        _currentTitle = _keptModuleTitles[segment.id] ?? segment.title;
+        _currentParentOverride = null;
+      });
+      _syncActiveModuleIndexFromRoute(segment.id);
+      return;
+    }
+    if (_keptModuleId != null) {
+      setState(() => _keptModuleId = null);
+    }
     final nav = _contentNavigator;
     if (nav == null) return;
     nav.popUntil((route) => route.settings.name == segment.id || route.isFirst);
@@ -1827,19 +2482,20 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  bool _systemKeyboardOpen(BuildContext context) {
-    return MediaQuery.viewInsetsOf(context).bottom > 0;
-  }
-
   /// على الهاتف: عند فتح لوحة المفاتيح نخفي الشريط السفلي — يمنع الشريط
   /// الفارغ بين الحقل والكيبورد.
-  Widget? _bottomNavWhenKeyboardClosed(List<ModuleItem> bottomModules) {
+  ///
+  /// يعتمد على ارتفاع الكيبورد الفعلي (لا على التركيز فقط): على أندرويد قد
+  /// يُغلق الـ IME ويبقى الحقل مركّزاً، فيختفي الشريط إلى الأبد إن اعتمدنا Focus.
+  Widget? _bottomNavHost(List<ModuleItem> bottomModules) {
     if (bottomModules.isEmpty) return const SizedBox.shrink();
-    if (context.screenLayout.isHandsetForLayout &&
-        _systemKeyboardOpen(context)) {
-      return null;
-    }
-    return _buildBottomNavBar(bottomModules);
+    return _HideBottomNavWhenKeyboardOpen(
+      isHandset: context.screenLayout.isHandsetForLayout,
+      childBuilder: () => ListenableBuilder(
+        listenable: _bottomSubMenu,
+        builder: (context, _) => _buildBottomNavBar(bottomModules),
+      ),
+    );
   }
 
   /// تثبيت حجم المحتوى: اللوحة تُرسَم فوق الجسم مع حجز ارتفاعها حتى لا يفيض المحتوى الداخلي.
@@ -1847,7 +2503,6 @@ class _HomeScreenState extends State<HomeScreen>
     final hideVk = ScreenLayout.of(context).hideInAppSearchKeyboard;
     final vkVisible = _showVirtualSearchKeyboard && !hideVk;
     final vkReserve = vkVisible ? MediaQuery.sizeOf(context).height * 0.40 : 0.0;
-    final subMenuOverlay = _buildBottomSubMenuOverlay();
     return Stack(
       fit: StackFit.expand,
       clipBehavior: Clip.none,
@@ -1858,8 +2513,20 @@ class _HomeScreenState extends State<HomeScreen>
             child: bodyColumn,
           ),
         ),
-        if (subMenuOverlay != null)
-          Positioned.fill(child: subMenuOverlay),
+        // طبقة القائمة الفرعية — تُغلق تلقائياً عند فتح الكيبورد.
+        Positioned.fill(
+          child: ListenableBuilder(
+            listenable: _bottomSubMenu,
+            builder: (context, _) {
+              return _KeyboardAwareSubMenuHost(
+                module: _bottomSubMenu.value,
+                isDark: _isDarkMode,
+                buildPopover: _buildBottomSubMenuPopover,
+                onDismiss: _dismissBottomSubMenu,
+              );
+            },
+          ),
+        ),
         if (vkVisible)
           Positioned(
             left: 0,
@@ -1879,63 +2546,6 @@ class _HomeScreenState extends State<HomeScreen>
                 if (mounted) FocusScope.of(context).unfocus();
               },
             ),
-          ),
-      ],
-    );
-  }
-
-  /// ارتفاع الشريط السفلي + الهوامش — لموضع القائمة الفرعية في طبقة الـ body.
-  ({double totalHeight, double horizontalInset, double barHeight}) _bottomNavLayoutMetrics() {
-    final sl = ScreenLayout.of(context);
-    final isPhoneDock = sl.isHandsetForLayout;
-    final barHeight = sl.isVeryShort ? 56.0 : (sl.isCompactHeight ? 60.0 : 64.0);
-    final safeBottom = MediaQuery.paddingOf(context).bottom;
-    if (isPhoneDock) {
-      final bottomPad = math.max(10.0, safeBottom);
-      return (
-        totalHeight: barHeight + bottomPad,
-        horizontalInset: 14.0,
-        barHeight: barHeight,
-      );
-    }
-    return (
-      totalHeight: barHeight + safeBottom,
-      horizontalInset: 16.0,
-      barHeight: barHeight,
-    );
-  }
-
-  /// طبقة القائمة الفرعية داخل الـ body — [Scaffold.bottomNavigationBar] لا يستقبل
-  /// لمسات خارج حدوده حتى لو ظهرت فوقه بصرياً.
-  Widget? _buildBottomSubMenuOverlay() {
-    final module = _openBottomSubMenuModule;
-    if (module == null) return null;
-    final variant = ScreenLayout.of(context).layoutVariant;
-    if (variant.index >= DeviceVariant.tabletLG.index) return null;
-    if (_systemKeyboardOpen(context)) return null;
-
-    final metrics = _bottomNavLayoutMetrics();
-    return Stack(
-      clipBehavior: Clip.none,
-      children: [
-        Positioned(
-          left: 0,
-          right: 0,
-          top: 0,
-          bottom: metrics.totalHeight,
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () => setState(() => _openBottomSubMenuModule = null),
-            child: ColoredBox(
-              color: Colors.black.withValues(alpha: _isDarkMode ? 0.48 : 0.30),
-            ),
-          ),
-        ),
-        Positioned(
-          left: metrics.horizontalInset,
-          right: metrics.horizontalInset,
-          bottom: metrics.totalHeight + 8,
-          child: _buildBottomSubMenuPopover(module),
         ),
       ],
     );
@@ -1958,7 +2568,6 @@ class _HomeScreenState extends State<HomeScreen>
           builder: (outerCtx, outerConstraints) {
             final variant = context.screenLayout.layoutVariant;
             final isLarge = variant.index >= DeviceVariant.tabletLG.index;
-            final isHandset = ScreenLayout.of(context).isHandsetForLayout;
 
             if (_lastLayoutVariant != null &&
                 _lastLayoutVariant != variant) {
@@ -1972,9 +2581,15 @@ class _HomeScreenState extends State<HomeScreen>
             final innerNav = _buildHomeInnerNavigator();
             final contentArea = Stack(
               fit: StackFit.expand,
-              clipBehavior: Clip.none,
               children: [
-                Positioned.fill(child: innerNav),
+                Offstage(
+                  offstage: _keptModuleId != null,
+                  child: TickerMode(
+                    enabled: _keptModuleId == null,
+                    child: innerNav,
+                  ),
+                ),
+                _buildKeptModulesLayer(),
               ],
             );
 
@@ -2008,33 +2623,22 @@ class _HomeScreenState extends State<HomeScreen>
             );
 
             final scaffold = Scaffold(
-              resizeToAvoidBottomInset: _systemKeyboardOpen(context),
+              // ثابت: لا نبدّل resize مع الكيبورد — التبديل كان يحرّك الـ Scaffold
+              // فيُغلق الـ IME (HIDE_SOFT_INPUT_ON_ANIMATION_STATE_CHANGED)
+              // وتختفي شيتات الكتالوج. الشاشات الداخلية/الـ sheets تعالج viewInsets.
+              resizeToAvoidBottomInset: false,
               backgroundColor: _bgColor,
-              appBar: _buildMobileTopAppBar(themeProvider),
+              // بطاقة غيار الزيت لها AppBar خاص — إخفاء شريط البحث والشريط السحري.
+              appBar: _hideHomeChromeForOilForm
+                  ? null
+                  : _buildMobileTopAppBar(themeProvider),
               body: _wrapBodyWithSearchKeyboard(bodyColumn),
-              bottomNavigationBar:
-                  isLarge ? null : _bottomNavWhenKeyboardClosed(_navForUi),
+              bottomNavigationBar: isLarge || _hideHomeChromeForOilForm
+                  ? null
+                  : _bottomNavHost(_navForUi),
             );
 
-            if (isLarge) {
-              return PopScope(
-                canPop: false,
-                onPopInvokedWithResult: (didPop, _) {
-                  if (_innerNavCanPop()) _innerNavPop();
-                },
-                child: scaffold,
-              );
-            }
-
             return DoubleBackToExitScope(
-              enabled: isHandset,
-              onBackPressed: () {
-                if (_innerNavCanPop()) {
-                  _innerNavPop();
-                  return true;
-                }
-                return false;
-              },
               child: scaffold,
             );
           },
@@ -2281,12 +2885,23 @@ class _HomeScreenState extends State<HomeScreen>
     return [
       _appBarShiftButton(),
       _appBarSyncButton(),
+      AppAssistantAppBarButton(
+        currentRouteId: _currentRouteId,
+        buttonStyle: _homeAppBarActionStyle(),
+      ),
       _appBarNotifButton(),
       _appBarUserMenu(themeProvider, auth),
     ];
   }
 
   // ── AppBar ──────────────────────────────────────────────────────────────────
+  /// إخفاء كروم الرئيسية داخل بطاقة غيار الزيت (شريط علوي + الشريط السحري السفلي).
+  bool get _hideHomeChromeForOilForm {
+    final id = _currentRouteId;
+    return id == AppContentRoutes.oilChangeCreate ||
+        id.startsWith(AppContentRoutes.oilChangeEditPrefix);
+  }
+
   /// AppBar — شعار + شريط بحث مضغوط بين الشعار وأزرار الوردية (كل المقاسات).
   PreferredSizeWidget _buildMobileTopAppBar(ThemeProvider themeProvider) {
     final auth = Provider.of<AuthProvider>(context, listen: false);
@@ -2300,11 +2915,42 @@ class _HomeScreenState extends State<HomeScreen>
       shadowColor: Colors.transparent,
       titleSpacing: 0,
       automaticallyImplyLeading: false,
-      title: Row(
+      // عند كثرة أزرار الـ actions يضيق عنوان الـ AppBar جداً — لا تترك Row يفيض.
+      title: LayoutBuilder(
+        builder: (context, constraints) {
+          final w = constraints.maxWidth;
+          // بعض إصدارات Flutter تعطي عنوان AppBar عرضاً غير محدود.
+          if (!w.isFinite) {
+            return Row(
         children: [
           _buildMobileAppBarLogo(),
           _buildMobileCompactSearchTrigger(),
         ],
+            );
+          }
+          if (w < 40) {
+            return const SizedBox.shrink();
+          }
+          if (w < 96) {
+            return Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: w),
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: AlignmentDirectional.centerStart,
+                  child: _buildMobileAppBarLogo(),
+                ),
+              ),
+            );
+          }
+          return Row(
+            children: [
+              _buildMobileAppBarLogo(),
+              _buildMobileCompactSearchTrigger(),
+            ],
+          );
+        },
       ),
       actions: _buildAppBarActions(themeProvider, auth),
     );
@@ -2384,13 +3030,25 @@ class _HomeScreenState extends State<HomeScreen>
                     width: useRoyal ? 1.5 : 1,
                   ),
                 ),
-                child: Row(
+                child: LayoutBuilder(
+                  builder: (context, box) {
+                    final bw = box.maxWidth;
+                    final iconSize = sl.isWideVariant ? 20.0 : 18.0;
+                    if (!bw.isFinite || bw < iconSize + 2) {
+                      return Icon(
+                        Icons.search_rounded,
+                        size: iconSize.clamp(12, 20),
+                        color: useRoyal ? royalGold : _textSecondary,
+                      );
+                    }
+                    return Row(
                   children: [
                     Icon(
                       Icons.search_rounded,
-                      size: sl.isWideVariant ? 20 : 18,
+                          size: iconSize,
                       color: useRoyal ? royalGold : _textSecondary,
                     ),
+                        if (bw >= 72) ...[
                     const SizedBox(width: 6),
                     Expanded(
                       child: Text(
@@ -2405,12 +3063,17 @@ class _HomeScreenState extends State<HomeScreen>
                         ),
                       ),
                     ),
+                        ] else
+                          const Spacer(),
+                        if (bw >= 100)
                     Icon(
                       Icons.qr_code_scanner_rounded,
-                      size: sl.isWideVariant ? 20 : 18,
+                            size: iconSize,
                       color: useRoyal ? royalGold : _textSecondary,
                     ),
                   ],
+                    );
+                  },
                 ),
               ),
             ),
@@ -3782,19 +4445,21 @@ class _HomeScreenState extends State<HomeScreen>
 
     void onBottomModuleTap(int i, ModuleItem m) {
       HapticFeedback.lightImpact();
+      // أزل تركيز أي حقل نص حتى لا يبقى الكيبورد/التركيز حاجزاً للقائمة.
+      FocusManager.instance.primaryFocus?.unfocus();
       final hasSubItems = m.subItems != null && m.subItems!.isNotEmpty;
       if (hasSubItems) {
-        setState(() {
-          _activeBottomIndex = i;
-          _openBottomSubMenuModule =
-              _openBottomSubMenuModule?.routeId == m.routeId ? null : m;
-        });
+        final next = _bottomSubMenu.value?.routeId == m.routeId ? null : m;
+        _bottomSubMenu.value = next;
+        if (_activeBottomIndex != i) {
+          setState(() => _activeBottomIndex = i);
+        }
         return;
       }
-      setState(() {
-        _activeBottomIndex = i;
-        _openBottomSubMenuModule = null;
-      });
+      _bottomSubMenu.value = null;
+      if (_activeBottomIndex != i) {
+        setState(() => _activeBottomIndex = i);
+      }
       _pushInContentTagged(m.routeId, m.breadcrumbTitle, m.destination);
     }
 
@@ -3813,7 +4478,7 @@ class _HomeScreenState extends State<HomeScreen>
           );
         },
         onReorder: (oldI, newI) {
-          setState(() => _openBottomSubMenuModule = null);
+          _bottomSubMenu.value = null;
           _reorderBottomModules(bottomModules, oldI, newI);
         },
         itemCount: bottomModules.length,
@@ -3828,7 +4493,7 @@ class _HomeScreenState extends State<HomeScreen>
               selected: selected,
               barColor: effectiveBarColor,
               useGlassDock: isPhoneDock,
-              subMenuOpen: _openBottomSubMenuModule?.routeId == m.routeId,
+              subMenuOpen: _bottomSubMenu.value?.routeId == m.routeId,
               onTap: () => onBottomModuleTap(i, m),
             ),
           );
@@ -3910,23 +4575,24 @@ class _HomeScreenState extends State<HomeScreen>
 
   /// قائمة فرعية منبثقة فوق الشريط — تُعرض في طبقة الـ body لاستقبال اللمسات.
   Widget _buildBottomSubMenuPopover(ModuleItem module) {
-    final ac = context.appCorners;
+    final cs = Theme.of(context).colorScheme;
     final subs = module.subItems ?? const <SubMenuItem>[];
     if (subs.isEmpty) return const SizedBox.shrink();
-    final cardBg = _isDarkMode ? AppColors.cardDark : Colors.white;
-    final headerBg = _isDarkMode
-        ? const Color(0xFF243044)
-        : const Color(0xFFF1F5F9);
+    final isDark = _isDarkMode;
+    final cardBg = isDark ? const Color(0xFF1A2332) : cs.surface;
+    final muted = isDark
+        ? Colors.white.withValues(alpha: 0.55)
+        : cs.onSurfaceVariant;
 
     void onSubTap(SubMenuItem sub) {
       HapticFeedback.selectionClick();
-      setState(() => _openBottomSubMenuModule = null);
+      _bottomSubMenu.value = null;
       _pushInContentTagged(sub.routeId, sub.breadcrumbTitle, sub.destination);
     }
 
     void onViewAll() {
       HapticFeedback.selectionClick();
-      setState(() => _openBottomSubMenuModule = null);
+      _bottomSubMenu.value = null;
       _pushInContentTagged(
         module.routeId,
         module.breadcrumbTitle,
@@ -3935,59 +4601,65 @@ class _HomeScreenState extends State<HomeScreen>
     }
 
     return Material(
-      elevation: 18,
-      shadowColor: Colors.black.withValues(alpha: 0.28),
-      borderRadius: ac.lg,
-      clipBehavior: Clip.antiAlias,
-      color: cardBg,
+      color: Colors.transparent,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: 420,
+          maxHeight: MediaQuery.sizeOf(context).height * 0.52,
+        ),
       child: DecoratedBox(
         decoration: BoxDecoration(
-          borderRadius: ac.lg,
+            color: cardBg,
+            borderRadius: BorderRadius.circular(22),
           border: Border.all(
-            color: module.iconColor.withValues(alpha: 0.55),
-            width: 1.5,
+              color: module.iconColor.withValues(alpha: isDark ? 0.45 : 0.35),
+              width: 1.2,
           ),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: 0.20),
+                color: Colors.black.withValues(alpha: isDark ? 0.45 : 0.18),
               blurRadius: 28,
-              offset: const Offset(0, -8),
+                offset: const Offset(0, 12),
             ),
             BoxShadow(
-              color: module.iconColor.withValues(alpha: 0.16),
-              blurRadius: 14,
-              offset: const Offset(0, -2),
+                color: module.iconColor.withValues(alpha: 0.14),
+                blurRadius: 18,
+                offset: const Offset(0, 4),
             ),
           ],
         ),
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxHeight: MediaQuery.sizeOf(context).height * 0.46,
-          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(22),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              DecoratedBox(
+                const SizedBox(height: 6),
+                Semantics(
+                  label: 'اسحب للأسفل للإغلاق',
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    child: Center(
+                      child: Container(
+                        width: 44,
+                        height: 5,
                 decoration: BoxDecoration(
-                  color: headerBg,
-                  border: BorderDirectional(
-                    bottom: BorderSide(color: _dividerColor, width: 1),
-                    start: BorderSide(color: module.iconColor, width: 4),
+                          color: muted.withValues(alpha: 0.55),
+                          borderRadius: BorderRadius.circular(99),
+                        ),
+                      ),
+                    ),
                   ),
                 ),
-                child: Padding(
-                  padding: const EdgeInsetsDirectional.fromSTEB(12, 10, 4, 10),
+                Padding(
+                  padding: const EdgeInsetsDirectional.fromSTEB(14, 4, 6, 8),
                   child: Row(
                     children: [
                       Container(
-                        width: 34,
-                        height: 34,
+                        width: 36,
+                        height: 36,
                         decoration: BoxDecoration(
                           color: module.iconColor.withValues(alpha: 0.16),
-                          borderRadius: ac.sm,
-                          border: Border.all(
-                            color: module.iconColor.withValues(alpha: 0.35),
-                          ),
+                          borderRadius: BorderRadius.circular(12),
                         ),
                         child: Icon(
                           module.icon,
@@ -3999,10 +4671,12 @@ class _HomeScreenState extends State<HomeScreen>
                       Expanded(
                         child: Text(
                           module.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                           style: TextStyle(
-                            fontSize: 14,
+                            fontSize: 15,
                             fontWeight: FontWeight.w800,
-                            color: _textPrimary,
+                            color: cs.onSurface,
                           ),
                         ),
                       ),
@@ -4020,7 +4694,7 @@ class _HomeScreenState extends State<HomeScreen>
                         child: const Text(
                           'عرض الكل',
                           style: TextStyle(
-                            fontSize: 11,
+                            fontSize: 12,
                             fontWeight: FontWeight.w700,
                           ),
                         ),
@@ -4028,55 +4702,52 @@ class _HomeScreenState extends State<HomeScreen>
                       IconButton(
                         tooltip: 'إغلاق',
                         visualDensity: VisualDensity.compact,
-                        onPressed: () =>
-                            setState(() => _openBottomSubMenuModule = null),
-                        icon: Icon(Icons.close, size: 18, color: _textSecondary),
+                        onPressed: _dismissBottomSubMenu,
+                        icon: Icon(Icons.close_rounded, size: 20, color: muted),
                       ),
                     ],
                   ),
                 ),
+                Divider(
+                  height: 1,
+                  thickness: 1,
+                  color: cs.outline.withValues(alpha: 0.25),
               ),
               Flexible(
                 child: ListView.separated(
                   shrinkWrap: true,
-                  padding: EdgeInsets.zero,
+                    padding: const EdgeInsets.fromLTRB(8, 6, 8, 10),
                   itemCount: subs.length,
-                  separatorBuilder: (_, __) => Divider(
-                    height: 1,
-                    thickness: 1,
-                    color: _dividerColor.withValues(alpha: 0.75),
-                  ),
+                    separatorBuilder: (_, __) => const SizedBox(height: 2),
                   itemBuilder: (context, index) {
                     final sub = subs[index];
-                    final isLast = index == subs.length - 1;
                     return Material(
-                      color: cardBg,
+                        color: Colors.transparent,
                       child: InkWell(
                         onTap: () => onSubTap(sub),
+                          borderRadius: BorderRadius.circular(14),
                         child: Padding(
                           padding: const EdgeInsetsDirectional.fromSTEB(
-                            14,
-                            12,
-                            14,
-                            12,
+                              10,
+                              11,
+                              10,
+                              11,
                           ),
                           child: Row(
                             children: [
                               Container(
-                                width: 32,
-                                height: 32,
+                                  width: 34,
+                                  height: 34,
                                 decoration: BoxDecoration(
                                   color: module.iconColor.withValues(
-                                    alpha: isLast ? 0.14 : 0.08,
+                                      alpha: 0.12,
                                   ),
-                                  borderRadius: ac.sm,
+                                    borderRadius: BorderRadius.circular(11),
                                 ),
                                 child: Icon(
-                                  sub.icon ?? Icons.arrow_forward,
+                                    sub.icon ?? Icons.arrow_outward_rounded,
                                   size: 17,
-                                  color: isLast
-                                      ? AppColors.accentGold
-                                      : module.iconColor,
+                                    color: module.iconColor,
                                 ),
                               ),
                               const SizedBox(width: 10),
@@ -4084,16 +4755,16 @@ class _HomeScreenState extends State<HomeScreen>
                                 child: Text(
                                   sub.title,
                                   style: TextStyle(
-                                    color: _textPrimary,
-                                    fontSize: 13,
+                                      color: cs.onSurface,
+                                      fontSize: 14,
                                     fontWeight: FontWeight.w600,
                                   ),
                                 ),
                               ),
                               Icon(
-                                Icons.chevron_left,
-                                size: 16,
-                                color: _textSecondary,
+                                  Icons.chevron_left_rounded,
+                                  size: 20,
+                                  color: muted,
                               ),
                             ],
                           ),
@@ -4104,6 +4775,7 @@ class _HomeScreenState extends State<HomeScreen>
                 ),
               ),
             ],
+            ),
           ),
         ),
       ),
@@ -4226,6 +4898,33 @@ class _HomeInnerNavObserver extends NavigatorObserver {
 
   @override
   void didRemove(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    if (previousRoute != null) {
+      _state._syncBreadcrumbForRoute(previousRoute);
+      _state._syncActiveModuleIndexFromRoute(previousRoute.settings.name);
+    }
+  }
+
+  @override
+  void didReplace({Route<dynamic>? newRoute, Route<dynamic>? oldRoute}) {
+    if (newRoute != null) {
+      _state._syncBreadcrumbForRoute(newRoute);
+      _state._syncActiveModuleIndexFromRoute(newRoute.settings.name);
+    }
+  }
+}
+
+class _KeptModuleNavObserver extends NavigatorObserver {
+  _KeptModuleNavObserver(this._state);
+  final _HomeScreenState _state;
+
+  @override
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    _state._syncBreadcrumbForRoute(route);
+    _state._syncActiveModuleIndexFromRoute(route.settings.name);
+  }
+
+  @override
+  void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) {
     if (previousRoute != null) {
       _state._syncBreadcrumbForRoute(previousRoute);
       _state._syncActiveModuleIndexFromRoute(previousRoute.settings.name);
@@ -4560,6 +5259,339 @@ class _MarketOrdersNavIcon extends StatelessWidget {
           child: iconWidget,
         );
       },
+    );
+  }
+}
+
+/// يخفي الشريط السفلي أثناء ظهور الكيبورد فقط — عبر [FlutterView.viewInsets]
+/// وليس Focus (إغلاق IME على أندرويد قد يُبقي التركيز فيختفي الشريط).
+///
+/// يُعاد بناء هذا الويدجت الصغير فقط، لا شجرة الرئيسية كاملة.
+class _HideBottomNavWhenKeyboardOpen extends StatefulWidget {
+  const _HideBottomNavWhenKeyboardOpen({
+    required this.isHandset,
+    required this.childBuilder,
+  });
+
+  final bool isHandset;
+  final Widget Function() childBuilder;
+
+  @override
+  State<_HideBottomNavWhenKeyboardOpen> createState() =>
+      _HideBottomNavWhenKeyboardOpenState();
+}
+
+class _HideBottomNavWhenKeyboardOpenState
+    extends State<_HideBottomNavWhenKeyboardOpen>
+    with WidgetsBindingObserver {
+  bool _keyboardOpen = false;
+  double _lastImeLogical = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    // مع تصفير IME عن FlutterView: didChangeMetrics وحده لا يكفي —
+    // نسمع قناة أندرويد حتى يعود الشريط عند الإغلاق.
+    AndroidImeInset.ensureStarted();
+    AndroidImeInset.bottomLogical.addListener(_onAndroidIme);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _syncKeyboard());
+  }
+
+  @override
+  void dispose() {
+    AndroidImeInset.bottomLogical.removeListener(_onAndroidIme);
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  void _onAndroidIme() {
+    _syncKeyboard();
+  }
+
+  @override
+  void didChangeMetrics() {
+    _syncKeyboard();
+  }
+
+  void _syncKeyboard() {
+    if (!mounted) return;
+    if (!widget.isHandset) {
+      if (_keyboardOpen) setState(() => _keyboardOpen = false);
+      _lastImeLogical = 0;
+      return;
+    }
+    final inset = rawKeyboardBottomInset(context);
+    bool open;
+    if (_keyboardOpen) {
+      // إظهار الشريط فور بدء الانخفاض — لا ننتظر نهاية أنيميشن الكيبورد.
+      if (inset + 6 < _lastImeLogical) {
+        open = false;
+      } else {
+        open = inset > 32;
+      }
+    } else {
+      // إخفاء فقط عند ظهور واضح للكيبورد (يتجنب الوميض).
+      open = inset > 56;
+    }
+    _lastImeLogical = inset;
+    if (open == _keyboardOpen) return;
+    setState(() => _keyboardOpen = open);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.isHandset && _keyboardOpen) return const SizedBox.shrink();
+    return widget.childBuilder();
+  }
+}
+
+({double totalHeight, double horizontalInset, double barHeight})
+_bottomNavLayoutMetricsOf(BuildContext context) {
+  final sl = ScreenLayout.of(context);
+  final isPhoneDock = sl.isHandsetForLayout;
+  final barHeight = sl.isVeryShort ? 56.0 : (sl.isCompactHeight ? 60.0 : 64.0);
+  final safeBottom = MediaQuery.viewPaddingOf(context).bottom;
+  if (isPhoneDock) {
+    final bottomPad = math.max(10.0, safeBottom);
+    return (
+      totalHeight: barHeight + bottomPad,
+      horizontalInset: 14.0,
+      barHeight: barHeight,
+    );
+  }
+  return (
+    totalHeight: barHeight + safeBottom,
+    horizontalInset: 16.0,
+    barHeight: barHeight,
+  );
+}
+
+/// قائمة فرعية فوق الشريط — ورقة سريعة + ضبابية للمحتوى فقط (الشريط العلوي يبقى واضحاً).
+///
+/// تُغلق تلقائياً عند ظهور الكيبورد، ولا تقرأ Focus في build بدون listener
+/// (كان يترك حاجز لمس/حالة «مفتوحة» صامتة بعد إغلاق الـ IME).
+class _KeyboardAwareSubMenuHost extends StatefulWidget {
+  const _KeyboardAwareSubMenuHost({
+    required this.module,
+    required this.isDark,
+    required this.buildPopover,
+    required this.onDismiss,
+  });
+
+  final ModuleItem? module;
+  final bool isDark;
+  final Widget Function(ModuleItem module) buildPopover;
+  final VoidCallback onDismiss;
+
+  @override
+  State<_KeyboardAwareSubMenuHost> createState() =>
+      _KeyboardAwareSubMenuHostState();
+}
+
+class _KeyboardAwareSubMenuHostState extends State<_KeyboardAwareSubMenuHost>
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
+  /// فتح ورقي سريع من الشريط إلى الأعلى.
+  static const _duration = Duration(milliseconds: 220);
+  static const _dismissDragPx = 96.0;
+  static const _dismissVelocity = 900.0;
+
+  late final AnimationController _ctrl;
+  late final Animation<double> _fade;
+  late final Animation<Offset> _slide;
+  ModuleItem? _visibleModule;
+  double _dragDy = 0;
+  bool _keyboardWasOpen = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    AndroidImeInset.ensureStarted();
+    AndroidImeInset.bottomLogical.addListener(_onAndroidIme);
+    _ctrl = AnimationController(vsync: this, duration: _duration);
+    final curve = CurvedAnimation(
+      parent: _ctrl,
+      curve: Curves.easeOutCubic,
+      reverseCurve: Curves.easeInCubic,
+    );
+    _fade = curve;
+    _slide = Tween<Offset>(
+      begin: const Offset(0, 0.72),
+      end: Offset.zero,
+    ).animate(curve);
+    _visibleModule = widget.module;
+    if (_visibleModule != null) {
+      _ctrl.value = 1;
+    }
+  }
+
+  @override
+  void dispose() {
+    AndroidImeInset.bottomLogical.removeListener(_onAndroidIme);
+    WidgetsBinding.instance.removeObserver(this);
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  void _onAndroidIme() => _syncKeyboardDismiss();
+
+  @override
+  void didChangeMetrics() => _syncKeyboardDismiss();
+
+  void _syncKeyboardDismiss() {
+    if (!mounted) return;
+    final inset = rawKeyboardBottomInset(context);
+    // اعتبر الكيبورد مفتوحاً مبكراً لإغلاق القائمة — لا تنتظر اكتمال الأنيميشن.
+    final open = inset > 40;
+    if (open && !_keyboardWasOpen && widget.module != null) {
+      widget.onDismiss();
+    }
+    _keyboardWasOpen = open;
+  }
+
+  @override
+  void didUpdateWidget(covariant _KeyboardAwareSubMenuHost oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final next = widget.module;
+    final prev = _visibleModule;
+
+    if (next != null) {
+      final switched = prev != null && prev.routeId != next.routeId;
+      final opening = prev == null || _ctrl.value < 0.01;
+
+      if (switched && !opening) {
+        setState(() {
+          _visibleModule = next;
+          _dragDy = 0;
+        });
+        if (_ctrl.value < 1) {
+          _ctrl.value = 1;
+        }
+        return;
+      }
+
+      _visibleModule = next;
+      _dragDy = 0;
+      if (opening || _ctrl.value < 1) {
+        _ctrl.forward(from: opening ? 0 : _ctrl.value);
+      }
+      return;
+    }
+
+    if (prev != null && _ctrl.value > 0) {
+      _ctrl.reverse().whenComplete(() {
+        if (!mounted) return;
+        if (widget.module == null) {
+          setState(() {
+            _visibleModule = null;
+            _dragDy = 0;
+          });
+        }
+      });
+    }
+  }
+
+  void _onDragUpdate(DragUpdateDetails details) {
+    final dy = details.primaryDelta ?? 0;
+    if (dy == 0) return;
+    // السحب للأسفل فقط لإغلاق الورقة.
+    final next = (_dragDy + dy).clamp(0.0, 420.0);
+    if (next == _dragDy) return;
+    setState(() => _dragDy = next);
+  }
+
+  void _onDragEnd(DragEndDetails details) {
+    final v = details.primaryVelocity ?? 0;
+    if (_dragDy >= _dismissDragPx || v > _dismissVelocity) {
+      HapticFeedback.lightImpact();
+      widget.onDismiss();
+      return;
+    }
+    // رجوع مرن إلى موضع الفتح.
+    setState(() => _dragDy = 0);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final module = _visibleModule;
+    if (module == null) {
+      return const IgnorePointer(
+        ignoring: true,
+        child: SizedBox.expand(),
+      );
+    }
+
+    final variant = ScreenLayout.of(context).layoutVariant;
+    if (variant.index >= DeviceVariant.tabletLG.index) {
+      return const IgnorePointer(
+        ignoring: true,
+        child: SizedBox.expand(),
+      );
+    }
+
+    final metrics = _bottomNavLayoutMetricsOf(context);
+    final scrimAlpha = widget.isDark ? 0.45 : 0.32;
+    final dragFade = (1.0 - (_dragDy / 280.0)).clamp(0.35, 1.0);
+    // أثناء إغلاق الرسوم: لا تلتقط اللمس حتى يكتمل الاختفاء.
+    final absorbHits = widget.module != null;
+
+    return IgnorePointer(
+      ignoring: !absorbHits,
+      child: Stack(
+        fit: StackFit.expand,
+        clipBehavior: Clip.none,
+        children: [
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: widget.onDismiss,
+              child: FadeTransition(
+                opacity: _fade,
+                child: Opacity(
+                  opacity: dragFade,
+                  child: ClipRect(
+                    child: BackdropFilter(
+                      filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+                      child: ColoredBox(
+                        color: Colors.black.withValues(alpha: scrimAlpha),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            left: metrics.horizontalInset,
+            right: metrics.horizontalInset,
+            bottom: 8,
+            child: FadeTransition(
+              opacity: _fade,
+              child: SlideTransition(
+                position: _slide,
+                child: AnimatedSlide(
+                  duration: _dragDy == 0
+                      ? const Duration(milliseconds: 180)
+                      : Duration.zero,
+                  curve: Curves.easeOutCubic,
+                  offset:
+                      Offset(0, _dragDy / MediaQuery.sizeOf(context).height),
+                  child: GestureDetector(
+                    onVerticalDragUpdate: _onDragUpdate,
+                    onVerticalDragEnd: _onDragEnd,
+                    behavior: HitTestBehavior.opaque,
+                    child: Align(
+                      alignment: Alignment.bottomCenter,
+                      child: widget.buildPopover(module),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

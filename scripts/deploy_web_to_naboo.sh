@@ -32,7 +32,7 @@ flutter pub get
 BUILD_DEFINES=(
   --dart-define=SUPABASE_URL="$SUPABASE_URL"
   --dart-define=SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY"
-  --dart-define=WEB_APP_ORIGIN="${WEB_APP_ORIGIN:-https://naboo-93580.web.app}"
+  --dart-define=WEB_APP_ORIGIN="${WEB_APP_ORIGIN:-https://naboo.fun}"
 )
 if [[ -n "${GOOGLE_WEB_CLIENT_ID:-}" ]]; then
   BUILD_DEFINES+=(--dart-define=GOOGLE_WEB_CLIENT_ID="$GOOGLE_WEB_CLIENT_ID")
@@ -54,7 +54,7 @@ for f in sqflite_sw.js sqlite3.wasm oauth_complete.html; do
 done
 
 BUILD_ID="$(date -u +%Y-%m-%dT%H:%MZ)"
-WEB_ORIGIN="${WEB_APP_ORIGIN:-https://naboo-93580.web.app}"
+WEB_ORIGIN="${WEB_APP_ORIGIN:-https://naboo.fun}"
 echo "{\"build_id\":\"$BUILD_ID\",\"source\":\"basra_store_manager\",\"sqlite_web\":true,\"web_app_origin\":\"$WEB_ORIGIN\"}" > "$NABOO_ROOT/app/naboo-build.json"
 
 echo "✅ جاهز للنشر. نفّذ:"

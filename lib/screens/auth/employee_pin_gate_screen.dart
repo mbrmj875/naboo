@@ -14,13 +14,16 @@ import '../../services/session_resume_context.dart';
 import '../../theme/design_tokens.dart';
 import '../../utils/auth_validators.dart';
 import '../../utils/pin_input_constraints.dart';
-import '../../utils/screen_layout.dart';
+import '../../navigation/app_system_back.dart';
 import '../../widgets/double_back_to_exit_scope.dart';
 import '../../widgets/glass/glass_background.dart';
 import '../../widgets/glass/glass_surface.dart';
 import '../../widgets/secure_screen.dart';
 import '../settings/sync_queue_health_screen.dart';
 import '../users/user_form_screen.dart';
+import 'email_pin_reauth_otp_screen.dart';
+import '../../services/auth/web_url_cleanup.dart';
+import '../../services/auth/web_auth_history_guard.dart';
 
 class EmployeePinGateScreen extends StatefulWidget {
   const EmployeePinGateScreen({super.key});
@@ -34,6 +37,8 @@ class _EmployeePinGateScreenState extends State<EmployeePinGateScreen> {
   bool _loading = true;
   bool _cloudHydrating = false;
   List<Map<String, dynamic>> _users = [];
+  /// موظفون موجودون في الدليل لكن بلا PIN — يظهرون معطّلين مع توضيح.
+  List<Map<String, dynamic>> _usersMissingPin = [];
   Map<String, dynamic>? _selectedUser;
 
   String _pin = '';
@@ -50,18 +55,30 @@ class _EmployeePinGateScreenState extends State<EmployeePinGateScreen> {
   @override
   void initState() {
     super.initState();
+    AppSystemBack.register(_onSystemBack);
     CloudSyncService.instance.remoteImportGeneration.addListener(_onCloudImport);
     unawaited(_bootstrapUsers());
   }
 
   @override
   void dispose() {
+    AppSystemBack.unregister(_onSystemBack);
     _usersReloadDebounce?.cancel();
     _lockTicker?.cancel();
     CloudSyncService.instance.remoteImportGeneration.removeListener(
       _onCloudImport,
     );
     super.dispose();
+  }
+
+  /// رجوع من لوحة PIN إلى قائمة «من سيبدأ العمل؟».
+  bool _onSystemBack() {
+    if (_selectedUser == null) return false;
+    setState(() {
+      _selectedUser = null;
+      _pin = '';
+    });
+    return true;
   }
 
   /// يقرأ حالة قفل الحارس للمستخدم المحدّد ويشغّل عدّاداً تنازلياً حياً.
@@ -108,29 +125,56 @@ class _EmployeePinGateScreenState extends State<EmployeePinGateScreen> {
   }
 
   Future<void> _bootstrapUsers() async {
-    // نتجنّب ترطيباً مزدوجاً: إذا سبق أن سُحبت بيانات السحابة للتوّ (مثلاً بعد
-    // تسجيل دخول Google مباشرةً) لا نُعيد الترطيب الكامل هنا (GAP-2 / S7).
+    // ويب: إن بقي ?code= بعد OAuth حاول إكمال الجلسة ثم نظّف الرابط.
+    if (kIsWeb) {
+      final uri = Uri.base;
+      if (uri.queryParameters.containsKey('code') ||
+          uri.fragment.contains('access_token')) {
+        try {
+          if (Supabase.instance.client.auth.currentUser == null) {
+            await Supabase.instance.client.auth.getSessionFromUrl(uri);
+          }
+        } catch (e) {
+          debugPrint('[EmployeePinGate] getSessionFromUrl: $e');
+        }
+        stripOAuthParamsFromBrowserUrl();
+      }
+    }
+
+    // أظهر المستخدمين المحليين فوراً — لا تنتظر سحب السحابة لفتح لوحة PIN.
+    _bootstrapDone = true;
+    await _db.reconcileUserDirectoryAfterCloudImport(
+      preferSupabaseUid: Supabase.instance.client.auth.currentUser?.id,
+    );
+    if (!mounted) return;
+    await _loadUsers();
+    if (!mounted) return;
+
+    // ترطيب سحابي في الخلفية فقط إن لم يُسحب للتوّ من شاشة الإقلاع.
     if (Supabase.instance.client.auth.currentUser != null &&
         !CloudSyncService.instance.hasFreshCloudPull()) {
       if (!mounted) return;
       setState(() => _cloudHydrating = true);
       try {
-      await context.read<AuthProvider>().hydrateCloudAccountData(
-        timeout: const Duration(seconds: 15),
-        forcePull: true,
-        forceImportOnPull: true,
-      );
+        await context.read<AuthProvider>().hydrateCloudAccountData(
+          timeout: const Duration(seconds: 12),
+          forcePull: true,
+          forceImportOnPull: true,
+        );
+        if (!mounted) return;
+        await _db.reconcileUserDirectoryAfterCloudImport(
+          preferSupabaseUid: Supabase.instance.client.auth.currentUser?.id,
+        );
+        if (!mounted) return;
+        await _loadUsers(showLoading: false);
       } finally {
         if (mounted) setState(() => _cloudHydrating = false);
       }
     }
+
     if (!mounted) return;
-    _bootstrapDone = true;
-    await _db.reconcileUserDirectoryAfterCloudImport(
-      preferSupabaseUid: Supabase.instance.client.auth.currentUser?.id,
-    );
-    await _loadUsers();
     await _maybeRedirectOwnerPinRestore();
+    if (kIsWeb) stabilizeWebAuthHistory();
   }
 
   Future<void> _maybeRedirectOwnerPinRestore() async {
@@ -139,10 +183,18 @@ class _EmployeePinGateScreenState extends State<EmployeePinGateScreen> {
     final row = await auth.getLocalOwnerRow();
     if (row == null) return;
     final localId = (row['id'] as num).toInt();
-    if (!await auth.cloudHasSecretButLocalEmpty(localId)) return;
+    final needsOtp = await auth.cloudHasSecretButLocalEmpty(localId) ||
+        (kIsWeb && auth.webForceOwnerPinRestoreOtp);
+    if (!needsOtp) return;
     if (!mounted) return;
     unawaited(
-      Navigator.of(context).pushReplacementNamed('/owner-pin-restore-otp'),
+      Navigator.of(context).pushReplacementNamed(
+        '/owner-pin-restore-otp',
+        arguments: {
+          'otpAlreadySent': false,
+          'localOwnerUserId': localId,
+        },
+      ),
     );
   }
 
@@ -163,6 +215,7 @@ class _EmployeePinGateScreenState extends State<EmployeePinGateScreen> {
   Future<void> _loadUsers({bool showLoading = true}) async {
     if (showLoading && mounted) setState(() => _loading = true);
     final list = await _db.listActiveUsersForEmployeeGate();
+    final missingPin = await _db.listStaffProfilesMissingPinForGate();
     final hintId = await SessionResumeContext.lastUserIdHint();
     Map<String, dynamic>? preselect;
     if (hintId != null) {
@@ -174,11 +227,15 @@ class _EmployeePinGateScreenState extends State<EmployeePinGateScreen> {
       }
     }
     if (kDebugMode) {
-      debugPrint('[EmployeePinGate] loaded ${list.length} active users');
+      debugPrint(
+        '[EmployeePinGate] loaded ${list.length} active users, '
+        '${missingPin.length} missing PIN',
+      );
     }
     if (!mounted) return;
     setState(() {
       _users = list;
+      _usersMissingPin = missingPin;
       _loading = false;
       if (preselect != null) {
         _selectedUser = preselect;
@@ -244,9 +301,22 @@ class _EmployeePinGateScreenState extends State<EmployeePinGateScreen> {
       return;
     }
 
-    // للمالك: إذا PIN على السحابة ولم يُستورد محلياً (ويب/جهاز جديد) → OTP
-    if (role == 'owner') {
+    // للمالك بلا رمز محلي فقط: السحابة. إن وُجد hash محلي فالنتيجة فورية
+    // ولا ننتظر الشبكة قبل إظهار أن الرمز خاطئ.
+    if (role == 'owner' && !await _db.userHasStoredPin(userId)) {
       final auth = context.read<AuthProvider>();
+
+      final cloudUnlocked = await auth.unlockOwnerWithVerifiedCloudPin(
+        localUserId: userId,
+        pin: _pin,
+      );
+      if (!mounted) return;
+      if (cloudUnlocked) {
+        await PinAttemptGuard.recordSuccess(guardScope);
+        await _activateUser(userId);
+        return;
+      }
+
       if (await auth.cloudHasSecretButLocalEmpty(userId)) {
         if (!mounted) return;
         setState(() => _verifying = false);
@@ -266,6 +336,54 @@ class _EmployeePinGateScreenState extends State<EmployeePinGateScreen> {
         unawaited(Navigator.of(context).pushNamedAndRemoveUntil('/home', (route) => false));
         return;
       }
+
+      final reauthMsg = auth.lastLoginErrorMessage;
+      if (reauthMsg == AuthProvider.kLoginEmailReauthOtpRequired) {
+        setState(() => _verifying = false);
+        final email = (Supabase.instance.client.auth.currentUser?.email ??
+                (_selectedUser!['email'] ?? _selectedUser!['username'] ?? '')
+                    .toString())
+            .trim();
+        if (!mounted) return;
+        unawaited(
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => EmailPinReauthOtpScreen(
+                email: email.isNotEmpty ? email : '—',
+              ),
+            ),
+          ),
+        );
+        return;
+      }
+
+      // فشل كل الطرق — تسجيل المحاولة لدى الحارس
+      final newLock = await PinAttemptGuard.recordFailure(
+        guardScope,
+        userId: userId,
+        username: _selectedUser?['username'] as String?,
+      );
+      if (!mounted) return;
+      setState(() {
+        _verifying = false;
+        _pin = '';
+      });
+      if (newLock != null) {
+        await _refreshGuardLock();
+        return;
+      }
+      final detail = (reauthMsg != null && reauthMsg.trim().isNotEmpty)
+          ? reauthMsg
+          : (Supabase.instance.client.auth.currentUser == null
+              ? 'انتهت جلسة المتصفح. اضغط «دخول الإدارة» وسجّل دخول Google ثم أعد إدخال رمز PIN.'
+              : 'رمز PIN غير صحيح، أو تعذّر التحقق من السحابة. تحقق من الإنترنت ثم أعد المحاولة.');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(detail),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
     }
 
     // فشل كل الطرق — تسجيل المحاولة لدى الحارس
@@ -293,7 +411,10 @@ class _EmployeePinGateScreenState extends State<EmployeePinGateScreen> {
   
   Future<void> _activateUser(int userId) async {
     final auth = context.read<AuthProvider>();
-    final activated = await auth.setLocalAuthUser(userId);
+    final activated = await auth.setLocalAuthUser(
+      userId,
+      deferBackgroundWork: true,
+    );
     if (!mounted) return;
     if (!activated) {
       setState(() {
@@ -310,6 +431,13 @@ class _EmployeePinGateScreenState extends State<EmployeePinGateScreen> {
       userId: userId,
       role: role,
     );
+    if (!mounted) return;
+    unawaited(
+      SessionResumeContext.recordActiveSession(
+        userId: userId,
+        rootRoute: target,
+      ),
+    );
     unawaited(
       Navigator.of(context).pushNamedAndRemoveUntil(target, (route) => false),
     );
@@ -317,9 +445,19 @@ class _EmployeePinGateScreenState extends State<EmployeePinGateScreen> {
 
   Future<void> _ownerLogout() async {
     final auth = context.read<AuthProvider>();
-    // نستخدم lockSession بدلاً من logout الكامل حتى لا تُمسح قاعدة البيانات
+    // قفل جلسة التشغيل مع الإبقاء على ربط الجهاز — لا تذهب لـ Google.
     await auth.lockSession();
     if (!mounted) return;
+    if (auth.deviceOwnerBound ||
+        Supabase.instance.client.auth.currentUser != null) {
+      setState(() {
+        _selectedUser = null;
+        _pin = '';
+        _bootstrapDone = false;
+      });
+      unawaited(_bootstrapUsers());
+      return;
+    }
     Navigator.of(context).pushNamedAndRemoveUntil('/login', (route) => false);
   }
 
@@ -495,10 +633,12 @@ class _EmployeePinGateScreenState extends State<EmployeePinGateScreen> {
                     ),
                   ] else if (hasUnsynced) ...[
                     const SizedBox(height: 16),
-                    const Text(
-                      'افتح قائمة المزامنة لمعرفة المهام العالقة (pending/dead) '
-                      'وإعادة إرسالها قبل الخروج.',
-                      style: TextStyle(
+                    Text(
+                      kIsWeb
+                          ? 'يوجد بيانات لم تُرفع من المتصفح. ارفع الآن من قائمة المزامنة، أو احذف محلياً عند التجاوز — سيُمسح تخزين هذا الجهاز في المتصفح.'
+                          : 'افتح قائمة المزامنة لمعرفة المهام العالقة (pending/dead) '
+                              'وإعادة إرسالها قبل الخروج.',
+                      style: const TextStyle(
                         color: Colors.white54,
                         height: 1.4,
                         fontSize: 13,
@@ -662,20 +802,8 @@ class _EmployeePinGateScreenState extends State<EmployeePinGateScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final isHandset = context.screenLayout.isHandsetForLayout;
     return SecureScreen(
       child: DoubleBackToExitScope(
-        enabled: isHandset,
-        onBackPressed: () {
-          if (_selectedUser != null) {
-            setState(() {
-              _selectedUser = null;
-              _pin = '';
-            });
-            return true;
-          }
-          return false;
-        },
         child: Directionality(
       textDirection: TextDirection.rtl,
       child: GlassBackground(
@@ -775,13 +903,27 @@ class _EmployeePinGateScreenState extends State<EmployeePinGateScreen> {
                 ),
                 const SizedBox(height: 24),
                 ElevatedButton.icon(
-                  onPressed: _ownerLogout,
-                  icon: const Icon(Icons.login),
+                  onPressed: () {
+                    final auth = context.read<AuthProvider>();
+                    if (auth.deviceOwnerBound ||
+                        Supabase.instance.client.auth.currentUser != null) {
+                      setState(() => _bootstrapDone = false);
+                      unawaited(_bootstrapUsers());
+                      return;
+                    }
+                    _ownerLogout();
+                  },
+                  icon: const Icon(Icons.sync),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.accentGold,
                     foregroundColor: Colors.black,
                   ),
-                  label: const Text('تسجيل الدخول'),
+                  label: Text(
+                    context.read<AuthProvider>().deviceOwnerBound ||
+                            Supabase.instance.client.auth.currentUser != null
+                        ? 'إعادة مزامنة الحساب'
+                        : 'تسجيل الدخول',
+                  ),
                 ),
               ],
             ),
@@ -837,10 +979,90 @@ class _EmployeePinGateScreenState extends State<EmployeePinGateScreen> {
             runSpacing: 40,
             children: [
               ..._users.map((user) => _buildUserCard(user)),
+              ..._usersMissingPin.map(_buildMissingPinUserCard),
               _buildAddUserCard(),
             ],
           ),
+          if (_usersMissingPin.isNotEmpty) ...[
+            const SizedBox(height: 28),
+            Text(
+              'بعض الموظفين بلا رمز PIN محفوظ في السحابة — '
+              'ادخل كمالك ثم عيّن PIN من إدارة المستخدمين.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.55),
+                fontSize: 13,
+                height: 1.35,
+              ),
+            ),
+          ],
         ],
+      ),
+    );
+  }
+
+  Widget _buildMissingPinUserCard(Map<String, dynamic> profile) {
+    final name = (profile['displayName'] as String?)?.trim().isNotEmpty == true
+        ? profile['displayName'] as String
+        : (profile['username'] as String? ?? '—');
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: () {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                '«$name» بلا رمز PIN محفوظ — ادخل بحساب صاحب العمل '
+                'ثم عيّن PIN من إدارة المستخدمين.',
+              ),
+              duration: const Duration(seconds: 6),
+            ),
+          );
+        },
+        child: SizedBox(
+          width: 140,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              AspectRatio(
+                aspectRatio: 1,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: Colors.white24, width: 1.5),
+                  ),
+                  alignment: Alignment.center,
+                  child: Icon(
+                    Icons.lock_outline_rounded,
+                    size: 40,
+                    color: Colors.white.withValues(alpha: 0.45),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                name,
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.55),
+                  fontWeight: FontWeight.w500,
+                  fontSize: 18,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'بلا PIN',
+                style: TextStyle(
+                  color: Colors.orangeAccent.withValues(alpha: 0.85),
+                  fontSize: 13,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

@@ -1,3 +1,7 @@
+import 'dart:io' show Platform;
+
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform;
 import 'package:flutter/services.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -7,10 +11,23 @@ import '../../utils/app_logger.dart';
 import 'auth_user_messages.dart';
 import 'native_google_id_token_sign_in_result.dart';
 
+bool get _isApplePlatform =>
+    defaultTargetPlatform == TargetPlatform.iOS ||
+    defaultTargetPlatform == TargetPlatform.macOS;
+
+/// Windows/Linux فقط: لا يوجد منتقي حسابات أصلي في google_sign_in الرسمي.
+/// macOS يستخدم المنتقي الأصلي بعد ضبط GIDClientID + keychain.
+bool get _noOfficialNativeGooglePicker =>
+    Platform.isWindows || Platform.isLinux;
+
 GoogleSignIn _buildGoogleSignIn() {
   return GoogleSignIn(
-    serverClientId: GoogleOAuthConfig.resolvedWebClientId,
-    scopes: const ['email', 'profile', 'openid'],
+    clientId: _isApplePlatform
+        ? GoogleOAuthConfig.resolvedIosClientId
+        : null,
+    // نفس جمهور Firebase على أندرويد وiPhone وmacOS.
+    serverClientId: GoogleOAuthConfig.firebaseWebClientId,
+    scopes: const ['email', 'profile'],
   );
 }
 
@@ -18,7 +35,13 @@ Future<bool> _exchangeGoogleIdTokenForSupabaseSession(
   GoogleSignInAuthentication googleAuth,
 ) async {
   final idToken = googleAuth.idToken;
-  if (idToken == null || idToken.isEmpty) return false;
+  if (idToken == null || idToken.isEmpty) {
+    AppLogger.warn(
+      'NativeGoogleIdToken',
+      'idToken empty after Google account selection',
+    );
+    return false;
+  }
 
   try {
     await Supabase.instance.client.auth.signInWithIdToken(
@@ -46,6 +69,15 @@ Future<bool> _exchangeGoogleIdTokenForSupabaseSession(
 Future<NativeGoogleIdTokenSignInResult> signInWithGoogleNativeIdToken() async {
   final serverClientId = GoogleOAuthConfig.resolvedWebClientId;
   if (serverClientId.isEmpty) {
+    return NativeGoogleIdTokenSignInResult.notConfigured();
+  }
+
+  // Windows/Linux: لا منتقي أصلي رسمي — AuthProvider يفتح المتصفح (اختيار حساب).
+  if (_noOfficialNativeGooglePicker) {
+    AppLogger.info(
+      'NativeGoogleIdToken',
+      'Windows/Linux — no official native picker; browser OAuth',
+    );
     return NativeGoogleIdTokenSignInResult.notConfigured();
   }
 
@@ -104,11 +136,25 @@ Future<NativeGoogleIdTokenSignInResult> signInWithGoogleNativeIdToken() async {
     return NativeGoogleIdTokenSignInResult.cancelled();
   }
 
-  final googleAuth = await account.authentication;
+  var googleAuth = await account.authentication;
+  if ((googleAuth.idToken ?? '').isEmpty) {
+    AppLogger.warn(
+      'NativeGoogleIdToken',
+      'idToken empty after picker; retrying silent sign-in',
+    );
+    try {
+      final silent = await googleSignIn.signInSilently();
+      if (silent != null) {
+        googleAuth = await silent.authentication;
+      }
+    } catch (e) {
+      AppLogger.warn('NativeGoogleIdToken', 'silent idToken retry: $e');
+    }
+  }
   final ok = await _exchangeGoogleIdTokenForSupabaseSession(googleAuth);
   if (!ok) {
     return NativeGoogleIdTokenSignInResult.error(
-      'تعذر الحصول على رمز Google. تأكد من إعداد SHA-1 وGOOGLE_WEB_CLIENT_ID.',
+      'تعذر إكمال الدخول عبر Google. حاول مرة أخرى.',
     );
   }
   return NativeGoogleIdTokenSignInResult.success();

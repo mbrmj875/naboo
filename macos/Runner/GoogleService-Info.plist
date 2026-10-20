@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>CLIENT_ID</key>
+	<string>281392172783-rpnh4q1n0vuvjb3lv96sl48rkg1iu8ld.apps.googleusercontent.com</string>
+	<key>REVERSED_CLIENT_ID</key>
+	<string>com.googleusercontent.apps.281392172783-rpnh4q1n0vuvjb3lv96sl48rkg1iu8ld</string>
 	<key>API_KEY</key>
 	<string>AIzaSyB52IFcUaQ-uCVjLMJT2z2OONP8I9xMENI</string>
 	<key>GCM_SENDER_ID</key>
@@ -9,7 +13,7 @@
 	<key>PLIST_VERSION</key>
 	<string>1</string>
 	<key>BUNDLE_ID</key>
-	<string>com.basra.storemanager</string>
+	<string>com.basra.storemanager.app</string>
 	<key>PROJECT_ID</key>
 	<string>naboo-93580</string>
 	<key>STORAGE_BUCKET</key>

@@ -20,11 +20,13 @@ class OwnerDashboardSummaryCards extends StatelessWidget {
     required this.center,
     required this.snapshot,
     this.onOpenCash,
+    this.onOpenSales,
   });
 
   final OwnerCommandCenterProvider center;
   final OwnerCommandCenterSnapshot snapshot;
   final VoidCallback? onOpenCash;
+  final VoidCallback? onOpenSales;
 
   /// بطاقات تُعرض أعلى الشبكة — لا تُكرَّر في catalog.
   static bool isSummaryCatalogId(String catalogId) {
@@ -64,6 +66,7 @@ class OwnerDashboardSummaryCards extends StatelessWidget {
           section: sales,
           sectionId: OwnerSectionIds.sales,
           onRetry: () => center.refreshSection(OwnerSectionIds.sales),
+          onTap: onOpenSales,
           icon: Icons.trending_up_rounded,
           iconColor: AppSemanticColors.success,
           valueBuilder: (data) => IraqiCurrencyFormat.formatIqd(

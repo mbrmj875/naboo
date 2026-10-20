@@ -6,6 +6,7 @@ import 'package:intl/intl.dart' hide TextDirection;
 import '../services/oil_change_reports_repository.dart';
 import '../../../utils/iraqi_currency_format.dart';
 import '../utils/oil_change_log_format.dart';
+import '../utils/oil_change_layout.dart';
 import '../../../utils/screen_layout.dart';
 import '../../../theme/design_tokens.dart';
 
@@ -286,13 +287,15 @@ class _Kpi extends StatelessWidget {
           color: AppColors.accentGold.withValues(alpha: 0.5),
           width: 1.0,
         ),
-        boxShadow: [
-          BoxShadow(
-            color: cs.shadow.withValues(alpha: 0.06),
-            blurRadius: 14,
-            offset: const Offset(0, 4),
-          ),
-        ],
+        boxShadow: oilChangePreferStackedFieldsOf(context)
+            ? kOilChangeCardShadowsLite
+            : [
+                BoxShadow(
+                  color: cs.shadow.withValues(alpha: 0.06),
+                  blurRadius: 14,
+                  offset: const Offset(0, 4),
+                ),
+              ],
       ),
       child: Padding(
         padding: const EdgeInsets.all(14),
@@ -361,13 +364,15 @@ class _Card extends StatelessWidget {
           color: AppColors.accentGold.withValues(alpha: 0.5),
           width: 1.0,
         ),
-        boxShadow: [
-          BoxShadow(
-            color: cs.shadow.withValues(alpha: 0.07),
-            blurRadius: 22,
-            offset: const Offset(0, 8),
-          ),
-        ],
+        boxShadow: oilChangePreferStackedFieldsOf(context)
+            ? kOilChangeCardShadowsLite
+            : [
+                BoxShadow(
+                  color: cs.shadow.withValues(alpha: 0.07),
+                  blurRadius: 22,
+                  offset: const Offset(0, 8),
+                ),
+              ],
       ),
       child: Padding(
         padding: const EdgeInsets.all(14),

@@ -3,7 +3,10 @@ import 'dart:math';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:pointycastle/export.dart';
+
+import '../utils/app_logger.dart';
 
 /// تجزئة رموز/كلمات المرور محلياً.
 ///
@@ -19,6 +22,7 @@ abstract class PasswordHashing {
   static const int pbkdf2Iterations = 150000;
   static const int _keyLengthBytes = 32;
   static const String _pbkdf2Prefix = 'pbkdf2';
+  static const MethodChannel _nativeKdfChannel = MethodChannel('naboo/pin_kdf');
 
   static String generateSalt() {
     final r = Random.secure();
@@ -41,9 +45,10 @@ abstract class PasswordHashing {
 
   /// ينتج hash بالصيغة الحديثة (PBKDF2) — يُستخدم عند إنشاء/تغيير الرمز.
   static Future<String> hashPin(String password, String salt) async {
-    final derived = await compute(
-      _pbkdf2Derive,
-      _Pbkdf2Request(password.trim(), salt, pbkdf2Iterations),
+    final derived = await _derivePbkdf2(
+      password.trim(),
+      salt,
+      pbkdf2Iterations,
     );
     return '$_pbkdf2Prefix\$$pbkdf2Iterations\$$derived';
   }
@@ -59,10 +64,7 @@ abstract class PasswordHashing {
       final parts = storedHash.split(r'$');
       if (parts.length != 3) return false;
       final iterations = int.tryParse(parts[1]) ?? pbkdf2Iterations;
-      final derived = await compute(
-        _pbkdf2Derive,
-        _Pbkdf2Request(password.trim(), salt, iterations),
-      );
+      final derived = await _derivePbkdf2(password.trim(), salt, iterations);
       return constantTimeEquals(derived, parts[2]);
     }
     // الصيغة القديمة SHA-256.
@@ -100,6 +102,34 @@ class _Pbkdf2Request {
   final String password;
   final String salt;
   final int iterations;
+}
+
+/// أندرويد يحسب PBKDF2 أصلياً. بقية المنصات وبيئة الاختبار تبقى على isolate.
+Future<String> _derivePbkdf2(
+  String password,
+  String salt,
+  int iterations,
+) async {
+  try {
+    final native = await PasswordHashing._nativeKdfChannel.invokeMethod<String>(
+      'pbkdf2',
+      <String, Object>{
+        'password': password,
+        'salt': salt,
+        'iterations': iterations,
+        'keyLength': PasswordHashing._keyLengthBytes,
+      },
+    );
+    if (native != null && native.isNotEmpty) return native;
+  } on MissingPluginException {
+    // سطح المكتب والاختبارات: لا قناة أصلية.
+  } catch (e) {
+    AppLogger.warn('PasswordHashing', 'native pbkdf2 failed, using isolate: $e');
+  }
+  return compute(
+    _pbkdf2Derive,
+    _Pbkdf2Request(password, salt, iterations),
+  );
 }
 
 /// يُنفَّذ داخل isolate — لا يلمس أي حالة مشتركة.

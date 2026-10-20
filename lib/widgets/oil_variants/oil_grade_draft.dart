@@ -95,10 +95,10 @@ const kCommonHydraulicGrades = [
 
 /// قوالب عبوات شائعة (الاسم + معامل لتر).
 const kOilPackPresets = <({String name, String symbol, String factor})>[
-  (name: 'علبة 1 لتر', symbol: 'L', factor: '1'),
+  (name: 'علبة واحدة', symbol: 'L', factor: '1'),
+  (name: 'علبتين', symbol: '', factor: '2'),
+  (name: 'ثلاث علب', symbol: '', factor: '3'),
   (name: 'علبة 4 لتر', symbol: 'L', factor: '4'),
   (name: 'علبة 5 لتر', symbol: 'L', factor: '5'),
   (name: 'كوارت', symbol: 'qt', factor: '0.946'),
-  (name: 'تين', symbol: '', factor: '2'),
-  (name: 'ثلاثة', symbol: '', factor: '3'),
 ];

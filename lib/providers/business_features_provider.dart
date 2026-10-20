@@ -9,6 +9,7 @@ import '../services/loyalty_settings_repository.dart';
 import '../services/cloud_sync_service.dart';
 import '../owner/services/owner_alert_cloud_sync_service.dart';
 import '../utils/app_logger.dart';
+import '../verticals/_contract/vertical_registry.dart';
 
 /// مصدر الحقيقة الواحد لبوابة ميزات المتجر (Feature Gate — المرحلة 1).
 class BusinessFeaturesProvider extends ChangeNotifier {
@@ -46,6 +47,7 @@ class BusinessFeaturesProvider extends ChangeNotifier {
   Future<void> refresh() async {
     try {
       _data = await BusinessSetupSettingsData.load(AppSettingsRepository.instance);
+      VerticalRegistry.instance.syncActiveVertical(_data);
     } catch (e, st) {
       AppLogger.error(
         'BusinessFeatures',

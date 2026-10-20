@@ -16,11 +16,13 @@ import '../services/app_session_lifecycle.dart';
 import '../services/app_remote_config_service.dart';
 import '../services/app_settings_repository.dart';
 import '../services/business_setup_settings.dart';
+import '../services/cloud_sync_service.dart';
 import '../services/license_service.dart';
 import '../theme/design_tokens.dart';
 import '../widgets/glass/glass_surface.dart';
 import '../utils/app_logger.dart';
 import '../utils/screen_layout.dart';
+import '../services/auth/web_auth_history_guard.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -47,10 +49,10 @@ class _SplashScreenState extends State<SplashScreen>
     super.initState();
     _bootGeneration = ++AppSessionLifecycle.splashBootstrapGeneration;
 
-    // One controller for the full "royal stamp" sequence (0..1300ms)
+    // ختم الشعار أقصر — الإقلاع لا ينتظر عرضاً طويلاً بلا داعٍ.
     _stampCtrl = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1300),
+      duration: const Duration(milliseconds: 900),
     );
 
     // انتقال سلس من الـ native splash: نبدأ بحجم قريب من النهائي بدل 0.3
@@ -61,21 +63,21 @@ class _SplashScreenState extends State<SplashScreen>
           begin: 0.92,
           end: 1.0,
         ).chain(CurveTween(curve: Curves.easeOutCubic)),
-        weight: 700,
+        weight: 500,
       ),
       TweenSequenceItem<double>(
         tween: Tween<double>(
           begin: 1.0,
           end: 1.04,
         ).chain(CurveTween(curve: Curves.easeInOut)),
-        weight: 300,
+        weight: 200,
       ),
       TweenSequenceItem<double>(
         tween: Tween<double>(
           begin: 1.04,
           end: 1.0,
         ).chain(CurveTween(curve: Curves.easeInOut)),
-        weight: 300,
+        weight: 200,
       ),
     ]).animate(_stampCtrl);
 
@@ -86,13 +88,13 @@ class _SplashScreenState extends State<SplashScreen>
     // النص ومؤشر التحميل يظهران بعد استقرار الختم بقليل.
     _textOpacity = CurvedAnimation(
       parent: _stampCtrl,
-      curve: const Interval(400 / 1300, 1.0, curve: Curves.easeIn),
+      curve: const Interval(280 / 900, 1.0, curve: Curves.easeIn),
     );
 
     _stampCtrl.addListener(() {
-      // Play sound around 750ms when the logo "settles" near 1.0.
+      // Play sound around mid-stamp when the logo "settles" near 1.0.
       if (_stampSoundPlayed) return;
-      if (_stampCtrl.value < (750 / 1300)) return;
+      if (_stampCtrl.value < (520 / 900)) return;
       _stampSoundPlayed = true;
       _playStampSound();
     });
@@ -106,13 +108,21 @@ class _SplashScreenState extends State<SplashScreen>
       unawaited(_goNext());
     });
 
-    _startupFailsafeTimer = Timer(const Duration(seconds: 22), () {
+    // إن تجاوز الإقلاع المهلة: جهاز مربوط → بوابة PIN، لا شاشة Google.
+    _startupFailsafeTimer = Timer(const Duration(seconds: 35), () {
       if (!mounted) return;
       if (!_bootStillActive()) return;
       if (AppSessionLifecycle.splashNavigationCompleted) return;
-      AppLogger.warn('Splash', 'failsafe — الإقلاع تجاوز 22 ثانية');
+      final auth = context.read<AuthProvider>();
+      final target =
+          auth.deviceOwnerBound ? '/employee-gate' : '/login';
+      AppLogger.warn(
+        'Splash',
+        'failsafe — الإقلاع تجاوز المهلة → $target '
+        '(deviceOwnerBound=${auth.deviceOwnerBound})',
+      );
       AppSessionLifecycle.splashNavigationCompleted = true;
-      unawaited(Navigator.of(context).pushReplacementNamed('/login'));
+      unawaited(Navigator.of(context).pushReplacementNamed(target));
     });
   }
 
@@ -167,11 +177,19 @@ class _SplashScreenState extends State<SplashScreen>
   Future<void> _runStartupNavigation() async {
     final auth = context.read<AuthProvider>();
 
-    // إعدادات سحابية: صيانة، تحديث، إلخ — تصل لكل من ثبّت التطبيق سابقاً عند فتحه مع إنترنت.
+    // استعادة الجلسة بالتوازي مع الإعدادات السحابية (لا ننتظر أحدهما بلا داعٍ).
+    final restoreFut = auth.restoreSession().timeout(
+      const Duration(seconds: 6),
+      onTimeout: () {},
+    ).catchError((Object e, StackTrace st) {
+      AppLogger.error('Splash', 'فشل restoreSession', e, st);
+    });
+
+    // إعدادات سحابية دائماً من السيرفر عند الإقلاع (مقارنة الإصدار مع latest_version).
     try {
       await AppRemoteConfigService.instance
           .refresh(force: true)
-          .timeout(const Duration(seconds: 6));
+          .timeout(const Duration(seconds: 8));
     } catch (e, st) {
       AppLogger.error('Splash', 'remote config refresh', e, st);
     }
@@ -200,14 +218,39 @@ class _SplashScreenState extends State<SplashScreen>
     }
 
     final pkg = await PackageInfo.fromPlatform();
-    final v = pkg.version;
-    if (cfg.forceUpdate &&
-        AppRemoteConfigService.compareVersions(v, cfg.minSupportedVersion) <
-            0) {
+    final installed = AppRemoteConfigService.normalizeVersion(pkg.version);
+    final latest = AppRemoteConfigService.normalizeVersion(cfg.latestVersion);
+    final belowMin = AppRemoteConfigService.compareVersions(
+          installed,
+          cfg.minSupportedVersion,
+        ) <
+        0;
+    final updateAvailable = AppRemoteConfigService.isUpdateAvailable(
+      installedVersion: installed,
+      latestVersion: latest,
+    );
+    final isWindowsDesktop =
+        !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
+    final isAndroidPhone =
+        !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+    final updateUrl = cfg.downloadUrlForPlatform(isWindows: isWindowsDesktop);
+    final platformLabel = isWindowsDesktop
+        ? 'حاسوب ويندوز'
+        : (isAndroidPhone ? 'هاتف أندرويد' : 'أخرى');
+
+    AppLogger.info(
+      'Splash',
+      'منصة=$platformLabel | إصدار=$installed | السيرفر=$latest | تحديث=${updateAvailable ? 'مطلوب' : 'لا'}',
+    );
+
+    final offersNativeUpdate =
+        (isAndroidPhone || isWindowsDesktop) && updateUrl.isNotEmpty;
+
+    if (offersNativeUpdate && cfg.forceUpdate && belowMin) {
       if (!_bootStillActive()) return;
       final msg = cfg.updateMessageAr.isNotEmpty
           ? cfg.updateMessageAr
-          : 'يجب تحديث التطبيق للمتابعة.';
+          : 'يجب تحديث التطبيق للمتابعة.\n\nنسختك: $installed\nأحدث نسخة: $latest';
       await showDialog<void>(
         context: context,
         barrierDismissible: false,
@@ -215,15 +258,15 @@ class _SplashScreenState extends State<SplashScreen>
           title: const Text('تحديث مطلوب'),
           content: SingleChildScrollView(child: Text(msg)),
           actions: [
-            if (cfg.updateDownloadUrl.isNotEmpty)
+            if (updateUrl.isNotEmpty)
               TextButton(
                 onPressed: () async {
-                  final u = Uri.tryParse(cfg.updateDownloadUrl);
+                  final u = Uri.tryParse(updateUrl);
                   if (u != null) {
                     await launchUrl(u, mode: LaunchMode.externalApplication);
                   }
                 },
-                child: const Text('تحميل التحديث'),
+                child: const Text('تحديث الآن'),
               ),
           ],
         ),
@@ -231,30 +274,33 @@ class _SplashScreenState extends State<SplashScreen>
       return;
     }
 
-    if (cfg.updateMessageAr.isNotEmpty &&
-        AppRemoteConfigService.compareVersions(v, cfg.latestVersion) < 0) {
+    // أندرويد أو ويندوز: اطلب التحديث فقط إذا نسخة الجهاز أقل، وبرابط منصته.
+    if (offersNativeUpdate && updateAvailable) {
       if (!_bootStillActive()) return;
+      final body = cfg.updateMessageAr.isNotEmpty
+          ? '${cfg.updateMessageAr}\n\nنسختك: $installed\nأحدث نسخة: $latest'
+          : 'يتوفر تحديث جديد للتطبيق.\n\nنسختك: $installed\nأحدث نسخة: $latest';
       await showDialog<void>(
         context: context,
         barrierDismissible: true,
         builder: (ctx) => AlertDialog(
           title: const Text('تحديث متوفر'),
-          content: SingleChildScrollView(child: Text(cfg.updateMessageAr)),
+          content: SingleChildScrollView(child: Text(body)),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(),
               child: const Text('لاحقاً'),
             ),
-            if (cfg.updateDownloadUrl.isNotEmpty)
+            if (updateUrl.isNotEmpty)
               TextButton(
                 onPressed: () async {
                   Navigator.of(ctx).pop();
-                  final u = Uri.tryParse(cfg.updateDownloadUrl);
+                  final u = Uri.tryParse(updateUrl);
                   if (u != null) {
                     await launchUrl(u, mode: LaunchMode.externalApplication);
                   }
                 },
-                child: const Text('تحميل'),
+                child: const Text('تحديث الآن'),
               ),
           ],
         ),
@@ -299,14 +345,7 @@ class _SplashScreenState extends State<SplashScreen>
       }
     }
 
-    try {
-      await auth.restoreSession().timeout(
-        const Duration(seconds: 6),
-        onTimeout: () {},
-      );
-    } catch (e, st) {
-      AppLogger.error('Splash', 'فشل restoreSession', e, st);
-    }
+    await restoreFut;
     if (!_bootStillActive()) return;
 
     if (kIsWeb) {
@@ -320,6 +359,7 @@ class _SplashScreenState extends State<SplashScreen>
           AppSessionLifecycle.splashNavigationCompleted = true;
           final row = await auth.getLocalOwnerRow();
           final localId = (row?['id'] as num?)?.toInt();
+          if (kIsWeb) stabilizeWebAuthHistory();
           unawaited(
             Navigator.of(context).pushReplacementNamed(
               '/owner-pin-restore-otp',
@@ -333,6 +373,7 @@ class _SplashScreenState extends State<SplashScreen>
         }
         if (oauthErr == AuthProvider.kGoogleOwnerProfileRequired) {
           AppSessionLifecycle.splashNavigationCompleted = true;
+          if (kIsWeb) stabilizeWebAuthHistory();
           unawaited(
             Navigator.of(context).pushReplacementNamed(
               '/complete-google-profile',
@@ -395,26 +436,51 @@ class _SplashScreenState extends State<SplashScreen>
 
     try {
       await _showTargetedRoyalMessageIfAny().timeout(
-        const Duration(seconds: 5),
+        const Duration(seconds: 3),
         onTimeout: () {},
       );
     } catch (e, st) {
       AppLogger.error('Splash', 'فشل رسالة المالك المخصصة', e, st);
     }
 
-    await Future<void>.delayed(const Duration(milliseconds: 1200));
+    // انتظر بقايا ختم الشعار فقط (بدون تأخير ثابت 1.2ث).
+    final stampLeftMs =
+        ((1.0 - _stampCtrl.value) * _stampCtrl.duration!.inMilliseconds)
+            .round()
+            .clamp(0, 350);
+    if (stampLeftMs > 0) {
+      await Future<void>.delayed(Duration(milliseconds: stampLeftMs));
+    }
     if (!_bootStillActive()) return;
 
     if (!auth.deviceOwnerBound) {
-      // Phase A (Atomic): يمنع أي دخول تشغيلي قبل ربط الجهاز بمالك.
-      // إذا وجدت جلسة قديمة غير مربوطة، نغلقها ثم نعيد المستخدم إلى Gmail login.
-      if (auth.isLoggedIn) {
-        await auth.logout();
+      // ويب: جلسة سحابة موجودة → لا تُخرج؛ أعد الربط من السحابة ثم تابع.
+      final cloudUser = Supabase.instance.client.auth.currentUser;
+      if (kIsWeb && cloudUser != null) {
+        try {
+          await auth.restoreWebSessionFromCloudIfNeeded();
+        } catch (e, st) {
+          AppLogger.error('Splash', 'restoreWebSessionFromCloudIfNeeded', e, st);
+        }
         if (!_bootStillActive()) return;
+        if (auth.deviceOwnerBound) {
+          // تابع مسار الجهاز المربوط أدناه
+        } else {
+          AppSessionLifecycle.splashNavigationCompleted = true;
+          unawaited(Navigator.of(context).pushReplacementNamed('/login'));
+          return;
+        }
+      } else {
+        // Phase A (Atomic): يمنع أي دخول تشغيلي قبل ربط الجهاز بمالك.
+        // إذا وجدت جلسة قديمة غير مربوطة، نغلقها ثم نعيد المستخدم إلى Gmail login.
+        if (auth.isLoggedIn) {
+          await auth.logout();
+          if (!_bootStillActive()) return;
+        }
+        AppSessionLifecycle.splashNavigationCompleted = true;
+        unawaited(Navigator.of(context).pushReplacementNamed('/login'));
+        return;
       }
-      AppSessionLifecycle.splashNavigationCompleted = true;
-      unawaited(Navigator.of(context).pushReplacementNamed('/login'));
-      return;
     }
 
     if (auth.deviceOwnerBound) {
@@ -431,9 +497,11 @@ class _SplashScreenState extends State<SplashScreen>
         final needsImport = !(await BusinessSetupSettingsData.isCompleted(
           AppSettingsRepository.instance,
         ));
+        final freshPull = CloudSyncService.instance.hasFreshCloudPull();
+        // لا تُعد سحباً كاملاً إن اكتمل للتوّ — يسرّع الإقلاع وبوابة PIN.
         await auth.hydrateCloudAccountData(
-          timeout: const Duration(seconds: 12),
-          forcePull: true,
+          timeout: const Duration(seconds: 8),
+          forcePull: needsImport || !freshPull,
           forceImportOnPull: needsImport,
           maxAttempts: needsImport ? 2 : 1,
         );
@@ -446,11 +514,14 @@ class _SplashScreenState extends State<SplashScreen>
         );
       }
       if (_bootStillActive()) {
-        try {
-          await context.read<BusinessFeaturesProvider>().refresh();
-        } catch (e, st) {
-          AppLogger.error('Splash', 'فشل refresh BusinessFeatures', e, st);
-        }
+        // لا تحجب التنقل على ميزات العمل — حدّث في الخلفية.
+        unawaited(
+          context.read<BusinessFeaturesProvider>().refresh().catchError(
+            (Object e, StackTrace st) {
+              AppLogger.error('Splash', 'فشل refresh BusinessFeatures', e, st);
+            },
+          ),
+        );
       }
     }
     if (!_bootStillActive()) return;
@@ -477,6 +548,9 @@ class _SplashScreenState extends State<SplashScreen>
         routeArgs = {
           if (localId != null) 'localOwnerUserId': localId,
         };
+      }
+      if (kIsWeb && target != '/login') {
+        stabilizeWebAuthHistory();
       }
       unawaited(
         Navigator.of(context).pushReplacementNamed(

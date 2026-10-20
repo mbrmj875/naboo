@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../guides/guide_anchor.dart';
 import '../../providers/auth_provider.dart';
 import '../../models/user_permission_catalog.dart';
 import '../../services/database_helper.dart';
@@ -303,119 +304,128 @@ class _UserFormScreenState extends State<UserFormScreen> {
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
                           // ── 1. الاسم ──
-                          _sectionCard(
-                            icon: Icons.person_outline,
-                            title: 'بيانات الموظف',
-                            children: [
-                              TextFormField(
-                                controller: _nameCtrl,
-                                decoration: _decoration(
-                                  label: 'الاسم',
-                                  hint: 'اسم الموظف',
-                                  prefixIcon: Icon(
-                                    Icons.badge_outlined,
-                                    color: _textSecondary,
-                                    size: 22,
+                          GuideAnchor(
+                            id: OilGuideAnchors.usersFormName,
+                            child: _sectionCard(
+                              icon: Icons.person_outline,
+                              title: 'بيانات الموظف',
+                              children: [
+                                TextFormField(
+                                  controller: _nameCtrl,
+                                  decoration: _decoration(
+                                    label: 'الاسم',
+                                    hint: 'اسم الموظف',
+                                    prefixIcon: Icon(
+                                      Icons.badge_outlined,
+                                      color: _textSecondary,
+                                      size: 22,
+                                    ),
                                   ),
+                                  validator: (v) =>
+                                      (v == null || v.trim().isEmpty)
+                                      ? 'مطلوب'
+                                      : null,
                                 ),
-                                validator: (v) =>
-                                    (v == null || v.trim().isEmpty)
-                                    ? 'مطلوب'
-                                    : null,
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
 
                           const SizedBox(height: 16),
 
                           // ── 2. رمز PIN ──
-                          _sectionCard(
-                            icon: Icons.pin_outlined,
-                            title: 'رمز الدخول (PIN)',
-                            subtitle: PinInputConstraints.staffSubtitle,
-                            children: [
-                              PinFourBoxesField(
-                                controller: _pinCtrl,
-                                label: _isEdit
-                                    ? 'رمز PIN جديد (اختياري)'
-                                    : 'رمز PIN',
-                                obscureText: !_showPin,
-                                onToggleObscure: () =>
-                                    setState(() => _showPin = !_showPin),
-                                validator: _isEdit
-                                    ? PinInputConstraints.validateOptional
-                                    : PinInputConstraints.validateRequired,
-                              ),
-                              const SizedBox(height: 14),
-                              PinFourBoxesField(
-                                controller: _pin2Ctrl,
-                                label: 'تأكيد رمز PIN',
-                                obscureText: !_showPin2,
-                                onToggleObscure: () =>
-                                    setState(() => _showPin2 = !_showPin2),
-                                validator: (v) {
-                                  if (_isEdit && _pinCtrl.text.isEmpty) {
+                          GuideAnchor(
+                            id: OilGuideAnchors.usersFormPin,
+                            child: _sectionCard(
+                              icon: Icons.pin_outlined,
+                              title: 'رمز الدخول (PIN)',
+                              subtitle: PinInputConstraints.staffSubtitle,
+                              children: [
+                                PinFourBoxesField(
+                                  controller: _pinCtrl,
+                                  label: _isEdit
+                                      ? 'رمز PIN جديد (اختياري)'
+                                      : 'رمز PIN',
+                                  obscureText: !_showPin,
+                                  onToggleObscure: () =>
+                                      setState(() => _showPin = !_showPin),
+                                  validator: _isEdit
+                                      ? PinInputConstraints.validateOptional
+                                      : PinInputConstraints.validateRequired,
+                                ),
+                                const SizedBox(height: 14),
+                                PinFourBoxesField(
+                                  controller: _pin2Ctrl,
+                                  label: 'تأكيد رمز PIN',
+                                  obscureText: !_showPin2,
+                                  onToggleObscure: () =>
+                                      setState(() => _showPin2 = !_showPin2),
+                                  validator: (v) {
+                                    if (_isEdit && _pinCtrl.text.isEmpty) {
+                                      return null;
+                                    }
+                                    if (!PinInputConstraints.isValid(v ?? '')) {
+                                      return PinInputConstraints.invalidMessage;
+                                    }
+                                    if (v != _pinCtrl.text) {
+                                      return PinInputConstraints.mismatchMessage;
+                                    }
                                     return null;
-                                  }
-                                  if (!PinInputConstraints.isValid(v ?? '')) {
-                                    return PinInputConstraints.invalidMessage;
-                                  }
-                                  if (v != _pinCtrl.text) {
-                                    return PinInputConstraints.mismatchMessage;
-                                  }
-                                  return null;
-                                },
-                              ),
-                            ],
+                                  },
+                                ),
+                              ],
+                            ),
                           ),
 
                           const SizedBox(height: 16),
 
                           // ── 3. مستوى الصلاحية ──
-                          _sectionCard(
-                            icon: Icons.security_outlined,
-                            title: 'مستوى الصلاحية',
-                            children: [
-                              _accessLevelTile(
-                                title: 'موظف محدود التخصيص',
-                                subtitle:
-                                    'صلاحيات أساسية فقط (نقطة بيع، عرض المخزون، الصندوق)',
-                                icon: Icons.shield_outlined,
-                                selected: !_fullAccess && !_showAdvancedPerms,
-                                onTap: () => setState(() {
-                                  _fullAccess = false;
-                                  _showAdvancedPerms = false;
-                                  _permMap = _perm.defaultStaffPermissionMap();
-                                }),
-                              ),
-                              const SizedBox(height: 8),
-                              _accessLevelTile(
-                                title: 'موظف كامل التخصيص',
-                                subtitle:
-                                    'جميع الصلاحيات (تقارير، إدارة مخزون، عملاء، إعدادات)',
-                                icon: Icons.admin_panel_settings_outlined,
-                                selected: _fullAccess && !_showAdvancedPerms,
-                                onTap: () => setState(() {
-                                  _fullAccess = true;
-                                  _showAdvancedPerms = false;
-                                  _permMap = {
-                                    for (final k in PermissionKeys.allKeys)
-                                      k: true,
-                                  };
-                                }),
-                              ),
-                              const SizedBox(height: 8),
-                              _accessLevelTile(
-                                title: 'تخصيص يدوي',
-                                subtitle:
-                                    'اختر الصلاحيات بنفسك واحدة تلو الأخرى',
-                                icon: Icons.tune_outlined,
-                                selected: _showAdvancedPerms,
-                                onTap: () => setState(() {
-                                  _showAdvancedPerms = true;
-                                }),
-                              ),
-                            ],
+                          GuideAnchor(
+                            id: OilGuideAnchors.usersFormPerms,
+                            child: _sectionCard(
+                              icon: Icons.security_outlined,
+                              title: 'مستوى الصلاحية',
+                              children: [
+                                _accessLevelTile(
+                                  title: 'موظف محدود التخصيص',
+                                  subtitle:
+                                      'صلاحيات أساسية فقط (نقطة بيع، عرض المخزون، الصندوق)',
+                                  icon: Icons.shield_outlined,
+                                  selected: !_fullAccess && !_showAdvancedPerms,
+                                  onTap: () => setState(() {
+                                    _fullAccess = false;
+                                    _showAdvancedPerms = false;
+                                    _permMap = _perm.defaultStaffPermissionMap();
+                                  }),
+                                ),
+                                const SizedBox(height: 8),
+                                _accessLevelTile(
+                                  title: 'موظف كامل التخصيص',
+                                  subtitle:
+                                      'جميع الصلاحيات (تقارير، إدارة مخزون، عملاء، إعدادات)',
+                                  icon: Icons.admin_panel_settings_outlined,
+                                  selected: _fullAccess && !_showAdvancedPerms,
+                                  onTap: () => setState(() {
+                                    _fullAccess = true;
+                                    _showAdvancedPerms = false;
+                                    _permMap = {
+                                      for (final k in PermissionKeys.allKeys)
+                                        k: true,
+                                    };
+                                  }),
+                                ),
+                                const SizedBox(height: 8),
+                                _accessLevelTile(
+                                  title: 'تخصيص يدوي',
+                                  subtitle:
+                                      'اختر الصلاحيات بنفسك واحدة تلو الأخرى',
+                                  icon: Icons.tune_outlined,
+                                  selected: _showAdvancedPerms,
+                                  onTap: () => setState(() {
+                                    _showAdvancedPerms = true;
+                                  }),
+                                ),
+                              ],
+                            ),
                           ),
 
                           // ── تفاصيل الصلاحيات (تظهر فقط عند تخصيص يدوي) ──
@@ -436,34 +446,37 @@ class _UserFormScreenState extends State<UserFormScreen> {
                           ],
 
                           const SizedBox(height: 28),
-                          FilledButton.icon(
-                            onPressed: _saving ? null : _save,
-                            icon: _saving
-                                ? const SizedBox(
-                                    width: 22,
-                                    height: 22,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: Colors.white,
-                                    ),
-                                  )
-                                : const Icon(Icons.save_outlined),
-                            label: Text(
-                              _saving ? 'جاري الحفظ…' : 'حفظ',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w700,
-                                fontSize: 16,
+                          GuideAnchor(
+                            id: OilGuideAnchors.usersFormSave,
+                            child: FilledButton.icon(
+                              onPressed: _saving ? null : _save,
+                              icon: _saving
+                                  ? const SizedBox(
+                                      width: 22,
+                                      height: 22,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: Colors.white,
+                                      ),
+                                    )
+                                  : const Icon(Icons.save_outlined),
+                              label: Text(
+                                _saving ? 'جاري الحفظ…' : 'حفظ',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 16,
+                                ),
                               ),
-                            ),
-                            style: FilledButton.styleFrom(
-                              backgroundColor: _primary,
-                              foregroundColor: _onPrimary,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 24,
-                                vertical: 14,
-                              ),
-                              shape: const RoundedRectangleBorder(
-                                borderRadius: AppShape.none,
+                              style: FilledButton.styleFrom(
+                                backgroundColor: _primary,
+                                foregroundColor: _onPrimary,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 24,
+                                  vertical: 14,
+                                ),
+                                shape: const RoundedRectangleBorder(
+                                  borderRadius: AppShape.none,
+                                ),
                               ),
                             ),
                           ),

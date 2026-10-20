@@ -3,11 +3,21 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../config/google_oauth_config.dart';
 import '../../utils/app_logger.dart';
+import 'web_app_origin.dart';
 
 /// تسجيل Google عبر ID token — بدون إعادة توجيه (يتجاوز Site URL = localhost في Supabase).
 Future<bool> signInWithGoogleIdTokenOnWeb() async {
   final clientId = GoogleOAuthConfig.resolvedWebClientId;
   if (clientId.isEmpty) return false;
+
+  // لا تفتح GIS إن كان الأصل غير مسجّل — يمنع popup «origin_mismatch».
+  if (!WebAppOrigin.supportsGoogleIdTokenGis) {
+    AppLogger.warn(
+      'WebGoogleIdToken',
+      'skip GIS on unauthorized origin=${Uri.base.origin}',
+    );
+    return false;
+  }
 
   final googleSignIn = GoogleSignIn(
     clientId: clientId,
@@ -22,7 +32,12 @@ Future<bool> signInWithGoogleIdTokenOnWeb() async {
   try {
     account = await googleSignIn.signIn();
   } catch (e) {
+    final msg = e.toString().toLowerCase();
     AppLogger.warn('WebGoogleIdToken', 'GoogleSignIn.signIn failed: $e');
+    if (msg.contains('origin_mismatch') ||
+        msg.contains('idpiframe_initialization_failed')) {
+      return false;
+    }
     return false;
   }
   if (account == null) return false;

@@ -92,6 +92,9 @@ abstract final class PinAttemptGuard {
     await prefs.remove('$_lockPrefix$scopeKey');
   }
 
+  /// يصفّر القفل/العداد يدوياً (مثلاً بعد مسار OTP أو خطأ غير متعلق بـ PIN).
+  static Future<void> clear(String scopeKey) => recordSuccess(scopeKey);
+
   /// عدد المحاولات الفاشلة الحالية (للاختبارات والتشخيص).
   static Future<int> failureCount(String scopeKey) async {
     final prefs = await SharedPreferences.getInstance();

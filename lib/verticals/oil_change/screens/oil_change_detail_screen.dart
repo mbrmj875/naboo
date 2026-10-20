@@ -3,13 +3,14 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../../navigation/content_navigation.dart';
-import '../../../services/print_settings_repository.dart';
+import '../../../services/effective_store_branding.dart';
 import '../../../services/service_order_invoice_bridge.dart';
 import '../../../services/service_order_kinds.dart';
 import '../../../services/service_orders_repository.dart';
 import '../../../utils/customer_phone_launch.dart';
 import '../../../utils/iqd_money.dart';
 import '../../../utils/iraqi_currency_format.dart';
+import '../services/oil_change_settings.dart';
 import '../utils/oil_change_finance.dart';
 import '../utils/oil_change_filter_format.dart';
 import '../utils/oil_change_log_format.dart';
@@ -106,7 +107,9 @@ class _OilChangeDetailScreenState extends State<OilChangeDetailScreen> {
       );
       return;
     }
-    final printData = await PrintSettingsRepository.instance.load();
+    final printData = await EffectiveStoreBranding.resolveFromContext(context);
+    final askRating =
+        await OilChangeSettings.whatsappAskRatingAfterSaveEnabled();
     final visitRem = oilChangeVisitRemainderFils(o);
     final priorDebt = await loadCustomerPriorOpenDebtFils(
       customerId: (o['customerId'] as num?)?.toInt(),
@@ -118,6 +121,7 @@ class _OilChangeDetailScreenState extends State<OilChangeDetailScreen> {
       storeTitle: printData.storeTitleLine,
       storeFooter: printData.footerExtra,
       priorOpenDebtFils: priorDebt,
+      includeRatingAsk: askRating,
     );
     if (!mounted) return;
     await launchWhatsAppWithMessage(context, phone: phone, message: msg);

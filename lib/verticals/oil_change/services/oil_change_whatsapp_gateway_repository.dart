@@ -38,7 +38,8 @@ class OilChangeWhatsappGatewayRepository {
       final row = await Supabase.instance.client
           .from(_table)
           .select(
-            'evolution_instance_name, status, whatsapp_phone, updated_at',
+            'evolution_instance_name, status, whatsapp_phone, updated_at, '
+            'whatsapp_provider, cloud_setup_status, rating_auto_reply',
           )
           .eq('user_id', user.id)
           .maybeSingle();
@@ -50,15 +51,57 @@ class OilChangeWhatsappGatewayRepository {
     }
   }
 
-  /// يستدعي Edge Function `status` ويُحدّث السحابة.
+  /// يستدعي Edge Function `status` / `ready_status` ودمج الحالة المحسوبة.
   Future<TenantWhatsappGatewayRecord?> refreshStatusFromServer() async {
-    final result = await OilChangeWhatsappGatewayService.instance.checkStatus();
-    if (!result.ok) return fetchForCurrentUser();
-    return fetchForCurrentUser();
+    final ready =
+        await OilChangeWhatsappGatewayService.instance.fetchReadyStatus();
+    final row = await fetchForCurrentUser();
+    if (row == null) return null;
+    if (!ready.ok) return row;
+    return TenantWhatsappGatewayRecord(
+      evolutionInstanceName: row.evolutionInstanceName,
+      status: ready.connected
+          ? TenantWhatsappGatewayStatus.connected
+          : (row.status == TenantWhatsappGatewayStatus.connecting
+              ? TenantWhatsappGatewayStatus.connecting
+              : TenantWhatsappGatewayStatus.disconnected),
+      whatsappPhone: ready.phone ?? row.whatsappPhone,
+      updatedAt: row.updatedAt,
+      provider: row.provider,
+      cloudSetupStatus: row.cloudSetupStatus,
+      readyState: TenantWhatsappGatewayRecord.fromMap({
+        'ready_state': ready.readyState ?? 'disconnected',
+      }).readyState,
+      ratingAutoReply: row.ratingAutoReply,
+    );
   }
 
-  Future<void> reportDisconnected() async {
-    if (!hasCloudSession) return;
-    await OilChangeWhatsappGatewayService.instance.reportDisconnected();
+  /// هل الرد التلقائي / الإجابة الذكية داخل واتساب مفعّل لهذا المحل؟
+  Future<bool> fetchRatingAutoReplyEnabled() async {
+    final row = await fetchForCurrentUser();
+    return row?.ratingAutoReply ?? true;
+  }
+
+  /// تشغيل أو إيقاف ردود واتساب التلقائية (ذكاء + تحية + شكر تقييم).
+  Future<bool> setRatingAutoReplyEnabled(bool enabled) async {
+    final user = Supabase.instance.client.auth.currentUser;
+    if (user == null) return false;
+    try {
+      await Supabase.instance.client.from(_table).update({
+        'rating_auto_reply': enabled,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('user_id', user.id);
+      return true;
+    } catch (e) {
+      AppLogger.warn('oil_change_wa_gateway', 'set rating_auto_reply failed: $e');
+      return false;
+    }
+  }
+
+  Future<WhatsappReportDisconnectedResult> reportDisconnected() async {
+    if (!hasCloudSession) {
+      return const WhatsappReportDisconnectedResult(ok: false);
+    }
+    return OilChangeWhatsappGatewayService.instance.reportDisconnected();
   }
 }

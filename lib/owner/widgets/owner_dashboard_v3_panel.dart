@@ -41,6 +41,7 @@ class OwnerDashboardV3Panel extends StatelessWidget {
     required this.onOpenDebts,
     required this.onOpenInstallments,
     this.onOpenCash,
+    this.onOpenSales,
     required this.staffRows,
     required this.activeShiftStaffNames,
   });
@@ -55,6 +56,7 @@ class OwnerDashboardV3Panel extends StatelessWidget {
   final VoidCallback onOpenDebts;
   final VoidCallback onOpenInstallments;
   final VoidCallback? onOpenCash;
+  final VoidCallback? onOpenSales;
   final List<StaffUserRow> staffRows;
   final Set<String> activeShiftStaffNames;
 
@@ -150,6 +152,7 @@ class OwnerDashboardV3Panel extends StatelessWidget {
       features: features,
       access: center.accessContext,
       onOpenCash: onOpenCash,
+      onOpenSales: onOpenSales,
       morningBriefBuilderId: preset.morningBriefBuilderId,
       onShortcutTap: (entry) => OwnerShortcutNavigation.open(
         context,

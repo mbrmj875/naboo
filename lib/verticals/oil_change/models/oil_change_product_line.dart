@@ -6,9 +6,15 @@ class OilChangeProductLine {
     required this.productName,
     this.quantity = 1,
     required this.priceFils,
+    this.unitVariantId,
+    this.unitLabel = '',
+    this.unitFactor = 1,
+    int? literPriceFils,
   })  : assert(productId > 0),
         assert(quantity > 0),
-        assert(priceFils >= 0);
+        assert(priceFils >= 0),
+        assert(unitFactor > 0),
+        literPriceFils = literPriceFils ?? priceFils;
 
   final int? id;
   final int productId;
@@ -16,7 +22,18 @@ class OilChangeProductLine {
   int quantity;
   int priceFils;
 
+  /// وحدة البيع المختارة (علبة / كوارت). فارغ يعني سعر اللتر.
+  int? unitVariantId;
+  String unitLabel;
+  double unitFactor;
+
+  /// سعر اللتر الواحد بالفلس، لتبديل الوحدة دون ضياع السعر.
+  final int literPriceFils;
+
   int get totalFils => quantity * priceFils;
+
+  /// لترات تُخصم من المخزون = عدد الوحدات × معامل العبوة.
+  double get stockBaseQty => quantity * unitFactor;
 
   factory OilChangeProductLine.fromMap(Map<String, dynamic> row) {
     final pid = (row['productId'] as num?)?.toInt() ?? 0;
@@ -41,6 +58,10 @@ class OilChangeProductLine {
       productName: productName,
       quantity: quantity ?? this.quantity,
       priceFils: priceFils ?? this.priceFils,
+      unitVariantId: unitVariantId,
+      unitLabel: unitLabel,
+      unitFactor: unitFactor,
+      literPriceFils: literPriceFils,
     );
   }
 }

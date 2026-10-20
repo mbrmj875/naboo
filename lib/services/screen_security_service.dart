@@ -1,5 +1,3 @@
-import 'dart:io' show Platform;
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter_windowmanager_plus/flutter_windowmanager_plus.dart';
 
@@ -57,7 +55,11 @@ abstract class ScreenSecurityService {
 class _DefaultScreenSecurityService implements ScreenSecurityService {
   @override
   Future<void> enable() async {
-    if (!ScreenSecurityService.enabled || !Platform.isAndroid) return;
+    if (!ScreenSecurityService.enabled ||
+        kIsWeb ||
+        defaultTargetPlatform != TargetPlatform.android) {
+      return;
+    }
     try {
       await FlutterWindowManagerPlus.addFlags(
         FlutterWindowManagerPlus.FLAG_SECURE,
@@ -76,7 +78,11 @@ class _DefaultScreenSecurityService implements ScreenSecurityService {
 
   @override
   Future<void> disable() async {
-    if (!ScreenSecurityService.enabled || !Platform.isAndroid) return;
+    if (!ScreenSecurityService.enabled ||
+        kIsWeb ||
+        defaultTargetPlatform != TargetPlatform.android) {
+      return;
+    }
     try {
       await FlutterWindowManagerPlus.clearFlags(
         FlutterWindowManagerPlus.FLAG_SECURE,

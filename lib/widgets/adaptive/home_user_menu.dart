@@ -63,7 +63,8 @@ class HomeUserMenu extends StatelessWidget {
 
   Widget _buildButtonChild(BuildContext context, bool isWide) {
     final cs = Theme.of(context).colorScheme;
-    final onPrimary = cs.onPrimary;
+    // على شريط AppBar (سطح فاتح/داكن) — لا تستخدم onPrimary (أبيض دائماً).
+    final labelColor = cs.onSurface;
     final initial = _initial();
 
     final avatar = Container(
@@ -113,7 +114,7 @@ class HomeUserMenu extends StatelessWidget {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                color: onPrimary,
+                color: labelColor,
                 fontSize: 13,
                 fontWeight: FontWeight.w600,
               ),
@@ -123,7 +124,7 @@ class HomeUserMenu extends StatelessWidget {
           Icon(
             Icons.keyboard_arrow_down_rounded,
             size: 18,
-            color: onPrimary.withValues(alpha: 0.78),
+            color: labelColor.withValues(alpha: 0.78),
           ),
         ],
       ),

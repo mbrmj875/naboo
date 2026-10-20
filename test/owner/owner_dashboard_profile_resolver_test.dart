@@ -114,7 +114,8 @@ void main() {
       final spec = OwnerDashboardProfileResolver.resolve(input(supermarket));
       expect(spec.profile, OwnerDashboardProfile.supermarket);
       expect(spec.defaultHeroCatalogId, OwnerCatalogIds.retailStockShortages);
-      expect(spec.defaultCardOrder.first, OwnerCatalogIds.retailStockShortages);
+      expect(spec.defaultCardOrder.first, OwnerCatalogIds.retailDebtsSummary);
+      expect(spec.defaultCardOrder, contains(OwnerCatalogIds.retailStockShortages));
       expect(spec.defaultCardOrder, contains(OwnerCatalogIds.retailTopSellers));
       expect(spec.morningBriefBuilderId, 'supermarket_morning_brief');
     });
@@ -131,7 +132,8 @@ void main() {
       final spec = OwnerDashboardProfileResolver.resolve(input(retail));
       expect(spec.profile, OwnerDashboardProfile.generalRetail);
       expect(spec.defaultHeroCatalogId, OwnerCatalogIds.retailStockShortages);
-      expect(spec.defaultCardOrder.first, OwnerCatalogIds.retailStockShortages);
+      expect(spec.defaultCardOrder.first, OwnerCatalogIds.retailDebtsSummary);
+      expect(spec.defaultCardOrder, contains(OwnerCatalogIds.retailStockShortages));
       expect(spec.defaultCardOrder, contains(OwnerCatalogIds.retailTopSellers));
       expect(spec.morningBriefBuilderId, 'supermarket_morning_brief');
       expect(

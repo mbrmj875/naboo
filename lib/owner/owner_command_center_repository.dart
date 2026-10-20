@@ -14,6 +14,8 @@ import 'owner_trend_repository.dart';
 import 'models/owner_date_range.dart';
 import 'models/owner_kpi_models.dart';
 import 'models/owner_kpi_trend.dart';
+import 'models/owner_period_sale_row.dart';
+import 'specs/owner_dashboard_profile.dart';
 
 /// قراءة SQLite لأقسام لوحة المالك — بدون UI state.
 class OwnerCommandCenterRepository {
@@ -284,6 +286,100 @@ class OwnerCommandCenterRepository {
       range: range,
       staffName: staffName,
     );
+  }
+
+  Future<List<OwnerPeriodSaleRow>> listPeriodSales({
+    required int tenantId,
+    required OwnerDateRange range,
+    required OwnerDashboardProfile? profile,
+    String? staffName,
+    int limit = 80,
+    String? afterCreatedAt,
+    int? afterId,
+  }) {
+    if (profile == OwnerDashboardProfile.oilChangeService ||
+        profile == OwnerDashboardProfile.oilChangeHybrid) {
+      return _oil.listOilSalesInRange(
+        tenantId: tenantId,
+        range: range,
+        staffName: staffName,
+        limit: limit,
+        afterCreatedAt: afterCreatedAt,
+        afterId: afterId,
+      );
+    }
+    return _listInvoiceSalesInRange(
+      tenantId: tenantId,
+      range: range,
+      staffName: staffName,
+      limit: limit,
+      afterCreatedAt: afterCreatedAt,
+      afterId: afterId,
+    );
+  }
+
+  Future<List<OwnerPeriodSaleRow>> _listInvoiceSalesInRange({
+    required int tenantId,
+    required OwnerDateRange range,
+    String? staffName,
+    int limit = 80,
+    String? afterCreatedAt,
+    int? afterId,
+  }) async {
+    final db = await _db.database;
+    try {
+      var sql = '''
+        SELECT id, date, customerName, total, createdByUserName
+        FROM invoices
+        WHERE tenantId = ?
+          AND deleted_at IS NULL
+          AND IFNULL(isReturned, 0) = 0
+          AND date >= ?
+          AND date < ?
+      ''';
+      final args = <Object?>[
+        tenantId,
+        range.startLocalIso,
+        range.endExclusiveLocalIso,
+      ];
+      if (staffName != null && staffName.isNotEmpty) {
+        sql += ' AND createdByUserName = ?';
+        args.add(staffName);
+      }
+      if (afterCreatedAt != null &&
+          afterCreatedAt.isNotEmpty &&
+          afterId != null &&
+          afterId > 0) {
+        sql += ' AND (date < ? OR (date = ? AND id < ?))';
+        args.addAll([afterCreatedAt, afterCreatedAt, afterId]);
+      }
+      sql += ' ORDER BY date DESC, id DESC LIMIT ?';
+      args.add(limit);
+
+      final rows = await db.rawQuery(sql, args);
+      return rows.map((r) {
+        final id = (r['id'] as num?)?.toInt() ?? 0;
+        final total = (r['total'] as num?)?.toDouble() ?? 0;
+        final name = (r['customerName'] as String?)?.trim();
+        return OwnerPeriodSaleRow(
+          kind: OwnerPeriodSaleKind.invoice,
+          recordId: id,
+          createdAtIso: (r['date'] as String?) ?? '',
+          title: (name == null || name.isEmpty) ? 'عميل' : name,
+          amountFils: IqdMoney.toFils(total),
+          invoiceId: id,
+          staffName: (r['createdByUserName'] as String?)?.trim(),
+        );
+      }).where((e) => e.recordId > 0).toList();
+    } catch (e, st) {
+      AppLogger.error(
+        'OwnerCommandCenterRepo',
+        'تعذر تحميل فواتير مبيعات الفترة',
+        e,
+        st,
+      );
+      rethrow;
+    }
   }
 
   Future<OilAvgTicketKpi> loadOilAvgTicket({

@@ -5,6 +5,7 @@ import '../../../services/database_helper.dart';
 import '../../../services/service_order_kinds.dart';
 import '../../../services/tenant_context_service.dart';
 import '../../../utils/iqd_money.dart';
+import 'oil_change_direct_sale_service.dart';
 
 /// آخر صف لاستكمال التصفح (cursor) حسب خيار الترتيب.
 class OilChangeInvoiceCursor {
@@ -19,7 +20,8 @@ class OilChangeInvoiceCursor {
   final double total;
 }
 
-/// فواتير مرتبطة ببطاقات غيار الزيت عبر `service_orders.invoiceId`.
+/// فواتير غيار الزيت: المرتبطة ببطاقة عبر `service_orders.invoiceId`
+/// أو فواتير «بيع مباشر» الموسومة بـ [OilChangeDirectSaleService.sourceTag].
 class OilChangeInvoicesRepository {
   OilChangeInvoicesRepository._();
   static final OilChangeInvoicesRepository instance =
@@ -51,12 +53,23 @@ class OilChangeInvoicesRepository {
     final qDigits = q.replaceAll(RegExp(r'\D'), '');
 
     final where = <String>[
-      'so.tenantId = ?',
-      "so.deletedAt IS NULL",
-      "so.orderKind = ?",
-      'so.invoiceId IS NOT NULL',
+      'i.tenantId = ?',
+      'i.deleted_at IS NULL',
+      '('
+          'i.deliveryAddress = ?'
+          ' OR EXISTS ('
+          'SELECT 1 FROM service_orders so '
+          'WHERE so.invoiceId = i.id '
+          'AND so.tenantId = ? '
+          'AND so.deletedAt IS NULL '
+          "AND so.orderKind = ? "
+          'AND so.invoiceId IS NOT NULL'
+          ')'
+          ')',
     ];
     final args = <Object?>[
+      tid,
+      OilChangeDirectSaleService.sourceTag,
       tid,
       ServiceOrderKinds.oilChange,
     ];
@@ -142,7 +155,6 @@ class OilChangeInvoicesRepository {
         i.*,
         c.phone AS customerPhone
       FROM invoices i
-      INNER JOIN service_orders so ON so.invoiceId = i.id
       LEFT JOIN customers c ON c.id = i.customerId
       WHERE ${where.join(' AND ')}
       ORDER BY $orderBy

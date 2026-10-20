@@ -57,12 +57,16 @@ abstract class AppContentRoutes {
   static const cash = 'app_cash';
   static const expenses = 'app_expenses';
   static const users = 'app_users';
+  static const userForm = 'app_user_form';
   static const staffShiftsWeek = 'app_staff_shifts_week';
   static const employeeIdentity = 'app_employee_identity';
+  /// لوحة صاحب العمل (جذر `/home` عندما يكون الدور owner).
+  static const ownerDashboard = 'app_owner_dashboard';
   static const printing = 'app_printing';
   static const settings = 'app_settings';
   /// شاشات تُفتح من داخل [SettingsScreen] — لفتات الخبز (لا تُستخدم للقائمة الرئيسية).
   static const settingsStoreInfo = 'app_settings_store_info';
+  static const settingsMyBranchInfo = 'app_settings_my_branch_info';
   static const settingsInvoice = 'app_settings_invoice';
   static const settingsSalePosAppearance = 'app_settings_sale_pos_appearance';
   static const settingsNotifications = 'app_settings_notifications';
@@ -91,9 +95,21 @@ abstract class AppContentRoutes {
   static const oilChangeServices = 'app_oil_change_services';
   static const oilChangeServiceCreate = 'app_oil_change_service_create';
   static const oilChangeServiceEditPrefix = 'app_oil_change_service_edit_';
+  static const oilWhatsappConnect = 'app_oil_whatsapp_connect';
   static const oilInvoices = 'app_oil_invoices';
+  static const oilDirectSale = 'app_oil_direct_sale';
+  static const carWashCreate = 'app_car_wash_create';
+  static const carWashServices = 'app_car_wash_services';
   static const pharmacyInvoices = 'app_pharmacy_invoices';
   static const pharmacyInvoiceDetailPrefix = 'app_pharmacy_invoice_detail_';
+
+  // ── Restaurant ────────────────────────────────────────────────────────────
+  static const restaurantFloor = 'app_restaurant_floor';
+  static const restaurantMenu = 'app_restaurant_menu';
+  static const restaurantRecipes = 'app_restaurant_recipes';
+  static const restaurantKds = 'app_restaurant_kds';
+  static const restaurantCashier = 'app_restaurant_cashier';
+  static const restaurantMenuTheme = 'app_restaurant_menu_theme';
 
   static String pharmacyInvoiceDetailId(int invoiceId) =>
       '$pharmacyInvoiceDetailPrefix$invoiceId';
@@ -105,8 +121,10 @@ abstract class AppContentRoutes {
       '$oilChangeServiceEditPrefix$serviceId';
 }
 
-/// مسار محتوى بانتقال أسرع من [MaterialPageRoute] الافتراضي (~300ms) —
-/// يحافظ على [PageTransitionsTheme] (مثل CupertinoSlide) من الثيم.
+/// مسار محتوى بانتقال موحّد: Fade + Slide خفيف (250ms / 220ms).
+///
+/// يحترم [MediaQuery.disableAnimationsOf] (إمكانية الوصول).
+/// لا يغيّر حركات الشيتات / الـ overlays / AnimatedSize داخل الشاشات.
 class FastContentPageRoute<T> extends MaterialPageRoute<T> {
   FastContentPageRoute({
     required super.builder,
@@ -116,14 +134,42 @@ class FastContentPageRoute<T> extends MaterialPageRoute<T> {
     super.maintainState,
   });
 
-  static const Duration _kForward = Duration(milliseconds: 185);
-  static const Duration _kReverse = Duration(milliseconds: 165);
+  /// ضمن نطاق 220–280ms المتفق عليه لسلاسة الهواتف.
+  static const Duration kForward = Duration(milliseconds: 90);
+  static const Duration kReverse = Duration(milliseconds: 80);
 
   @override
-  Duration get transitionDuration => _kForward;
+  Duration get transitionDuration => kForward;
 
   @override
-  Duration get reverseTransitionDuration => _kReverse;
+  Duration get reverseTransitionDuration => kReverse;
+
+  @override
+  Widget buildTransitions(
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+    Widget child,
+  ) {
+    if (MediaQuery.maybeOf(context)?.disableAnimations ?? false) {
+      return child;
+    }
+    final curved = CurvedAnimation(
+      parent: animation,
+      curve: Curves.easeOutCubic,
+      reverseCurve: Curves.easeInCubic,
+    );
+    final rtl = Directionality.of(context) == TextDirection.rtl;
+    // انزلاق خفيف من جهة البداية (يمين في RTL).
+    final begin = Offset(rtl ? 0.08 : -0.08, 0);
+    return FadeTransition(
+      opacity: curved,
+      child: SlideTransition(
+        position: Tween<Offset>(begin: begin, end: Offset.zero).animate(curved),
+        child: child,
+      ),
+    );
+  }
 }
 
 /// ميزة بوابة الميزات المرتبطة بمسار المحتوى.
@@ -135,6 +181,7 @@ enum FeatureGateId {
   repairServices,
   customers,
   loyalty,
+  restaurant,
 }
 
 /// مسارات لا تُحظر أبداً (إعدادات النظام / تفعيل الميزات).
@@ -143,6 +190,7 @@ const Set<String> _featureGateExemptRouteIds = {
   AppContentRoutes.settings,
   AppContentRoutes.settingsBusinessFeatures,
   AppContentRoutes.settingsStoreInfo,
+  AppContentRoutes.settingsMyBranchInfo,
   AppContentRoutes.settingsNotifications,
   AppContentRoutes.settingsPrintingInline,
   AppContentRoutes.settingsDashboardLayout,
@@ -178,6 +226,10 @@ const Map<FeatureGateId, List<String>> featureRouteMapping = {
     AppContentRoutes.oilChangeHub,
     AppContentRoutes.oilChangeCreate,
     AppContentRoutes.oilInvoices,
+    AppContentRoutes.oilDirectSale,
+    AppContentRoutes.oilWhatsappConnect,
+    AppContentRoutes.carWashCreate,
+    AppContentRoutes.carWashServices,
   ],
   FeatureGateId.repairServices: [
     AppContentRoutes.servicesHub,
@@ -194,6 +246,14 @@ const Map<FeatureGateId, List<String>> featureRouteMapping = {
   FeatureGateId.loyalty: [
     AppContentRoutes.loyaltySettings,
     AppContentRoutes.loyaltyLedger,
+  ],
+  FeatureGateId.restaurant: [
+    AppContentRoutes.restaurantFloor,
+    AppContentRoutes.restaurantMenu,
+    AppContentRoutes.restaurantRecipes,
+    AppContentRoutes.restaurantKds,
+    AppContentRoutes.restaurantCashier,
+    AppContentRoutes.restaurantMenuTheme,
   ],
 };
 
@@ -301,6 +361,17 @@ bool _isBusinessFeatureEnabled(
       return data.enableCustomers;
     case BusinessSetupKeys.enableLoyalty:
       return data.enableLoyalty;
+    case BusinessSetupKeys.enableRestaurantTables:
+    case BusinessSetupKeys.enableRestaurantKds:
+    case BusinessSetupKeys.enableRestaurantQrMenu:
+    case BusinessSetupKeys.enableRestaurantRecipes:
+    case BusinessSetupKeys.enableRestaurantPublicLink:
+    case BusinessSetupKeys.enableRestaurantHubLan:
+    case BusinessSetupKeys.enableRestaurantMenuTheme:
+    case BusinessSetupKeys.enableRestaurantMultiImages:
+      return data.enableRestaurantOs;
+    case BusinessSetupKeys.enableRestaurantBilingualMenu:
+      return data.enableRestaurantBilingualMenu;
     default:
       return true;
   }
@@ -334,6 +405,8 @@ bool _isFeatureGateEnabled(FeatureGateId id, BusinessSetupSettingsData data) {
       return data.enableCustomers;
     case FeatureGateId.loyalty:
       return data.enableLoyalty;
+    case FeatureGateId.restaurant:
+      return data.enableRestaurantOs;
   }
 }
 
@@ -488,6 +561,17 @@ bool popUntilContentRoute(NavigatorState nav, String routeId) {
   return stoppedAtMatch;
 }
 
+/// اسم المسار في أعلى المكدس دون إزالته.
+String? peekTopContentRouteId(NavigatorState nav) {
+  String? top;
+  nav.popUntil((route) {
+    final n = route.settings.name;
+    top = n is String ? n : null;
+    return true;
+  });
+  return top;
+}
+
 // ── عناوين فتات الخبز الاحتياطية (عند غياب [BreadcrumbMeta]) ─────────────────
 
 /// عنوان واجهة لفتات الخبز: يفضّل [BreadcrumbMeta] ثم التسمية حسب [RouteSettings.name].
@@ -563,16 +647,22 @@ String breadcrumbFallbackTitleForRouteId(String id) {
       return 'المصروفات';
     case AppContentRoutes.users:
       return 'المستخدمون';
+    case AppContentRoutes.userForm:
+      return 'مستخدم جديد';
     case AppContentRoutes.staffShiftsWeek:
       return 'ورديات الموظفين';
     case AppContentRoutes.employeeIdentity:
       return 'هويات الموظفين';
+    case AppContentRoutes.ownerDashboard:
+      return 'لوحة المالك';
     case AppContentRoutes.printing:
       return 'الطباعة';
     case AppContentRoutes.settings:
       return 'الإعدادات';
     case AppContentRoutes.settingsStoreInfo:
       return 'بيانات المتجر';
+    case AppContentRoutes.settingsMyBranchInfo:
+      return 'بيانات فرعي';
     case AppContentRoutes.settingsInvoice:
       return 'إعدادات الفواتير';
     case AppContentRoutes.settingsSalePosAppearance:
@@ -608,10 +698,30 @@ String breadcrumbFallbackTitleForRouteId(String id) {
       return 'إضافة خدمة غيار زيت';
     case AppContentRoutes.oilChangeCreate:
       return 'بطاقة غيار زيت جديدة';
+    case AppContentRoutes.oilWhatsappConnect:
+      return 'ربط واتساب المحل';
+    case AppContentRoutes.carWashCreate:
+      return 'بطاقة غسيل سيارة';
+    case AppContentRoutes.carWashServices:
+      return 'أنواع الغسيل وأسعارها';
     case AppContentRoutes.oilInvoices:
       return 'فواتير غيار الزيت';
+    case AppContentRoutes.oilDirectSale:
+      return 'بيع مباشر';
     case AppContentRoutes.pharmacyInvoices:
       return 'فواتير الصيدلية';
+    case AppContentRoutes.restaurantFloor:
+      return 'ترتيب القاعة';
+    case AppContentRoutes.restaurantMenu:
+      return 'المنيو';
+    case AppContentRoutes.restaurantRecipes:
+      return 'وصفات الأطباق';
+    case AppContentRoutes.restaurantKds:
+      return 'شاشة المطبخ';
+    case AppContentRoutes.restaurantCashier:
+      return 'كاشير المطعم';
+    case AppContentRoutes.restaurantMenuTheme:
+      return 'تصميم المنيو';
     default:
       if (id.startsWith(AppContentRoutes.pharmacyInvoiceDetailPrefix)) {
         final n = id.replaceFirst(AppContentRoutes.pharmacyInvoiceDetailPrefix, '');
@@ -689,6 +799,7 @@ IconData breadcrumbIconForRouteId(String id) {
     case AppContentRoutes.expenses:
       return Icons.payments_rounded;
     case AppContentRoutes.users:
+    case AppContentRoutes.userForm:
     case AppContentRoutes.staffShiftsWeek:
     case AppContentRoutes.employeeIdentity:
       return Icons.manage_accounts_rounded;
@@ -698,6 +809,8 @@ IconData breadcrumbIconForRouteId(String id) {
       return Icons.settings_rounded;
     case AppContentRoutes.settingsStoreInfo:
       return Icons.store_rounded;
+    case AppContentRoutes.settingsMyBranchInfo:
+      return Icons.storefront_rounded;
     case AppContentRoutes.settingsInvoice:
       return Icons.receipt_long_rounded;
     case AppContentRoutes.settingsSalePosAppearance:
@@ -727,9 +840,21 @@ IconData breadcrumbIconForRouteId(String id) {
     case AppContentRoutes.oilChangeServices:
     case AppContentRoutes.oilChangeServiceCreate:
     case AppContentRoutes.oilInvoices:
+    case AppContentRoutes.oilDirectSale:
+    case AppContentRoutes.oilWhatsappConnect:
       return Icons.opacity_rounded;
+    case AppContentRoutes.carWashCreate:
+    case AppContentRoutes.carWashServices:
+      return Icons.local_car_wash_rounded;
     case AppContentRoutes.pharmacyInvoices:
       return Icons.medication_liquid_rounded;
+    case AppContentRoutes.restaurantFloor:
+    case AppContentRoutes.restaurantMenu:
+    case AppContentRoutes.restaurantRecipes:
+    case AppContentRoutes.restaurantKds:
+    case AppContentRoutes.restaurantCashier:
+    case AppContentRoutes.restaurantMenuTheme:
+      return Icons.restaurant_menu_rounded;
     default:
       if (id.startsWith(AppContentRoutes.pharmacyInvoiceDetailPrefix)) {
         return Icons.receipt_long_rounded;
@@ -794,6 +919,7 @@ const Map<String, String> routeParentMapping = {
 
   // Users & Printing
   AppContentRoutes.users: AppContentRoutes.home,
+  AppContentRoutes.userForm: AppContentRoutes.users,
   AppContentRoutes.staffShiftsWeek: AppContentRoutes.users,
   AppContentRoutes.employeeIdentity: AppContentRoutes.users,
   AppContentRoutes.printing: AppContentRoutes.home,
@@ -801,6 +927,7 @@ const Map<String, String> routeParentMapping = {
   // Settings
   AppContentRoutes.settings: AppContentRoutes.home,
   AppContentRoutes.settingsStoreInfo: AppContentRoutes.settings,
+  AppContentRoutes.settingsMyBranchInfo: AppContentRoutes.settings,
   AppContentRoutes.settingsInvoice: AppContentRoutes.settings,
   AppContentRoutes.settingsSalePosAppearance: AppContentRoutes.settings,
   AppContentRoutes.settingsNotifications: AppContentRoutes.settings,
@@ -823,8 +950,20 @@ const Map<String, String> routeParentMapping = {
   AppContentRoutes.oilChangeServices: AppContentRoutes.oilChangeHub,
   AppContentRoutes.oilChangeServiceCreate: AppContentRoutes.oilChangeServices,
   AppContentRoutes.oilChangeCreate: AppContentRoutes.oilChangeHub,
+  AppContentRoutes.oilWhatsappConnect: AppContentRoutes.oilServicesLog,
   AppContentRoutes.oilInvoices: AppContentRoutes.oilChangeHub,
+  AppContentRoutes.oilDirectSale: AppContentRoutes.oilChangeHub,
+  AppContentRoutes.carWashCreate: AppContentRoutes.home,
+  AppContentRoutes.carWashServices: AppContentRoutes.carWashCreate,
   AppContentRoutes.pharmacyInvoices: AppContentRoutes.invoices,
+
+  // Restaurant
+  AppContentRoutes.restaurantFloor: AppContentRoutes.home,
+  AppContentRoutes.restaurantMenu: AppContentRoutes.home,
+  AppContentRoutes.restaurantRecipes: AppContentRoutes.restaurantMenu,
+  AppContentRoutes.restaurantKds: AppContentRoutes.home,
+  AppContentRoutes.restaurantCashier: AppContentRoutes.home,
+  AppContentRoutes.restaurantMenuTheme: AppContentRoutes.restaurantMenu,
 };
 
 /// يستدل على معرف الصفحة الأبوية منطقياً، مع مراعاة بادئات الشاشات ذات المعاملات الديناميكية.

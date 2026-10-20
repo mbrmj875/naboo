@@ -54,7 +54,7 @@ class DefaultFirebaseOptions {
     messagingSenderId: '281392172783',
     projectId: 'naboo-93580',
     storageBucket: 'naboo-93580.firebasestorage.app',
-    iosBundleId: 'com.basra.storemanager',
+    iosBundleId: 'com.basra.storemanager.app',
   );
   static const FirebaseOptions macos = FirebaseOptions(
     apiKey: 'AIzaSyB52IFcUaQ-uCVjLMJT2z2OONP8I9xMENI',
@@ -62,7 +62,7 @@ class DefaultFirebaseOptions {
     messagingSenderId: '281392172783',
     projectId: 'naboo-93580',
     storageBucket: 'naboo-93580.firebasestorage.app',
-    iosBundleId: 'com.basra.storemanager',
+    iosBundleId: 'com.basra.storemanager.app',
   );
 
   static const FirebaseOptions windows = FirebaseOptions(

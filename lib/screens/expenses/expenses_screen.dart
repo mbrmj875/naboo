@@ -1,5 +1,4 @@
 import 'dart:async' show Timer, unawaited;
-import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -18,6 +17,7 @@ import '../../utils/numeric_format.dart';
 import '../../utils/screen_layout.dart';
 import '../../widgets/inputs/app_input.dart';
 import '../../widgets/inputs/app_price_input.dart';
+import '../../widgets/product_media_image.dart';
 import '../../verticals/oil_change/widgets/oil_change_form_theme.dart';
 import '../../verticals/oil_change/widgets/oil_change_royal_card.dart';
 import 'expense_receipt_printer.dart';
@@ -381,66 +381,74 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   }
 
   Future<void> _showDatePresetSheet() async {
-    final cs = Theme.of(context).colorScheme;
     await showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
       builder: (ctx) {
         return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-                child: Text(
-                  'نطاق التاريخ',
-                  style: Theme.of(ctx).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w800,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                  child: Text(
+                    'نطاق التاريخ',
+                    style: Theme.of(ctx).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w800,
+                    ),
                   ),
                 ),
-              ),
-              ListTile(
-                leading: const Icon(Icons.today_rounded),
-                title: const Text('اليوم'),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  unawaited(_pickPresetAndReload(_ExpenseDatePreset.today));
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.date_range_rounded),
-                title: const Text('هذا الأسبوع'),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  unawaited(_pickPresetAndReload(_ExpenseDatePreset.thisWeek));
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.calendar_view_month_rounded),
-                title: const Text('هذا الشهر'),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  unawaited(_pickPresetAndReload(_ExpenseDatePreset.thisMonth));
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.calendar_today_rounded),
-                title: const Text('هذا العام'),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  unawaited(_pickPresetAndReload(_ExpenseDatePreset.thisYear));
-                },
-              ),
-              ListTile(
-                leading: Icon(Icons.edit_calendar_rounded, color: AppColors.accentGold),
-                title: const Text('نطاق مخصص…'),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  unawaited(_pickRange());
-                },
-              ),
-              const SizedBox(height: 8),
-            ],
+                ListTile(
+                  leading: const Icon(Icons.today_rounded),
+                  title: const Text('اليوم'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    unawaited(_pickPresetAndReload(_ExpenseDatePreset.today));
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.date_range_rounded),
+                  title: const Text('هذا الأسبوع'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    unawaited(
+                      _pickPresetAndReload(_ExpenseDatePreset.thisWeek),
+                    );
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.calendar_view_month_rounded),
+                  title: const Text('هذا الشهر'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    unawaited(
+                      _pickPresetAndReload(_ExpenseDatePreset.thisMonth),
+                    );
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.calendar_today_rounded),
+                  title: const Text('هذا العام'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    unawaited(_pickPresetAndReload(_ExpenseDatePreset.thisYear));
+                  },
+                ),
+                ListTile(
+                  leading: Icon(
+                    Icons.edit_calendar_rounded,
+                    color: AppColors.accentGold,
+                  ),
+                  title: const Text('نطاق مخصص…'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    unawaited(_pickRange());
+                  },
+                ),
+                const SizedBox(height: 8),
+              ],
+            ),
           ),
         );
       },
@@ -457,49 +465,48 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     final layout = ScreenLayout.of(context);
     final isPhone = layout.isPhoneVariant;
     final themed = OilChangeFormTheme.wrap(context, Theme.of(context));
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final isDark = theme.brightness == Brightness.dark;
+    final phoneAppBarBg =
+        isDark ? cs.surfaceContainerHighest : Colors.white;
+    final phoneAppBarFg = isDark ? cs.onSurface : const Color(0xFF1A1A1A);
 
     Widget buildScaffold(BuildContext ctx) {
       return Scaffold(
-        backgroundColor: isPhone
-            ? ExpensesStitchMetrics.background
-            : Theme.of(ctx).scaffoldBackgroundColor,
-        floatingActionButton: isPhone
-            ? FloatingActionButton.extended(
-                onPressed: () => unawaited(_openEditor()),
-                backgroundColor: ExpensesStitchMetrics.gold,
-                foregroundColor: ExpensesStitchMetrics.onGold,
-                icon: const Icon(Icons.add_rounded),
-                label: const Text(
-                  'إضافة مصروف',
-                  style: TextStyle(fontWeight: FontWeight.w700),
-                ),
-              )
-            : null,
-        floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+        backgroundColor: theme.scaffoldBackgroundColor,
+        floatingActionButton: null,
         appBar: isPhone
             ? AppBar(
-                backgroundColor: ExpensesStitchMetrics.background,
+                backgroundColor: phoneAppBarBg,
+                foregroundColor: phoneAppBarFg,
+                surfaceTintColor: Colors.transparent,
+                iconTheme: IconThemeData(color: phoneAppBarFg),
+                actionsIconTheme: IconThemeData(
+                  color: isDark ? AppColors.accentGold : phoneAppBarFg,
+                ),
                 elevation: 0,
                 scrolledUnderElevation: 0,
-                centerTitle: true,
-                title: const Text(
+                centerTitle: false,
+                titleSpacing: 0,
+                title: Text(
                   'المصروفات',
                   style: TextStyle(
-                    fontWeight: FontWeight.w600,
-                    fontSize: 20,
-                    color: ExpensesStitchMetrics.textPrimary,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 18,
+                    color: phoneAppBarFg,
                   ),
                 ),
                 actions: [
                   IconButton(
-                    tooltip: 'تحديث',
-                    onPressed: _loading ? null : _refreshFromServer,
-                    icon: const Icon(Icons.refresh_rounded),
-                  ),
-                  IconButton(
                     tooltip: 'إضافة مصروف',
                     onPressed: () => unawaited(_openEditor()),
                     icon: const Icon(Icons.add_rounded),
+                  ),
+                  IconButton(
+                    tooltip: 'تحديث',
+                    onPressed: _loading ? null : _refreshFromServer,
+                    icon: const Icon(Icons.refresh_rounded),
                   ),
                   PopupMenuButton<String>(
                     tooltip: 'المزيد',
@@ -545,9 +552,10 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                   ),
                 ],
                 bottom: TabBar(
-                  labelColor: ExpensesStitchMetrics.textPrimary,
-                  unselectedLabelColor: ExpensesStitchMetrics.textMuted,
-                  indicatorColor: ExpensesStitchMetrics.gold,
+                  labelColor: phoneAppBarFg,
+                  unselectedLabelColor:
+                      phoneAppBarFg.withValues(alpha: 0.55),
+                  indicatorColor: AppColors.accentGold,
                   indicatorWeight: 2.5,
                   tabs: const [
                     Tab(text: 'السجل'),
@@ -1110,6 +1118,7 @@ class _ExpensesLedgerTab extends StatelessWidget {
                 padding: const EdgeInsets.fromLTRB(24, 36, 24, 28),
                 decoration: OilChangeRoyalCard.decoration(
                   cs,
+                  context: context,
                   radius: ac.rMd,
                   borderWidth: 1.75,
                   borderAlpha: 0.72,
@@ -2653,9 +2662,8 @@ class _ExpenseEditorSheetState extends State<_ExpenseEditorSheet> {
         maxWidth: 1600,
       );
       if (xfile == null) return;
-      final saved = await ExpenseAttachmentStore.instance.save(
-        File(xfile.path),
-      );
+      final bytes = await xfile.readAsBytes();
+      final saved = await ExpenseAttachmentStore.instance.saveBytes(bytes);
       if (!mounted) return;
       setState(() => _attachmentPath = saved);
     } catch (_) {
@@ -3373,8 +3381,8 @@ class _AttachmentPicker extends StatelessWidget {
             ),
             clipBehavior: Clip.antiAlias,
             child: has
-                ? Image.file(
-                    File(path!),
+                ? ProductMediaImage(
+                    pathOrUrl: path,
                     fit: BoxFit.cover,
                     errorBuilder: (_, __, ___) => Icon(
                       Icons.broken_image_outlined,

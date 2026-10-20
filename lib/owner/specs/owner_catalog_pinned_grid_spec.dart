@@ -10,6 +10,13 @@ abstract final class OwnerCatalogPinnedGridSpec {
     required OwnerDashboardProfile profile,
     required BusinessSetupSettingsData features,
   }) {
+    if (profile == OwnerDashboardProfile.restaurantCafe) {
+      return [
+        _row(OwnerCatalogIds.retailSalesPeriod, OwnerCatalogIds.retailCashSummary),
+        _row(OwnerCatalogIds.retailOpenShifts, OwnerCatalogIds.retailTopSellers),
+      ].where((r) => r.isNotEmpty).toList(growable: false);
+    }
+
     final debts = _debtsId(profile, features);
     final installments = features.enableInstallments
         ? OwnerCatalogIds.installmentsSummary
@@ -89,7 +96,8 @@ abstract final class OwnerCatalogPinnedGridSpec {
     return switch (profile) {
       OwnerDashboardProfile.supermarket ||
       OwnerDashboardProfile.generalRetail ||
-      OwnerDashboardProfile.pharmacy =>
+      OwnerDashboardProfile.pharmacy ||
+      OwnerDashboardProfile.restaurantCafe =>
         OwnerCatalogIds.retailDebtsSummary,
       OwnerDashboardProfile.clothingStore =>
         OwnerCatalogIds.clothingDebtsSummary,
@@ -105,6 +113,7 @@ abstract final class OwnerCatalogPinnedGridSpec {
       OwnerDashboardProfile.generalRetail ||
       OwnerDashboardProfile.pharmacy =>
         OwnerCatalogIds.retailInventoryValue,
+      OwnerDashboardProfile.restaurantCafe => null,
       OwnerDashboardProfile.clothingStore =>
         OwnerCatalogIds.clothingInventoryValue,
       OwnerDashboardProfile.oilChangeService ||
@@ -119,6 +128,7 @@ abstract final class OwnerCatalogPinnedGridSpec {
       OwnerDashboardProfile.generalRetail ||
       OwnerDashboardProfile.pharmacy =>
         OwnerCatalogIds.retailStockShortages,
+      OwnerDashboardProfile.restaurantCafe => null,
       OwnerDashboardProfile.clothingStore =>
         OwnerCatalogIds.clothingVariantShortages,
       OwnerDashboardProfile.oilChangeService ||
@@ -131,7 +141,8 @@ abstract final class OwnerCatalogPinnedGridSpec {
     return switch (profile) {
       OwnerDashboardProfile.supermarket ||
       OwnerDashboardProfile.generalRetail ||
-      OwnerDashboardProfile.pharmacy =>
+      OwnerDashboardProfile.pharmacy ||
+      OwnerDashboardProfile.restaurantCafe =>
         OwnerCatalogIds.retailOpenShifts,
       OwnerDashboardProfile.clothingStore =>
         OwnerCatalogIds.clothingOpenShifts,
@@ -145,7 +156,8 @@ abstract final class OwnerCatalogPinnedGridSpec {
     return switch (profile) {
       OwnerDashboardProfile.supermarket ||
       OwnerDashboardProfile.generalRetail ||
-      OwnerDashboardProfile.pharmacy =>
+      OwnerDashboardProfile.pharmacy ||
+      OwnerDashboardProfile.restaurantCafe =>
         OwnerCatalogIds.retailTopSellers,
       OwnerDashboardProfile.clothingStore =>
         OwnerCatalogIds.clothingTopSellers,

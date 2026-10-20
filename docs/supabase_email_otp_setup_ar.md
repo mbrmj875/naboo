@@ -16,9 +16,10 @@
 ## 1) الأهم — Magic link or OTP
 
 1. من القائمة اضغط **Magic link or OTP** (الوصف: *Send a one-time sign-in link or one-time password*)
-2. **Subject:** `رمز الدخول — naboo` (احذف `Your sign-in link`)
+2. **Subject:** `رمز الدخول — نابو` (احذف `Your sign-in link`)
 3. **Body:** احذف كل المحتوى الافتراضي (نص Sign in، أي رابط)
 4. الصق HTML من `docs/supabase_email_otp_template_ar.html`
+   (من `<div dir="rtl"` حتى نهاية الملف — بدون تعليق `<!--` إن رفض المحرر)
 5. تأكد أن المحرر يحتوي **`{{ .Token }}`** ولا يحتوي:
    - `{{ .ConfirmationURL }}`
    - `Sign in`
@@ -33,9 +34,19 @@ https://supabase.com/dashboard/project/rkofqwcuvbzrnmelvxhz/auth/templates/magic
 ## 2) Confirm sign up
 
 1. اضغط **Confirm sign up**
-2. **Subject:** `تأكيد التسجيل — naboo`
-3. نفس HTML من نفس الملف
+2. **Subject:** `تأكيد التسجيل — نابو`
+3. الصق HTML من `docs/supabase_email_confirm_signup_template_ar.html`
 4. **Save**
+
+---
+
+## 2ب) Reset password
+
+1. اضغط **Reset password**
+2. **Subject:** `إعادة تعيين كلمة المرور — نابو`
+3. الصق HTML من `docs/supabase_email_reset_password_template_ar.html`
+4. تأكد من وجود `{{ .ConfirmationURL }}` (هذا القالب برابط)
+5. **Save**
 
 ---
 
@@ -67,8 +78,9 @@ https://supabase.com/dashboard/project/rkofqwcuvbzrnmelvxhz/auth/templates/magic
 | موضوع البريد | ماذا تفعل |
 |--------------|-----------|
 | **Your sign-in link** | لم تُحفظ **Magic link or OTP** بعد |
-| **رمز الدخول — naboo** | صحيح |
-| يظهر **8 أرقام** في الصندوق الأزرق | أدخلها في التطبيق |
+| **رمز الدخول — نابو** | صحيح |
+| يظهر الاسم **نابو** (وليس نبو) | صحيح |
+| يظهر **8 أرقام** في الصندوق | أدخلها في التطبيق |
 
 ## متغيرات القالب
 

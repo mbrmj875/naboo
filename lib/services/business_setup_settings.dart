@@ -52,6 +52,18 @@ abstract class BusinessSetupKeys {
   static const enableOilChange = 'biz.feature.oil_change';
   static const enableRepairServices = 'biz.feature.repair_services';
   static const enablePos = 'biz.feature.pos';
+
+  // Restaurant vertical feature gates (docs/specs/vertical_restaurant_v1.md §14)
+  static const enableRestaurantTables = 'biz.feature.restaurant.tables';
+  static const enableRestaurantKds = 'biz.feature.restaurant.kds';
+  static const enableRestaurantQrMenu = 'biz.feature.restaurant.qr_menu';
+  static const enableRestaurantRecipes = 'biz.feature.restaurant.recipes';
+  static const enableRestaurantPublicLink = 'biz.feature.restaurant.public_link';
+  static const enableRestaurantHubLan = 'biz.feature.restaurant.hub_lan';
+  static const enableRestaurantMenuTheme = 'biz.feature.restaurant.menu_theme';
+  static const enableRestaurantMultiImages = 'biz.feature.restaurant.multi_images';
+  static const enableRestaurantBilingualMenu =
+      'biz.feature.restaurant.bilingual_menu';
 }
 
 class BusinessSetupSettingsData {
@@ -70,6 +82,15 @@ class BusinessSetupSettingsData {
     required this.enableRepairServices,
     required this.enablePos,
     required this.enableServices,
+    this.enableRestaurantTables = false,
+    this.enableRestaurantKds = false,
+    this.enableRestaurantQrMenu = false,
+    this.enableRestaurantRecipes = false,
+    this.enableRestaurantPublicLink = false,
+    this.enableRestaurantHubLan = false,
+    this.enableRestaurantMenuTheme = false,
+    this.enableRestaurantMultiImages = false,
+    this.enableRestaurantBilingualMenu = false,
   });
 
   final bool onboardingCompleted;
@@ -89,8 +110,30 @@ class BusinessSetupSettingsData {
   /// مرآة للمفتاح القديم `biz.feature.services` — يُحفظ كـ (oil ∨ repair).
   final bool enableServices;
 
+  final bool enableRestaurantTables;
+  final bool enableRestaurantKds;
+  final bool enableRestaurantQrMenu;
+  final bool enableRestaurantRecipes;
+  final bool enableRestaurantPublicLink;
+  final bool enableRestaurantHubLan;
+  final bool enableRestaurantMenuTheme;
+  final bool enableRestaurantMultiImages;
+  final bool enableRestaurantBilingualMenu;
+
+  /// أي بوابة مطاعم مفعّلة (ما عدا bilingual المقفل افتراضياً).
+  bool get enableRestaurantOs =>
+      enableRestaurantTables ||
+      enableRestaurantKds ||
+      enableRestaurantQrMenu ||
+      enableRestaurantRecipes ||
+      enableRestaurantPublicLink ||
+      enableRestaurantHubLan ||
+      enableRestaurantMenuTheme ||
+      enableRestaurantMultiImages;
+
   /// غيار زيت + صيانة (للتوافق مع القراءات القديمة قبل المرحلة 1).
-  bool get enableAnyLegacyServicesBundle => enableOilChange || enableRepairServices;
+  bool get enableAnyLegacyServicesBundle =>
+      enableOilChange || enableRepairServices;
 
   /// التخصص الفعلي للواجهة — يُصلّح الحسابات القديمة حيث `biz.vertical`
   /// = [BusinessVertical.generalRetail] لكن أعلام الورشة (مثل [enableOilChange]) مفعّلة.
@@ -235,7 +278,7 @@ class BusinessSetupSettingsData {
         return BusinessSetupSettingsData(
           onboardingCompleted: onboardingCompleted,
           businessVertical: BusinessVertical.restaurantCafe,
-          enableDebts: enableDebtsCustom,
+          enableDebts: false,
           enableInstallments: false,
           enableWeightSales: false,
           enableCustomers: true,
@@ -246,7 +289,16 @@ class BusinessSetupSettingsData {
           enableOilChange: false,
           enableRepairServices: false,
           enablePos: true,
-          enableServices: true,
+          enableServices: false,
+          enableRestaurantTables: true,
+          enableRestaurantKds: true,
+          enableRestaurantQrMenu: true,
+          enableRestaurantRecipes: true,
+          enableRestaurantPublicLink: true,
+          enableRestaurantHubLan: true,
+          enableRestaurantMenuTheme: true,
+          enableRestaurantMultiImages: true,
+          enableRestaurantBilingualMenu: false,
         );
       case BusinessVertical.generalRetail:
       default:
@@ -269,17 +321,38 @@ class BusinessSetupSettingsData {
     }
   }
 
-  /// قيود نشاط ورشة غيار الزيت (Spec v1.0.2).
+  /// قيود نشاط ورشة غيار الزيت / مطعم (Spec).
   BusinessSetupSettingsData withVerticalGuardsApplied() {
-    if (businessVertical != BusinessVertical.oilChange) return this;
-    return copyWith(
-      enableInstallments: false,
-      enablePos: false,
-      enableOilChange: true,
-      enableRepairServices: false,
-      enableCustomers: true,
-      enableServices: true,
-    );
+    if (businessVertical == BusinessVertical.oilChange) {
+      return copyWith(
+        enableInstallments: false,
+        enablePos: false,
+        enableOilChange: true,
+        enableRepairServices: false,
+        enableCustomers: true,
+        enableServices: true,
+      );
+    }
+    if (businessVertical == BusinessVertical.restaurantCafe) {
+      return copyWith(
+        enableOilChange: false,
+        enableRepairServices: false,
+        enableClothingVariants: false,
+        enableWeightSales: false,
+        enablePos: true,
+        enableServices: false,
+        enableRestaurantTables: true,
+        enableRestaurantKds: true,
+        enableRestaurantQrMenu: true,
+        enableRestaurantRecipes: true,
+        enableRestaurantPublicLink: true,
+        enableRestaurantHubLan: true,
+        enableRestaurantMenuTheme: true,
+        enableRestaurantMultiImages: true,
+        // bilingual stays as stored (default false)
+      );
+    }
+    return this;
   }
 
   BusinessSetupSettingsData copyWith({
@@ -297,6 +370,15 @@ class BusinessSetupSettingsData {
     bool? enableRepairServices,
     bool? enablePos,
     bool? enableServices,
+    bool? enableRestaurantTables,
+    bool? enableRestaurantKds,
+    bool? enableRestaurantQrMenu,
+    bool? enableRestaurantRecipes,
+    bool? enableRestaurantPublicLink,
+    bool? enableRestaurantHubLan,
+    bool? enableRestaurantMenuTheme,
+    bool? enableRestaurantMultiImages,
+    bool? enableRestaurantBilingualMenu,
   }) {
     final oil = enableOilChange ?? this.enableOilChange;
     final repair = enableRepairServices ?? this.enableRepairServices;
@@ -317,6 +399,23 @@ class BusinessSetupSettingsData {
       enableRepairServices: repair,
       enablePos: enablePos ?? this.enablePos,
       enableServices: enableServices ?? (oil || repair),
+      enableRestaurantTables:
+          enableRestaurantTables ?? this.enableRestaurantTables,
+      enableRestaurantKds: enableRestaurantKds ?? this.enableRestaurantKds,
+      enableRestaurantQrMenu:
+          enableRestaurantQrMenu ?? this.enableRestaurantQrMenu,
+      enableRestaurantRecipes:
+          enableRestaurantRecipes ?? this.enableRestaurantRecipes,
+      enableRestaurantPublicLink:
+          enableRestaurantPublicLink ?? this.enableRestaurantPublicLink,
+      enableRestaurantHubLan:
+          enableRestaurantHubLan ?? this.enableRestaurantHubLan,
+      enableRestaurantMenuTheme:
+          enableRestaurantMenuTheme ?? this.enableRestaurantMenuTheme,
+      enableRestaurantMultiImages:
+          enableRestaurantMultiImages ?? this.enableRestaurantMultiImages,
+      enableRestaurantBilingualMenu: enableRestaurantBilingualMenu ??
+          this.enableRestaurantBilingualMenu,
     );
   }
 
@@ -486,6 +585,15 @@ class BusinessSetupSettingsData {
       't:$t:${BusinessSetupKeys.enableOilChange}',
       't:$t:${BusinessSetupKeys.enableRepairServices}',
       't:$t:${BusinessSetupKeys.enablePos}',
+      't:$t:${BusinessSetupKeys.enableRestaurantTables}',
+      't:$t:${BusinessSetupKeys.enableRestaurantKds}',
+      't:$t:${BusinessSetupKeys.enableRestaurantQrMenu}',
+      't:$t:${BusinessSetupKeys.enableRestaurantRecipes}',
+      't:$t:${BusinessSetupKeys.enableRestaurantPublicLink}',
+      't:$t:${BusinessSetupKeys.enableRestaurantHubLan}',
+      't:$t:${BusinessSetupKeys.enableRestaurantMenuTheme}',
+      't:$t:${BusinessSetupKeys.enableRestaurantMultiImages}',
+      't:$t:${BusinessSetupKeys.enableRestaurantBilingualMenu}',
     ];
   }
 
@@ -546,6 +654,60 @@ class BusinessSetupSettingsData {
       enableRepairServices: enableRepairServices,
       enablePos: enablePos,
       enableServices: enableOilChange || enableRepairServices,
+      enableRestaurantTables: resolvedVertical == BusinessVertical.restaurantCafe
+          ? (raw.containsKey('t:$t:${BusinessSetupKeys.enableRestaurantTables}')
+              ? b('t:$t:${BusinessSetupKeys.enableRestaurantTables}')
+              : true)
+          : b('t:$t:${BusinessSetupKeys.enableRestaurantTables}'),
+      enableRestaurantKds: resolvedVertical == BusinessVertical.restaurantCafe
+          ? (raw.containsKey('t:$t:${BusinessSetupKeys.enableRestaurantKds}')
+              ? b('t:$t:${BusinessSetupKeys.enableRestaurantKds}')
+              : true)
+          : b('t:$t:${BusinessSetupKeys.enableRestaurantKds}'),
+      enableRestaurantQrMenu:
+          resolvedVertical == BusinessVertical.restaurantCafe
+              ? (raw.containsKey(
+                      't:$t:${BusinessSetupKeys.enableRestaurantQrMenu}')
+                  ? b('t:$t:${BusinessSetupKeys.enableRestaurantQrMenu}')
+                  : true)
+              : b('t:$t:${BusinessSetupKeys.enableRestaurantQrMenu}'),
+      enableRestaurantRecipes:
+          resolvedVertical == BusinessVertical.restaurantCafe
+              ? (raw.containsKey(
+                      't:$t:${BusinessSetupKeys.enableRestaurantRecipes}')
+                  ? b('t:$t:${BusinessSetupKeys.enableRestaurantRecipes}')
+                  : true)
+              : b('t:$t:${BusinessSetupKeys.enableRestaurantRecipes}'),
+      enableRestaurantPublicLink:
+          resolvedVertical == BusinessVertical.restaurantCafe
+              ? (raw.containsKey(
+                      't:$t:${BusinessSetupKeys.enableRestaurantPublicLink}')
+                  ? b('t:$t:${BusinessSetupKeys.enableRestaurantPublicLink}')
+                  : true)
+              : b('t:$t:${BusinessSetupKeys.enableRestaurantPublicLink}'),
+      enableRestaurantHubLan:
+          resolvedVertical == BusinessVertical.restaurantCafe
+              ? (raw.containsKey(
+                      't:$t:${BusinessSetupKeys.enableRestaurantHubLan}')
+                  ? b('t:$t:${BusinessSetupKeys.enableRestaurantHubLan}')
+                  : true)
+              : b('t:$t:${BusinessSetupKeys.enableRestaurantHubLan}'),
+      enableRestaurantMenuTheme:
+          resolvedVertical == BusinessVertical.restaurantCafe
+              ? (raw.containsKey(
+                      't:$t:${BusinessSetupKeys.enableRestaurantMenuTheme}')
+                  ? b('t:$t:${BusinessSetupKeys.enableRestaurantMenuTheme}')
+                  : true)
+              : b('t:$t:${BusinessSetupKeys.enableRestaurantMenuTheme}'),
+      enableRestaurantMultiImages:
+          resolvedVertical == BusinessVertical.restaurantCafe
+              ? (raw.containsKey(
+                      't:$t:${BusinessSetupKeys.enableRestaurantMultiImages}')
+                  ? b('t:$t:${BusinessSetupKeys.enableRestaurantMultiImages}')
+                  : true)
+              : b('t:$t:${BusinessSetupKeys.enableRestaurantMultiImages}'),
+      enableRestaurantBilingualMenu:
+          b('t:$t:${BusinessSetupKeys.enableRestaurantBilingualMenu}'),
     );
   }
 
@@ -651,6 +813,51 @@ class BusinessSetupSettingsData {
     await repo.setForTenant(
       BusinessSetupKeys.enableServices,
       legacyServices ? '1' : '0',
+      tenantId: tenantId,
+    );
+    await repo.setForTenant(
+      BusinessSetupKeys.enableRestaurantTables,
+      normalized.enableRestaurantTables ? '1' : '0',
+      tenantId: tenantId,
+    );
+    await repo.setForTenant(
+      BusinessSetupKeys.enableRestaurantKds,
+      normalized.enableRestaurantKds ? '1' : '0',
+      tenantId: tenantId,
+    );
+    await repo.setForTenant(
+      BusinessSetupKeys.enableRestaurantQrMenu,
+      normalized.enableRestaurantQrMenu ? '1' : '0',
+      tenantId: tenantId,
+    );
+    await repo.setForTenant(
+      BusinessSetupKeys.enableRestaurantRecipes,
+      normalized.enableRestaurantRecipes ? '1' : '0',
+      tenantId: tenantId,
+    );
+    await repo.setForTenant(
+      BusinessSetupKeys.enableRestaurantPublicLink,
+      normalized.enableRestaurantPublicLink ? '1' : '0',
+      tenantId: tenantId,
+    );
+    await repo.setForTenant(
+      BusinessSetupKeys.enableRestaurantHubLan,
+      normalized.enableRestaurantHubLan ? '1' : '0',
+      tenantId: tenantId,
+    );
+    await repo.setForTenant(
+      BusinessSetupKeys.enableRestaurantMenuTheme,
+      normalized.enableRestaurantMenuTheme ? '1' : '0',
+      tenantId: tenantId,
+    );
+    await repo.setForTenant(
+      BusinessSetupKeys.enableRestaurantMultiImages,
+      normalized.enableRestaurantMultiImages ? '1' : '0',
+      tenantId: tenantId,
+    );
+    await repo.setForTenant(
+      BusinessSetupKeys.enableRestaurantBilingualMenu,
+      normalized.enableRestaurantBilingualMenu ? '1' : '0',
       tenantId: tenantId,
     );
   }

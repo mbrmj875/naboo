@@ -4,6 +4,7 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 type Body = {
   userId: string;
   action: "ban" | "unban";
+  confirmPhrase?: string;
 };
 
 export async function POST(req: Request) {
@@ -15,6 +16,15 @@ export async function POST(req: Request) {
     }
     if (body.action !== "ban" && body.action !== "unban") {
       return NextResponse.json({ error: "إجراء غير معروف" }, { status: 400 });
+    }
+    if (body.action === "ban") {
+      const phrase = (body.confirmPhrase ?? "").trim();
+      if (phrase !== "تعطيل") {
+        return NextResponse.json(
+          { error: "اكتب كلمة «تعطيل» لتأكيد الحظر" },
+          { status: 400 },
+        );
+      }
     }
     const supabase = getSupabaseAdmin();
     const attrs =

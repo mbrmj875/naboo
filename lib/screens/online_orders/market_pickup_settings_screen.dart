@@ -229,6 +229,7 @@ class _MarketPickupSettingsScreenState extends State<MarketPickupSettingsScreen>
                                   urlTemplate: _tileUrl,
                                   subdomains: const ['a', 'b', 'c', 'd'],
                                   userAgentPackageName: 'com.naboo.store',
+                                  retinaMode: RetinaMode.isHighDensity(context),
                                 ),
                               ],
                             ),

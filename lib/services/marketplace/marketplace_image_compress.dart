@@ -1,37 +1,18 @@
-import 'dart:io';
+import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart';
-import 'package:image/image.dart' as img;
+import 'marketplace_image_compress_core.dart';
+import 'marketplace_image_compress_file.dart';
 
 /// ضغط صور المنتجات قبل رفعها إلى Supabase Storage.
 abstract final class MarketplaceImageCompress {
   MarketplaceImageCompress._();
 
-  static const int maxEdgePx = 1200;
-  static const int jpegQuality = 72;
+  static const int maxEdgePx = MarketplaceImageCompressCore.maxEdgePx;
+  static const int jpegQuality = MarketplaceImageCompressCore.jpegQuality;
 
-  static Future<Uint8List?> compressFile(String path) async {
-    if (kIsWeb) return null;
-    final file = File(path);
-    if (!await file.exists()) return null;
-    final raw = await file.readAsBytes();
-    return compressBytes(raw);
-  }
+  static Future<Uint8List?> compressFile(String path) =>
+      compressImageFile(path);
 
-  static Uint8List? compressBytes(Uint8List raw) {
-    final decoded = img.decodeImage(raw);
-    if (decoded == null) return null;
-
-    img.Image resized = decoded;
-    final longest = decoded.width > decoded.height ? decoded.width : decoded.height;
-    if (longest > maxEdgePx) {
-      if (decoded.width >= decoded.height) {
-        resized = img.copyResize(decoded, width: maxEdgePx);
-      } else {
-        resized = img.copyResize(decoded, height: maxEdgePx);
-      }
-    }
-
-    return Uint8List.fromList(img.encodeJpg(resized, quality: jpegQuality));
-  }
+  static Uint8List? compressBytes(Uint8List raw) =>
+      MarketplaceImageCompressCore.compressBytes(raw);
 }

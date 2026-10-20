@@ -317,7 +317,7 @@ class OilProductGradesRepository {
       sellPrice: 0,
       qty: 0,
       lowStockThreshold: 0,
-      trackInventory: 1,
+      trackInventory: 0,
       stockBaseKind: 3,
       variantKind: variantKind,
       categoryId: categoryId,
@@ -487,7 +487,7 @@ class OilProductGradesRepository {
       minSellPrice: 0,
       qty: 0,
       lowStockThreshold: 0,
-      trackInventory: true,
+      trackInventory: false,
       stockBaseKind: 3,
     );
 

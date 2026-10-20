@@ -12,7 +12,10 @@
       "name": "Webhook",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
-      "position": [240, 300],
+      "position": [
+        240,
+        300
+      ],
       "webhookId": "oil-change-notify"
     },
     {
@@ -23,7 +26,10 @@
       "name": "Validate Payload",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [460, 300]
+      "position": [
+        460,
+        300
+      ]
     },
     {
       "parameters": {
@@ -53,7 +59,10 @@
       "name": "DeepSeek",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [680, 300],
+      "position": [
+        680,
+        300
+      ],
       "onError": "continueErrorOutput"
     },
     {
@@ -64,7 +73,10 @@
       "name": "Build Message",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [900, 300]
+      "position": [
+        900,
+        300
+      ]
     },
     {
       "parameters": {
@@ -74,43 +86,30 @@
       "name": "Wait 10-20s",
       "type": "n8n-nodes-base.wait",
       "typeVersion": 1.1,
-      "position": [1120, 300],
+      "position": [
+        1120,
+        300
+      ],
       "webhookId": "oil-wait"
     },
     {
       "parameters": {
-        "method": "POST",
-        "url": "=http://localhost:8080/message/sendText/{{ $json.instanceName }}",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "apikey",
-              "value": "={{ $env.EVOLUTION_API_KEY }}"
-            },
-            {
-              "name": "Content-Type",
-              "value": "application/json"
-            }
-          ]
-        },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={\n  \"number\": \"{{ $json.phone }}\",\n  \"text\": {{ JSON.stringify($json.message_text) }}\n}",
-        "options": {
-          "timeout": 30000
-        }
+        "jsCode": "/**\n * n8n Code node: soft reconnect ثم sendText عبر WAHA (GOWS).\n * عقدة «WAHA Send» في workflow إشعارات غيار الزيت.\n *\n * متغيرات البيئة في n8n:\n *   WAHA_API_KEY\n *   WAHA_BASE_URL (افتراضي داخلي: http://naboo-waha:3000)\n *\n * شكل الرد متوافق مع عقدة Evolution السابقة (ok/reason/mode/…).\n */\nconst prev = $input.first().json;\nif (prev._abort) {\n  return [{ json: prev }];\n}\n\nconst WAHA_BASE = String(\n  $env.WAHA_BASE_URL || 'http://naboo-waha:3000',\n).replace(/\\/$/, '');\nconst WAHA_KEY = String($env.WAHA_API_KEY || '').trim();\nconst SOFT_TIMEOUT_MS = 12000;\nconst POLL_MS = 1500;\n\nconst instance = (prev.instanceName || '').toString().trim();\nconst phoneRaw = (prev.phone || '').toString().trim();\nconst text = (prev.message_text || '').toString();\n\nfunction fail(reason, detail, extra = {}) {\n  return [{\n    json: {\n      ok: false,\n      reason,\n      detail: detail || '',\n      mode: extra.mode || '',\n      pdf_bytes_est: 0,\n      tenant_id: prev.tenant_id || '',\n      order_id: prev.order_id ?? null,\n      source: prev.source || '',\n      sent_to: extra.sent_to || phoneRaw || '',\n      instanceName: instance,\n      secret_used: prev.secret_used || '',\n      provider: 'waha',\n      ...extra,\n    },\n  }];\n}\n\nif (!WAHA_KEY) return fail('missing_field', 'WAHA_API_KEY_env');\nif (!instance) return fail('missing_field', 'instance_name');\nif (!phoneRaw) return fail('missing_field', 'phone');\nif (!String(text).trim()) return fail('missing_field', 'message_text');\n\nfunction normalizeIraqDigits(raw) {\n  let d = String(raw).replace(/\\D/g, '');\n  if (!d) return '';\n  if (d.startsWith('964')) return d;\n  if (d.startsWith('0')) return `964${d.slice(1)}`;\n  if (d.length === 10 && d.startsWith('7')) return `964${d}`;\n  return d;\n}\n\nconst phone = normalizeIraqDigits(phoneRaw);\nif (!phone) return fail('invalid_phone', 'normalize_failed');\nconst chatId = `${phone}@c.us`;\n\nasync function waha(path, opts = {}) {\n  return this.helpers.httpRequest({\n    method: opts.method || 'GET',\n    url: `${WAHA_BASE}${path}`,\n    headers: {\n      'X-Api-Key': WAHA_KEY,\n      'Content-Type': 'application/json',\n      ...(opts.headers || {}),\n    },\n    body: opts.body,\n    json: true,\n    timeout: opts.timeout || 15000,\n    returnFullResponse: true,\n    ignoreHttpStatusErrors: true,\n  });\n}\n\nfunction mapState(payload) {\n  const status = String(payload?.status || '').toUpperCase().trim();\n  return {\n    state: status || 'UNKNOWN',\n    open: status === 'WORKING',\n  };\n}\n\nfunction statusOf(res) {\n  return res?.statusCode ?? res?.status ?? 0;\n}\n\nasync function readState() {\n  const res = await waha.call(\n    this,\n    `/api/sessions/${encodeURIComponent(instance)}`,\n    { method: 'GET' },\n  );\n  const code = statusOf(res);\n  if (code === 404) {\n    return { open: false, state: 'removed', notFound: true };\n  }\n  return { ...mapState(res.body), notFound: false, http: code };\n}\n\nasync function softReconnect() {\n  const started = Date.now();\n  const initial = await readState.call(this);\n  if (initial.notFound) {\n    return {\n      ok: false,\n      skipped: 'instance_removed',\n      finalState: 'removed',\n      elapsedMs: 0,\n    };\n  }\n  if (initial.open) {\n    return {\n      ok: true,\n      skipped: 'already_open',\n      finalState: 'WORKING',\n      elapsedMs: 0,\n    };\n  }\n\n  let restartOk = false;\n  try {\n    const r = await waha.call(\n      this,\n      `/api/sessions/${encodeURIComponent(instance)}/restart`,\n      { method: 'POST', body: {} },\n    );\n    const code = statusOf(r);\n    restartOk = code >= 200 && code < 300;\n  } catch (_) {\n    restartOk = false;\n  }\n\n  await new Promise((r) => setTimeout(r, 800));\n\n  let finalState = initial.state || 'unknown';\n  while (Date.now() - started < SOFT_TIMEOUT_MS) {\n    const live = await readState.call(this);\n    if (live.notFound) {\n      return {\n        ok: false,\n        skipped: 'instance_removed',\n        finalState: 'removed',\n        elapsedMs: Date.now() - started,\n        restartOk,\n      };\n    }\n    finalState = live.state || finalState;\n    if (live.open) {\n      return {\n        ok: true,\n        finalState,\n        elapsedMs: Date.now() - started,\n        restartOk,\n      };\n    }\n    await new Promise((r) => setTimeout(r, POLL_MS));\n  }\n\n  return {\n    ok: false,\n    finalState,\n    elapsedMs: Date.now() - started,\n    restartOk,\n  };\n}\n\nasync function sendTextOnce() {\n  return waha.call(this, '/api/sendText', {\n    method: 'POST',\n    body: { session: instance, chatId, text },\n    timeout: 30000,\n  });\n}\n\nfunction looksDisconnected(detail, statusCode) {\n  const lower = String(detail || '').toLowerCase();\n  return (\n    statusCode === 500 ||\n    lower.includes('disconnect') ||\n    lower.includes('not connected') ||\n    lower.includes('failed') ||\n    lower.includes('stopped') ||\n    lower.includes('closed')\n  );\n}\n\nlet soft = null;\nconst before = await readState.call(this);\nif (before.notFound) {\n  return fail('instance_not_found', 'session_404', { sent_to: phone, mode: 'text' });\n}\nif (!before.open) {\n  soft = await softReconnect.call(this);\n  if (!soft.ok) {\n    return fail(\n      soft.skipped === 'instance_removed'\n        ? 'instance_not_found'\n        : 'whatsapp_disconnected',\n      soft.finalState || 'not_open',\n      {\n        sent_to: phone,\n        mode: 'text',\n        soft_reconnect: false,\n        soft_reconnect_elapsed_ms: soft.elapsedMs,\n        soft_reconnect_meta: soft,\n      },\n    );\n  }\n}\n\nlet ok = false;\nlet reason = '';\nlet detail = '';\ntry {\n  const sendRes = await sendTextOnce.call(this);\n  const code = statusOf(sendRes);\n  if (code >= 200 && code < 300) {\n    ok = true;\n    detail = String(sendRes.body?.id || '');\n  } else {\n    detail = String(\n      sendRes.body?.message || sendRes.body?.error || code,\n    ).slice(0, 400);\n    if (looksDisconnected(detail, code)) {\n      reason = 'whatsapp_disconnected';\n      soft = await softReconnect.call(this);\n      if (soft.ok) {\n        const retry = await sendTextOnce.call(this);\n        const rCode = statusOf(retry);\n        if (rCode >= 200 && rCode < 300) {\n          ok = true;\n          reason = '';\n          detail = String(retry.body?.id || '');\n        } else {\n          detail = String(\n            retry.body?.message || retry.body?.error || rCode,\n          ).slice(0, 400);\n          reason = 'whatsapp_disconnected';\n        }\n      }\n    } else if (code === 401 || code === 403) {\n      reason = 'unauthorized';\n    } else if (code === 404) {\n      reason = 'instance_not_found';\n    } else {\n      reason = 'waha_error';\n    }\n  }\n} catch (e) {\n  const msg = (e.message || String(e)).toLowerCase();\n  detail = String(e.message || e).slice(0, 400);\n  if (looksDisconnected(msg, 0)) {\n    reason = 'whatsapp_disconnected';\n    soft = await softReconnect.call(this);\n    if (soft.ok) {\n      try {\n        const retry = await sendTextOnce.call(this);\n        const rCode = statusOf(retry);\n        if (rCode >= 200 && rCode < 300) {\n          ok = true;\n          reason = '';\n          detail = String(retry.body?.id || '');\n        } else {\n          detail = String(\n            retry.body?.message || retry.body?.error || rCode,\n          ).slice(0, 400);\n          reason = 'whatsapp_disconnected';\n        }\n      } catch (e2) {\n        detail = String(e2.message || e2).slice(0, 400);\n        reason = 'whatsapp_disconnected';\n      }\n    }\n  } else if (msg.includes('timeout') || msg.includes('timed out')) {\n    reason = 'timeout';\n  } else if (msg.includes('401') || msg.includes('403')) {\n    reason = 'unauthorized';\n  } else if (msg.includes('404')) {\n    reason = 'instance_not_found';\n  } else {\n    reason = 'waha_error';\n  }\n}\n\nreturn [{\n  json: {\n    ok,\n    reason,\n    mode: 'text',\n    detail,\n    pdf_bytes_est: 0,\n    tenant_id: prev.tenant_id,\n    order_id: prev.order_id,\n    source: prev.source,\n    sent_to: phone,\n    chat_id: chatId,\n    instanceName: instance,\n    secret_used: prev.secret_used || '',\n    soft_reconnect: soft?.ok === true,\n    soft_reconnect_elapsed_ms: soft?.elapsedMs ?? null,\n    soft_reconnect_meta: soft,\n    provider: 'waha',\n  },\n}];\n"
       },
-      "id": "evolution-send",
-      "name": "Evolution Send",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [1340, 300]
+      "id": "waha-send",
+      "name": "WAHA Send",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1340,
+        300
+      ],
+      "onError": "continueErrorOutput"
     },
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={\n  \"ok\": true,\n  \"tenant_id\": \"{{ $('Build Message').item.json.tenant_id }}\",\n  \"order_id\": {{ $('Build Message').item.json.order_id ?? 'null' }},\n  \"source\": \"{{ $('Build Message').item.json.source }}\",\n  \"sent_to\": \"{{ $('Build Message').item.json.phone }}\"\n}",
+        "responseBody": "={\n  \"ok\": {{ $json.ok === true }},\n  \"reason\": {{ JSON.stringify($json.reason || \"\") }},\n  \"detail\": {{ JSON.stringify($json.detail || \"\") }},\n  \"tenant_id\": {{ JSON.stringify($json.tenant_id || $('Build Message').item.json.tenant_id || \"\") }},\n  \"order_id\": {{ $json.order_id ?? $('Build Message').item.json.order_id ?? null }},\n  \"source\": {{ JSON.stringify($json.source || $('Build Message').item.json.source || \"\") }},\n  \"sent_to\": {{ JSON.stringify($json.sent_to || $('Build Message').item.json.phone || \"\") }},\n  \"soft_reconnect\": {{ $json.soft_reconnect === true }},\n  \"soft_reconnect_elapsed_ms\": {{ $json.soft_reconnect_elapsed_ms ?? null }}\n}",
         "options": {
           "responseCode": 200
         }
@@ -119,12 +118,15 @@
       "name": "Respond OK",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [1560, 300]
+      "position": [
+        1560,
+        300
+      ]
     },
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={\n  \"ok\": false,\n  \"error\": \"{{ $json.error?.message ?? 'send_failed' }}\"\n}",
+        "responseBody": "={\n  \"ok\": false,\n  \"error\": {{ JSON.stringify($json.error?.message ?? $json.reason ?? \"send_failed\") }},\n  \"reason\": {{ JSON.stringify($json.reason || \"\") }},\n  \"soft_reconnect\": {{ $json.soft_reconnect === true }}\n}",
         "options": {
           "responseCode": 500
         }
@@ -133,32 +135,91 @@
       "name": "Respond Error",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [1340, 500]
+      "position": [
+        1340,
+        500
+      ]
     }
   ],
   "connections": {
     "Webhook": {
-      "main": [[{ "node": "Validate Payload", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Validate Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Validate Payload": {
-      "main": [[{ "node": "DeepSeek", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "DeepSeek",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "DeepSeek": {
       "main": [
-        [{ "node": "Build Message", "type": "main", "index": 0 }],
-        [{ "node": "Build Message", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Build Message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Build Message": {
-      "main": [[{ "node": "Wait 10-20s", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Wait 10-20s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Wait 10-20s": {
-      "main": [[{ "node": "Evolution Send", "type": "main", "index": 0 }]]
-    },
-    "Evolution Send": {
       "main": [
-        [{ "node": "Respond OK", "type": "main", "index": 0 }],
-        [{ "node": "Respond Error", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "WAHA Send",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WAHA Send": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     }
   },
@@ -169,8 +230,14 @@
     "templateCredsSetupCompleted": false
   },
   "tags": [
-    { "name": "naboo" },
-    { "name": "oil-change" },
-    { "name": "whatsapp" }
+    {
+      "name": "naboo"
+    },
+    {
+      "name": "oil-change"
+    },
+    {
+      "name": "whatsapp"
+    }
   ]
 }

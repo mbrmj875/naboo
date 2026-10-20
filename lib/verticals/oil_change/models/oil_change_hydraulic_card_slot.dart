@@ -114,4 +114,20 @@ class OilChangeHydraulicCardSlot {
     selectedBrand = null;
     catalogSellPerLiterFils = null;
   }
+
+  /// تفريغ كامل لبطاقة جديدة (حقول + اختيار مخزون/كتالوج).
+  void clear() {
+    customerProvided = false;
+    type.clear();
+    sizeAmount.clear();
+    litersStock.clear();
+    clearStockSelection();
+    clearCatalogSelection();
+    warehouseId = null;
+    editStockVoucherId = null;
+    editLitersUsed = 0;
+    editProductId = null;
+    editWarehouseId = null;
+    editCustomerProvided = false;
+  }
 }

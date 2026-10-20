@@ -14,11 +14,103 @@
       },
       "oauth_client": [
         {
+          "client_id": "281392172783-2qvjsnvgtbma3rm5871lohmrfm26lou9.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.basra.storemanager",
+            "certificate_hash": "128463bd886e81abb14191ba2ce8a1cf0c5b4a4c"
+          }
+        },
+        {
+          "client_id": "281392172783-qe0s87g7ru4sgtvei3logu5v43sqr2dk.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.basra.storemanager",
+            "certificate_hash": "79440d68200a115276a90ee1b40d119307ef713d"
+          }
+        },
+        {
           "client_id": "281392172783-t4urj8tpd85sig8osv2te2aefvk18stb.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
             "package_name": "com.basra.storemanager",
             "certificate_hash": "052edaa5bc2dc1b9fff4d6359b77686c7fa8b6f8"
+          }
+        },
+        {
+          "client_id": "281392172783-u4arq8sdijav6h30ej4u900nbstcsch4.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.basra.storemanager",
+            "certificate_hash": "98204eb1dbc2ded61f14389f6d44f2417ed0f5f9"
+          }
+        },
+        {
+          "client_id": "281392172783-s4hvsidll33hgvt75tilm0okg5epb0ep.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCzHzbSN54H4ou58XAh-Yv2kW_ADsct9L4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "281392172783-5ca8bv3d1t9ggb7lulrkfun5nojogeuq.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "281392172783-rpnh4q1n0vuvjb3lv96sl48rkg1iu8ld.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.basra.storemanager"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:281392172783:android:81ffc0cfda5e071118151a",
+        "android_client_info": {
+          "package_name": "com.basra.storemanager.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "281392172783-47tj5f9n3arcrmel9uc4qt3rtnaulc4p.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.basra.storemanager.app",
+            "certificate_hash": "98204eb1dbc2ded61f14389f6d44f2417ed0f5f9"
+          }
+        },
+        {
+          "client_id": "281392172783-itptu6uglcsmm5g5he449qkublsr62ol.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.basra.storemanager.app",
+            "certificate_hash": "052edaa5bc2dc1b9fff4d6359b77686c7fa8b6f8"
+          }
+        },
+        {
+          "client_id": "281392172783-tbjmfn3u7or0sbv5eeg94m7p6ol0kabl.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.basra.storemanager.app",
+            "certificate_hash": "128463bd886e81abb14191ba2ce8a1cf0c5b4a4c"
+          }
+        },
+        {
+          "client_id": "281392172783-tg5kv5taep5k3eg9fdhetgfl7b300f88.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.basra.storemanager.app",
+            "certificate_hash": "79440d68200a115276a90ee1b40d119307ef713d"
           }
         },
         {

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -379,9 +380,11 @@ class _PrintingScreenState extends State<PrintingScreen> {
                         SwitchListTile(
                           contentPadding: EdgeInsets.zero,
                           title: const Text('تفعيل مسار ESC/POS الحراري'),
-                          subtitle: const Text(
-                            'وضع تجريبي: يولد payload خام للطابعات الحرارية (بدون PDF).',
-                            style: TextStyle(fontSize: 12),
+                          subtitle: Text(
+                            kIsWeb
+                                ? 'من المتصفح: يلزم تشغيل جسر الطباعة المحلي على جهاز الكاشير (منفذ 19100)، أو استخدم طباعة PDF.'
+                                : 'وضع تجريبي: يولد payload خام للطابعات الحرارية (بدون PDF).',
+                            style: const TextStyle(fontSize: 12),
                           ),
                           value: _thermalEscPosEnabled,
                           activeThumbColor: AppColors.accentGold,

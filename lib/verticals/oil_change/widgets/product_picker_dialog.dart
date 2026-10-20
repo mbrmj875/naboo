@@ -3,23 +3,42 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../../services/product_quick_pick_cache.dart';
 import '../../../services/product_repository.dart';
 import '../../../theme/design_tokens.dart';
 import '../../../utils/screen_layout.dart';
 import '../../../widgets/inventory/product_quick_pick_grid_tile.dart';
+import 'oil_change_form_theme.dart';
+import 'oil_change_log_stitch.dart';
 
 /// نافذة اختيار منتج من المخزون (شاشات عريضة) — شبكة مربعات كإدارة المنتجات.
 class ProductPickerDialog extends StatefulWidget {
-  const ProductPickerDialog({super.key});
+  const ProductPickerDialog({super.key, this.fullScreen = false});
 
-  static const int _initialLimit = 80;
+  /// على الهاتف تُفتح صفحة كاملة بمربعات أكبر. على التابلت والكمبيوتر تبقى النافذة.
+  final bool fullScreen;
+
+  static const int _initialLimit = 240;
   static const int _searchLimit = 120;
 
-  /// يُعرض على الشاشات العريضة فقط ([ScreenLayout.showSaleBarcodeShortcut] == false).
-  static Future<Map<String, dynamic>?> show(BuildContext context) {
+  /// على الشاشات العريضة تُعرض النافذة دائماً.
+  /// على الهاتف تُعرض فقط عند [allowHandset] حتى لا تتغير بطاقة الغيار.
+  static Future<Map<String, dynamic>?> show(
+    BuildContext context, {
+    bool allowHandset = false,
+  }) {
     final layout = ScreenLayout.of(context);
-    if (layout.showSaleBarcodeShortcut) {
+    final handset = layout.showSaleBarcodeShortcut;
+    if (handset && !allowHandset) {
       return Future.value(null);
+    }
+    if (handset) {
+      return Navigator.of(context).push<Map<String, dynamic>>(
+        MaterialPageRoute(
+          fullscreenDialog: true,
+          builder: (_) => const ProductPickerDialog(fullScreen: true),
+        ),
+      );
     }
     return showDialog<Map<String, dynamic>>(
       context: context,
@@ -42,14 +61,22 @@ class _ProductPickerDialogState extends State<ProductPickerDialog> {
   bool _loading = true;
   String? _error;
   List<Map<String, dynamic>> _rows = const [];
+  int _request = 0;
 
   @override
   void initState() {
     super.initState();
+    final cached = ProductQuickPickCache.instance.snapshot;
+    if (cached != null) {
+      _rows = cached;
+      _loading = false;
+    }
     _search.addListener(_onSearchChanged);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _searchFocus.requestFocus();
-    });
+    if (!widget.fullScreen) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _searchFocus.requestFocus();
+      });
+    }
     unawaited(_load());
   }
 
@@ -65,7 +92,7 @@ class _ProductPickerDialogState extends State<ProductPickerDialog> {
 
   void _onSearchChanged() {
     _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 300), () {
+    _debounce = Timer(const Duration(milliseconds: 120), () {
       unawaited(_load());
     });
     setState(() {});
@@ -73,32 +100,61 @@ class _ProductPickerDialogState extends State<ProductPickerDialog> {
 
   Future<void> _load() async {
     if (!mounted) return;
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+    final request = ++_request;
+    final q = _search.text.trim();
+    if (_rows.isEmpty) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
     try {
-      final q = _search.text.trim();
       final rows = q.isEmpty
-          ? await _repo.listActiveProductsForQuickPick(
+          ? await ProductQuickPickCache.instance.refresh(
               limit: ProductPickerDialog._initialLimit,
             )
-          : await _repo.searchProducts(
+          : await _repo.searchSaleGridProducts(
               q,
               limit: ProductPickerDialog._searchLimit,
             );
-      if (!mounted) return;
+      if (!mounted || request != _request) return;
+      if (_sameGrid(_rows, rows)) {
+        if (_loading || _error != null) {
+          setState(() {
+            _loading = false;
+            _error = null;
+          });
+        }
+        return;
+      }
       setState(() {
         _rows = rows;
         _loading = false;
+        _error = null;
       });
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || request != _request) return;
       setState(() {
-        _error = 'تعذّر تحميل المنتجات';
+        _error = _rows.isEmpty ? 'تعذّر تحميل المنتجات' : _error;
         _loading = false;
       });
     }
+  }
+
+  bool _sameGrid(List<Map<String, dynamic>> a, List<Map<String, dynamic>> b) {
+    if (identical(a, b) || a.length != b.length) return identical(a, b);
+    for (var i = 0; i < a.length; i++) {
+      final left = a[i];
+      final right = b[i];
+      if (left['id'] != right['id'] ||
+          left['qty'] != right['qty'] ||
+          left['sell'] != right['sell'] ||
+          left['name'] != right['name'] ||
+          left['status'] != right['status']) {
+        return false;
+      }
+    }
+    return true;
   }
 
   void _pick(Map<String, dynamic> row) {
@@ -114,7 +170,92 @@ class _ProductPickerDialogState extends State<ProductPickerDialog> {
         ? 860.0
         : (layout.isTabletVariant ? 700.0 : 560.0);
 
-    return Shortcuts(
+    final pickerBody = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        TextField(
+          controller: _search,
+          focusNode: _searchFocus,
+          textDirection: TextDirection.rtl,
+          textAlign: TextAlign.start,
+          style: TextStyle(
+            color: OilChangeFormTheme.emphasisText(context),
+            fontWeight: FontWeight.w600,
+          ),
+          cursorColor: OilChangeFormTheme.gold,
+          textInputAction: TextInputAction.search,
+          decoration: OilChangeFormTheme.field(
+            context: context,
+            labelText: '',
+            hintText: 'ابحث بالاسم أو الباركود أو رمز المنتج',
+            isDense: true,
+            prefixIcon: const Icon(
+              Icons.search_rounded,
+              color: OilChangeFormTheme.gold,
+            ),
+            suffixIcon: _search.text.isEmpty
+                ? null
+                : IconButton(
+                    tooltip: 'مسح',
+                    onPressed: () {
+                      _search.clear();
+                      unawaited(_load());
+                    },
+                    icon: Icon(
+                      Icons.close_rounded,
+                      color: OilChangeFormTheme.secondaryText(context),
+                    ),
+                  ),
+          ).copyWith(
+            labelText: null,
+            floatingLabelBehavior: FloatingLabelBehavior.never,
+          ),
+        ),
+        const SizedBox(height: 8),
+        if (_search.text.trim().isEmpty && !widget.fullScreen)
+          Padding(
+            padding: const EdgeInsetsDirectional.only(bottom: 6),
+            child: Text(
+              'يعرض أول ${ProductPickerDialog._initialLimit} منتجاً — ابحث للوصول إلى صنف بعينه. '
+              'يمكنك مسح الباركود بالقارئ دون النقر هنا.',
+              style: TextStyle(
+                fontSize: 12,
+                height: 1.35,
+                color: colors.textSecondary,
+              ),
+              textAlign: TextAlign.start,
+            ),
+          ),
+        Expanded(child: _buildBody(colors)),
+      ],
+    );
+
+    if (widget.fullScreen) {
+      final page = Scaffold(
+        backgroundColor: isDark
+            ? const Color(0xFF0F172A)
+            : OilChangeLogStitchMetrics.background,
+        appBar: OilChangeFormTheme.appBar(
+          context: context,
+          title: 'اختيار منتج',
+          actions: const [],
+        ),
+        body: SafeArea(
+          child: Padding(
+            padding: const EdgeInsetsDirectional.fromSTEB(12, 8, 12, 12),
+            child: pickerBody,
+          ),
+        ),
+      );
+      return Theme(
+        data: OilChangeFormTheme.wrap(context, Theme.of(context)),
+        child: page,
+      );
+    }
+
+    return Theme(
+      data: OilChangeFormTheme.wrap(context, Theme.of(context)),
+      child: Shortcuts(
       shortcuts: const {
         SingleActivator(LogicalKeyboardKey.escape): DismissIntent(),
       },
@@ -128,7 +269,9 @@ class _ProductPickerDialogState extends State<ProductPickerDialog> {
           ),
         },
         child: AlertDialog(
-          backgroundColor: isDark ? const Color(0xFF0F172A) : null,
+          backgroundColor: isDark
+              ? const Color(0xFF0F172A)
+              : OilChangeLogStitchMetrics.background,
           title: Row(
             children: [
               Icon(
@@ -157,74 +300,7 @@ class _ProductPickerDialogState extends State<ProductPickerDialog> {
           content: SizedBox(
             width: dialogW,
             height: 520,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                TextField(
-                  controller: _search,
-                  focusNode: _searchFocus,
-                  style: TextStyle(color: colors.textPrimary),
-                  cursorColor: AppColors.accentGold,
-                  textInputAction: TextInputAction.search,
-                  decoration: InputDecoration(
-                    hintText: 'ابحث بالاسم أو الباركود أو رمز المنتج…',
-                    hintStyle: TextStyle(color: colors.textSecondary),
-                    prefixIcon: Icon(
-                      Icons.search_rounded,
-                      color: colors.textSecondary,
-                    ),
-                    suffixIcon: _search.text.isEmpty
-                        ? null
-                        : IconButton(
-                            tooltip: 'مسح',
-                            onPressed: () {
-                              _search.clear();
-                              unawaited(_load());
-                            },
-                            icon: Icon(
-                              Icons.close_rounded,
-                              color: colors.textSecondary,
-                            ),
-                          ),
-                    filled: true,
-                    fillColor: isDark
-                        ? Colors.white.withValues(alpha: 0.06)
-                        : Theme.of(context)
-                            .colorScheme
-                            .surfaceContainerHighest
-                            .withValues(alpha: 0.35),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide.none,
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: const BorderSide(
-                        color: AppColors.accentGold,
-                        width: 2,
-                      ),
-                    ),
-                    isDense: true,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                if (_search.text.trim().isEmpty)
-                  Padding(
-                    padding: const EdgeInsetsDirectional.only(bottom: 6),
-                    child: Text(
-                      'يعرض أول ${ProductPickerDialog._initialLimit} منتجاً — ابحث للوصول إلى صنف بعينه. '
-                      'يمكنك مسح الباركود بالقارئ دون النقر هنا.',
-                      style: TextStyle(
-                        fontSize: 12,
-                        height: 1.35,
-                        color: colors.textSecondary,
-                      ),
-                      textAlign: TextAlign.start,
-                    ),
-                  ),
-                Expanded(child: _buildBody(colors)),
-              ],
-            ),
+            child: pickerBody,
           ),
           actions: [
             TextButton(
@@ -236,6 +312,7 @@ class _ProductPickerDialogState extends State<ProductPickerDialog> {
             ),
           ],
         ),
+      ),
       ),
     );
   }
@@ -268,20 +345,26 @@ class _ProductPickerDialogState extends State<ProductPickerDialog> {
       );
     }
     if (_rows.isEmpty) {
-      return Center(
-        child: Text(
-          _search.text.trim().isEmpty
-              ? 'لا توجد منتجات نشطة.'
-              : 'لا توجد نتائج مطابقة.',
-          style: TextStyle(color: colors.textSecondary),
-          textAlign: TextAlign.center,
+      return Align(
+        alignment: AlignmentDirectional.topCenter,
+        child: Padding(
+          padding: const EdgeInsetsDirectional.only(top: 28),
+          child: Text(
+            _search.text.trim().isEmpty
+                ? 'لا توجد منتجات نشطة.'
+                : 'لا توجد نتائج مطابقة.',
+            style: TextStyle(color: colors.textSecondary),
+            textAlign: TextAlign.center,
+          ),
         ),
       );
     }
     return LayoutBuilder(
       builder: (context, constraints) {
-        final crossAxisCount =
-            productQuickPickGridCrossAxisCount(constraints.maxWidth);
+        final width = constraints.maxWidth;
+        final crossAxisCount = widget.fullScreen && width < 600
+            ? 2
+            : productQuickPickGridCrossAxisCount(width);
         return GridView.builder(
           controller: _scroll,
           padding: const EdgeInsetsDirectional.only(bottom: 8),

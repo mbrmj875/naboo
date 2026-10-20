@@ -10,6 +10,8 @@ enum OilChangeWhatsappNotifyReason {
   evolutionError,
   invalidPhone,
   serverError,
+  /// رصيد محفظة الرسائل صفر أو مجمّد / إرسال متوقف من المنصة.
+  insufficientWallet,
   unknown,
 }
 
@@ -18,10 +20,15 @@ class OilChangeWhatsappNotifyOutcome {
   const OilChangeWhatsappNotifyOutcome({
     required this.reason,
     this.httpStatus,
+    this.skipLocalOutbox = false,
   });
 
   final OilChangeWhatsappNotifyReason reason;
   final int? httpStatus;
+
+  /// true عندما وصلت المحاولة للخادم/السحابة (أو كانت غير مؤكدة بعد بدء الإرسال)
+  /// — لا تُضاف لنسخة Outbox المحلية حتى لا تظهر الرسالة مرتين.
+  final bool skipLocalOutbox;
 
   bool get isSent => reason == OilChangeWhatsappNotifyReason.sent;
 

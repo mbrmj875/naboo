@@ -189,7 +189,8 @@ class OwnerCommandCenterProvider extends ChangeNotifier {
         profile == OwnerDashboardProfile.oilChangeHybrid ||
         profile == OwnerDashboardProfile.clothingStore ||
         profile == OwnerDashboardProfile.generalRetail ||
-        profile == OwnerDashboardProfile.pharmacy) {
+        profile == OwnerDashboardProfile.pharmacy ||
+        profile == OwnerDashboardProfile.restaurantCafe) {
       return true;
     }
     final vertical = _features.routingVertical;
@@ -205,9 +206,21 @@ class OwnerCommandCenterProvider extends ChangeNotifier {
     if (_dateRange == range) return;
     _dateRange = range;
     _sectionTrends.clear();
+    // إعادة جلب الأقسام المعتمدة على الفترة فوراً (لا تعتمد على TTL القديم).
+    for (final id in _dateRangeSectionIds) {
+      _sectionFetchedAt.remove(id);
+    }
     notifyListeners();
     unawaited(refreshAll(force: true));
   }
+
+  static const _dateRangeSectionIds = <String>{
+    OwnerSectionIds.sales,
+    OwnerSectionIds.oilChangesCount,
+    OwnerSectionIds.oilAvgTicket,
+    OwnerSectionIds.hybridRevenueSplit,
+    OwnerSectionIds.retailTopSellers,
+  };
 
   void setStaffFilter(String? staffName, {int? staffUserId}) {
     if (_staffFilter == staffName && _staffUserIdFilter == staffUserId) return;

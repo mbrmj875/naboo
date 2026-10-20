@@ -138,54 +138,16 @@ class _CustomerDebtDetailScreenState extends State<CustomerDebtDetailScreen> {
       );
       return;
     }
-    final ctrl = TextEditingController(
-      text: (_openTotalFils / 1000.0).toStringAsFixed(0),
-    );
+    final defaultText = (_openTotalFils / 1000.0).toStringAsFixed(0);
+    final remainingLabel =
+        '${_numFmt.format(_openTotalFils / 1000.0)} د.ع';
     final submitted = await showDialog<String>(
       context: context,
-      builder: (ctx) => Directionality(
-        textDirection: TextDirection.rtl,
-        child: AlertDialog(
-          shape: const RoundedRectangleBorder(borderRadius: AppShape.none),
-          title: const Text('تسديد دين'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                'المتبقي الحالي: ${_numFmt.format(_openTotalFils / 1000.0)} د.ع',
-                style: const TextStyle(fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: ctrl,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
-                  labelText: 'المبلغ (د.ع)',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'يُوزَّع تلقائياً على الفواتير من الأقدم إلى الأحدث.',
-                style: TextStyle(fontSize: 12, color: Theme.of(ctx).hintColor),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('إلغاء'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx, ctrl.text),
-              child: const Text('تأكيد'),
-            ),
-          ],
-        ),
+      builder: (ctx) => _DebtPayAmountDialog(
+        remainingLabel: remainingLabel,
+        initialAmountText: defaultText,
       ),
     );
-    ctrl.dispose();
     if (submitted == null || !mounted) return;
     final raw = submitted.replaceAll(',', '').trim();
     final amt = double.tryParse(raw) ?? 0;
@@ -630,6 +592,90 @@ class _PayBar extends StatelessWidget {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// حوار مبلغ التسديد — يملك [TextEditingController] داخلياً حتى لا يُستدعى
+/// dispose أثناء إغلاق الـ dialog (كان يسبب الشاشة الحمراء).
+class _DebtPayAmountDialog extends StatefulWidget {
+  const _DebtPayAmountDialog({
+    required this.remainingLabel,
+    required this.initialAmountText,
+  });
+
+  final String remainingLabel;
+  final String initialAmountText;
+
+  @override
+  State<_DebtPayAmountDialog> createState() => _DebtPayAmountDialogState();
+}
+
+class _DebtPayAmountDialogState extends State<_DebtPayAmountDialog> {
+  late final TextEditingController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = TextEditingController(text: widget.initialAmountText);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: AlertDialog(
+        shape: const RoundedRectangleBorder(borderRadius: AppShape.none),
+        title: const Text('تسديد دين'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'المتبقي الحالي: ${widget.remainingLabel}',
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _ctrl,
+                autofocus: true,
+                keyboardType: TextInputType.number,
+                textInputAction: TextInputAction.done,
+                onSubmitted: (v) => Navigator.pop(context, v),
+                decoration: const InputDecoration(
+                  labelText: 'المبلغ (د.ع)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'يُوزَّع تلقائياً على الفواتير من الأقدم إلى الأحدث.',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Theme.of(context).hintColor,
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, _ctrl.text),
+            child: const Text('تأكيد'),
+          ),
+        ],
       ),
     );
   }

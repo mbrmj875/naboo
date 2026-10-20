@@ -1,5 +1,15 @@
 import 'owner_action_alert.dart';
 
+/// تنبيهات حرجة — Push مفعّل افتراضياً حتى يصل الإشعار والقفل/السكون.
+const kDefaultPushEnabledAlertIds = <String>{
+  OwnerActionAlertIds.oilGarageStale,
+  OwnerActionAlertIds.oilStockShortage,
+  OwnerActionAlertIds.installmentOverdue,
+  OwnerActionAlertIds.debtCustomers,
+  OwnerActionAlertIds.retailStockShortage,
+  OwnerActionAlertIds.clothingVariantShortage,
+};
+
 /// عتبات التنبيه — تُحفظ per tenant عبر [OwnerDashboardStudioStore].
 class OwnerAlertThresholds {
   const OwnerAlertThresholds({
@@ -134,7 +144,12 @@ class OwnerAlertChannelPrefs {
   static const defaults = OwnerAlertChannelPrefs();
 
   OwnerAlertChannelPref forAlert(String alertId) {
-    return byAlertId[alertId] ?? const OwnerAlertChannelPref();
+    final saved = byAlertId[alertId];
+    if (saved != null) return saved;
+    return OwnerAlertChannelPref(
+      showInActionRail: true,
+      enablePush: kDefaultPushEnabledAlertIds.contains(alertId),
+    );
   }
 
   OwnerAlertChannelPrefs copyWith({
@@ -170,11 +185,17 @@ class OwnerAlertChannelPrefs {
   }
 
   /// معرّفات التنبيهات المفعّل لها Push — للمزامنة مع الخادم/FCM.
+  ///
+  /// يشمل الافتراضات الحرجة حتى لو لم تُحفظ بعد في Studio.
   List<String> pushEnabledAlertIds() {
-    return byAlertId.entries
-        .where((e) => e.value.enablePush)
-        .map((e) => e.key)
-        .toList(growable: false);
+    final considered = <String>{
+      ...kDefaultPushEnabledAlertIds,
+      ...byAlertId.keys,
+    };
+    return considered
+        .where((id) => forAlert(id).enablePush)
+        .toList(growable: false)
+      ..sort();
   }
 }
 

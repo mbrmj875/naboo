@@ -17,6 +17,20 @@ extension DbOilProductGrades on DatabaseHelper {
       AppLogger.error('DBMigrate', 'فشل أعمدة products للزيوت', e, st);
     }
 
+    try {
+      await db.execute('''
+      UPDATE products
+      SET trackInventory = 0,
+          qty = 0,
+          lowStockThreshold = 0,
+          status = 'instock'
+      WHERE IFNULL(variantKind, 0) IN (2, 3)
+        AND IFNULL(trackInventory, 1) != 0
+      ''');
+    } catch (e, st) {
+      AppLogger.error('DBMigrate', 'فشل تعطيل مخزون آباء الزيت/الهيدروليك', e, st);
+    }
+
     await db.execute('''
     CREATE TABLE IF NOT EXISTS product_oil_grades(
       id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -15,12 +15,18 @@ abstract final class OwnerKpiCatalog {
     BusinessVertical.supermarket,
     BusinessVertical.generalRetail,
   };
+  static const _restaurantVerticals = {BusinessVertical.restaurantCafe};
+  static const _retailAndRestaurantVerticals = {
+    ..._retailVerticals,
+    ..._restaurantVerticals,
+  };
   static const _clothingVerticals = {BusinessVertical.clothingStore};
   static const _allVerticals = {
     BusinessVertical.oilChange,
     BusinessVertical.supermarket,
     BusinessVertical.generalRetail,
     BusinessVertical.clothingStore,
+    BusinessVertical.restaurantCafe,
   };
 
   static final List<OwnerKpiCatalogEntry> allKpiEntries = [
@@ -122,7 +128,7 @@ abstract final class OwnerKpiCatalog {
       id: OwnerCatalogIds.retailSalesPeriod,
       titleKey: OwnerDashboardL10nKeys.retailSalesPeriodTitle,
       sectionId: OwnerSectionIds.sales,
-      verticalAllowList: _retailVerticals,
+      verticalAllowList: _retailAndRestaurantVerticals,
       requiredPermissionKey: PermissionKeys.ownerKpiFinancial,
       supportsTrend: true,
       heroEligible: true,
@@ -132,7 +138,7 @@ abstract final class OwnerKpiCatalog {
       id: OwnerCatalogIds.retailTopSellers,
       titleKey: OwnerDashboardL10nKeys.retailTopSellersTitle,
       sectionId: OwnerSectionIds.retailTopSellers,
-      verticalAllowList: _retailVerticals,
+      verticalAllowList: _retailAndRestaurantVerticals,
       requiredPermissionKey: PermissionKeys.ownerKpiFinancial,
     ),
     OwnerKpiCatalogEntry(
@@ -147,7 +153,7 @@ abstract final class OwnerKpiCatalog {
       id: OwnerCatalogIds.retailOpenShifts,
       titleKey: OwnerDashboardL10nKeys.openShiftsTitle,
       sectionId: OwnerSectionIds.openShifts,
-      verticalAllowList: _retailVerticals,
+      verticalAllowList: _retailAndRestaurantVerticals,
       requiredPermissionKey: PermissionKeys.ownerKpiOperations,
       loadPriority: OwnerCardLoadPriority.critical,
     ),
@@ -155,7 +161,7 @@ abstract final class OwnerKpiCatalog {
       id: OwnerCatalogIds.retailCashSummary,
       titleKey: OwnerDashboardL10nKeys.cashSummaryTitle,
       sectionId: OwnerSectionIds.cash,
-      verticalAllowList: _retailVerticals,
+      verticalAllowList: _retailAndRestaurantVerticals,
       requiredPermissionKey: PermissionKeys.ownerKpiFinancial,
       loadPriority: OwnerCardLoadPriority.critical,
     ),
@@ -299,6 +305,14 @@ abstract final class OwnerKpiCatalog {
       requiredPermissionKey: PermissionKeys.usersView,
     ),
     OwnerShortcutCatalogEntry(
+      id: OwnerShortcutIds.oilRatings,
+      titleKey: OwnerDashboardL10nKeys.scOilRatings,
+      routeId: 'oil_change_ratings',
+      verticalAllowList: _oilVerticals,
+      requiredFeatures: [OwnerFeatureRequirement.oilChange],
+      requiredPermissionKey: PermissionKeys.usersView,
+    ),
+    OwnerShortcutCatalogEntry(
       id: OwnerShortcutIds.purchasePdf,
       titleKey: OwnerDashboardL10nKeys.scPurchasePdf,
       routeId: 'owner_purchase_pdf',
@@ -347,6 +361,28 @@ abstract final class OwnerKpiCatalog {
       verticalAllowList: _retailVerticals,
       requiredFeatures: [OwnerFeatureRequirement.pos],
       requiredPermissionKey: PermissionKeys.ownerKpiFinancial,
+    ),
+    // مطعم/كافيه — بدون مخزون رف أو بيع جديد أو ديون
+    OwnerShortcutCatalogEntry(
+      id: OwnerShortcutIds.scReports,
+      titleKey: OwnerDashboardL10nKeys.scReports,
+      routeId: 'reports',
+      verticalAllowList: _restaurantVerticals,
+      requiredPermissionKey: PermissionKeys.reportsAccess,
+    ),
+    OwnerShortcutCatalogEntry(
+      id: OwnerShortcutIds.customers,
+      titleKey: OwnerDashboardL10nKeys.scCustomers,
+      routeId: 'customers',
+      verticalAllowList: _restaurantVerticals,
+      requiredPermissionKey: PermissionKeys.customersView,
+    ),
+    OwnerShortcutCatalogEntry(
+      id: OwnerShortcutIds.cash,
+      titleKey: OwnerDashboardL10nKeys.scCash,
+      routeId: 'cash',
+      verticalAllowList: _restaurantVerticals,
+      requiredPermissionKey: PermissionKeys.cashView,
     ),
     OwnerShortcutCatalogEntry(
       id: OwnerShortcutIds.purchasePdf,

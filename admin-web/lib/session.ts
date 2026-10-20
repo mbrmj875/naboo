@@ -25,8 +25,8 @@ export async function createSessionToken(): Promise<string> {
 export async function verifySessionToken(token: string | undefined): Promise<boolean> {
   if (!token) return false;
   try {
-    await jwtVerify(token, getSecret());
-    return true;
+    const { payload } = await jwtVerify(token, getSecret());
+    return payload.role === "admin";
   } catch {
     return false;
   }

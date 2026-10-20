@@ -163,17 +163,17 @@ class SecureLocalStorage extends LocalStorage {
 
   @override
   Future<void> removePersistedSession() async {
-    if (_useFallback) {
-      final prefs = await _prefsFactory();
-      await prefs.remove(persistSessionKey);
-      return;
-    }
+    // Always clear both stores — fallback mode must not leave JWT in Keychain.
     try {
       await _secure.delete(persistSessionKey);
-    } catch (e) {
-      _useFallback = true;
+    } catch (_) {
+      /* ignore */
+    }
+    try {
       final prefs = await _prefsFactory();
       await prefs.remove(persistSessionKey);
+    } catch (_) {
+      /* ignore */
     }
   }
 
@@ -200,4 +200,69 @@ String supabasePersistSessionKeyFromUrl(String supabaseUrl) {
   final host = Uri.parse(supabaseUrl).host;
   final ref = host.split('.').first;
   return 'sb-$ref-auth-token';
+}
+
+/// تخزين جلسة Supabase على الويب عبر SharedPreferences → localStorage.
+/// يصمد بعد إغلاق التبويب وإعادة فتح PWA (عكس flutter_secure_storage على الويب).
+class WebSharedPreferencesLocalStorage extends LocalStorage {
+  WebSharedPreferencesLocalStorage({required this.persistSessionKey});
+
+  final String persistSessionKey;
+
+  @override
+  Future<void> initialize() async {}
+
+  @override
+  Future<bool> hasAccessToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.containsKey(persistSessionKey);
+  }
+
+  @override
+  Future<String?> accessToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(persistSessionKey);
+  }
+
+  @override
+  Future<void> removePersistedSession() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(persistSessionKey);
+  }
+
+  @override
+  Future<void> persistSession(String persistSessionString) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(persistSessionKey, persistSessionString);
+  }
+}
+
+/// مرة واحدة: انقل رمز الجلسة من flutter_secure_storage إلى SharedPreferences على الويب.
+Future<void> migrateWebSecureSessionToSharedPreferences(
+  String persistSessionKey,
+) async {
+  if (!kIsWeb) return;
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final existing = prefs.getString(persistSessionKey);
+    if (existing != null && existing.isNotEmpty) return;
+
+    final secure = FlutterSecureKvStore();
+    final fromSecure = await secure.read(persistSessionKey);
+    if (fromSecure == null || fromSecure.isEmpty) return;
+
+    await prefs.setString(persistSessionKey, fromSecure);
+    try {
+      await secure.delete(persistSessionKey);
+    } catch (_) {}
+    if (kDebugMode) {
+      debugPrint(
+        '[WebSession] migrated Supabase session secure → SharedPreferences',
+      );
+    }
+  } catch (e) {
+    if (kDebugMode) {
+      debugPrint('[WebSession] migrate skipped: $e');
+    }
+  }
 }

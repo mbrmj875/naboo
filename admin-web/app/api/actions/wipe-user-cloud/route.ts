@@ -4,16 +4,42 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 /**
  * يحذف لقطة المزامنة وأجزاءها من السحابة فقط.
  * لا يمس SQLite على أجهزة العميل — الأجهزة قد تعيد الرفع عند المزامنة.
+ * يتطلب تأكيد البريد على الخادم (مثل حذف الحساب).
  */
 export async function POST(req: Request) {
   try {
-    const body = (await req.json()) as { userId?: string };
+    const body = (await req.json()) as {
+      userId?: string;
+      emailConfirm?: string;
+    };
     const userId = (body.userId ?? "").trim();
+    const emailConfirm = (body.emailConfirm ?? "").trim().toLowerCase();
     if (!userId) {
       return NextResponse.json({ error: "معرّف المستخدم ناقص" }, { status: 400 });
     }
+    if (!emailConfirm) {
+      return NextResponse.json(
+        { error: "يجب تأكيد البريد الإلكتروني للحساب" },
+        { status: 400 },
+      );
+    }
 
     const supabase = getSupabaseAdmin();
+    const { data: au, error: getErr } =
+      await supabase.auth.admin.getUserById(userId);
+    if (getErr || !au?.user) {
+      return NextResponse.json(
+        { error: getErr?.message ?? "لم يُعثر على المستخدم" },
+        { status: 400 },
+      );
+    }
+    const email = (au.user.email ?? "").trim().toLowerCase();
+    if (!email || email !== emailConfirm) {
+      return NextResponse.json(
+        { error: "البريد المعروض لا يطابق حساب هذا المستخدم" },
+        { status: 400 },
+      );
+    }
 
     const { error: cErr } = await supabase
       .from("app_snapshot_chunks")

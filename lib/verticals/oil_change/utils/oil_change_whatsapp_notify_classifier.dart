@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 
@@ -117,12 +116,16 @@ OilChangeWhatsappNotifyOutcome classifyWhatsappNotifyException(Object error) {
       reason: OilChangeWhatsappNotifyReason.timeout,
     );
   }
-  if (error is SocketException) {
+  final text = error.toString().toLowerCase();
+  if (text.contains('socketexception') ||
+      text.contains('failed host lookup') ||
+      text.contains('network is unreachable') ||
+      text.contains('connection refused') ||
+      text.contains('connection reset')) {
     return const OilChangeWhatsappNotifyOutcome(
       reason: OilChangeWhatsappNotifyReason.noInternet,
     );
   }
-  final text = error.toString().toLowerCase();
   if (text.contains('timeout') || text.contains('timed out')) {
     return const OilChangeWhatsappNotifyOutcome(
       reason: OilChangeWhatsappNotifyReason.timeout,

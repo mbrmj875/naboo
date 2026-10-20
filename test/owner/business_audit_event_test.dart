@@ -28,6 +28,22 @@ void main() {
       expect(e.isSensitive, isFalse);
     });
 
+    test('oil_change_amended appears in owner sensitive panel feed', () {
+      final e = BusinessAuditEvent(
+        id: 8,
+        tenantId: 1,
+        eventType: 'oil_change_amended',
+        entityType: 'service_order',
+        entityId: '12',
+        oldValueJson: '{"totalFils":50000}',
+        newValueJson: '{"totalFils":75000,"customerName":"عميل","plate":"AMD-1"}',
+        createdAt: at,
+      );
+      expect(e.showInOwnerSensitivePanel, isTrue);
+      expect(e.labelAr, 'تعديل بطاقة غيار زيت');
+      expect(e.detailAr, contains('AMD-1'));
+    });
+
     test('debt_payment_received is sensitive debt', () {
       final e = BusinessAuditEvent(
         id: 3,

@@ -54,37 +54,39 @@ class _OpenShiftScreenState extends State<OpenShiftScreen> {
     try {
       final auth = context.read<AuthProvider>();
       final uid = auth.userId;
-      if (uid != null && uid > 0) {
-        await _db.repairDuplicateOpenShifts();
-      }
       final open = (uid != null && uid > 0)
           ? await _db.getOpenWorkShiftForStaff(uid)
           : await _db.getOpenWorkShift();
       if (!mounted) return;
       if (open != null) {
-        if (uid != null && uid > 0) {
-          final openId = (open['id'] as num?)?.toInt();
-          await _db.closeDuplicateOpenShiftsForStaff(
-            shiftStaffUserId: uid,
-            keepShiftId: openId,
-          );
-        }
         final ok = await _verifyShiftStaffResume(open);
         if (!mounted) return;
         if (!ok) {
           await _returnToEmployeeGate();
           return;
         }
-        await context.read<ShiftProvider>().refresh(forStaffUserId: uid);
-        if (!mounted) return;
         if (uid != null && uid > 0) {
-          await SessionResumeContext.recordActiveSession(
-            userId: uid,
-            rootRoute: '/home',
+          final openId = (open['id'] as num?)?.toInt();
+          unawaited(
+            SessionResumeContext.recordActiveSession(
+              userId: uid,
+              rootRoute: '/home',
+            ),
           );
+          unawaited(() async {
+            await _db.repairDuplicateOpenShifts();
+            await _db.closeDuplicateOpenShiftsForStaff(
+              shiftStaffUserId: uid,
+              keepShiftId: openId,
+            );
+          }());
         }
+        if (!mounted) return;
         unawaited(Navigator.of(context).pushReplacementNamed('/home'));
         return;
+      }
+      if (uid != null && uid > 0) {
+        unawaited(_db.repairDuplicateOpenShifts());
       }
       final sum = await _db.getCashSummary();
       if (!mounted) return;

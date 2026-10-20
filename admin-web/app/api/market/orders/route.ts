@@ -34,6 +34,19 @@ export async function PATCH(req: Request) {
     if (!order_id || !status) {
       return NextResponse.json({ error: "order_id and status required" }, { status: 400 });
     }
+    const allowed = new Set([
+      "pending",
+      "accepted",
+      "preparing",
+      "ready",
+      "out_for_delivery",
+      "delivered",
+      "cancelled",
+      "rejected",
+    ]);
+    if (!allowed.has(status)) {
+      return NextResponse.json({ error: "حالة طلب غير مسموحة" }, { status: 400 });
+    }
     const sb = getSupabaseAdmin();
     const extra: Record<string, string> = {};
     if (status === "delivered") {

@@ -34,6 +34,10 @@ abstract final class BusinessAuditEventPresentation {
         return 'ربط فاتورة آجلة بعميل';
       case 'stock_voucher_posted':
         return 'ترحيل سند مخزني';
+      case 'oil_change_amended':
+        return 'تعديل بطاقة غيار زيت';
+      case 'oil_change_voided':
+        return 'حذف بطاقة غيار زيت';
       case 'owner_emergency_shift_bypass':
         return 'تجاوز طوارئ — وردية';
       case 'owner_emergency_sync_bypass':
@@ -81,6 +85,8 @@ abstract final class BusinessAuditEventPresentation {
         return 'مزامنة';
       case 'invoice':
         return 'فاتورة';
+      case 'service_order':
+        return 'بطاقة خدمة';
       default:
         if (entityType == null || entityType.isEmpty) return '';
         return _humanizeSnakeCase(entityType);
@@ -107,6 +113,10 @@ abstract final class BusinessAuditEventPresentation {
         return _entityRefDetail(event);
       case 'stock_voucher_posted':
         return _stockVoucherDetail(newMap, event.entityId);
+      case 'oil_change_amended':
+        return _oilChangeAmendDetail(oldMap, newMap);
+      case 'oil_change_voided':
+        return _oilChangeVoidDetail(oldMap, newMap);
       case 'owner_emergency_shift_bypass':
         return _emergencyShiftDetail(newMap);
       case 'owner_emergency_sync_bypass':
@@ -226,6 +236,50 @@ abstract final class BusinessAuditEventPresentation {
       parts.add('سند #$voucherId');
     }
     return parts.join(' · ');
+  }
+
+  static String _oilChangeAmendDetail(
+    Map<String, dynamic>? oldMap,
+    Map<String, dynamic>? newMap,
+  ) {
+    final parts = <String>[];
+    final name = _stringField(newMap, 'customerName') ??
+        _stringField(oldMap, 'customerName');
+    final plate = _stringField(newMap, 'plate');
+    final invoiceId = _numField(newMap, 'invoiceId')?.round() ??
+        _numField(oldMap, 'invoiceId')?.round();
+    final oldTotal = _numField(oldMap, 'totalFils');
+    final newTotal = _numField(newMap, 'totalFils');
+    if (name != null && name.isNotEmpty) parts.add(name);
+    if (plate != null && plate.isNotEmpty) parts.add('لوحة $plate');
+    if (invoiceId != null) parts.add('فاتورة #$invoiceId');
+    if (oldTotal != null && newTotal != null && oldTotal != newTotal) {
+      parts.add(
+        'المبلغ: ${_formatMoney(oldTotal / 1000)} ← ${_formatMoney(newTotal / 1000)}',
+      );
+    } else if (newTotal != null) {
+      parts.add('المبلغ: ${_formatMoney(newTotal / 1000)}');
+    }
+    return parts.isEmpty ? 'تعديل بطاقة غيار مربوطة بفاتورة' : parts.join(' · ');
+  }
+
+  static String _oilChangeVoidDetail(
+    Map<String, dynamic>? oldMap,
+    Map<String, dynamic>? newMap,
+  ) {
+    final parts = <String>[];
+    final name = _stringField(oldMap, 'customerName') ??
+        _stringField(newMap, 'customerName');
+    final plate = _stringField(oldMap, 'plate') ??
+        _stringField(newMap, 'plate');
+    final invoiceId = _numField(oldMap, 'invoiceId')?.round() ??
+        _numField(newMap, 'invoiceId')?.round();
+    final total = _numField(oldMap, 'totalFils');
+    if (name != null && name.isNotEmpty) parts.add(name);
+    if (plate != null && plate.isNotEmpty) parts.add('لوحة $plate');
+    if (invoiceId != null) parts.add('فاتورة #$invoiceId');
+    if (total != null) parts.add('ملغى: ${_formatMoney(total / 1000)}');
+    return parts.isEmpty ? 'إبطال بطاقة غيار وفاتورتها' : parts.join(' · ');
   }
 
   static String _emergencyShiftDetail(Map<String, dynamic>? map) {

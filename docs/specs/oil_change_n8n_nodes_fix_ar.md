@@ -103,46 +103,18 @@ return [{
 
 ---
 
-## 3) Code in JavaScript2 (إرسال WhatsApp)
+## 3) Code in JavaScript2 (إرسال WhatsApp + soft reconnect)
+
+> انسخ محتوى الملف `infra/hostinger/evolution-send-node.js` كاملاً إلى عقدة **Code**.
+> المنطق: إن كانت الجلسة ليست `open` → `restart` + استطلاع حتى ~12ث → ثم `sendText`.
+> عند فشل إرسال بسبب disconnect → إعادة soft reconnect ثم محاولة إرسال واحدة.
+> الاستجابة تتضمن `soft_reconnect` و `soft_reconnect_elapsed_ms`.
 
 ```javascript
-const prev = $input.first().json;
-const instance = prev.instanceName;
-
-let ok = false;
-let reason = '';
-
-try {
-  await this.helpers.httpRequest({
-    method: 'POST',
-    url: `http://72.61.191.237:8080/message/sendText/${instance}`,
-    headers: {
-      apikey: 'Ev0_Naboo_72aB91cD3eF4gH5iJ',
-      'Content-Type': 'application/json',
-    },
-    body: {
-      number: prev.phone,
-      text: prev.message_text,
-    },
-    json: true,
-    timeout: 30000,
-  });
-  ok = true;
-} catch (e) {
-  const msg = (e.message || String(e)).toLowerCase();
-  if (msg.includes('disconnect') || msg.includes('not connected') || msg.includes('closed')) {
-    reason = 'whatsapp_disconnected';
-  } else if (msg.includes('timeout')) {
-    reason = 'timeout';
-  } else if (msg.includes('401') || msg.includes('403')) {
-    reason = 'unauthorized';
-  } else {
-    reason = 'evolution_error';
-  }
-}
-
-return [{ json: { ok, reason, sent_to: prev.phone } }];
+// انظر: infra/hostinger/evolution-send-node.js
 ```
+
+**بديل مختصر** إن بقيت عقدة HTTP القديمة: أضف قبلها Code يتحقق من `connectionState` ويستدعي `/instance/restart/{instance}` ثم ينتظر 3–5 ثوانٍ قبل الإرسال.
 
 ---
 

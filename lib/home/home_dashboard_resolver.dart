@@ -7,16 +7,8 @@ abstract final class HomeDashboardResolver {
   HomeDashboardResolver._();
 
   static HomeDashboardSpec resolve(BusinessSetupSettingsData features) {
-    final manifest =
-        VerticalRegistry.instance.manifestFor(BusinessVertical.oilChange);
-    if (manifest != null && features.enableOilChange) {
-      return manifest.resolveHome(features);
-    }
-
-    return const HomeDashboardSpec(
-      profile: HomeDashboardProfile.retail,
-      greetingSubtitle: 'إليك ملخص أعمال اليوم',
-      greetingEmoji: '👋',
-    );
+    // عقد VerticalManifest: اللوحة من الـmanifest النشط (oil / pharmacy / restaurant / …).
+    VerticalRegistry.instance.syncActiveVertical(features);
+    return VerticalRegistry.instance.activeManifest.resolveHome(features);
   }
 }

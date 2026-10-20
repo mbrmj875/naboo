@@ -1,10 +1,10 @@
-import 'dart:io';
-
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import '../../services/app_settings_repository.dart';
 import '../../services/business_setup_settings.dart';
 import '../../services/market_pos_import_service.dart';
+import '../../services/market_pos_path_resolve.dart';
 
 class MarketPosImportScreen extends StatefulWidget {
   const MarketPosImportScreen({super.key});
@@ -40,83 +40,6 @@ class _MarketPosImportScreenState extends State<MarketPosImportScreen> {
     }
   }
 
-  Future<String?> _searchFileInDir(
-    Directory dir,
-    String fileName, {
-    required int maxDepth,
-  }) async {
-    if (maxDepth < 0) return null;
-    try {
-      await for (final ent in dir.list(followLinks: false)) {
-        if (ent is File) {
-          try {
-            if (ent.path.split(Platform.pathSeparator).last == fileName) {
-              return ent.path;
-            }
-          } catch (_) {}
-        } else if (ent is Directory) {
-          final hit = await _searchFileInDir(
-            ent,
-            fileName,
-            maxDepth: maxDepth - 1,
-          );
-          if (hit != null) return hit;
-        }
-      }
-    } catch (_) {
-      // Ignore permission / filesystem errors.
-    }
-    return null;
-  }
-
-  Future<String?> _resolvePath(String input) async {
-    final raw = input.trim();
-    if (raw.isEmpty) return null;
-
-    // 1) Absolute or directly valid path.
-    final direct = File(raw);
-    if (await direct.exists()) return direct.path;
-
-    // 2) User pasted a Windows path while on macOS (or vice versa) — keep it as-is.
-    // We'll still attempt a basename lookup below.
-
-    // 3) If only a filename was provided, search common folders.
-    final base = raw.contains('/') || raw.contains('\\')
-        ? raw.split(RegExp(r'[\\/]+')).where((e) => e.isNotEmpty).last
-        : raw;
-    if (base.isEmpty) return null;
-
-    final home = Platform.environment['HOME'] ?? '';
-    final candidates = <String>[
-      if (home.isNotEmpty) '$home/Documents/$base',
-      if (home.isNotEmpty) '$home/Downloads/$base',
-      if (home.isNotEmpty) '$home/Desktop/$base',
-      // Current working directory (useful on desktop/dev).
-      base,
-    ];
-
-    for (final p in candidates) {
-      final f = File(p);
-      if (await f.exists()) return f.path;
-    }
-
-    // 4) Search within common folders (limited depth to stay fast).
-    final searchRoots = <String>[
-      if (home.isNotEmpty) '$home/Documents',
-      if (home.isNotEmpty) '$home/Downloads',
-      if (home.isNotEmpty) '$home/Desktop',
-    ];
-    for (final root in searchRoots) {
-      final hit = await _searchFileInDir(
-        Directory(root),
-        base,
-        maxDepth: 4,
-      );
-      if (hit != null) return hit;
-    }
-    return null;
-  }
-
   @override
   void dispose() {
     _pathCtrl.dispose();
@@ -131,10 +54,13 @@ class _MarketPosImportScreenState extends State<MarketPosImportScreen> {
       _last = null;
     });
     try {
+      if (kIsWeb) {
+        throw const FormatException('web_path_unsupported');
+      }
       if (input.trim().isEmpty) {
         throw const FormatException('empty_path');
       }
-      final resolved = await _resolvePath(input);
+      final resolved = await resolveMarketPosPath(input);
       if (resolved == null) {
         throw const FormatException('missing_file');
       }
@@ -183,6 +109,9 @@ class _MarketPosImportScreenState extends State<MarketPosImportScreen> {
 
   String _humanError(Object e) {
     final s = e.toString();
+    if (s.contains('web_path_unsupported')) {
+      return 'استيراد ملف خارجي غير متاح من المتصفح. استخدم الاستيراد المضمّن أو تطبيق سطح المكتب.';
+    }
     if (s.contains('empty_path')) return 'اكتب مسار ملف قاعدة البيانات أولاً';
     if (s.contains('missing_file')) {
       return 'الملف غير موجود. إذا كان الملف داخل RAR/ZIP لازم تفك الضغط وتستخرج ملف .db أولاً، ثم اكتب مساره أو اسمه.';
@@ -268,7 +197,8 @@ class _MarketPosImportScreenState extends State<MarketPosImportScreen> {
               ),
               const SizedBox(height: 18),
             ],
-            ExpansionTile(
+            if (!kIsWeb)
+              ExpansionTile(
               tilePadding: EdgeInsets.zero,
               childrenPadding: const EdgeInsets.symmetric(vertical: 6),
               title: Text(

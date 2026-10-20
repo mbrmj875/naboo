@@ -5,6 +5,7 @@ import 'package:intl/intl.dart' hide TextDirection;
 import 'package:provider/provider.dart';
 import 'package:sqflite/sqflite.dart' show Database;
 
+import '../../models/product_variant_kind.dart';
 import '../../providers/notification_provider.dart';
 import '../../services/database_helper.dart';
 import '../../services/tenant_context_service.dart';
@@ -203,6 +204,7 @@ class _AddPurchaseOrderScreenState extends State<AddPurchaseOrderScreen> {
         WHERE isActive = 1
           AND tenantId = ?
           AND IFNULL(trackInventory, 1) = 1
+          AND ${ProductVariantKind.sqlNotFluidFamilyParent}
           AND (
             qty <= 0
             OR (IFNULL(lowStockThreshold, 0) > 0 AND qty <= lowStockThreshold)

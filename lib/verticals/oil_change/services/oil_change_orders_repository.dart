@@ -5,7 +5,9 @@ import '../../../services/service_order_kinds.dart';
 import '../../../services/service_orders_repository.dart';
 import '../../../services/service_orders_sql_ops.dart';
 import '../../../services/tenant_context_service.dart';
+import '../../../utils/customer_validation.dart';
 import '../utils/oil_change_order_status.dart';
+import 'oil_change_whatsapp_outbox.dart';
 
 /// واجهة بطاقات غيار الزيت فوق `service_orders` — بدون جدول جديد (v1).
 class OilChangeOrdersRepository {
@@ -22,6 +24,13 @@ class OilChangeOrdersRepository {
     final t = TenantContextService.instance;
     if (!t.loaded) await t.load();
     return t.requireActiveTenantId();
+  }
+
+  String? _storePhone(String? raw) {
+    if (raw == null) return null;
+    final t = raw.trim();
+    if (t.isEmpty) return t;
+    return CustomerValidation.toE164IraqMobile(t) ?? t;
   }
 
   // ── قراءة زيت (منقولة من ServiceOrdersRepository) ─────────────────────
@@ -90,6 +99,27 @@ class OilChangeOrdersRepository {
     );
   }
 
+  /// بطاقات غيار الزيت لعميل مسجّل — لتفاصيل العميل في تخصص الزيوت.
+  Future<List<Map<String, dynamic>>> listOilChangeOrdersForCustomer({
+    required int customerId,
+    String? customerName,
+    int? afterId,
+    int limit = 80,
+  }) async {
+    if (customerId <= 0) return const [];
+    final tid = await _tenantId();
+    final db = await _db;
+    await _dbHelper.ensureServiceOrdersReadRepair();
+    return ServiceOrdersSqlOps.listOilChangeOrdersForCustomer(
+      db,
+      tid,
+      customerId: customerId,
+      customerName: customerName,
+      afterId: afterId,
+      limit: limit,
+    );
+  }
+
   // ── facade — كتابة/قراءة مشتركة مع تحقق النوع ─────────────────────────
 
   Future<Map<String, dynamic>?> getOilChangeOrderById(int id) async {
@@ -145,6 +175,7 @@ class OilChangeOrdersRepository {
     int? airFilterPriceFils,
     String? gearFilterName,
     int? gearFilterPriceFils,
+    String? oilFiltersJson,
     String? requestedServices,
     String? customerPhone,
     int? oilProductId,
@@ -199,8 +230,9 @@ class OilChangeOrdersRepository {
       airFilterPriceFils: airFilterPriceFils,
       gearFilterName: gearFilterName,
       gearFilterPriceFils: gearFilterPriceFils,
+      oilFiltersJson: oilFiltersJson,
       requestedServices: requestedServices,
-      customerPhone: customerPhone,
+      customerPhone: _storePhone(customerPhone),
       orderKind: ServiceOrderKinds.oilChange,
       oilProductId: oilProductId,
       oilLitersUsed: oilLitersUsed,
@@ -249,6 +281,7 @@ class OilChangeOrdersRepository {
     String? promisedDeliveryAt,
     bool patchWorkStartedAt = false,
     String? workStartedAt,
+    bool stampCreatedAtAsNow = false,
     String? carModel,
     String? engineSize,
     String? odometerCurrent,
@@ -263,6 +296,7 @@ class OilChangeOrdersRepository {
     int? airFilterPriceFils,
     String? gearFilterName,
     int? gearFilterPriceFils,
+    String? oilFiltersJson,
     String? requestedServices,
     String? customerPhone,
     bool patchOilStockFields = false,
@@ -313,6 +347,7 @@ class OilChangeOrdersRepository {
       promisedDeliveryAt: promisedDeliveryAt,
       patchWorkStartedAt: patchWorkStartedAt,
       workStartedAt: workStartedAt,
+      stampCreatedAtAsNow: stampCreatedAtAsNow,
       carModel: carModel,
       engineSize: engineSize,
       odometerCurrent: odometerCurrent,
@@ -327,8 +362,9 @@ class OilChangeOrdersRepository {
       airFilterPriceFils: airFilterPriceFils,
       gearFilterName: gearFilterName,
       gearFilterPriceFils: gearFilterPriceFils,
+      oilFiltersJson: oilFiltersJson,
       requestedServices: requestedServices,
-      customerPhone: customerPhone,
+      customerPhone: _storePhone(customerPhone),
       patchOilStockFields: patchOilStockFields,
       oilProductId: oilProductId,
       oilLitersUsed: oilLitersUsed,
@@ -370,5 +406,24 @@ class OilChangeOrdersRepository {
       orderGlobalId: orderGlobalId,
       lines: lines,
     );
+  }
+
+  /// إسقاط بطاقة معلّقة من قائمة «المعلّقة» (حذف منطقي — لا تُباع ولا تبقى معلّقة).
+  ///
+  /// لا يرسل واتساب. يلغي أي رسالة معلّقة في طابور الواتساب لهذه البطاقة.
+  /// يرفض الإسقاط إن لم تكن معلّقة أو إن رُبطت بفاتورة مسبقاً.
+  Future<bool> discardSuspendedOilChangeOrder(int id) async {
+    if (id <= 0) return false;
+    final row = await getOilChangeOrderById(id);
+    if (row == null) return false;
+    if (!OilChangeOrderStatus.isSuspended(row)) return false;
+    final invoiceId = (row['invoiceId'] as num?)?.toInt() ?? 0;
+    if (invoiceId > 0) return false;
+    final n = await _serviceOrders.softDeleteServiceOrderById(id);
+    if (n > 0) {
+      // لا واتساب عند الإسقاط — حتى لو كانت رسالة معلّقة بالطابور.
+      await OilChangeWhatsappOutbox.instance.discardPendingForOrder(id);
+    }
+    return n > 0;
   }
 }

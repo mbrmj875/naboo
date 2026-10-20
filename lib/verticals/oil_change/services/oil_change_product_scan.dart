@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/oil_change_product_line.dart';
+import '../../../navigation/content_navigation.dart';
 import '../../../providers/product_provider.dart';
 import '../../../screens/inventory/add_product_screen.dart';
 import '../../../utils/iqd_money.dart';
@@ -109,7 +110,7 @@ class OilChangeProductScan {
 
     await Navigator.push<void>(
       context,
-      MaterialPageRoute<void>(
+      FastContentPageRoute<void>(
         builder: (_) => AddProductScreen(
           initialBarcode: code,
           autoFillFromScan: true,

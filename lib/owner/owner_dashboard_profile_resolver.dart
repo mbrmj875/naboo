@@ -23,6 +23,13 @@ abstract final class OwnerDashboardProfileResolver {
       final spec = pharmacyManifest.resolveOwner(features);
       if (spec != null) return spec.profile;
     }
+    final restaurantManifest =
+        VerticalRegistry.instance.manifestFor(BusinessVertical.restaurantCafe);
+    if (restaurantManifest != null &&
+        features.effectiveVertical == BusinessVertical.restaurantCafe) {
+      final spec = restaurantManifest.resolveOwner(features);
+      if (spec != null) return spec.profile;
+    }
     final vertical = features.routingVertical;
     if (vertical == BusinessVertical.supermarket) {
       return OwnerDashboardProfile.supermarket;
@@ -47,6 +54,13 @@ abstract final class OwnerDashboardProfileResolver {
       final spec = pharmacyManifest.resolveOwner(input.features);
       if (spec != null) return spec;
     }
+    final restaurantManifest =
+        VerticalRegistry.instance.manifestFor(BusinessVertical.restaurantCafe);
+    if (restaurantManifest != null &&
+        input.features.effectiveVertical == BusinessVertical.restaurantCafe) {
+      final spec = restaurantManifest.resolveOwner(input.features);
+      if (spec != null) return spec;
+    }
 
     final profile = detectProfile(input.features);
     switch (profile) {
@@ -58,6 +72,10 @@ abstract final class OwnerDashboardProfileResolver {
       case OwnerDashboardProfile.pharmacy:
         throw StateError(
           'pharmacy owner preset missing — register PharmacyVerticalManifest',
+        );
+      case OwnerDashboardProfile.restaurantCafe:
+        throw StateError(
+          'restaurant_cafe owner preset missing — register RestaurantVerticalManifest',
         );
       case OwnerDashboardProfile.supermarket:
         return _retailStoreSpec(

@@ -2,10 +2,10 @@ import 'dart:async' show unawaited;
 
 import 'package:flutter/material.dart';
 
-import '../../../theme/design_tokens.dart';
 import '../../../theme/sale_brand.dart';
 import '../utils/oil_change_finance.dart';
 import '../utils/oil_change_filter_format.dart';
+import '../utils/oil_change_layout.dart';
 import '../utils/oil_change_log_format.dart';
 import '../../../utils/screen_layout.dart';
 
@@ -27,6 +27,7 @@ class OilChangeLogDetailSheet extends StatefulWidget {
   }) {
     return showModalBottomSheet<void>(
       context: context,
+      useRootNavigator: true,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (ctx) => OilChangeLogDetailSheet(
@@ -205,13 +206,11 @@ class _OilChangeLogDetailSheetState extends State<OilChangeLogDetailSheet> {
                   color: _royalGold.withValues(alpha: 0.85),
                   width: 2,
                 ),
-                boxShadow: const [
-                  BoxShadow(
-                    color: AppGlass.goldGlow,
-                    blurRadius: 20,
-                    offset: Offset(0, 6),
-                  ),
-                ],
+                boxShadow: oilChangeGoldGlowOf(
+                  context,
+                  blurRadius: 20,
+                  offset: const Offset(0, 6),
+                ),
               ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,

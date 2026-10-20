@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
@@ -28,6 +29,7 @@ import '../../providers/shift_provider.dart';
 import '../../providers/ui_feedback_settings_provider.dart';
 import '../../providers/sale_draft_provider.dart';
 import '../../services/cloud_sync_service.dart';
+import '../../services/web_financial_write_gate.dart';
 import '../../services/database_helper.dart';
 import '../../services/price_list_repository.dart';
 import '../../services/tenant_context_service.dart';
@@ -4710,6 +4712,19 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       return;
     }
 
+    final stockBlock = WebFinancialWriteGate.blockReasonForStockDecrementSale();
+    if (stockBlock != null) {
+      _showSaleSnackBar(SnackBar(content: Text(stockBlock)));
+      return;
+    }
+    final writeBlock =
+        await WebFinancialWriteGate.blockReasonForFinancialWrite();
+    if (writeBlock != null) {
+      if (!mounted) return;
+      _showSaleSnackBar(SnackBar(content: Text(writeBlock)));
+      return;
+    }
+
     final conflict = ShiftActorConflictGuard.evaluate(
       sessionUserId: context.read<AuthProvider>().userId,
       activeShift: context.read<ShiftProvider>().activeShift,
@@ -5082,6 +5097,15 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       return;
     }
     if (!mounted || !context.mounted) return;
+
+    // على الويب: رفع فوري بعد البيع حتى لا يُفقد إنقاص المخزون عند جهاز آخر.
+    if (kIsWeb) {
+      unawaited(
+        CloudSyncService.instance.syncNow(forcePull: false, forcePush: true),
+      );
+    } else {
+      CloudSyncService.instance.scheduleSyncSoon();
+    }
 
     VerticalRegistry.instance.activeManifest.invalidateOwnerDashboardCache();
     if (VerticalRegistry.instance.activeManifest.id ==

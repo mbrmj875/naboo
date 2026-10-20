@@ -87,21 +87,23 @@ abstract final class OwnerBusinessVerticalCloudService {
     }
   }
 
-  /// يطبّق تخصص الحساب من السحابة محلياً إن لم يُضبط بعد أو كان ناقصاً.
+  /// يطبّق تخصص الحساب من السحابة محلياً.
+  /// السحابة مصدر الحقيقة: إن اختلف المحلي عن السحابة يُستبدل (ويب/جهاز جديد).
   static Future<bool> applyToLocalIfNeeded() async {
     final cloud = await fetchForCurrentUser();
     if (cloud == null) return false;
 
     final repo = AppSettingsRepository.instance;
     final local = await BusinessSetupSettingsData.load(repo);
+    final localRouting = local.routingVertical;
 
     if (local.onboardingCompleted &&
-        local.businessVertical == cloud &&
+        localRouting == cloud &&
         await BusinessSetupSettingsData.isVerticalLocked(repo)) {
       return false;
     }
 
-    if (local.onboardingCompleted && local.businessVertical == cloud) {
+    if (local.onboardingCompleted && localRouting == cloud) {
       await BusinessSetupSettingsData.markVerticalLocked(repo);
       return false;
     }
@@ -113,12 +115,12 @@ abstract final class OwnerBusinessVerticalCloudService {
       enableDebtsCustom: local.enableDebts,
     );
 
-    await preset.save(repo);
+    await preset.save(repo, forceVerticalCorrection: true);
     await BusinessSetupSettingsData.markVerticalLocked(repo);
     BusinessFeaturesRevision.bump();
     AppLogger.info(
       'OwnerBusinessVertical',
-      'applied cloud vertical=$cloud to local settings',
+      'applied cloud vertical=$cloud (was local routing=$localRouting)',
     );
     return true;
   }

@@ -2,11 +2,14 @@ import 'dart:async' show unawaited;
 
 import 'package:flutter/material.dart';
 
+import '../../../guides/guide_anchor.dart';
 import '../models/oil_change_oil_catalog_entry.dart';
 import '../services/oil_change_oil_catalog_repository.dart';
 import '../../../theme/sale_brand.dart';
 import '../../../utils/iraqi_currency_format.dart';
 import '../../../utils/iqd_money.dart';
+import '../utils/oil_field_select_all.dart';
+import 'oil_change_catalog_sheet_frame.dart';
 import 'oil_change_royal_card.dart';
 import '../../../widgets/oil_variants/oil_grade_draft.dart';
 
@@ -20,15 +23,12 @@ Future<OilChangeOilCatalogPick?> showOilChangeOilCatalogSheet(
     context: context,
     isScrollControlled: true,
     useSafeArea: true,
+    useRootNavigator: true,
+    enableDrag: false,
     showDragHandle: true,
-    builder: (ctx) => Padding(
-      padding: EdgeInsets.only(
-        bottom: MediaQuery.viewInsetsOf(ctx).bottom,
-      ),
-      child: _OilChangeOilCatalogSheetBody(
-        manageOnly: manageOnly,
-        initialBrandName: initialBrandName,
-      ),
+    builder: (ctx) => _OilChangeOilCatalogSheetBody(
+      manageOnly: manageOnly,
+      initialBrandName: initialBrandName,
     ),
   );
 }
@@ -57,11 +57,11 @@ class _OilChangeOilCatalogSheetBodyState
   bool _adding = false;
   /// بعد أول حفظ أو اختيار ماركة من القائمة — يُبقى الاسم لإضافة لزوجات أخرى.
   bool _brandLocked = false;
+  int? _editingId;
 
   final _brandCtrl = TextEditingController();
   final _viscosityCtrl = TextEditingController();
   final _priceCtrl = TextEditingController();
-  final _scrollCtrl = ScrollController();
   final _brandFocus = FocusNode();
   final _viscosityFocus = FocusNode();
   final _priceFocus = FocusNode();
@@ -69,6 +69,9 @@ class _OilChangeOilCatalogSheetBodyState
   @override
   void initState() {
     super.initState();
+    oilAttachSelectAllOnFocus(_brandFocus, _brandCtrl);
+    oilAttachSelectAllOnFocus(_viscosityFocus, _viscosityCtrl);
+    _priceFocus.addListener(_onPriceFocusChanged);
     if (widget.manageOnly) {
       _adding = true;
     } else {
@@ -79,17 +82,31 @@ class _OilChangeOilCatalogSheetBodyState
         _adding = true;
       }
     }
-    for (final node in [_brandFocus, _viscosityFocus, _priceFocus]) {
-      node.addListener(() {
-        if (node.hasFocus) _ensureFieldVisible(node);
-      });
-    }
     unawaited(_load());
+  }
+
+  void _onPriceFocusChanged() {
+    if (!_priceFocus.hasFocus) return;
+    _reformatPriceField();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_priceFocus.hasFocus) return;
+      selectAllOilFieldText(_priceCtrl);
+    });
+  }
+
+  void _reformatPriceField() {
+    final n = IraqiCurrencyFormat.parseIqdInt(_priceCtrl.text);
+    final formatted = n <= 0 ? '' : IraqiCurrencyFormat.formatInt(n);
+    if (_priceCtrl.text == formatted) return;
+    _priceCtrl.value = TextEditingValue(
+      text: formatted,
+      selection: TextSelection.collapsed(offset: formatted.length),
+    );
   }
 
   @override
   void dispose() {
-    _scrollCtrl.dispose();
+    _priceFocus.removeListener(_onPriceFocusChanged);
     _brandFocus.dispose();
     _viscosityFocus.dispose();
     _priceFocus.dispose();
@@ -99,36 +116,20 @@ class _OilChangeOilCatalogSheetBodyState
     super.dispose();
   }
 
-  void _ensureFieldVisible(FocusNode node) {
-    Future<void> scroll() async {
-      if (!mounted || !node.hasFocus) return;
-      final target = node.context;
-      if (target == null) return;
-      await Scrollable.ensureVisible(
-        target,
-        alignment: 0.08,
-        duration: const Duration(milliseconds: 260),
-        curve: Curves.easeOutCubic,
-      );
+  Future<void> _load({bool silent = false}) async {
+    if (!silent && mounted) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
     }
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      unawaited(scroll());
-      Future<void>.delayed(const Duration(milliseconds: 120), scroll);
-    });
-  }
-
-  Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
     try {
       final list = await OilChangeOilCatalogRepository.instance.listActive();
       if (!mounted) return;
       setState(() {
         _entries = list;
         _loading = false;
+        _error = null;
       });
     } catch (e) {
       if (!mounted) return;
@@ -165,39 +166,55 @@ class _OilChangeOilCatalogSheetBodyState
       return;
     }
     final visKey = normalizeOilViscosityKey(vis);
-    if (_entries.any(
-      (e) =>
-          e.brandName.toLowerCase() == brand.toLowerCase() &&
-          normalizeOilViscosityKey(e.viscosity) == visKey,
-    )) {
+    final editingId = _editingId;
+    if (editingId == null &&
+        _entries.any(
+          (e) =>
+              e.brandName.toLowerCase() == brand.toLowerCase() &&
+              normalizeOilViscosityKey(e.viscosity) == visKey,
+        )) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            'نفس الماركة ونفس اللزوجة موجودة — اخترها من القائمة أو غيّر اللزوجة',
+            'نفس الماركة ونفس اللزوجة موجودة — عدّلها من القائمة أو غيّر اللزوجة',
           ),
         ),
       );
       return;
     }
     try {
-      await OilChangeOilCatalogRepository.instance.insert(
-        brandName: brand,
-        viscosity: visKey,
-        sellPerLiterFils: priceFils,
-      );
+      if (editingId != null) {
+        await OilChangeOilCatalogRepository.instance.updateById(
+          id: editingId,
+          brandName: brand,
+          viscosity: visKey,
+          sellPerLiterFils: priceFils,
+        );
+      } else {
+        await OilChangeOilCatalogRepository.instance.insert(
+          brandName: brand,
+          viscosity: visKey,
+          sellPerLiterFils: priceFils,
+        );
+      }
+      if (!mounted) return;
+      final wasEdit = editingId != null;
       _viscosityCtrl.clear();
       _priceCtrl.clear();
-      if (!mounted) return;
       setState(() {
+        _editingId = null;
         _brandLocked = true;
         _adding = true;
       });
-      await _load();
+      await _load(silent: true);
       if (!mounted) return;
+      _viscosityFocus.requestFocus();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'تمت إضافة $visKey لـ $brand — يمكنك إضافة لزوجة أخرى لنفس الاسم',
+            wasEdit
+                ? 'تم تحديث $visKey لـ $brand'
+                : 'تمت إضافة $visKey لـ $brand — يمكنك إضافة لزوجة أخرى',
           ),
         ),
       );
@@ -219,27 +236,90 @@ class _OilChangeOilCatalogSheetBodyState
 
   void _beginAddForBrand(String brandName) {
     setState(() {
+      _editingId = null;
       _brandCtrl.text = brandName;
       _brandLocked = true;
       _adding = true;
       _viscosityCtrl.clear();
       _priceCtrl.clear();
     });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _viscosityFocus.requestFocus();
+    });
+  }
+
+  void _beginEdit(OilChangeOilCatalogEntry e) {
+    setState(() {
+      _editingId = e.id;
+      _brandCtrl.text = e.brandName;
+      _brandLocked = true;
+      _adding = true;
+      _viscosityCtrl.text = e.viscosity;
+      _priceCtrl.text = IraqiCurrencyFormat.formatInt(
+        IqdMoney.fromFils(e.sellPerLiterFils).round(),
+      );
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _priceFocus.requestFocus();
+    });
   }
 
   void _unlockBrand() {
     setState(() {
+      _editingId = null;
       _brandLocked = false;
       _brandCtrl.clear();
       _viscosityCtrl.clear();
       _priceCtrl.clear();
     });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _brandFocus.requestFocus();
+    });
+  }
+
+  Future<void> _delete(OilChangeOilCatalogEntry e) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('حذف الصنف؟'),
+        content: Text('«${e.brandName} · ${e.viscosity}» لن يظهر في القوائم الجديدة.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('حذف'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await OilChangeOilCatalogRepository.instance.softDeleteById(e.id);
+    if (!mounted) return;
+    if (_editingId == e.id) {
+      setState(() {
+        _editingId = null;
+        _viscosityCtrl.clear();
+        _priceCtrl.clear();
+      });
+    }
+    await _load(silent: true);
   }
 
   List<OilChangeOilCatalogEntry> _entriesForLockedBrand() {
     final b = _brandCtrl.text.trim();
     if (b.isEmpty) return const [];
     return OilChangeOilCatalogRepository.entriesForBrand(_entries, b);
+  }
+
+  void _pickViscosityChip(String v) {
+    _viscosityCtrl.value = TextEditingValue(
+      text: v,
+      selection: TextSelection.collapsed(offset: v.length),
+    );
+    _priceFocus.requestFocus();
   }
 
   void _pick(OilChangeOilCatalogEntry e) {
@@ -254,202 +334,200 @@ class _OilChangeOilCatalogSheetBodyState
     );
   }
 
+  Widget _entryActions(OilChangeOilCatalogEntry e) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        IconButton(
+          tooltip: 'تعديل',
+          icon: const Icon(Icons.edit_outlined, size: 20),
+          onPressed: () => _beginEdit(e),
+        ),
+        IconButton(
+          tooltip: 'حذف',
+          icon: const Icon(Icons.delete_outline_rounded, size: 20),
+          onPressed: () => unawaited(_delete(e)),
+        ),
+        if (!widget.manageOnly)
+          Icon(
+            Icons.check_circle_outline,
+            color: _gold,
+          ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final bottom = MediaQuery.paddingOf(context).bottom;
-    final viewInsets = MediaQuery.viewInsetsOf(context).bottom;
-    final screenH = MediaQuery.sizeOf(context).height;
-    final maxH = screenH * 0.92;
 
-    return Padding(
-      padding: EdgeInsetsDirectional.fromSTEB(12, 0, 12, 12 + bottom),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        curve: Curves.easeOutCubic,
-        constraints: BoxConstraints(maxHeight: maxH),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Padding(
-              padding: const EdgeInsetsDirectional.fromSTEB(8, 4, 8, 8),
-              child: Row(
-                children: [
-                  Icon(Icons.opacity_rounded, color: _gold, size: 22),
-                  const SizedBox(width: 8),
-                  const Expanded(
-                    child: Text(
-                      'كتالوج الزيت واللزوجات',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w900,
-                        fontSize: 17,
+    return OilChangeCatalogSheetFrame(
+      title: 'كتالوج الزيت واللزوجات',
+      icon: Icons.opacity_rounded,
+      titleGuideAnchor: (row) => GuideAnchor(
+        id: OilGuideAnchors.catalogOilTitle,
+        child: row,
+      ),
+      child: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView(
+              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+              padding: const EdgeInsetsDirectional.fromSTEB(12, 0, 12, 16),
+              children: [
+                Text(
+                  widget.manageOnly
+                      ? 'اكتب اسم الزيت مرة واحدة، ثم أضف عدة لزوجات بسعر كل لزوجة. يمكن تعديل أو حذف أي صنف من القائمة.'
+                      : 'اختر صنفاً للبطاقة، أو أضف/عدّل أصنافاً من النموذج أعلاه.',
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    color: cs.onSurfaceVariant,
+                    height: 1.35,
+                  ),
+                  textAlign: TextAlign.start,
+                ),
+                const SizedBox(height: 10),
+                Align(
+                  alignment: AlignmentDirectional.centerEnd,
+                  child: GuideAnchor(
+                    id: OilGuideAnchors.catalogOilAdd,
+                    child: FilledButton.tonalIcon(
+                      onPressed: () {
+                        setState(() {
+                          if (_adding) {
+                            _adding = false;
+                            _editingId = null;
+                          } else {
+                            _adding = true;
+                          }
+                        });
+                        if (_adding) {
+                          WidgetsBinding.instance.addPostFrameCallback((_) {
+                            if (!mounted) return;
+                            (_brandLocked ? _viscosityFocus : _brandFocus)
+                                .requestFocus();
+                          });
+                        }
+                      },
+                      icon: Icon(
+                        _adding ? Icons.expand_less : Icons.add_rounded,
                       ),
-                      textAlign: TextAlign.start,
+                      label: Text(
+                        _adding
+                            ? (_editingId != null
+                                ? 'إخفاء التعديل'
+                                : 'إخفاء الإضافة')
+                            : 'إضافة زيت / لزوجة',
+                      ),
                     ),
                   ),
-                  IconButton(
-                    onPressed: () => Navigator.pop(context),
-                    icon: const Icon(Icons.close_rounded),
+                ),
+                if (_adding) ...[
+                  const SizedBox(height: 8),
+                  KeyedSubtree(
+                    key: ValueKey('oil_catalog_form_${_editingId ?? 'new'}'),
+                    child: _buildAddForm(cs),
                   ),
                 ],
-              ),
-            ),
-            Expanded(
-              child: _loading
-                  ? const Center(child: CircularProgressIndicator())
-                  : ListView(
-                      controller: _scrollCtrl,
-                      keyboardDismissBehavior:
-                          ScrollViewKeyboardDismissBehavior.onDrag,
-                      children: [
-                        Text(
-                          widget.manageOnly
-                              ? 'اكتب اسم الزيت مرة واحدة، ثم أضف عدة لزوجات بسعر كل لزوجة. الاختيار في البطاقة من القوائم فقط.'
-                              : 'اختر صنفاً للبطاقة، أو أضف اسم زيت ثم لزوجات متعددة بأسعارها.',
-                          style: TextStyle(
-                            fontSize: 12.5,
-                            color: cs.onSurfaceVariant,
-                            height: 1.35,
-                          ),
-                          textAlign: TextAlign.start,
-                        ),
-                        const SizedBox(height: 10),
-                        Align(
-                          alignment: AlignmentDirectional.centerEnd,
-                          child: FilledButton.tonalIcon(
-                            onPressed: () => setState(() => _adding = !_adding),
-                            icon: Icon(
-                              _adding ? Icons.expand_less : Icons.add_rounded,
-                            ),
-                            label: Text(
-                              _adding ? 'إخفاء الإضافة' : 'إضافة زيت / لزوجة',
-                            ),
-                          ),
-                        ),
-                        if (_adding) ...[
-                          const SizedBox(height: 8),
-                          _buildAddForm(cs),
-                        ],
-                        const SizedBox(height: 10),
-                        if (_error != null)
-                          Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 24),
-                            child: Center(
-                              child: Text(
-                                'تعذّر تحميل الكتالوج',
-                                style: TextStyle(color: cs.error),
-                              ),
-                            ),
-                          )
-                        else if (_entries.isEmpty)
-                          Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 24),
-                            child: Center(
-                              child: Text(
-                                'لا توجد أصناف بعد. أضف أول ماركة ولزوجة.',
-                                style: TextStyle(color: cs.onSurfaceVariant),
-                                textAlign: TextAlign.center,
-                              ),
-                            ),
-                          )
-                        else
-                          for (final entry in _byBrand.entries) ...[
-                            Padding(
-                              padding: const EdgeInsets.only(
-                                top: 8,
-                                bottom: 4,
-                              ),
-                              child: InkWell(
-                                onTap: widget.manageOnly
-                                    ? () => _beginAddForBrand(entry.key)
-                                    : null,
-                                borderRadius: BorderRadius.circular(8),
-                                child: Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                    vertical: 4,
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      Expanded(
-                                        child: Text(
-                                          entry.key,
-                                          style: TextStyle(
-                                            fontWeight: FontWeight.w900,
-                                            color: cs.primary,
-                                            fontSize: 14,
-                                          ),
-                                          textAlign: TextAlign.start,
-                                        ),
-                                      ),
-                                      if (widget.manageOnly)
-                                        TextButton.icon(
-                                          onPressed: () =>
-                                              _beginAddForBrand(entry.key),
-                                          icon: const Icon(
-                                            Icons.add_rounded,
-                                            size: 18,
-                                          ),
-                                          label: const Text('لزوجة'),
-                                        ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ),
-                            for (final e in entry.value)
-                              OilChangeRoyalCard.listTileCard(
-                                cs: cs,
-                                onTap: widget.manageOnly
-                                    ? null
-                                    : () => _pick(e),
-                                child: ListTile(
-                                  title: Text(
-                                    e.viscosity,
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.w800,
-                                    ),
-                                  ),
-                                  subtitle: Text(
-                                    '${IraqiCurrencyFormat.formatIqd(IqdMoney.fromFils(e.sellPerLiterFils))} / لتر',
-                                    textAlign: TextAlign.start,
-                                  ),
-                                  trailing: widget.manageOnly
-                                      ? null
-                                      : Icon(
-                                          Icons.check_circle_outline,
-                                          color: _gold,
-                                        ),
-                                ),
-                              ),
-                          ],
-                        SizedBox(height: viewInsets > 0 ? 120 : 8),
-                      ],
+                const SizedBox(height: 10),
+                if (_error != null)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 24),
+                    child: Center(
+                      child: Text(
+                        'تعذّر تحميل الكتالوج',
+                        style: TextStyle(color: cs.error),
+                      ),
                     ),
+                  )
+                else if (_entries.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 24),
+                    child: Center(
+                      child: Text(
+                        'لا توجد أصناف بعد. أضف أول ماركة ولزوجة.',
+                        style: TextStyle(color: cs.onSurfaceVariant),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  )
+                else
+                  for (final entry in _byBrand.entries) ...[
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8, bottom: 4),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              entry.key,
+                              style: TextStyle(
+                                fontWeight: FontWeight.w900,
+                                color: cs.primary,
+                                fontSize: 14,
+                              ),
+                              textAlign: TextAlign.start,
+                            ),
+                          ),
+                          TextButton.icon(
+                            onPressed: () => _beginAddForBrand(entry.key),
+                            icon: const Icon(Icons.add_rounded, size: 18),
+                            label: const Text('لزوجة'),
+                          ),
+                        ],
+                      ),
+                    ),
+                    for (final e in entry.value)
+                      OilChangeRoyalCard.listTileCard(
+                        context: context,
+                        cs: cs,
+                        onTap: widget.manageOnly ? null : () => _pick(e),
+                        child: ListTile(
+                          title: Text(
+                            e.viscosity,
+                            style: const TextStyle(fontWeight: FontWeight.w800),
+                          ),
+                          subtitle: Text(
+                            '${IraqiCurrencyFormat.formatIqd(IqdMoney.fromFils(e.sellPerLiterFils))} / لتر',
+                            textAlign: TextAlign.start,
+                          ),
+                          trailing: _entryActions(e),
+                        ),
+                      ),
+                  ],
+                const SizedBox(height: 24),
+              ],
             ),
-          ],
-        ),
-      ),
     );
   }
 
   Widget _buildAddForm(ColorScheme cs) {
-    final existing = _entriesForLockedBrand();
+    final existing = _entriesForLockedBrand()
+        .where((e) => e.id != _editingId)
+        .toList();
     return Container(
       padding: const EdgeInsets.all(12),
-      decoration: OilChangeRoyalCard.decoration(
-        cs,
-        radius: 12,
-        backgroundColor: _gold.withValues(alpha: 0.06),
-        borderAlpha: 0.72,
-      ),
+      decoration: OilChangeCatalogSheetFrame.addFormDecoration(cs),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          if (_editingId != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text(
+                'تعديل صنف موجود',
+                style: TextStyle(
+                  fontWeight: FontWeight.w800,
+                  color: cs.primary,
+                  fontSize: 13,
+                ),
+                textAlign: TextAlign.start,
+              ),
+            ),
           if (_brandLocked) ...[
             InputDecorator(
               decoration: const InputDecoration(
                 labelText: 'اسم الزيت (ثابت)',
                 border: OutlineInputBorder(),
+                isDense: true,
               ),
               child: Row(
                 children: [
@@ -471,19 +549,18 @@ class _OilChangeOilCatalogSheetBodyState
             TextField(
               controller: _brandCtrl,
               focusNode: _brandFocus,
+              textInputAction: TextInputAction.next,
+              onSubmitted: (_) => _viscosityFocus.requestFocus(),
               decoration: const InputDecoration(
                 labelText: 'اسم / ماركة الزيت',
                 border: OutlineInputBorder(),
                 hintText: 'faza، موبيل 1…',
-                helperText: 'يُحفظ الاسم عند أول لزوجة — ثم تضيف لزوجات أخرى دون إعادة كتابته',
+                helperMaxLines: 2,
+                helperText:
+                    'بعد الحفظ يبقى الاسم ثابتاً لإضافة لزوجات أخرى بسهولة',
+                isDense: true,
               ),
               textAlign: TextAlign.start,
-              onTap: () => _ensureFieldVisible(_brandFocus),
-              onSubmitted: (_) {
-                if (_brandCtrl.text.trim().isNotEmpty) {
-                  setState(() => _brandLocked = true);
-                }
-              },
             ),
           if (existing.isNotEmpty) ...[
             const SizedBox(height: 8),
@@ -504,6 +581,7 @@ class _OilChangeOilCatalogSheetBodyState
                   .map(
                     (e) => Chip(
                       label: Text(e.viscosity),
+                      visualDensity: VisualDensity.compact,
                       backgroundColor: cs.surfaceContainerHighest,
                     ),
                   )
@@ -514,14 +592,15 @@ class _OilChangeOilCatalogSheetBodyState
           TextField(
             controller: _viscosityCtrl,
             focusNode: _viscosityFocus,
+            textInputAction: TextInputAction.next,
+            onSubmitted: (_) => _priceFocus.requestFocus(),
             decoration: const InputDecoration(
               labelText: 'اللزوجة',
               border: OutlineInputBorder(),
               hintText: '5W30',
+              isDense: true,
             ),
             textAlign: TextAlign.start,
-            autofocus: _brandLocked,
-            onTap: () => _ensureFieldVisible(_viscosityFocus),
           ),
           const SizedBox(height: 6),
           Wrap(
@@ -531,16 +610,14 @@ class _OilChangeOilCatalogSheetBodyState
                 .map(
                   (v) => ActionChip(
                     label: Text(v),
+                    visualDensity: VisualDensity.compact,
                     onPressed: existing.any(
                       (e) =>
                           normalizeOilViscosityKey(e.viscosity) ==
                           normalizeOilViscosityKey(v),
                     )
                         ? null
-                        : () {
-                            _viscosityCtrl.text = v;
-                            setState(() {});
-                          },
+                        : () => _pickViscosityChip(v),
                   ),
                 )
                 .toList(),
@@ -549,22 +626,36 @@ class _OilChangeOilCatalogSheetBodyState
           TextField(
             controller: _priceCtrl,
             focusNode: _priceFocus,
-            keyboardType: TextInputType.number,
+            keyboardType: const TextInputType.numberWithOptions(
+              decimal: false,
+              signed: false,
+            ),
+            textInputAction: TextInputAction.done,
+            onSubmitted: (_) => unawaited(_saveNew()),
+            onTap: () {
+              _reformatPriceField();
+              selectAllOilFieldText(_priceCtrl);
+            },
             inputFormatters: [IraqiCurrencyFormat.moneyInputFormatter()],
             decoration: const InputDecoration(
               labelText: 'سعر البيع / لتر (د.ع)',
               border: OutlineInputBorder(),
+              isDense: true,
+              hintText: 'مثال: 30,000',
             ),
             textDirection: TextDirection.ltr,
             textAlign: TextAlign.start,
-            onTap: () => _ensureFieldVisible(_priceFocus),
           ),
           const SizedBox(height: 10),
           FilledButton.icon(
             onPressed: () => unawaited(_saveNew()),
-            icon: const Icon(Icons.save_rounded),
+            icon: Icon(
+              _editingId != null ? Icons.check_rounded : Icons.save_rounded,
+            ),
             label: Text(
-              _brandLocked ? 'إضافة اللزوجة' : 'حفظ الاسم واللزوجة',
+              _editingId != null
+                  ? 'حفظ التعديل'
+                  : (_brandLocked ? 'إضافة اللزوجة' : 'حفظ الاسم واللزوجة'),
             ),
           ),
         ],

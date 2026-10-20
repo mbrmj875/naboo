@@ -494,8 +494,8 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
       final draft = OilGradeDraft(
         viscosity: g.viscosity,
         qtyLiters: g.openingQtyLiters.toString(),
-        buy: g.buyPrice.toStringAsFixed(0),
-        sell: g.sellPrice.toStringAsFixed(0),
+        buy: IraqiCurrencyFormat.formatInt(g.buyPrice),
+        sell: IraqiCurrencyFormat.formatInt(g.sellPrice),
         gradeRowId: s.gradeRowId,
         linkedProductId: s.linkedProductId,
       );
@@ -510,7 +510,7 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
             factor: p.factorToBase.toString(),
           )..sellCtrl.text = p.sellPrice == null
               ? ''
-              : IraqiCurrencyFormat.formatIqd(p.sellPrice!.round()),
+              : IraqiCurrencyFormat.formatInt(p.sellPrice!),
         );
       }
       target.add(draft);

@@ -29,7 +29,7 @@
 		<key>NSSpeechRecognitionUsageDescription</key>
 		<string>نحتاج التعرف على الكلام لتحويل ملاحظاتك إلى نص عربي.</string>
 		<key>NSLocationWhenInUseUsageDescription</key>
-		<string>نحتاج موقعك لتحديد نقطة الاستلام على الخريطة.</string>
+		<string>نحتاج موقعك لتحديد موقع المتجر ونقطة الاستلام على الخريطة.</string>
 		<key>GMSApiKey</key>
 		<string>$(GOOGLE_MAPS_API_KEY)</string>
 		<key>LSRequiresIPhoneOS</key>
@@ -78,6 +78,10 @@
 			<string>UIInterfaceOrientationLandscapeLeft</string>
 			<string>UIInterfaceOrientationLandscapeRight</string>
 		</array>
+		<key>GIDClientID</key>
+		<string>281392172783-rpnh4q1n0vuvjb3lv96sl48rkg1iu8ld.apps.googleusercontent.com</string>
+		<key>GIDServerClientID</key>
+		<string>281392172783-s4hvsidll33hgvt75tilm0okg5epb0ep.apps.googleusercontent.com</string>
 		<key>CFBundleURLTypes</key>
 		<array>
 			<dict>
@@ -113,7 +117,13 @@
 		</array>
 		<key>UIStatusBarHidden</key>
 		<false/>
+		<key>UIBackgroundModes</key>
+		<array>
+			<string>remote-notification</string>
+			<string>fetch</string>
+		</array>
 		<key>FirebaseAppDelegateProxyEnabled</key>
 		<true/>
 	</dict>
 </plist>
+

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../../navigation/content_navigation.dart';
 import '../../../theme/design_tokens.dart';
 import '../../../widgets/inputs/arabic_speech_mic_button.dart';
 import '../models/oil_change_campaign_recipient.dart';
@@ -31,7 +32,7 @@ class OilChangeWhatsappCampaignScreen extends StatefulWidget {
     required bool gatewayConnected,
   }) {
     return Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(
+      FastContentPageRoute<void>(
         fullscreenDialog: true,
         builder: (_) => OilChangeWhatsappCampaignScreen(
           storeTitle: storeTitle,
@@ -209,7 +210,7 @@ class _OilChangeWhatsappCampaignScreenState
       );
       if (go == true && mounted) {
         await Navigator.of(context).push<void>(
-          MaterialPageRoute<void>(
+          FastContentPageRoute<void>(
             builder: (_) => const OilChangeWhatsappConnectScreen(),
           ),
         );

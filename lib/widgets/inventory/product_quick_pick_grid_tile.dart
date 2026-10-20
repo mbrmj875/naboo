@@ -1,11 +1,9 @@
-import 'dart:io' show File;
-
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import '../../theme/design_tokens.dart';
 import '../../theme/sale_brand.dart';
 import '../../utils/iraqi_currency_format.dart';
+import '../product_media_image.dart';
 
 /// ألوان نصوص بطاقة المنتج في الشبكة — واضحة في الوضع الداكن والفاتح (بدون كحلي على خلفية داكنة).
 class ProductQuickPickColors {
@@ -38,11 +36,11 @@ class ProductQuickPickColors {
       );
     }
     return ProductQuickPickColors._(
-      textPrimary: const Color(0xFF0F172A),
-      textSecondary: const Color(0xFF64748B),
-      price: AppColors.accentGold,
-      border: AppColors.borderLight,
-      cardFill: Colors.white,
+        textPrimary: const Color(0xFF0F172A),
+        textSecondary: const Color(0xFF64748B),
+        price: AppColors.accentGold,
+        border: AppColors.accentGold.withValues(alpha: 0.38),
+        cardFill: Colors.white,
       iconMuted: const Color(0xFF94A3B8),
     );
   }
@@ -106,53 +104,18 @@ class ProductQuickPickThumb extends StatelessWidget {
       );
     }
 
-    if (!kIsWeb &&
-        path != null &&
-        path.isNotEmpty &&
-        File(path).existsSync()) {
+    final media = (path != null && path.isNotEmpty)
+        ? path
+        : (urlRaw != null && urlRaw.isNotEmpty ? urlRaw : null);
+    if (media != null) {
       return ClipRRect(
         borderRadius: _topRadius,
-        child: Image.file(
-          File(path),
+        child: ProductMediaImage(
+          pathOrUrl: media,
           fit: BoxFit.cover,
           width: double.infinity,
           height: double.infinity,
-          errorBuilder: (_, __, ___) => placeholder(),
-        ),
-      );
-    }
-
-    final net = urlRaw != null &&
-            urlRaw.isNotEmpty &&
-            (urlRaw.startsWith('http://') || urlRaw.startsWith('https://'))
-        ? urlRaw
-        : null;
-    if (net != null) {
-      return ClipRRect(
-        borderRadius: _topRadius,
-        child: Image.network(
-          net,
-          fit: BoxFit.cover,
-          width: double.infinity,
-          height: double.infinity,
-          loadingBuilder: (context, child, progress) {
-            if (progress == null) return child;
-            return ColoredBox(
-              color: isDark
-                  ? Colors.white.withValues(alpha: 0.06)
-                  : const Color(0xFFF1F5F9),
-              child: Center(
-                child: SizedBox(
-                  width: 22,
-                  height: 22,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: colors.iconMuted,
-                  ),
-                ),
-              ),
-            );
-          },
+          placeholder: placeholder(),
           errorBuilder: (_, __, ___) => placeholder(),
         ),
       );
@@ -283,66 +246,84 @@ class _ProductQuickPickGridTileState extends State<ProductQuickPickGridTile> {
                         padding: const EdgeInsetsDirectional.only(
                           start: 6,
                           end: 6,
-                          top: 6,
-                          bottom: 6,
+                          top: 4,
+                          bottom: 4,
                         ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            Text(
-                              name,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w800,
-                                color: colors.textPrimary,
-                                height: 1.05,
-                              ),
-                            ),
-                            if (meta.isNotEmpty) ...[
-                              const SizedBox(height: 2),
-                              Text(
-                                meta,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                textAlign: TextAlign.center,
-                                textDirection: TextDirection.ltr,
-                                style: TextStyle(
-                                  fontSize: 9,
-                                  color: colors.textSecondary,
+                        child: LayoutBuilder(
+                          builder: (context, textConstraints) {
+                            // يمنع BOTTOM OVERFLOW عند ضيق ارتفاع نصف البطاقة
+                            // (شبكة مربعة + خطوط نص عربية + مقياس نص النظام).
+                            return FittedBox(
+                              fit: BoxFit.scaleDown,
+                              alignment: Alignment.topCenter,
+                              child: SizedBox(
+                                width: textConstraints.maxWidth,
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    Text(
+                                      name,
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      textAlign: TextAlign.center,
+                                      textDirection: TextDirection.rtl,
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w800,
+                                        color: colors.textPrimary,
+                                        height: 1.05,
+                                      ),
+                                    ),
+                                    if (meta.isNotEmpty) ...[
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        meta,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        textAlign: TextAlign.center,
+                                        textDirection: TextDirection.ltr,
+                                        style: TextStyle(
+                                          fontSize: 9,
+                                          color: colors.textSecondary,
+                                        ),
+                                      ),
+                                    ],
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      priceLabel,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      textAlign: TextAlign.center,
+                                      textDirection: TextDirection.ltr,
+                                      style: TextStyle(
+                                        fontSize: 10.5,
+                                        fontWeight: FontWeight.w800,
+                                        color: colors.price,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      isService
+                                          ? 'خدمة فنية'
+                                          : 'المتوفر: $stock',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      textAlign: TextAlign.center,
+                                      style: TextStyle(
+                                        fontSize: 9.5,
+                                        fontWeight: FontWeight.w700,
+                                        color: isService
+                                            ? colors.textSecondary
+                                            : stockColor,
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ),
-                            ],
-                            const SizedBox(height: 3),
-                            Text(
-                              priceLabel,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              textAlign: TextAlign.center,
-                              textDirection: TextDirection.ltr,
-                              style: TextStyle(
-                                fontSize: 10.5,
-                                fontWeight: FontWeight.w800,
-                                color: colors.price,
-                              ),
-                            ),
-                            const Spacer(),
-                            Text(
-                              isService ? 'خدمة فنية' : 'المتوفر: $stock',
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                fontSize: 9.5,
-                                fontWeight: FontWeight.w700,
-                                color: isService
-                                    ? colors.textSecondary
-                                    : stockColor,
-                              ),
-                            ),
-                          ],
+                            );
+                          },
                         ),
                       ),
                     ),

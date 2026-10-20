@@ -49,7 +49,7 @@ class OilChangeFilterCatalogRepository {
     OilChangeFilterKind kind,
   ) {
     return entries
-        .where((e) => e.kind == kind)
+        .where((e) => e.kind.code == kind.code)
         .toList()
       ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
   }
@@ -102,8 +102,9 @@ class OilChangeFilterCatalogRepository {
     final db = await _db;
     await ensureSchema();
     final label = name.trim();
-    if (label.isEmpty) throw StateError('name_required');
-    if (await existsActiveKindName(kind: kind, name: label)) {
+    if (priceFils <= 0) throw StateError('price_required');
+    if (label.isNotEmpty &&
+        await existsActiveKindName(kind: kind, name: label)) {
       throw StateError('duplicate_kind_name');
     }
     final now = DateTime.now().toUtc().toIso8601String();
@@ -136,11 +137,13 @@ class OilChangeFilterCatalogRepository {
     final db = await _db;
     await ensureSchema();
     final label = name.trim();
-    if (await existsActiveKindName(
-      kind: kind,
-      name: label,
-      excludeId: id,
-    )) {
+    if (priceFils <= 0) throw StateError('price_required');
+    if (label.isNotEmpty &&
+        await existsActiveKindName(
+          kind: kind,
+          name: label,
+          excludeId: id,
+        )) {
       throw StateError('duplicate_kind_name');
     }
     await db.update(

@@ -1,5 +1,6 @@
 import 'dart:async' show Timer, TimeoutException, unawaited;
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -8,6 +9,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../config/otp_config.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/business_features_provider.dart';
+import '../../services/auth/web_auth_history_guard.dart';
 import '../../theme/design_tokens.dart';
 import '../../widgets/glass/glass_background.dart';
 import '../../widgets/glass/glass_surface.dart';
@@ -207,6 +209,7 @@ class _OwnerPinRestoreOtpScreenState extends State<OwnerPinRestoreOtpScreen> {
         await context.read<BusinessFeaturesProvider>().refresh();
       } catch (_) {}
       if (!mounted) return;
+      if (kIsWeb) stabilizeWebAuthHistory();
       unawaited(Navigator.of(context).pushReplacementNamed(target));
     } on TimeoutException {
       if (!mounted) return;

@@ -164,7 +164,7 @@ class _PinFourBoxesBodyState extends State<_PinFourBoxesBody> {
 
   _PinMetrics _computeMetrics(BuildContext context, double maxWidth) {
     final layout = context.screenLayout;
-    final (minBox, preferredBox, gap) = switch (layout.layoutVariant) {
+    final (minBox, preferredBox, preferredGap) = switch (layout.layoutVariant) {
       DeviceVariant.phoneXS => (44.0, 52.0, 8.0),
       DeviceVariant.phoneSM => (48.0, 56.0, 10.0),
       DeviceVariant.tabletSM => (52.0, 60.0, 12.0),
@@ -173,12 +173,37 @@ class _PinFourBoxesBodyState extends State<_PinFourBoxesBody> {
       DeviceVariant.desktopLG => (60.0, 72.0, 16.0),
     };
 
-    final gapsTotal = gap * (_count - 1);
-    final idealTotal = preferredBox * _count + gapsTotal;
-    double box = preferredBox;
-    if (idealTotal > maxWidth && maxWidth > 0) {
-      box = ((maxWidth - gapsTotal) / _count).clamp(minBox, preferredBox);
+    var gap = preferredGap;
+    var box = preferredBox;
+
+    // مهم: لا نفرض minBox إن كان يفيض عن العرض — كان يسبب RenderFlex +48px
+    // على سطح المكتب عندما maxWidth ≈ preferred*4 بدون فجوات.
+    if (maxWidth.isFinite && maxWidth > 0) {
+      var gapsTotal = gap * (_count - 1);
+      var total = box * _count + gapsTotal;
+      if (total > maxWidth) {
+        box = (maxWidth - gapsTotal) / _count;
+        if (box < minBox) {
+          box = minBox;
+          gapsTotal = gap * (_count - 1);
+          total = box * _count + gapsTotal;
+          if (total > maxWidth) {
+            // قلّص الفجوات أولاً ثم الصناديق حتى يدخل الصف بالكامل.
+            gap = ((maxWidth - box * _count) / (_count - 1)).clamp(2.0, preferredGap);
+            gapsTotal = gap * (_count - 1);
+            total = box * _count + gapsTotal;
+            if (total > maxWidth + 0.5) {
+              gap = 4.0;
+              gapsTotal = gap * (_count - 1);
+              box = ((maxWidth - gapsTotal) / _count).clamp(28.0, preferredBox);
+            }
+          }
+        } else if (box > preferredBox) {
+          box = preferredBox;
+        }
+      }
     }
+
     return _PinMetrics(box: box, gap: gap, digitSize: box * 0.40);
   }
 
@@ -231,46 +256,60 @@ class _PinFourBoxesBodyState extends State<_PinFourBoxesBody> {
         const SizedBox(height: 10),
         LayoutBuilder(
           builder: (context, constraints) {
-            final m = _computeMetrics(context, constraints.maxWidth);
+            final maxW = constraints.maxWidth;
+            final m = _computeMetrics(
+              context,
+              maxW.isFinite ? maxW : 320,
+            );
             final rowWidth = m.box * _count + m.gap * (_count - 1);
+            final cappedWidth = maxW.isFinite && maxW > 0
+                ? rowWidth.clamp(0.0, maxW)
+                : rowWidth;
 
             return Align(
               alignment: AlignmentDirectional.centerStart,
               child: SizedBox(
-                width: rowWidth.clamp(0, constraints.maxWidth),
+                width: cappedWidth,
                 height: m.box,
                 child: Stack(
                   alignment: Alignment.center,
-                  clipBehavior: Clip.none,
+                  clipBehavior: Clip.hardEdge,
                   children: [
+                    // Expanded يمنع أي فيضان حتى لو تغيّر العرض بعد القياس.
                     Row(
                       textDirection: TextDirection.ltr,
-                      mainAxisSize: MainAxisSize.min,
                       children: [
                         for (var i = 0; i < _count; i++) ...[
                           if (i > 0) SizedBox(width: m.gap),
-                          Builder(
-                            builder: (_) {
-                              final filled = i < pin.length;
-                              final highlighted = _focus.hasFocus &&
-                                  (i == pin.length ||
-                                      (pin.length == _count &&
-                                          i == _count - 1));
-                              final ch = filled
-                                  ? (widget.obscureText ? '•' : pin[i])
-                                  : '';
-                              return _PinBox(
-                                size: m.box,
-                                digitSize: m.digitSize,
-                                filled: filled,
-                                highlighted: highlighted,
-                                hasError: hasError,
-                                glass: glass,
-                                obscureText: widget.obscureText,
-                                character: ch,
-                                colorScheme: cs,
-                              );
-                            },
+                          Expanded(
+                            child: LayoutBuilder(
+                              builder: (context, boxConstraints) {
+                                final side = boxConstraints.maxWidth
+                                    .clamp(0.0, m.box)
+                                    .toDouble();
+                                final filled = i < pin.length;
+                                final highlighted = _focus.hasFocus &&
+                                    (i == pin.length ||
+                                        (pin.length == _count &&
+                                            i == _count - 1));
+                                final ch = filled
+                                    ? (widget.obscureText ? '•' : pin[i])
+                                    : '';
+                                return Center(
+                                  child: _PinBox(
+                                    size: side > 0 ? side : m.box,
+                                    digitSize: (side > 0 ? side : m.box) * 0.40,
+                                    filled: filled,
+                                    highlighted: highlighted,
+                                    hasError: hasError,
+                                    glass: glass,
+                                    obscureText: widget.obscureText,
+                                    character: ch,
+                                    colorScheme: cs,
+                                  ),
+                                );
+                              },
+                            ),
                           ),
                         ],
                       ],
@@ -313,10 +352,11 @@ class _PinFourBoxesBodyState extends State<_PinFourBoxesBody> {
                             maxLength: _count,
                             inputFormatters: PinInputConstraints.formatters,
                             autofillHints: const [AutofillHints.oneTimeCode],
+                            // حجم طبيعي حتى ensureVisible يرفع صف الصناديق كاملاً.
                             style: const TextStyle(
                               color: Colors.transparent,
-                              fontSize: 1,
-                              height: 0.01,
+                              fontSize: 16,
+                              height: 1.2,
                             ),
                             cursorColor: Colors.transparent,
                             decoration: const InputDecoration(

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../guides/guide_anchor.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/database_helper.dart';
 import '../../widgets/employee_id_card.dart';
@@ -87,11 +88,14 @@ class _EmployeeIdentityScreenState extends State<EmployeeIdentityScreen> {
           backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
           foregroundColor: Theme.of(context).colorScheme.onSurface,
           elevation: 0,
-          title: Text(
-            'هويات الموظفين',
-            style: TextStyle(
-              fontWeight: FontWeight.bold,
-              color: Theme.of(context).colorScheme.onSurface,
+          title: GuideAnchor(
+            id: OilGuideAnchors.usersIdentityTitle,
+            child: Text(
+              'هويات الموظفين',
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                color: Theme.of(context).colorScheme.onSurface,
+              ),
             ),
           ),
         ),

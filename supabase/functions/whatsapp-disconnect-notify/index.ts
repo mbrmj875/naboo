@@ -13,12 +13,13 @@ Deno.serve(async (req) => {
     return new Response('Method not allowed', { status: 405 });
   }
 
-  const secret = Deno.env.get('WHATSAPP_DISCONNECT_WEBHOOK_SECRET');
-  if (secret) {
-    const header = req.headers.get('x-webhook-secret');
-    if (header !== secret) {
-      return new Response('Unauthorized', { status: 401 });
-    }
+  const secret = (Deno.env.get('WHATSAPP_DISCONNECT_WEBHOOK_SECRET') ?? '').trim();
+  if (!secret) {
+    return new Response('Unauthorized', { status: 401 });
+  }
+  const header = req.headers.get('x-webhook-secret');
+  if (header !== secret) {
+    return new Response('Unauthorized', { status: 401 });
   }
 
   let body: Body;

@@ -10,6 +10,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'web_financial_write_gate.dart';
+import '../models/invoice.dart';
 import '../utils/app_logger.dart';
 import '../owner/services/business_audit_log_service.dart';
 import 'app_remote_config_service.dart';
@@ -68,6 +70,12 @@ class DeviceLimitReachedException implements Exception {
   const DeviceLimitReachedException();
   @override
   String toString() => 'DEVICE_LIMIT_REACHED';
+}
+
+class WebDeviceRateLimitException implements Exception {
+  const WebDeviceRateLimitException();
+  @override
+  String toString() => 'WEB_DEVICE_RATE_LIMIT';
 }
 
 /// يحوّل أخطاء الشبكة/DNS/SQLite الخام إلى رسالة عربية مفهومة للمستخدم.
@@ -544,6 +552,8 @@ class CloudSyncService {
     _syncDebounce = null;
     _deltaDebounceTimer?.cancel();
     _deltaDebounceTimer = null;
+    _realtimePullDebounce?.cancel();
+    _realtimePullDebounce = null;
     _pendingDeltas.clear();
     devices.value = const [];
 
@@ -610,6 +620,8 @@ class CloudSyncService {
         await _registerCurrentDeviceViaServerLimit();
       } on DeviceLimitReachedException {
         return 'تم الوصول إلى الحد الأقصى للأجهزة في خطتك. افصل جهازاً من الحساب أو قم بترقية الخطة.';
+      } on WebDeviceRateLimitException {
+        return 'تم تسجيل جهاز متصفح جديد مؤخراً. انتظر 24 ساعة أو اطلب من الدعم إعادة تفعيل جهاز ويب، أو استخدم جهازاً سبق تسجيله.';
       }
 
       final access = await registerCurrentDevice();
@@ -643,19 +655,23 @@ class CloudSyncService {
     if (user == null) return;
     final deviceId = await LicenseService.instance.getDeviceId();
     final deviceName = await LicenseService.instance.getDeviceName();
+    final platform = kIsWeb ? 'web' : defaultTargetPlatform.name;
     try {
       await client.rpc(
         'app_register_device',
         params: {
           'p_device_id': deviceId,
           'p_device_name': deviceName,
-          'p_platform': defaultTargetPlatform.name,
+          'p_platform': platform,
         },
       );
     } on PostgrestException catch (e) {
       final m = e.message.toUpperCase();
       if (m.contains('DEVICE_LIMIT_REACHED')) {
         throw const DeviceLimitReachedException();
+      }
+      if (m.contains('WEB_DEVICE_RATE_LIMIT')) {
+        throw const WebDeviceRateLimitException();
       }
       // إذا الدالة غير موجودة بعد، لا نكسر الدخول.
       if (m.contains('APP_REGISTER_DEVICE') &&
@@ -770,6 +786,7 @@ class CloudSyncService {
     final deviceId = await LicenseService.instance.getDeviceId();
     final deviceName = await LicenseService.instance.getDeviceName();
     final now = DateTime.now().toUtc().toIso8601String();
+    final platform = kIsWeb ? 'web' : defaultTargetPlatform.name;
 
     await _ensureCurrentDeviceActiveIfReturning(
       userId: user.id,
@@ -784,7 +801,7 @@ class CloudSyncService {
           params: {
             'p_device_id': deviceId,
             'p_device_name': deviceName,
-            'p_platform': defaultTargetPlatform.name,
+            'p_platform': platform,
           },
         );
         // If revoked: treat as revoked.
@@ -963,7 +980,9 @@ class CloudSyncService {
     return changed;
   }
 
-  /// يُعيد تفعيل هذا الجهاز إذا كان «مفصولاً» سابقاً وعاد صاحبه للدخول.
+  /// Orphan recovery only: re-activate this handset if it was revoked AND
+  /// no other device is still active (owner lost all sessions). Never bypass
+  /// an intentional revoke while another approved device remains active.
   Future<void> _ensureCurrentDeviceActiveIfReturning({
     required String userId,
     required String deviceId,
@@ -1000,23 +1019,23 @@ class CloudSyncService {
         if (s != 'revoked') activeCount++;
       }
 
-      final max = LicenseService.instance.state.effectiveMaxDevices;
-      if (max > 0 && activeCount >= max) {
+      // Intentional revoke stands if any other device is still active.
+      if (activeCount > 0) {
         AppLogger.info(
           'CloudSync',
-          'self device reactivate skipped — plan limit reached',
+          'self device reactivate skipped — other active devices exist',
         );
         return;
       }
 
       final err = await approveDeviceAccess(deviceId);
       if (err == null) {
-        AppLogger.info('CloudSync', 'self device reactivated after return');
+        AppLogger.info('CloudSync', 'orphan device reactivated (no other active)');
         _auditSyncOperation(
-          eventType: 'device_self_reactivated',
+          eventType: 'device_orphan_reactivated',
           details: {
             'device_id': deviceId,
-            'reason': 'same_handset_returned',
+            'reason': 'no_other_active_devices',
           },
         );
       }
@@ -1579,6 +1598,12 @@ class CloudSyncService {
             pushSucceeded: pushSucceeded,
             errorMessage: lastError.value,
           );
+        }
+        // سحب ناجح أو «محدث مسبقاً» على الويب → بوابة الكتابة المالية.
+        if (kIsWeb &&
+            (pull.status == CloudSyncPullStatus.imported ||
+                pull.status == CloudSyncPullStatus.skippedAlreadyCurrent)) {
+          unawaited(WebFinancialWriteGate.markSuccessfulPull());
         }
       }
       pushAttempted = true;
@@ -2764,6 +2789,11 @@ class CloudSyncService {
     });
   }
 
+  /// للاختبارات: دمج لقطة واردة (مثل سحب السحابة) دون شبكة.
+  @visibleForTesting
+  Future<void> importSnapshotForTesting(Map<String, dynamic> payload) =>
+      _importSnapshot(payload);
+
   /// للاختبارات: إعادة تطبيق الطابور غير المرفوع.
   @visibleForTesting
   Future<void> reapplyUnpushedSyncQueueMutationsForTesting(Database db) =>
@@ -2989,6 +3019,21 @@ class CloudSyncService {
           .toList();
     }
 
+    // خط أساس كميات المخزون من اللقطة (ويب فقط — دمج حدثي بعد الاستيراد).
+    final baselineQtyByProductGid = <String, double>{};
+    final incomingInvoiceItemGids = <String>{};
+    if (kIsWeb) {
+      for (final row in await readTable('products')) {
+        final gid = (row['global_id'] ?? '').toString().trim();
+        if (gid.isEmpty) continue;
+        baselineQtyByProductGid[gid] = (row['qty'] as num?)?.toDouble() ?? 0;
+      }
+      for (final row in await readTable('invoice_items')) {
+        final gid = (row['global_id'] ?? '').toString().trim();
+        if (gid.isNotEmpty) incomingInvoiceItemGids.add(gid);
+      }
+    }
+
     final tableNames = await _listSyncTables(db);
 
     // في SQLite لا يُطبَّق تعطيل المفاتيح الأجنبية إذا وُضع PRAGMA داخل معاملة؛
@@ -3008,12 +3053,90 @@ class CloudSyncService {
           }
           await _mergeTableRows(txn, table, rows);
         }
+        // ويب فقط: إعادة احتساب qty من خط أساس اللقطة + بنود فاتورة محلية غير واردة.
+        // المنصات الأصلية تبقى على حماية qty المحلية (أوفلاين أولاً).
+        if (kIsWeb) {
+          await _reconcileProductQtyFromSnapshotEvents(
+            txn,
+            baselineQtyByProductGid: baselineQtyByProductGid,
+            incomingInvoiceItemGids: incomingInvoiceItemGids,
+          );
+        }
         await applyUserProfilesIntoUsersTransaction(txn);
       });
     } finally {
       await db.execute('PRAGMA foreign_keys = ON');
     }
     await _dbHelper.reconcileUserDirectoryAfterCloudImport();
+  }
+
+  /// بعد دمج اللقطة: qty = خط أساس السحابة + أثر بنود الفواتير المحلية غير الواردة في اللقطة.
+  /// لا يعتمد على LWW لقيمة qty النهائية (هاتف↔ويب متزامن).
+  Future<void> _reconcileProductQtyFromSnapshotEvents(
+    Transaction txn, {
+    required Map<String, double> baselineQtyByProductGid,
+    required Set<String> incomingInvoiceItemGids,
+  }) async {
+    if (baselineQtyByProductGid.isEmpty) return;
+
+    final localOnlyDeltas = <String, double>{};
+    try {
+      final eventRows = await txn.rawQuery('''
+        SELECT
+          ii.global_id AS item_gid,
+          COALESCE(NULLIF(TRIM(ii.product_global_id), ''), p.global_id) AS product_gid,
+          COALESCE(ii.baseQty, ii.quantity, 0) AS qty,
+          i.type AS invoice_type,
+          i.isReturned AS is_returned
+        FROM invoice_items ii
+        INNER JOIN invoices i ON i.id = ii.invoiceId
+        LEFT JOIN products p ON p.id = ii.productId
+        WHERE ii.global_id IS NOT NULL
+          AND TRIM(ii.global_id) != ''
+      ''');
+      for (final row in eventRows) {
+        final itemGid = (row['item_gid'] ?? '').toString().trim();
+        if (itemGid.isEmpty || incomingInvoiceItemGids.contains(itemGid)) {
+          continue;
+        }
+        final productGid = (row['product_gid'] ?? '').toString().trim();
+        if (productGid.isEmpty) continue;
+        if (!baselineQtyByProductGid.containsKey(productGid)) continue;
+
+        final typeIdx = (row['invoice_type'] as num?)?.toInt() ?? 0;
+        final isReturned = ((row['is_returned'] as num?)?.toInt() ?? 0) == 1;
+        final qty = (row['qty'] as num?)?.toDouble() ?? 0;
+        if (qty.abs() <= 1e-12) continue;
+
+        // سندات غير مخزنية.
+        if (typeIdx == InvoiceType.debtCollection.index ||
+            typeIdx == InvoiceType.installmentCollection.index ||
+            typeIdx == InvoiceType.supplierPayment.index) {
+          continue;
+        }
+
+        final delta = isReturned ? qty : -qty;
+        localOnlyDeltas[productGid] = (localOnlyDeltas[productGid] ?? 0) + delta;
+      }
+    } catch (e, st) {
+      AppLogger.warn(
+        'CloudSync',
+        'stock event reconcile skipped: $e',
+      );
+      if (kDebugMode) {
+        AppLogger.error('CloudSync', 'stock event reconcile', e, st);
+      }
+      return;
+    }
+
+    for (final entry in baselineQtyByProductGid.entries) {
+      final gid = entry.key;
+      final next = entry.value + (localOnlyDeltas[gid] ?? 0);
+      await txn.rawUpdate(
+        'UPDATE products SET qty = ? WHERE global_id = ?',
+        [next, gid],
+      );
+    }
   }
 
   /// يربط [expenses.cashLedgerId] بقيد الصندوق المستورد عبر [global_id] (`{expense}_cash`).
@@ -3280,6 +3403,7 @@ class CloudSyncService {
     for (final c in pkCols) {
       merged[c] = current[c];
     }
+    // لا LWW على qty النهائي — يُعاد الاحتساب بعد الاستيراد من خط الأساس + بنود محلية.
     for (final col in _productStockProtectedCols) {
       if (!localCols.contains(col)) continue;
       merged[col] = current[col];
@@ -4414,6 +4538,7 @@ class CloudSyncService {
 
     final merged = Map<String, dynamic>.from(incoming);
     merged['id'] = current['id'];
+    _preserveLocalUserProfileExtrasIfNeeded(current, merged);
     await txn.update(
       table,
       merged,
@@ -4484,6 +4609,7 @@ class CloudSyncService {
 
     final merged = Map<String, dynamic>.from(incoming);
     merged['id'] = current['id'];
+    _preserveLocalUserProfileExtrasIfNeeded(current, merged);
     await txn.update(
       table,
       merged,
@@ -4491,6 +4617,23 @@ class CloudSyncService {
       whereArgs: [username],
     );
     return true;
+  }
+
+  /// لقطة قديمة بدون حقول فرع/واجهة الموظف لا تمسح القيم المحلية.
+  void _preserveLocalUserProfileExtrasIfNeeded(
+    Map<String, dynamic> current,
+    Map<String, dynamic> merged,
+  ) {
+    void keep(String col) {
+      final incomingRaw = (merged[col] ?? '').toString().trim();
+      if (incomingRaw.isNotEmpty) return;
+      final localRaw = (current[col] ?? '').toString().trim();
+      if (localRaw.isEmpty) return;
+      merged[col] = localRaw;
+    }
+
+    keep('branchProfileJson');
+    keep('staffUiPrefsJson');
   }
 
   Future<List<String>> _listSyncTables(Database db) async {

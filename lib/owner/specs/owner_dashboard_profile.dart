@@ -6,4 +6,5 @@ enum OwnerDashboardProfile {
   clothingStore,
   generalRetail,
   pharmacy,
+  restaurantCafe,
 }

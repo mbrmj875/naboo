@@ -17,14 +17,35 @@ class OilChangeFilterCatalogEntry {
   final int sortOrder;
 
   factory OilChangeFilterCatalogEntry.fromMap(Map<String, dynamic> m) {
+    final code = (m['filterKind'] ?? '').toString().trim().toLowerCase();
+    final known = OilChangeFilterKind.fromCode(code);
     return OilChangeFilterCatalogEntry(
       id: (m['id'] as num).toInt(),
-      kind: OilChangeFilterKind.fromCode(m['filterKind']?.toString()) ??
-          OilChangeFilterKind.engine,
+      kind: known ??
+          OilChangeFilterKind(
+            code: code.isEmpty ? 'custom' : code,
+            label: 'فلتر',
+          ),
       name: (m['name'] ?? '').toString().trim(),
       priceFils: (m['priceFils'] as num?)?.toInt() ?? 0,
       sortOrder: (m['sortOrder'] as num?)?.toInt() ?? 0,
     );
+  }
+
+  /// يحدّث تسمية الفئة من قائمة الفئات النشطة (بعد تحميل kinds من DB).
+  OilChangeFilterCatalogEntry withResolvedKind(List<OilChangeFilterKind> kinds) {
+    for (final k in kinds) {
+      if (k.code == kind.code) {
+        return OilChangeFilterCatalogEntry(
+          id: id,
+          kind: k,
+          name: name,
+          priceFils: priceFils,
+          sortOrder: sortOrder,
+        );
+      }
+    }
+    return this;
   }
 }
 
@@ -49,7 +70,10 @@ class OilChangeFilterSlot {
   String? name;
   int priceFils = 0;
 
-  bool get hasSelection => (name ?? '').trim().isNotEmpty;
+  bool get hasSelection =>
+      priceFils > 0 ||
+      catalogEntryId != null ||
+      (name ?? '').trim().isNotEmpty;
 
   void clear() {
     catalogEntryId = null;
@@ -70,12 +94,12 @@ class OilChangeFilterSlot {
   }) {
     final n = (row[nameKey] ?? '').toString().trim();
     final p = (row[priceKey] as num?)?.toInt() ?? 0;
-    if (n.isEmpty) {
+    if (n.isEmpty && p <= 0) {
       clear();
       return;
     }
     catalogEntryId = null;
-    name = n;
+    name = n.isEmpty ? null : n;
     priceFils = p < 0 ? 0 : p;
   }
 }

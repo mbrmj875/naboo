@@ -1,4 +1,4 @@
-import '../../../utils/iqd_money.dart';
+import '../../../services/cloud_sync_service.dart';
 import '../../../services/database_helper.dart';
 import '../../../services/oil_product_grades_repository.dart';
 import '../../../services/tenant_context_service.dart';
@@ -37,11 +37,131 @@ class OilChangeStockService {
     required int warehouseId,
   }) async {
     final tid = await _tenantId();
-    return _db.getProductWarehouseQty(
-      tenantId: tid,
-      productId: productId,
-      warehouseId: warehouseId,
+    // رقم المخزون الظاهر في قائمة المنتجات، لا رصيد مستودع فارغ.
+    return _productBookLiters(tid, productId);
+  }
+
+  Future<double> _productBookLiters(int tenantId, int productId) async {
+    final db = await _db.database;
+    final rows = await db.query(
+      'products',
+      columns: ['qty'],
+      where: 'id = ? AND tenantId = ?',
+      whereArgs: [productId, tenantId],
+      limit: 1,
     );
+    if (rows.isEmpty) return 0;
+    return (rows.first['qty'] as num?)?.toDouble() ?? 0;
+  }
+
+  /// يُرجع معرّف سند الصرف. يخصم اللترات من رصيد المنتج الظاهر في المخزون.
+  Future<int> issueForOilChangeOrder({
+    required int orderId,
+    required int productId,
+    required double liters,
+    required int warehouseId,
+    double creditLiters = 0,
+    String notes = 'صرف زيت — بطاقة غيار',
+  }) async {
+    if (liters <= 1e-9) {
+      throw StateError('أدخل كمية اللترات المأخوذة من المخزون');
+    }
+    final tid = await _tenantId();
+    final book = await _productBookLiters(tid, productId);
+    final credit = creditLiters > 0 ? creditLiters : 0.0;
+    if (book + credit + 1e-9 < liters) {
+      throw StateError(
+        'الرصيد غير كافٍ: متوفر ${book.toStringAsFixed(1)} لتر، '
+        'المطلوب ${liters.toStringAsFixed(1)} لتر',
+      );
+    }
+
+    var warehouse = warehouseId;
+    if (warehouse <= 0) {
+      final warehouses = await _db.listWarehousesActive(tenantId: tid);
+      if (warehouses.isNotEmpty) {
+        warehouse = (warehouses.first['id'] as num).toInt();
+      }
+    }
+
+    final db = await _db.database;
+    final nowIso = DateTime.now().toIso8601String();
+    final voucherId = await db.transaction<int>((txn) async {
+      final beforeRows = await txn.query(
+        'products',
+        columns: ['qty', 'buyPrice'],
+        where: 'id = ? AND tenantId = ?',
+        whereArgs: [productId, tid],
+        limit: 1,
+      );
+      if (beforeRows.isEmpty) {
+        throw StateError('منتج الزيت غير موجود في المخزون');
+      }
+      final before = (beforeRows.first['qty'] as num?)?.toDouble() ?? 0;
+      if (before + credit + 1e-9 < liters) {
+        throw StateError(
+          'الرصيد غير كافٍ: متوفر ${before.toStringAsFixed(1)} لتر، '
+          'المطلوب ${liters.toStringAsFixed(1)} لتر',
+        );
+      }
+      final after = before - liters;
+      final updated = await txn.rawUpdate(
+        'UPDATE products SET qty = qty - ? WHERE id = ? AND tenantId = ?',
+        [liters, productId, tid],
+      );
+      if (updated < 1) {
+        throw StateError('تعذّر تحديث رصيد الزيت في المخزون');
+      }
+      if (warehouse > 0) {
+        final aligned = await txn.rawUpdate(
+          '''
+          UPDATE product_warehouse_stock
+          SET qty = ?, updatedAt = ?
+          WHERE tenantId = ? AND productId = ? AND warehouseId = ?
+          ''',
+          [after, nowIso, tid, productId, warehouse],
+        );
+        if (aligned < 1) {
+          await txn.insert('product_warehouse_stock', {
+            'tenantId': tid,
+            'productId': productId,
+            'warehouseId': warehouse,
+            'qty': after,
+            'updatedAt': nowIso,
+          });
+        }
+      }
+      final unitCost =
+          (beforeRows.first['buyPrice'] as num?)?.toDouble() ?? 0;
+      final vId = await txn.insert('stock_vouchers', {
+        'tenantId': tid,
+        'voucherNo':
+            'OC-${DateTime.now().microsecondsSinceEpoch}-${orderId % 100000}',
+        'voucherType': 'out',
+        'voucherDate': nowIso,
+        'warehouseFromId': warehouse > 0 ? warehouse : null,
+        'warehouseToId': null,
+        'notes': '$notes #$orderId',
+        'sourceType': 'oil_change',
+        'sourceName': 'بطاقة غيار زيت',
+        'sourceRefId': orderId,
+        'createdAt': nowIso,
+      });
+      await txn.insert('stock_voucher_items', {
+        'tenantId': tid,
+        'voucherId': vId,
+        'productId': productId,
+        'qty': liters,
+        'unitPrice': unitCost,
+        'total': liters * unitCost,
+        'stockBefore': before,
+        'stockAfter': after,
+        'baseQty': liters,
+      });
+      return vId;
+    });
+    CloudSyncService.instance.scheduleSyncSoon();
+    return voucherId;
   }
 
   /// بند سند صرف مرتبط ببطاقة غيار زيت.
@@ -85,71 +205,6 @@ class OilChangeStockService {
       warehouseId: wh,
       unitCostIqd: unit,
     );
-  }
-
-  /// يُرجع معرّف سند الصرف. يرفض الرصيد غير الكافي (لا سالب).
-  Future<int> issueForOilChangeOrder({
-    required int orderId,
-    required int productId,
-    required double liters,
-    required int warehouseId,
-    double creditLiters = 0,
-    String notes = 'صرف زيت — بطاقة غيار',
-  }) async {
-    if (liters <= 1e-9) {
-      throw StateError('أدخل كمية اللترات المأخوذة من المخزون');
-    }
-    final tid = await _tenantId();
-    final avail = await _db.getProductWarehouseQty(
-      tenantId: tid,
-      productId: productId,
-      warehouseId: warehouseId,
-    );
-    final effectiveAvail = avail + (creditLiters > 0 ? creditLiters : 0);
-    if (effectiveAvail + 1e-9 < liters) {
-      throw StateError(
-        'الرصيد غير كافٍ: متوفر ${avail.toStringAsFixed(1)} لتر، '
-        'المطلوب ${liters.toStringAsFixed(1)} لتر',
-      );
-    }
-
-    final costRows = await (await _db.database).query(
-      'product_warehouse_stock',
-      columns: ['avgCostFils'],
-      where: 'tenantId = ? AND productId = ? AND warehouseId = ?',
-      whereArgs: [tid, productId, warehouseId],
-      limit: 1,
-    );
-    final avgFils = costRows.isEmpty
-        ? 0
-        : (costRows.first['avgCostFils'] as num?)?.toInt() ?? 0;
-    final unitCostIqd = IqdMoney.fromFils(avgFils);
-
-    final voucherNo =
-        'OC-${DateTime.now().microsecondsSinceEpoch}-${orderId % 100000}';
-    final res = await _db.commitOutboundStockVoucherWithLines(
-      tenantId: tid,
-      warehouseFromId: warehouseId,
-      voucherNo: voucherNo,
-      voucherDate: DateTime.now(),
-      sourceType: 'oil_change',
-      sourceName: 'بطاقة غيار زيت',
-      sourceRefId: orderId,
-      notes: '$notes #$orderId',
-      lines: [
-        (
-          productId: productId,
-          qty: liters,
-          unitPrice: unitCostIqd,
-        ),
-      ],
-    );
-    if (!res.ok || res.voucherId == null) {
-      throw StateError(
-        res.message.isEmpty ? 'تعذّر صرف الزيت من المخزون' : res.message,
-      );
-    }
-    return res.voucherId!;
   }
 
   /// إرجاع كمية سند صرف سابق إلى المستودع (تعديل بطاقة / إلغاء صرف).

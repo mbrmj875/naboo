@@ -1,5 +1,4 @@
 import 'dart:async' show Timer, unawaited;
-import 'dart:io';
 import 'dart:math';
 
 import 'package:barcode_widget/barcode_widget.dart';
@@ -8,10 +7,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl/intl.dart' hide TextDirection;
+
+import '../../platform/persist_local_bytes.dart';
+import '../../widgets/product_media_image.dart';
 
 import '../../models/new_product_extra_unit.dart';
 import '../../providers/product_provider.dart';
@@ -23,6 +24,7 @@ import '../../services/product_repository.dart';
 import '../../services/product_variants_repository.dart';
 import '../../services/tenant_context_service.dart';
 import '../../services/business_setup_settings.dart';
+import '../../services/web_financial_write_gate.dart';
 import '../../verticals/_contract/vertical_manifest.dart';
 import '../../verticals/_contract/vertical_registry.dart';
 import '../../theme/app_corner_style.dart';
@@ -38,6 +40,8 @@ import '../../utils/iqd_money.dart';
 import '../../utils/numeric_format.dart';
 import '../../utils/screen_layout.dart';
 import '../../widgets/inputs/app_input.dart';
+import '../../guides/guide_anchor.dart';
+import '../../guides/guide_controller.dart';
 import '../../widgets/inputs/arabic_speech_mic_button.dart';
 import '../../widgets/inputs/app_price_input.dart';
 import '../../widgets/variants/variant_size_picker_sheet.dart';
@@ -719,6 +723,70 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
     _minSellPriceCtrl.addListener(_onSellOrMinManualEdit);
     _reconcilePharmacySession();
     _loadRefs();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      try {
+        context.read<GuideController>().addListener(_onGuideStep);
+        _onGuideStep();
+      } catch (_) {}
+    });
+  }
+
+  void _onGuideStep() {
+    if (!mounted) return;
+    GuideController guide;
+    try {
+      guide = context.read<GuideController>();
+    } catch (_) {
+      return;
+    }
+    final action = guide.currentStep?.action;
+    if (action == null || action.isEmpty) return;
+    final target = switch (action) {
+      'product.set_stock_type_count' => 0,
+      'product.set_stock_type_volume' => 3,
+      'product.set_stock_type_hydraulic' => 4,
+      'product.set_stock_type_oil' => 5,
+      _ => null,
+    };
+    if (target == null || _stockTypeUi == target) return;
+    if ((target == 4 || target == 5) && _fluidInventoryEditor == null) return;
+    _applyStockTypeUi(target);
+  }
+
+  void _applyStockTypeUi(int next) {
+    setState(() {
+      _stockTypeUi = next;
+      if (next == 2) {
+        _multiVariantEnabled = true;
+        _trackInventory = true;
+        _stockBaseKind = 0;
+        if (_colorDrafts.isEmpty) {
+          final c = _VariantColorDraft();
+          c.sizes.add(_VariantSizeDraft());
+          _colorDrafts.add(c);
+        }
+      } else if (next == 4) {
+        _multiVariantEnabled = false;
+        _trackInventory = true;
+        _stockBaseKind = 3;
+        if (_hydraulicGradeDrafts.isEmpty) {
+          final draft = _fluidInventoryEditor?.newGradeDraft();
+          if (draft != null) _hydraulicGradeDrafts.add(draft);
+        }
+      } else if (next == 5) {
+        _multiVariantEnabled = false;
+        _trackInventory = true;
+        _stockBaseKind = 3;
+        if (_oilFamilyGradeDrafts.isEmpty) {
+          final draft = _fluidInventoryEditor?.newGradeDraft();
+          if (draft != null) _oilFamilyGradeDrafts.add(draft);
+        }
+      } else {
+        _multiVariantEnabled = false;
+        _stockBaseKind = next == 3 ? 3 : next;
+      }
+    });
   }
 
   Future<void> _loadRefs() async {
@@ -904,6 +972,9 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
 
   @override
   void dispose() {
+    try {
+      context.read<GuideController>().removeListener(_onGuideStep);
+    } catch (_) {}
     _homeInnerRouteObserver?.unsubscribe(this);
     _pharmacySession?.dispose();
     _buyPriceCtrl.removeListener(_onBuyPriceChangedForCostSuggest);
@@ -1011,15 +1082,17 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
         imageQuality: 72,
       );
       if (file == null) return;
-      if (kIsWeb) {
-        setState(() => _imagePath = file.path);
-        return;
-      }
-      final dir = await getApplicationDocumentsDirectory();
+      final bytes = await file.readAsBytes();
+      final ext = p.extension(file.name).isEmpty
+          ? p.extension(file.path)
+          : p.extension(file.name);
       final name =
-          'product_${DateTime.now().millisecondsSinceEpoch}${p.extension(file.path)}';
-      final dest = p.join(dir.path, name);
-      await File(file.path).copy(dest);
+          'product_${DateTime.now().millisecondsSinceEpoch}${ext.isEmpty ? '.jpg' : ext}';
+      final dest = await persistLocalBytes(
+        bytes: bytes,
+        relativeDir: 'product_images',
+        fileName: name,
+      );
       if (!mounted) return;
       setState(() => _imagePath = dest);
     } catch (e) {
@@ -1036,6 +1109,20 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
   Future<void> _submit({required bool popAfter}) async {
     if (_saving) return;
     if (!(_formKey.currentState?.validate() ?? false)) return;
+
+    final writeBlock =
+        await WebFinancialWriteGate.blockReasonForFinancialWrite();
+    if (writeBlock != null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(writeBlock),
+          backgroundColor: Colors.red.shade700,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
 
     if (_uiSettings.addShowAdvancedPricing &&
         _uiSettings.addShowDiscountFields &&
@@ -2380,7 +2467,9 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
                 const SizedBox(width: 6),
                 Expanded(
                   flex: 2,
-                  child: FilledButton(
+                  child: GuideAnchor(
+                    id: OilGuideAnchors.productFormSave,
+                    child: FilledButton(
                     onPressed: _saving ? null : () => _submit(popAfter: true),
                     style: FilledButton.styleFrom(
                       backgroundColor: _kGreen,
@@ -2402,6 +2491,7 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
                             ),
                           )
                         : Text(saveLabel),
+                  ),
                   ),
                 ),
                 const SizedBox(width: 6),
@@ -2466,7 +2556,9 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
                   ),
                   child: const Text('إلغاء'),
                 ),
-                FilledButton.icon(
+                GuideAnchor(
+                  id: OilGuideAnchors.productFormSave,
+                  child: FilledButton.icon(
                   onPressed: _saving ? null : () => _submit(popAfter: true),
                   style: FilledButton.styleFrom(
                     backgroundColor: _kGreen,
@@ -2488,6 +2580,7 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
                         )
                       : const Icon(Icons.check_rounded, size: 20),
                   label: Text(_saving ? 'جاري الحفظ…' : 'حفظ المنتج'),
+                ),
                 ),
                 FilledButton.tonalIcon(
                   onPressed: _saving ? null : () => _submit(popAfter: false),
@@ -2612,16 +2705,19 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
             children: [
               Expanded(
                 flex: 3,
-                child: AppInput(
-                  label: 'اسم المنتج',
-                  isRequired: true,
-                  controller: _nameCtrl,
-                  focusNode: _focusName,
-                  textInputAction: TextInputAction.next,
-                  onFieldSubmitted: (_) => _focusDesc.requestFocus(),
-                  textAlign: TextAlign.right,
-                  validator: (v) =>
-                      (v == null || v.trim().isEmpty) ? 'الاسم مطلوب' : null,
+                child: GuideAnchor(
+                  id: OilGuideAnchors.productFormName,
+                  child: AppInput(
+                    label: 'اسم المنتج',
+                    isRequired: true,
+                    controller: _nameCtrl,
+                    focusNode: _focusName,
+                    textInputAction: TextInputAction.next,
+                    onFieldSubmitted: (_) => _focusDesc.requestFocus(),
+                    textAlign: TextAlign.right,
+                    validator: (v) =>
+                        (v == null || v.trim().isEmpty) ? 'الاسم مطلوب' : null,
+                  ),
                 ),
               ),
               const SizedBox(width: 12),
@@ -2661,25 +2757,31 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
             ],
           ),
           const SizedBox(height: 14),
-          AppInput(
-            label: 'الوصف',
-            controller: _descCtrl,
-            focusNode: _focusDesc,
-            textAlign: TextAlign.right,
-            minLines: 2,
-            maxLines: 4,
-            suffixIcon: ArabicSpeechMicButton(
+          GuideAnchor(
+            id: OilGuideAnchors.productFormDescription,
+            child: AppInput(
+              label: 'الوصف',
               controller: _descCtrl,
-              onTextUpdated: () => setState(() {}),
+              focusNode: _focusDesc,
+              textAlign: TextAlign.right,
+              minLines: 2,
+              maxLines: 4,
+              suffixIcon: ArabicSpeechMicButton(
+                controller: _descCtrl,
+                onTextUpdated: () => setState(() {}),
+              ),
             ),
           ),
           const SizedBox(height: 14),
           if (_uiSettings.addShowImageField) ...[
-            _labeledField(
-              context,
-              label: 'صورة المنتج',
-              requiredField: _uiSettings.addRequireImage,
-              child: _imageTile(context),
+            GuideAnchor(
+              id: OilGuideAnchors.productFormImage,
+              child: _labeledField(
+                context,
+                label: 'صورة المنتج',
+                requiredField: _uiSettings.addRequireImage,
+                child: _imageTile(context),
+              ),
             ),
             const SizedBox(height: 14),
           ],
@@ -2688,23 +2790,29 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
               final pairRow =
                   context.screenLayout.isHandsetForLayout || c.maxWidth >= 520;
               final gap = context.screenLayout.isHandsetForLayout ? 8.0 : 12.0;
-              final cat = _comboField(
-                context,
-                label: 'التصنيف',
-                controller: _categoryCtrl,
-                options: _categoryOptions,
-                hint: 'اكتب أو اختر من القائمة',
-                focusNode: _focusCategory,
-                onFieldSubmitted: (_) => _focusBrand.requestFocus(),
+              final cat = GuideAnchor(
+                id: OilGuideAnchors.productFormCategory,
+                child: _comboField(
+                  context,
+                  label: 'التصنيف',
+                  controller: _categoryCtrl,
+                  options: _categoryOptions,
+                  hint: 'اكتب أو اختر من القائمة',
+                  focusNode: _focusCategory,
+                  onFieldSubmitted: (_) => _focusBrand.requestFocus(),
+                ),
               );
-              final br = _comboField(
-                context,
-                label: 'الماركة',
-                controller: _brandCtrl,
-                options: _brandOptions,
-                hint: 'اكتب أو اختر من القائمة',
-                focusNode: _focusBrand,
-                onFieldSubmitted: (_) => _focusSupplier.requestFocus(),
+              final br = GuideAnchor(
+                id: OilGuideAnchors.productFormBrand,
+                child: _comboField(
+                  context,
+                  label: 'الماركة',
+                  controller: _brandCtrl,
+                  options: _brandOptions,
+                  hint: 'اكتب أو اختر من القائمة',
+                  focusNode: _focusBrand,
+                  onFieldSubmitted: (_) => _focusSupplier.requestFocus(),
+                ),
               );
               if (pairRow) {
                 return Row(
@@ -2765,7 +2873,9 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
               final pairRow =
                   context.screenLayout.isHandsetForLayout || c.maxWidth >= 520;
               final gap = context.screenLayout.isHandsetForLayout ? 8.0 : 12.0;
-              final warehouse = _labeledField(
+              final warehouse = GuideAnchor(
+                id: OilGuideAnchors.productFormWarehouse,
+                child: _labeledField(
                 context,
                 label: 'المخزن',
                 requiredField: _uiSettings.addRequireWarehouse,
@@ -2806,8 +2916,11 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
                       ? null
                       : (v) => setState(() => _warehouseId = v),
                 ),
+              ),
               );
-              final stockType = _labeledField(
+              final stockType = GuideAnchor(
+                id: OilGuideAnchors.productFormStockType,
+                child: _labeledField(
                 context,
                 label: 'نوع المخزون الأساسي',
                 child: DropdownButtonFormField<int>(
@@ -2845,41 +2958,10 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
                     ],
                   ],
                   onChanged: (v) {
-                    final next = v ?? 0;
-                    setState(() {
-                      _stockTypeUi = next;
-                      if (next == 2) {
-                        _multiVariantEnabled = true;
-                        _trackInventory = true;
-                        _stockBaseKind = 0;
-                        if (_colorDrafts.isEmpty) {
-                          final c = _VariantColorDraft();
-                          c.sizes.add(_VariantSizeDraft());
-                          _colorDrafts.add(c);
-                        }
-                      } else if (next == 4) {
-                        _multiVariantEnabled = false;
-                        _trackInventory = true;
-                        _stockBaseKind = 3;
-                        if (_hydraulicGradeDrafts.isEmpty) {
-                          final draft = _fluidInventoryEditor?.newGradeDraft();
-                          if (draft != null) _hydraulicGradeDrafts.add(draft);
-                        }
-                      } else if (next == 5) {
-                        _multiVariantEnabled = false;
-                        _trackInventory = true;
-                        _stockBaseKind = 3;
-                        if (_oilFamilyGradeDrafts.isEmpty) {
-                          final draft = _fluidInventoryEditor?.newGradeDraft();
-                          if (draft != null) _oilFamilyGradeDrafts.add(draft);
-                        }
-                      } else {
-                        _multiVariantEnabled = false;
-                        _stockBaseKind = next == 3 ? 3 : next;
-                      }
-                    });
+                    _applyStockTypeUi(v ?? 0);
                   },
                 ),
+              ),
               );
               if (pairRow) {
                 return Row(
@@ -2949,17 +3031,23 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
           const SizedBox(height: 14),
           if (_isFluidFamilyUi && _fluidInventoryEditor != null) ...[
             const SizedBox(height: 10),
-            _fluidInventoryEditor!.buildGradesEditor(
-              context: context,
-              isOilFamily: _stockTypeUi == 5,
-              grades: _activeFluidGradeDrafts,
-              onChanged: () => setState(() {}),
+            GuideAnchor(
+              id: OilGuideAnchors.productFormFluidGrades,
+              child: _fluidInventoryEditor!.buildGradesEditor(
+                context: context,
+                isOilFamily: _stockTypeUi == 5,
+                grades: _activeFluidGradeDrafts,
+                onChanged: () => setState(() {}),
+              ),
             ),
           ],
           if (_stockTypeUi != 2 &&
               _stockTypeUi != 3 &&
               !_isFluidFamilyUi)
-            _saleExtraUnitsEditor(context),
+            GuideAnchor(
+              id: OilGuideAnchors.productFormExtraUnits,
+              child: _saleExtraUnitsEditor(context),
+            ),
           if (_stockTypeUi == 3) ...[
             const SizedBox(height: 8),
             Text(
@@ -2972,7 +3060,10 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
               textAlign: TextAlign.start,
             ),
             const SizedBox(height: 8),
-            _saleExtraUnitsEditor(context),
+            GuideAnchor(
+              id: OilGuideAnchors.productFormExtraUnits,
+              child: _saleExtraUnitsEditor(context),
+            ),
           ],
           const SizedBox(height: 14),
           Text(
@@ -2989,15 +3080,18 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
               final pairRow =
                   context.screenLayout.isHandsetForLayout || c.maxWidth >= 520;
               final gap = context.screenLayout.isHandsetForLayout ? 8.0 : 12.0;
-              final supplier = _comboField(
-                context,
-                label: 'المورد',
-                controller: _supplierCtrl,
-                options: _supplierOptions,
-                hint: 'اكتب أو اختر من السجل',
-                requiredField: _uiSettings.addRequireSupplier,
-                focusNode: _focusSupplier,
-                onFieldSubmitted: (_) => _focusSupplierCode.requestFocus(),
+              final supplier = GuideAnchor(
+                id: OilGuideAnchors.productFormSupplier,
+                child: _comboField(
+                  context,
+                  label: 'المورد',
+                  controller: _supplierCtrl,
+                  options: _supplierOptions,
+                  hint: 'اكتب أو اختر من السجل',
+                  requiredField: _uiSettings.addRequireSupplier,
+                  focusNode: _focusSupplier,
+                  onFieldSubmitted: (_) => _focusSupplierCode.requestFocus(),
+                ),
               );
               final supplierCode = _labeledField(
                 context,
@@ -3735,14 +3829,17 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
       final labels = _fluidInventoryEditor?.labels(
         isOilFamily: _stockTypeUi == 5,
       );
-      return _sectionCard(
-        context,
-        title: 'التسعير',
-        child: Text(
-          labels?.pricingHint ??
-              'سعر الشراء والبيع يُحدَّد في جدول اللزوجات/الدرجات أعلاه.',
-          style: TextStyle(color: cs.onSurfaceVariant, height: 1.4),
-          textAlign: TextAlign.start,
+      return GuideAnchor(
+        id: OilGuideAnchors.productFormPricing,
+        child: _sectionCard(
+          context,
+          title: 'التسعير',
+          child: Text(
+            labels?.pricingHint ??
+                'سعر الشراء والبيع يُحدَّد في جدول اللزوجات/الدرجات أعلاه.',
+            style: TextStyle(color: cs.onSurfaceVariant, height: 1.4),
+            textAlign: TextAlign.start,
+          ),
         ),
       );
     }
@@ -3751,13 +3848,18 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
         : null;
     final isHandset = context.screenLayout.isHandsetForLayout;
     if (isHandset) {
-      return _sectionCard(
-        context,
-        title: 'التسعير',
-        child: _buildHandsetPricingLayout(context, perKgHint: perKgHint),
+      return GuideAnchor(
+        id: OilGuideAnchors.productFormPricing,
+        child: _sectionCard(
+          context,
+          title: 'التسعير',
+          child: _buildHandsetPricingLayout(context, perKgHint: perKgHint),
+        ),
       );
     }
-    return _sectionCard(
+    return GuideAnchor(
+      id: OilGuideAnchors.productFormPricing,
+      child: _sectionCard(
       context,
       title: 'التسعير',
       child: Column(
@@ -4150,6 +4252,7 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
           ],
         ],
       ),
+      ),
     );
   }
 
@@ -4294,20 +4397,24 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text(
-              'تتبع المخزون',
-              style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+          GuideAnchor(
+            id: OilGuideAnchors.productFormTrackInventory,
+            child: SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text(
+                'تتبع المخزون',
+                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+              ),
+              subtitle: Text(
+                'عند الإيقاف لا تُسجَّل كميات لهذا المنتج',
+                style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+              ),
+              value: _trackInventory,
+              activeThumbColor: cs.primary,
+              onChanged: _multiVariantEnabled
+                  ? null
+                  : (v) => setState(() => _trackInventory = v),
             ),
-            subtitle: Text(
-              'عند الإيقاف لا تُسجَّل كميات لهذا المنتج',
-              style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
-            ),
-            value: _trackInventory,
-            activeThumbColor: cs.primary,
-            onChanged:
-                _multiVariantEnabled ? null : (v) => setState(() => _trackInventory = v),
           ),
           if (showQtyLow && !handsetSixGrid) ...[
             const SizedBox(height: 8),
@@ -4321,7 +4428,9 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
                 final lowHint = _stockBaseKind == 1
                     ? 'بالكيلوغرام (مثال: 1 = تنبيه عند أقل من 1 كغ)'
                     : null;
-                final q = _labeledField(
+                final q = GuideAnchor(
+                  id: OilGuideAnchors.productFormQty,
+                  child: _labeledField(
                   context,
                   label: 'الكمية في المخزون',
                   child: AppInput(
@@ -4340,8 +4449,11 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
                     hint: '0',
                   ),
                   subtitle: qtyHint,
+                ),
                 );
-                final low = _labeledField(
+                final low = GuideAnchor(
+                  id: OilGuideAnchors.productFormLowStock,
+                  child: _labeledField(
                   context,
                   label: 'تنبيه عند أقل من',
                   child: AppInput(
@@ -4358,6 +4470,7 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
                     hint: '0',
                   ),
                   subtitle: lowHint,
+                ),
                 );
                 if (row) {
                   return Row(
@@ -4678,31 +4791,28 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
             borderRadius: BorderRadius.circular(12),
             border: Border.all(color: borderColor, width: 1.5),
           ),
-          child:
-              _imagePath != null &&
-                  ((kIsWeb) || (!kIsWeb && File(_imagePath!).existsSync()))
+          child: _imagePath != null && _imagePath!.trim().isNotEmpty
               ? ClipRRect(
                   borderRadius: BorderRadius.circular(10),
-                  child: kIsWeb
-                      ? Center(
-                          child: Padding(
-                            padding: const EdgeInsets.all(12),
-                            child: Text(
-                              'تم اختيار صورة (معاينة على الويب غير متاحة)',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: cs.onSurfaceVariant,
-                              ),
-                            ),
+                  child: ProductMediaImage(
+                    pathOrUrl: _imagePath,
+                    fit: BoxFit.cover,
+                    width: double.infinity,
+                    height: 120,
+                    placeholder: Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Text(
+                          'تم اختيار صورة',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: cs.onSurfaceVariant,
                           ),
-                        )
-                      : Image.file(
-                          File(_imagePath!),
-                          fit: BoxFit.cover,
-                          width: double.infinity,
-                          height: 120,
                         ),
+                      ),
+                    ),
+                  ),
                 )
               : Row(
                   mainAxisAlignment: MainAxisAlignment.center,

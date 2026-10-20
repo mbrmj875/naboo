@@ -55,6 +55,8 @@ class HomeDashboardSpec {
     required this.profile,
     this.searchConfig,
     this.primaryCta,
+    this.pinnedCta,
+    this.secondaryCta,
     this.secondaryTiles = const [],
     this.hideGlanceIds = const {},
     this.hideNavRouteIds = const {},
@@ -62,12 +64,20 @@ class HomeDashboardSpec {
     this.greetingEmoji = '👋',
     this.showPinnedProducts = true,
     this.showOilKpiGrid = false,
+    this.showRestaurantPosHome = false,
     this.extraHybridGlanceIds = const {},
   });
 
   final HomeDashboardProfile profile;
   final HomeSearchConfig? searchConfig;
   final HomeDashboardAction? primaryCta;
+
+  /// زر بنفس شكل [primaryCta] يظهر تحته دائماً (مثل بيع مباشر). لا يُخفى من الإعدادات.
+  final HomeDashboardAction? pinnedCta;
+
+  /// زر رئيسي ثانٍ يمكن إخفاؤه من الإعدادات (مثل بطاقة غسيل السيارات).
+  final HomeDashboardAction? secondaryCta;
+
   final List<HomeDashboardAction> secondaryTiles;
   final Set<String> hideGlanceIds;
 
@@ -78,6 +88,9 @@ class HomeDashboardSpec {
   final String greetingEmoji;
   final bool showPinnedProducts;
   final bool showOilKpiGrid;
+
+  /// رئيسية POS للمطعم/الكافيه: أقسام + شبكة أصناف بدل glance orbit.
+  final bool showRestaurantPosHome;
 
   /// بطاقات orbit إضافية في الوضع الهجين (مثل sale).
   final Set<String> extraHybridGlanceIds;

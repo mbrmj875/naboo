@@ -21,6 +21,7 @@ import '../../owner/utils/owner_shortcut_navigation.dart';
 import '../../owner/widgets/owner_dashboard_top_chrome.dart';
 import '../../owner/widgets/owner_dashboard_v3_pinned_section.dart';
 import '../../owner/widgets/owner_dashboard_v3_panel.dart';
+import '../../owner/screens/owner_period_sales_detail_screen.dart';
 import '../../owner/providers/owner_command_center_provider.dart';
 import '../../owner/providers/owner_dashboard_layout_provider.dart';
 import '../../owner/services/business_audit_log_service.dart';
@@ -37,6 +38,10 @@ import '../../owner/widgets/owner_partial_status_banner.dart';
 import '../../owner/widgets/owner_staff_activity_panel.dart';
 import '../../owner/widgets/owner_sensitive_actions_panel.dart';
 import '../../owner/widgets/owner_sparkline.dart';
+import '../../guides/guide_controller.dart';
+import '../../guides/guide_root_nav_observer.dart';
+import '../../guides/widgets/guide_owner_home_cta_stub.dart';
+import '../../navigation/content_navigation.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/business_features_provider.dart';
 import '../../services/business_setup_settings.dart';
@@ -53,6 +58,17 @@ import '../cash/cash_screen.dart';
 import '../debts/debts_screen.dart';
 import '../installments/installments_screen.dart';
 import '../inventory/inventory_products_screen.dart';
+import '../settings/dashboard_layout_settings_screen.dart';
+import '../inventory/add_product_screen.dart';
+import '../users/employee_identity_screen.dart';
+import '../users/staff_shifts_week_screen.dart';
+import '../users/user_form_screen.dart';
+import '../users/users_screen.dart';
+import '../../verticals/car_wash/screens/car_wash_form_screen.dart';
+import '../../verticals/oil_change/screens/oil_change_form_screen.dart';
+import '../../verticals/oil_change/screens/oil_change_hub_screen.dart';
+import '../../verticals/oil_change/screens/oil_change_services_screen.dart';
+import '../../verticals/oil_change/screens/oil_change_whatsapp_connect_screen.dart';
 
 class OwnerDashboardScreen extends StatefulWidget {
   const OwnerDashboardScreen({super.key});
@@ -94,9 +110,222 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    GuideRootNavObserver.instance.addListener(_onGuideRootRoute);
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      _bindGuideHost();
       unawaited(_bootstrapDashboard());
     });
+  }
+
+  void _onGuideRootRoute(String routeId) {
+    if (!mounted) return;
+    if (routeId == AppContentRoutes.ownerDashboard) {
+      _bindGuideHost();
+    }
+  }
+
+  void _bindGuideHost() {
+    if (!mounted) return;
+    final guide = context.read<GuideController>();
+    // لا تسرق المضيف أثناء جولة تعمل عبر شاشة أخرى فوق المالك
+    if (guide.isRunning && GuideRootNavObserver.instance.topRouteId !=
+        AppContentRoutes.ownerDashboard) {
+      return;
+    }
+    final auth = context.read<AuthProvider>();
+    final tenantId = TenantContextService.instance.activeTenantId;
+    final userKey = auth.userGlobalId.isNotEmpty
+        ? auth.userGlobalId
+        : 'u${auth.userId ?? 0}';
+    guide.configureIdentity(tenantId: tenantId, userKey: userKey);
+    guide.bindHost(
+      GuideHostBridge(
+        currentRouteId: _guideCurrentRouteId,
+        ensureRoute: _guideEnsureRoute,
+        runAction: _guideRunAction,
+      ),
+    );
+  }
+
+  String _guideCurrentRouteId() {
+    return GuideRootNavObserver.instance.topRouteId;
+  }
+
+  Future<void> _guideRunAction(String action) async {
+    if (!mounted) return;
+    if (action == 'oil.select_pending_tab' ||
+        action == 'wa.show_methods' ||
+        action == 'wa.show_connected' ||
+        action == 'oil.open_hub_settings' ||
+        action == 'oil.open_oil_catalog' ||
+        action == 'oil.open_filter_catalog' ||
+        action == 'oil.open_hydraulic_catalog' ||
+        action == 'oil.expand_extras' ||
+        action.startsWith('product.set_stock_type_')) {
+      context.read<GuideController>().bump();
+      await Future<void>.delayed(const Duration(milliseconds: 220));
+    }
+  }
+
+  Future<void> _guideWaitUntilTop(bool Function(String id) match) async {
+    for (var i = 0; i < 24; i++) {
+      if (match(GuideRootNavObserver.instance.topRouteId)) return;
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
+  }
+
+  /// يدفع مساراً على الجذر دون انتظار إغلاقه (وإلا تتجمّد الجولة).
+  Future<void> _guidePushNamed(String routeId, Widget page) async {
+    if (!mounted) return;
+    if (GuideRootNavObserver.instance.topRouteId == routeId) return;
+    unawaited(
+      Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          settings: RouteSettings(name: routeId),
+          builder: (_) => page,
+        ),
+      ),
+    );
+    await _guideWaitUntilTop((id) => id == routeId);
+  }
+
+  Future<void> _guideEnsureRoute(String routeId) async {
+    if (!mounted) return;
+    final top = GuideRootNavObserver.instance.topRouteId;
+
+    bool isHub(String id) =>
+        id == AppContentRoutes.oilServicesLog ||
+        id == AppContentRoutes.oilChangeHub;
+
+    if (routeId == AppContentRoutes.ownerDashboard) {
+      if (top == AppContentRoutes.ownerDashboard) return;
+      Navigator.of(context).popUntil((r) => r.isFirst);
+      await _guideWaitUntilTop((id) => id == AppContentRoutes.ownerDashboard);
+      if (mounted) _bindGuideHost();
+      return;
+    }
+
+    if (routeId == top) return;
+
+    if (routeId == AppContentRoutes.home) {
+      await _guidePushNamed(
+        AppContentRoutes.home,
+        const GuideOwnerHomeCtaStub(),
+      );
+      return;
+    }
+
+    if (routeId == AppContentRoutes.oilServicesLog ||
+        routeId == AppContentRoutes.oilChangeHub) {
+      if (isHub(top)) return;
+      await _guidePushNamed(
+        AppContentRoutes.oilServicesLog,
+        const OilChangeHubScreen(),
+      );
+      return;
+    }
+
+    if (routeId == AppContentRoutes.oilChangeCreate) {
+      await _guidePushNamed(
+        AppContentRoutes.oilChangeCreate,
+        const OilChangeFormScreen(),
+      );
+      return;
+    }
+
+    if (routeId == AppContentRoutes.oilChangeServices) {
+      await _guidePushNamed(
+        AppContentRoutes.oilChangeServices,
+        const OilChangeServicesScreen(),
+      );
+      return;
+    }
+
+    if (routeId == AppContentRoutes.oilWhatsappConnect) {
+      if (!isHub(top) && top != AppContentRoutes.oilWhatsappConnect) {
+        await _guidePushNamed(
+          AppContentRoutes.oilServicesLog,
+          const OilChangeHubScreen(),
+        );
+      }
+      await _guidePushNamed(
+        AppContentRoutes.oilWhatsappConnect,
+        const OilChangeWhatsappConnectScreen(),
+      );
+      return;
+    }
+
+    if (routeId == AppContentRoutes.carWashCreate) {
+      await _guidePushNamed(
+        AppContentRoutes.carWashCreate,
+        const CarWashFormScreen(),
+      );
+      return;
+    }
+
+    if (routeId == AppContentRoutes.settingsDashboardLayout) {
+      await _guidePushNamed(
+        AppContentRoutes.settingsDashboardLayout,
+        const DashboardLayoutSettingsScreen(),
+      );
+      return;
+    }
+
+    if (routeId == AppContentRoutes.users) {
+      await _guidePushNamed(AppContentRoutes.users, const UsersScreen());
+      return;
+    }
+
+    if (routeId == AppContentRoutes.userForm) {
+      if (top != AppContentRoutes.users &&
+          top != AppContentRoutes.userForm) {
+        await _guidePushNamed(AppContentRoutes.users, const UsersScreen());
+      }
+      await _guidePushNamed(
+        AppContentRoutes.userForm,
+        const UserFormScreen(),
+      );
+      return;
+    }
+
+    if (routeId == AppContentRoutes.staffShiftsWeek) {
+      await _guidePushNamed(
+        AppContentRoutes.staffShiftsWeek,
+        const StaffShiftsWeekScreen(),
+      );
+      return;
+    }
+
+    if (routeId == AppContentRoutes.employeeIdentity) {
+      await _guidePushNamed(
+        AppContentRoutes.employeeIdentity,
+        const EmployeeIdentityScreen(),
+      );
+      return;
+    }
+
+    if (routeId == AppContentRoutes.inventoryProducts) {
+      await _guidePushNamed(
+        AppContentRoutes.inventoryProducts,
+        const InventoryProductsScreen(),
+      );
+      return;
+    }
+
+    if (routeId == AppContentRoutes.addProduct) {
+      if (top != AppContentRoutes.inventoryProducts &&
+          top != AppContentRoutes.addProduct) {
+        await _guidePushNamed(
+          AppContentRoutes.inventoryProducts,
+          const InventoryProductsScreen(),
+        );
+      }
+      await _guidePushNamed(
+        AppContentRoutes.addProduct,
+        const AddProductScreen(),
+      );
+      return;
+    }
   }
 
   @override
@@ -151,8 +380,12 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen>
 
   @override
   void dispose() {
+    GuideRootNavObserver.instance.removeListener(_onGuideRootRoute);
     WidgetsBinding.instance.removeObserver(this);
     OwnerPushActionRegistry.clear();
+    try {
+      context.read<GuideController>().unbindHost();
+    } catch (_) {}
     _featuresProvider?.removeListener(_syncFeatureGate);
     _tenantContext?.removeListener(_onTenantContextChanged);
     _studioProvider?.removeListener(_syncV3Mode);
@@ -461,6 +694,7 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen>
               MaterialPageRoute<void>(builder: (_) => const CashScreen()),
             );
           },
+          onOpenSales: () => openOwnerPeriodSalesDetail(context, center),
         ),
         const SizedBox(height: 14),
         Row(
@@ -544,6 +778,7 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen>
               MaterialPageRoute<void>(builder: (_) => const CashScreen()),
             );
           },
+          onOpenSales: () => openOwnerPeriodSalesDetail(context, center),
         ),
         const SizedBox(height: 14),
         OwnerStaffActivityPanel(
@@ -593,6 +828,7 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen>
               );
             },
             onRetry: () => center.refreshSection(OwnerSectionIds.sales),
+            onTap: () => openOwnerPeriodSalesDetail(context, center),
           ),
           if (snapshot.salesSparkline != null &&
               (snapshot.salesSparkline!.hasData ||
@@ -763,9 +999,7 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen>
 
   @override
   Widget build(BuildContext context) {
-    final isHandset = context.screenLayout.isHandsetForLayout;
     return DoubleBackToExitScope(
-      enabled: isHandset,
       child: Consumer<OwnerCommandCenterProvider>(
       builder: (context, center, _) {
         final features = context.watch<BusinessFeaturesProvider>();
@@ -820,6 +1054,7 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen>
                 MaterialPageRoute<void>(builder: (_) => const CashScreen()),
               );
             },
+            onOpenSales: () => openOwnerPeriodSalesDetail(context, center),
           );
         } else {
           contentLayout = isWideLayout

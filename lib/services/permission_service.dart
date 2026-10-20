@@ -247,6 +247,37 @@ class PermissionService {
     return {for (final k in PermissionKeys.allKeys) k: d.contains(k)};
   }
 
+  /// مالك/مدير أو موظف «كامل التخصيص» (كل مفاتيح [PermissionKeys.allKeys] مفعّلة).
+  Future<bool> hasElevatedAccess({
+    required int? userId,
+    required String roleKey,
+  }) async {
+    final rk = roleKey.trim().toLowerCase();
+    if (rk == 'owner' || rk == 'admin') return true;
+    if (userId == null || userId <= 0) return false;
+    final map = await getUserPermissionMapForEdit(
+      userId: userId,
+      roleKey: roleKey,
+    );
+    if (map.isEmpty) return false;
+    return PermissionKeys.allKeys.every((k) => map[k] == true);
+  }
+
+  Future<bool> hasElevatedAccessForSession({
+    required int? sessionUserId,
+    required String sessionRoleKey,
+    Map<String, dynamic>? activeShift,
+    bool useShiftOwnerAsSubject = false,
+  }) async {
+    final sub = await resolveEffectivePermissionSubject(
+      sessionUserId: sessionUserId,
+      sessionRoleKey: sessionRoleKey,
+      activeShift: activeShift,
+      useShiftOwnerAsSubject: useShiftOwnerAsSubject,
+    );
+    return hasElevatedAccess(userId: sub.userId, roleKey: sub.roleKey);
+  }
+
   Future<void> clearUserPermissionOverrides(int userId) async {
     final db = await _dbHelper.database;
     await db.delete(

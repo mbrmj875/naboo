@@ -2,6 +2,7 @@ import 'dart:async' show unawaited;
 
 import 'package:flutter/foundation.dart' show kDebugMode, kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'dart:ui' show PlatformDispatcher;
 import 'utils/debug_ndjson_logger.dart';
 import 'utils/app_logger.dart';
@@ -13,7 +14,11 @@ import 'package:provider/provider.dart';
 import 'package:app_links/app_links.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'services/cloud_sync_service.dart';
+import 'services/web_runtime_bootstrap.dart';
 import 'services/auth/web_url_cleanup.dart';
+import 'services/auth/web_auth_history_guard.dart';
+import 'widgets/web_idle_lock_binder.dart';
+import 'widgets/web_pwa_install_banner.dart';
 import 'services/sync_queue_service.dart';
 import 'services/database_helper.dart';
 import 'services/system_notification_service.dart';
@@ -43,9 +48,14 @@ import 'providers/ui_feedback_settings_provider.dart';
 import 'providers/dashboard_layout_provider.dart';
 import 'providers/global_barcode_route_bridge.dart';
 import 'providers/open_ops_registry.dart';
+import 'guides/guide_controller.dart';
+import 'guides/guide_overlay.dart';
+import 'guides/guide_root_nav_observer.dart';
+import 'guides/widgets/guide_nav_lifecycle_binder.dart';
 import 'widgets/global_barcode_keyboard_listener.dart';
 import 'widgets/keyboard_focus_scroll_scope.dart';
 import 'widgets/restricted_mode_banner_controller.dart';
+import 'navigation/app_exit_back.dart';
 import 'navigation/app_root_navigator_key.dart';
 import 'services/marketplace/marketplace_session_service.dart';
 import 'services/tenant_context_service.dart';
@@ -70,12 +80,15 @@ import 'screens/dev/stress_tools_screen.dart';
 import 'verticals/_contract/vertical_registry.dart';
 import 'verticals/general_retail/manifest.dart';
 import 'verticals/oil_change/manifest.dart';
+import 'verticals/oil_change/services/oil_change_whatsapp_outbox_auto_retry.dart';
 import 'verticals/pharmacy/manifest.dart';
+import 'verticals/restaurant/manifest.dart';
 
 void _registerVerticalManifests() {
   VerticalRegistry.instance.register(const GeneralRetailVerticalManifest());
   VerticalRegistry.instance.register(const OilChangeVerticalManifest());
   VerticalRegistry.instance.register(const PharmacyVerticalManifest());
+  VerticalRegistry.instance.register(const RestaurantVerticalManifest());
 }
 
 /// Supabase OAuth returns `io.supabase.naboo://login-callback?code=…`.
@@ -223,20 +236,27 @@ void main() async {
   initSqliteForPlatform();
   // Fail fast if --dart-define values are missing (or assertions stripped in release).
   SupabaseConfig.assertConfigured();
+  final sessionPersistKey =
+      supabasePersistSessionKeyFromUrl(SupabaseConfig.url);
+  // الويب: localStorage عبر SharedPreferences — يصمد بعد إغلاق التبويب/PWA.
+  // المنصات الأصلية: Keychain / EncryptedSharedPreferences كما كانت.
+  if (kIsWeb) {
+    await migrateWebSecureSessionToSharedPreferences(sessionPersistKey);
+  }
   await Supabase.initialize(
     url: SupabaseConfig.url,
     anonKey: SupabaseConfig.anonKey,
     // Offline-friendly: prevent noisy infinite refresh retries when DNS/Internet is down.
     // We explicitly trigger sync/bootstrap from our code paths when needed.
-    // Token persisted in OS-level secure storage (Keychain / EncryptedSharedPreferences / DPAPI)
-    // instead of plain SharedPreferences. Also auto-migrates any legacy token on first run.
     authOptions: FlutterAuthClientOptions(
       autoRefreshToken: true,
       // نعالج deep links يدوياً (ويب + موبايل) مع try/catch — تجنب crash PKCE.
       detectSessionInUri: false,
-      localStorage: SecureLocalStorage(
-        persistSessionKey: supabasePersistSessionKeyFromUrl(SupabaseConfig.url),
-      ),
+      localStorage: kIsWeb
+          ? WebSharedPreferencesLocalStorage(
+              persistSessionKey: sessionPersistKey,
+            )
+          : SecureLocalStorage(persistSessionKey: sessionPersistKey),
     ),
   );
   _registerMobileOAuthDeepLinkHandler();
@@ -268,6 +288,7 @@ void main() async {
         }
       }
     }
+    await WebRuntimeBootstrap.initialize();
   }
   if (kDebugMode) {
     debugPrint('Before runStartupCriticalMigrations');
@@ -286,6 +307,13 @@ void main() async {
   // عجّل ظهور شاشة التحميل (Flutter) — الإشعارات/FCM ليست شرطًا للإقلاع.
   runApp(const MyApp());
   unawaited(_startPostUiServices());
+  // إعادة تلقائية آمنة لطابور واتساب عند عودة الشبكة (بعد ظهور الواجهة).
+  try {
+    OilChangeWhatsappOutboxAutoRetry.instance.start();
+  } catch (e, st) {
+    AppLogger.warn('main', 'WhatsApp outbox auto-retry start: $e');
+    if (kDebugMode) debugPrint('$st');
+  }
 }
 
 Future<void> _startPostUiServices() async {
@@ -371,9 +399,23 @@ class MyApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => NotificationProvider()),
         ChangeNotifierProvider(create: (_) => SalePosSettingsProvider()),
         ChangeNotifierProvider(create: (_) => UiFeedbackSettingsProvider()),
-        ChangeNotifierProvider(create: (_) => DashboardLayoutProvider()),
+        ChangeNotifierProxyProvider<AuthProvider, DashboardLayoutProvider>(
+          create: (_) => DashboardLayoutProvider(),
+          update: (_, auth, previous) {
+            final provider = previous ?? DashboardLayoutProvider();
+            unawaited(
+              provider.bindToUser(
+                isLoggedIn: auth.isLoggedIn,
+                userGlobalId: auth.userGlobalId,
+                userId: auth.userId,
+              ),
+            );
+            return provider;
+          },
+        ),
         ChangeNotifierProvider(create: (_) => OpenOpsRegistry()),
         Provider(create: (_) => GlobalBarcodeRouteBridge()),
+        ChangeNotifierProvider(create: (_) => GuideController()),
       ],
       child: Consumer<ThemeProvider>(
         builder: (context, themeProvider, child) {
@@ -382,6 +424,9 @@ class MyApp extends StatelessWidget {
               return CloudSessionResumeBridge(
                 child: MaterialApp(
                 navigatorKey: appRootNavigatorKey,
+                navigatorObservers: <NavigatorObserver>[
+                  GuideRootNavObserver.instance,
+                ],
                 title: 'naboo',
                 debugShowCheckedModeBanner: false,
                 theme: AppThemeResolver.light(salePosProv.data),
@@ -391,6 +436,14 @@ class MyApp extends StatelessWidget {
                     : ThemeMode.light,
                 themeAnimationDuration: const Duration(milliseconds: 460),
                 themeAnimationCurve: Curves.easeOutCubic,
+                // بدون هذا: الملاح الداخلي عند الجذر يبلّغ canHandlePop=false
+                // فيغلق Android التطبيق فوراً (predictive back) قبل حرّاس الخروج.
+                onNavigationNotification: (notification) {
+                  final life = WidgetsBinding.instance.lifecycleState;
+                  if (life == AppLifecycleState.detached) return true;
+                  SystemNavigator.setFrameworkHandlesBack(true);
+                  return true;
+                },
                 builder: (context, child) {
                   _registerRemoteDeviceRevokeHandler();
                   _registerTenantRevokeHandler();
@@ -405,16 +458,23 @@ class MyApp extends StatelessWidget {
                     context,
                     listen: false,
                   );
-                  final mq = MediaQuery.of(context);
-                  final userScale = salePosSettings.data.appTextScale;
-                  final combinedScaler = TextScaler.linear(
-                    (mq.textScaler.scale(1.0) * userScale).clamp(0.75, 2.2),
-                  );
+                  // لا تستخدم MediaQuery.of في هذا الـ builder — ذلك يعيد بناء
+                  // شجرة التطبيق كاملة مع كل إطار من حركة الكيبورد.
+                  if (kIsWeb && WebRuntimeBootstrap.isTabFollower) {
+                    return const WebTabFollowerScreen();
+                  }
                   Widget content = child ?? const SizedBox.shrink();
-                  content = MediaQuery(
-                    data: mq.copyWith(textScaler: combinedScaler),
+                  // صفّر viewInsets هنا فقط — يعيد بناء هذا الغلاف لا شجرة التطبيق.
+                  // الشيتات التي تحتاج رفعاً تستخدم RawKeyboardInsetBuilder.
+                  content = _StripImeViewInsets(child: content);
+                  content = _AppTextScaleOverride(
+                    userScale: salePosSettings.data.appTextScale,
                     child: content,
                   );
+                  content = WebIdleLockBinder(child: content);
+                  if (kIsWeb) {
+                    content = _WebAuthHistoryBinder(child: content);
+                  }
                   content = Selector<AuthProvider, bool>(
                     selector: (_, a) => a.isLoggedIn,
                     builder: (context, loggedIn, child) {
@@ -455,9 +515,31 @@ class MyApp extends StatelessWidget {
                     ),
                     child: content,
                   );
-                  return _ThemeModeTransitionShell(
-                    isDarkMode: themeProvider.isDarkMode,
-                    child: themedContent,
+                  final withPwa = kIsWeb
+                      ? Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            const WebPwaInstallBanner(compact: true),
+                            Expanded(child: themedContent),
+                          ],
+                        )
+                      : themedContent;
+                  return CloudSessionSurface(
+                    child: AppExitBackBinder(
+                    child: GuideNavLifecycleBinder(
+                      child: _ThemeModeTransitionShell(
+                        isDarkMode: themeProvider.isDarkMode,
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            withPwa,
+                            // فوق كل مسارات الجذر (لوحة المالك + الشاشات المدفوعة)
+                            const GuideOverlayHost(),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
                   );
                 },
                 localizationsDelegates: const [
@@ -689,5 +771,82 @@ class _HomeRouteResolver extends StatelessWidget {
       return const OwnerDashboardScreen();
     }
     return const HomeScreen();
+  }
+}
+
+/// ويب: يثبت زر رجوع المتصفح داخل الحساب (لا عودة لـ OAuth/تسجيل الدخول).
+class _WebAuthHistoryBinder extends StatefulWidget {
+  const _WebAuthHistoryBinder({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_WebAuthHistoryBinder> createState() => _WebAuthHistoryBinderState();
+}
+
+class _WebAuthHistoryBinderState extends State<_WebAuthHistoryBinder> {
+  @override
+  void initState() {
+    super.initState();
+    installWebAuthHistoryGuard(
+      shouldTrapBack: () {
+        if (!mounted) return false;
+        final auth = Provider.of<AuthProvider>(context, listen: false);
+        if (auth.deviceOwnerBound || auth.isLoggedIn) return true;
+        return Supabase.instance.client.auth.currentUser != null;
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
+}
+
+/// يصفّر [MediaQueryData.viewInsets] للأشجار تحته دون إعادة بناء التطبيق
+/// مع كل إطار كيبورد (هذا الغلاف فقط يعتمد على MediaQuery الأب).
+///
+/// مهم: الغلاف يجب أن يبقى **دائماً** في الشجرة. إزالة/إضافة [MediaQuery]
+/// عند فتح/إغلاق الكيبورد كانت تُفكّك InheritedElement بينما Overlay
+/// ما زال عليه dependents → `_dependents.isEmpty`.
+class _StripImeViewInsets extends StatelessWidget {
+  const _StripImeViewInsets({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final mq = MediaQuery.of(context);
+    return MediaQuery(
+      data: mq.copyWith(viewInsets: EdgeInsets.zero),
+      child: child,
+    );
+  }
+}
+
+class _AppTextScaleOverride extends StatelessWidget {
+  const _AppTextScaleOverride({
+    required this.userScale,
+    required this.child,
+  });
+
+  final double userScale;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    // لا تستخدم fromView — يعيد حقن viewInsets الحقيقية فوق الـ strip.
+    final base = MediaQuery.of(context);
+    if ((userScale - 1.0).abs() < 0.01) {
+      // أبقِ MediaQuery في الشجرة حتى لا يتبدّل عمق العناصر مع تغيّر المقياس.
+      return MediaQuery(data: base, child: child);
+    }
+    final platform = MediaQuery.textScalerOf(context);
+    final combined = TextScaler.linear(
+      (platform.scale(1.0) * userScale).clamp(0.75, 2.2),
+    );
+    return MediaQuery(
+      data: base.copyWith(textScaler: combined),
+      child: child,
+    );
   }
 }

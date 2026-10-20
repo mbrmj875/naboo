@@ -2,6 +2,7 @@ import 'package:intl/intl.dart' hide TextDirection;
 
 import '../../../utils/iqd_money.dart';
 import '../../../utils/iraqi_currency_format.dart';
+import 'oil_change_auto_whatsapp_message.dart';
 import 'oil_change_filter_format.dart';
 
 /// بناء نص رسالة واتساب بعد إتمام بطاقة غيار الزيت.
@@ -13,6 +14,7 @@ String buildOilServiceWhatsAppMessage({
   required String storeTitle,
   required String storeFooter,
   int priorOpenDebtFils = 0,
+  bool includeRatingAsk = true,
 }) {
   final shop = storeTitle.trim().isEmpty ? 'المحل' : storeTitle.trim();
   final customer =
@@ -173,6 +175,11 @@ String buildOilServiceWhatsAppMessage({
   } else {
     buf.writeln();
     buf.writeln('نراكم عند موعد الصيانة القادمة ✨');
+  }
+
+  if (includeRatingAsk) {
+    buf.writeln();
+    buf.writeln(oilChangeWhatsAppRatingAskText);
   }
 
   return buf.toString().trim();

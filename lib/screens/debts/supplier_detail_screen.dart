@@ -1,14 +1,12 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart' hide TextDirection;
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 
 import '../../models/supplier_ap_models.dart';
+import '../../platform/persist_local_bytes.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/invoice_provider.dart';
 import '../../providers/shift_provider.dart';
@@ -18,6 +16,7 @@ import '../../utils/screen_layout.dart';
 import '../../utils/sale_receipt_pdf.dart';
 import '../../utils/shift_actor_conflict_guard.dart';
 import '../../theme/design_tokens.dart';
+import '../../widgets/product_media_image.dart';
 
 final _numFmt = NumberFormat('#,##0', 'ar');
 final _dateFmt = DateFormat('dd/MM/yyyy', 'ar');
@@ -304,14 +303,12 @@ class _SupplierDetailScreenState extends State<SupplierDetailScreen> {
       );
       final xf = pickedFile;
       if (xf != null) {
-        final dir = await getApplicationDocumentsDirectory();
-        final folder = Directory(p.join(dir.path, 'supplier_bill_images'));
-        if (!await folder.exists()) {
-          await folder.create(recursive: true);
-        }
-        final dest = p.join(folder.path, 'bill_$id.jpg');
         final bytes = await xf.readAsBytes();
-        await File(dest).writeAsBytes(bytes, flush: true);
+        final dest = await persistLocalBytes(
+          bytes: bytes,
+          relativeDir: 'supplier_bill_images',
+          fileName: 'bill_$id.jpg',
+        );
         await _db.updateSupplierBillImagePath(id, dest);
       }
     } catch (e) {
@@ -1234,12 +1231,12 @@ class _BillTile extends StatelessWidget {
           ),
           if ((bill.note ?? '').isNotEmpty)
             Text(bill.note!, style: const TextStyle(fontSize: 12)),
-          if (img != null && img.isNotEmpty && File(img).existsSync()) ...[
+          if (img != null && img.isNotEmpty) ...[
             const SizedBox(height: 8),
             ClipRRect(
               borderRadius: BorderRadius.circular(8),
-              child: Image.file(
-                File(img),
+              child: ProductMediaImage(
+                pathOrUrl: img,
                 height: 140,
                 fit: BoxFit.cover,
                 width: double.infinity,

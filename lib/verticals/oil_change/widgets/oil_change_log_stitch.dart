@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 
+import '../../../guides/guide_anchor.dart';
 import '../utils/oil_change_log_format.dart';
 import '../utils/oil_change_log_grouping.dart';
 
@@ -168,6 +169,7 @@ class OilChangeLogStitchActionButtons extends StatelessWidget {
     required this.onWhatsApp,
     this.stacked = false,
     this.compactWhatsAppLabel = false,
+    this.pendingCount = 0,
   });
 
   final VoidCallback onNewCard;
@@ -175,29 +177,36 @@ class OilChangeLogStitchActionButtons extends StatelessWidget {
   final bool stacked;
   final bool compactWhatsAppLabel;
 
+  /// رسائل لم تصل الزبائن — تظهر شارة على الزر لينتبه صاحب المحل.
+  final int pendingCount;
+
   @override
   Widget build(BuildContext context) {
     final waLabel = compactWhatsAppLabel ? 'واتساب' : 'إرسال واتساب';
 
-    final newBtn = SizedBox(
-      height: OilChangeLogStitchMetrics.actionHeight,
-      width: double.infinity,
-      child: FilledButton.icon(
-        onPressed: onNewCard,
-        style: FilledButton.styleFrom(
-          backgroundColor: OilChangeLogStitchMetrics.secondaryContainer,
-          foregroundColor: OilChangeLogStitchMetrics.onSecondaryContainer,
-          elevation: 2,
-          shadowColor:
-              OilChangeLogStitchMetrics.secondaryContainer.withValues(alpha: 0.4),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(OilChangeLogStitchMetrics.pillRadius),
+    final newBtn = GuideAnchor(
+      id: OilGuideAnchors.hubNewCard,
+      child: SizedBox(
+        height: OilChangeLogStitchMetrics.actionHeight,
+        width: double.infinity,
+        child: FilledButton.icon(
+          onPressed: onNewCard,
+          style: FilledButton.styleFrom(
+            backgroundColor: OilChangeLogStitchMetrics.secondaryContainer,
+            foregroundColor: OilChangeLogStitchMetrics.onSecondaryContainer,
+            elevation: 2,
+            shadowColor: OilChangeLogStitchMetrics.secondaryContainer
+                .withValues(alpha: 0.4),
+            shape: RoundedRectangleBorder(
+              borderRadius:
+                  BorderRadius.circular(OilChangeLogStitchMetrics.pillRadius),
+            ),
           ),
-        ),
-        icon: const Icon(Icons.add_circle_rounded),
-        label: const Text(
-          'بطاقة غيار زيت جديدة',
-          style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13),
+          icon: const Icon(Icons.add_circle_rounded),
+          label: const Text(
+            'بطاقة غيار زيت جديدة',
+            style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13),
+          ),
         ),
       ),
     );
@@ -217,7 +226,12 @@ class OilChangeLogStitchActionButtons extends StatelessWidget {
             borderRadius: BorderRadius.circular(OilChangeLogStitchMetrics.pillRadius),
           ),
         ),
-        icon: const Icon(Icons.chat_rounded),
+        icon: pendingCount > 0
+            ? Badge.count(
+                count: pendingCount,
+                child: const Icon(Icons.chat_rounded),
+              )
+            : const Icon(Icons.chat_rounded),
         label: Text(waLabel, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13)),
       ),
     );
@@ -303,73 +317,122 @@ class OilChangeLogStitchDayHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = group.summary;
+    final badge = '${s.visitCount} ${s.visitCount == 1 ? 'زيارة' : 'زيارات'}';
+
     if (compact) {
       return Padding(
-        padding: const EdgeInsetsDirectional.only(bottom: OilChangeLogStitchMetrics.gapSm),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              group.title,
-              style: const TextStyle(
-                fontWeight: FontWeight.w700,
-                fontSize: 13,
-                color: OilChangeLogStitchMetrics.textPrimary,
+        padding: const EdgeInsetsDirectional.only(
+          bottom: OilChangeLogStitchMetrics.gapSm,
+        ),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: onToggle,
+            borderRadius: BorderRadius.circular(8),
+            child: Padding(
+              padding: const EdgeInsetsDirectional.symmetric(
+                vertical: 6,
+                horizontal: 2,
               ),
-              textAlign: TextAlign.start,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          group.title,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 13,
+                            color: OilChangeLogStitchMetrics.textPrimary,
+                          ),
+                          textAlign: TextAlign.start,
+                        ),
+                      ),
+                      Text(
+                        badge,
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: OilChangeLogStitchMetrics.textMuted,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Icon(
+                        expanded
+                            ? Icons.expand_less_rounded
+                            : Icons.expand_more_rounded,
+                        size: 22,
+                        color: OilChangeLogStitchMetrics.primaryContainer,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Divider(
+                    height: 1,
+                    color: OilChangeLogStitchMetrics.secondaryContainer
+                        .withValues(alpha: 0.40),
+                  ),
+                ],
+              ),
             ),
-            const SizedBox(height: 6),
-            Divider(
-              height: 1,
-              color: OilChangeLogStitchMetrics.secondaryContainer
-                  .withValues(alpha: 0.40),
-            ),
-          ],
+          ),
         ),
       );
     }
 
-    final s = group.summary;
-    final badge = '${s.visitCount} ${s.visitCount == 1 ? 'زيارة' : 'زيارات'}';
-
     return Padding(
       padding: const EdgeInsetsDirectional.only(bottom: 8),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              group.title,
-              style: const TextStyle(
-                fontWeight: FontWeight.w700,
-                fontSize: 14,
-                color: OilChangeLogStitchMetrics.textPrimary,
-              ),
-              textAlign: TextAlign.start,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onToggle,
+          borderRadius: BorderRadius.circular(8),
+          child: Padding(
+            padding: const EdgeInsetsDirectional.symmetric(vertical: 2),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    group.title,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 14,
+                      color: OilChangeLogStitchMetrics.textPrimary,
+                    ),
+                    textAlign: TextAlign.start,
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsetsDirectional.symmetric(
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: OilChangeLogStitchMetrics.surfaceContainerHigh,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    badge,
+                    style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: OilChangeLogStitchMetrics.textMuted,
+                    ),
+                  ),
+                ),
+                Icon(
+                  expanded
+                      ? Icons.expand_less_rounded
+                      : Icons.expand_more_rounded,
+                  color: OilChangeLogStitchMetrics.primaryContainer,
+                ),
+              ],
             ),
           ),
-          Container(
-            padding: const EdgeInsetsDirectional.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(
-              color: OilChangeLogStitchMetrics.surfaceContainerHigh,
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: Text(
-              badge,
-              style: const TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-                color: OilChangeLogStitchMetrics.textMuted,
-              ),
-            ),
-          ),
-          IconButton(
-            onPressed: onToggle,
-            icon: Icon(
-              expanded ? Icons.expand_less_rounded : Icons.expand_more_rounded,
-              color: OilChangeLogStitchMetrics.primaryContainer,
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -454,6 +517,9 @@ class OilChangeLogStitchVisitCard extends StatelessWidget {
     required this.onTap,
     required this.onDetail,
     this.onResume,
+    this.onDiscard,
+    this.onAmend,
+    this.onVoid,
   });
 
   final Map<String, dynamic> row;
@@ -462,6 +528,9 @@ class OilChangeLogStitchVisitCard extends StatelessWidget {
   final VoidCallback onTap;
   final VoidCallback onDetail;
   final VoidCallback? onResume;
+  final VoidCallback? onDiscard;
+  final VoidCallback? onAmend;
+  final VoidCallback? onVoid;
 
   @override
   Widget build(BuildContext context) {
@@ -525,6 +594,35 @@ class OilChangeLogStitchVisitCard extends StatelessWidget {
                       ),
                       const SizedBox(width: 8),
                       OilChangeLogStitchPlateBadge(plate: plate),
+                      if (!showSuspended &&
+                          (onAmend != null || onVoid != null)) ...[
+                        const SizedBox(width: 2),
+                        PopupMenuButton<String>(
+                          tooltip: 'المزيد',
+                          padding: EdgeInsets.zero,
+                          icon: const Icon(
+                            Icons.more_vert_rounded,
+                            size: 22,
+                            color: OilChangeLogStitchMetrics.textMuted,
+                          ),
+                          onSelected: (value) {
+                            if (value == 'amend') onAmend?.call();
+                            if (value == 'void') onVoid?.call();
+                          },
+                          itemBuilder: (ctx) => [
+                            if (onAmend != null)
+                              const PopupMenuItem(
+                                value: 'amend',
+                                child: Text('تعديل'),
+                              ),
+                            if (onVoid != null)
+                              const PopupMenuItem(
+                                value: 'void',
+                                child: Text('حذف'),
+                              ),
+                          ],
+                        ),
+                      ],
                     ],
                   ),
                   if (oilChip.isNotEmpty || (odoCurrent.isNotEmpty && odoCurrent != '—')) ...[
@@ -584,20 +682,46 @@ class OilChangeLogStitchVisitCard extends StatelessWidget {
                       ),
                     ],
                   ),
-                  if (showSuspended && onResume != null) ...[
+                  if (showSuspended &&
+                      (onResume != null || onDiscard != null)) ...[
                     const SizedBox(height: 6),
-                    Align(
-                      alignment: AlignmentDirectional.centerStart,
-                      child: FilledButton.tonalIcon(
-                        onPressed: onResume,
-                        style: FilledButton.styleFrom(
-                          backgroundColor:
-                              OilChangeLogStitchMetrics.primaryContainer.withValues(alpha: 0.08),
-                          foregroundColor: OilChangeLogStitchMetrics.primaryContainer,
-                        ),
-                        icon: const Icon(Icons.play_arrow_rounded, size: 18),
-                        label: const Text('استكمال'),
-                      ),
+                    Row(
+                      children: [
+                        if (onResume != null)
+                          FilledButton.tonalIcon(
+                            onPressed: onResume,
+                            style: FilledButton.styleFrom(
+                              backgroundColor: OilChangeLogStitchMetrics
+                                  .primaryContainer
+                                  .withValues(alpha: 0.08),
+                              foregroundColor:
+                                  OilChangeLogStitchMetrics.primaryContainer,
+                            ),
+                            icon: const Icon(Icons.play_arrow_rounded, size: 18),
+                            label: const Text('استكمال'),
+                          ),
+                        if (onResume != null && onDiscard != null)
+                          const SizedBox(width: 8),
+                        if (onDiscard != null)
+                          OutlinedButton.icon(
+                            onPressed: onDiscard,
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: OilChangeLogStitchMetrics.error,
+                              side: BorderSide(
+                                color: OilChangeLogStitchMetrics.error
+                                    .withValues(alpha: 0.45),
+                              ),
+                              padding: const EdgeInsetsDirectional.symmetric(
+                                horizontal: 12,
+                              ),
+                            ),
+                            icon: const Icon(
+                              Icons.cancel_outlined,
+                              size: 18,
+                            ),
+                            label: const Text('إسقاط'),
+                          ),
+                      ],
                     ),
                   ],
                 ],
@@ -872,6 +996,11 @@ class OilChangeLogStitchDesktopTableCard extends StatelessWidget {
     required this.onRowTap,
     required this.onRowDetail,
     required this.onRefresh,
+    this.showSuspended = false,
+    this.onRowAmend,
+    this.onRowVoid,
+    this.onRowResume,
+    this.onRowDiscard,
   });
 
   final List<Map<String, dynamic>> rows;
@@ -881,6 +1010,11 @@ class OilChangeLogStitchDesktopTableCard extends StatelessWidget {
   final void Function(Map<String, dynamic> row) onRowTap;
   final void Function(Map<String, dynamic> row) onRowDetail;
   final VoidCallback onRefresh;
+  final bool showSuspended;
+  final void Function(Map<String, dynamic> row)? onRowAmend;
+  final void Function(Map<String, dynamic> row)? onRowVoid;
+  final void Function(Map<String, dynamic> row)? onRowResume;
+  final void Function(Map<String, dynamic> row)? onRowDiscard;
 
   @override
   Widget build(BuildContext context) {
@@ -894,10 +1028,12 @@ class OilChangeLogStitchDesktopTableCard extends StatelessWidget {
             padding: const EdgeInsetsDirectional.fromSTEB(16, 14, 16, 14),
             child: Row(
               children: [
-                const Expanded(
+                Expanded(
                   child: Text(
-                    'سجل عمليات تبديل الزيت الأخيرة',
-                    style: TextStyle(
+                    showSuspended
+                        ? 'البطاقات المعلّقة'
+                        : 'سجل عمليات تبديل الزيت الأخيرة',
+                    style: const TextStyle(
                       fontWeight: FontWeight.w800,
                       fontSize: 18,
                       color: OilChangeLogStitchMetrics.textPrimary,
@@ -960,8 +1096,10 @@ class OilChangeLogStitchDesktopTableCard extends StatelessWidget {
                 Expanded(
                   child: Text(
                     rows.isEmpty
-                        ? 'لا توجد عمليات'
-                        : 'عرض ${rows.length} من أصل $loadedCount+ عملية',
+                        ? (showSuspended ? 'لا توجد بطاقات معلّقة' : 'لا توجد عمليات')
+                        : showSuspended
+                            ? 'عرض ${rows.length} بطاقة معلّقة'
+                            : 'عرض ${rows.length} من أصل $loadedCount+ عملية',
                     style: const TextStyle(
                       fontSize: 12,
                       color: OilChangeLogStitchMetrics.textMuted,
@@ -1034,10 +1172,49 @@ class OilChangeLogStitchDesktopTableCard extends StatelessWidget {
           ),
         ),
         DataCell(
-          IconButton(
-            tooltip: 'عرض التفاصيل',
+          PopupMenuButton<String>(
+            tooltip: 'المزيد',
             icon: const Icon(Icons.more_vert_rounded),
-            onPressed: () => onRowDetail(r),
+            onSelected: (value) {
+              switch (value) {
+                case 'detail':
+                  onRowDetail(r);
+                case 'resume':
+                  onRowResume?.call(r);
+                case 'discard':
+                  onRowDiscard?.call(r);
+                case 'amend':
+                  onRowAmend?.call(r);
+                case 'void':
+                  onRowVoid?.call(r);
+              }
+            },
+            itemBuilder: (ctx) => [
+              const PopupMenuItem(
+                value: 'detail',
+                child: Text('التفاصيل'),
+              ),
+              if (showSuspended && onRowResume != null)
+                const PopupMenuItem(
+                  value: 'resume',
+                  child: Text('استكمال'),
+                ),
+              if (showSuspended && onRowDiscard != null)
+                const PopupMenuItem(
+                  value: 'discard',
+                  child: Text('إسقاط'),
+                ),
+              if (!showSuspended && onRowAmend != null)
+                const PopupMenuItem(
+                  value: 'amend',
+                  child: Text('تعديل'),
+                ),
+              if (!showSuspended && onRowVoid != null)
+                const PopupMenuItem(
+                  value: 'void',
+                  child: Text('حذف'),
+                ),
+            ],
           ),
         ),
       ],

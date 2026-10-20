@@ -1,10 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
-import { maxDevicesForPlan, PLAN_KEYS, type PlanKey } from "@/lib/plan-presets";
+import {
+  LIFETIME_JWT_ENDS_AT,
+  maxDevicesForPlan,
+  PLAN_KEYS,
+  type PlanKey,
+} from "@/lib/plan-presets";
 import { importRsaPrivateKeyFromPem, signLicenseJwt } from "@/lib/license-jwt-sign";
 import {
-  expandLicensePrivateKeyPath,
   resolveLicenseJwtPrivateKeyPem,
 } from "@/lib/resolve-license-private-pem";
 
@@ -32,19 +36,13 @@ function isUuid(v: string): boolean {
 export async function POST(req: Request) {
   let insertedId: number | null = null;
   try {
-    const pathRaw = process.env.LICENSE_JWT_PRIVATE_KEY_PATH?.trim();
     const pem = resolveLicenseJwtPrivateKeyPem();
     const kid = process.env.LICENSE_JWT_KID?.trim();
     if (!pem) {
-      const pathHint =
-        pathRaw != null && pathRaw !== ""
-          ? ` تعذر قراءة الملف: ${expandLicensePrivateKeyPath(pathRaw)} (تحقق من المسار والأذونات).`
-          : "";
       return NextResponse.json(
         {
           error:
-            "لم يُضبط مفتاح التوقيع: اضبط LICENSE_JWT_PRIVATE_KEY_PEM أو LICENSE_JWT_PRIVATE_KEY_PATH في .env.local داخل مجلد admin-web ثم أعد تشغيل الخادم." +
-            pathHint,
+            "لم يُضبط مفتاح التوقيع: اضبط LICENSE_JWT_PRIVATE_KEY_PEM أو LICENSE_JWT_PRIVATE_KEY_PATH في .env.local داخل مجلد admin-web ثم أعد تشغيل الخادم.",
         },
         { status: 503 },
       );
@@ -61,6 +59,12 @@ export async function POST(req: Request) {
     if (!tenantId) {
       return NextResponse.json({ error: "tenant_id مطلوب" }, { status: 400 });
     }
+    if (!isUuid(tenantId)) {
+      return NextResponse.json(
+        { error: "tenant_id يجب أن يكون UUID صالحاً" },
+        { status: 400 },
+      );
+    }
 
     const rawPlan = (body.plan ?? "").trim().toLowerCase();
     if (!PLAN_KEYS.includes(rawPlan as PlanKey)) {
@@ -74,8 +78,11 @@ export async function POST(req: Request) {
     let maxDevices: number;
     if (body.max_devices != null && Number.isFinite(Number(body.max_devices))) {
       const n = Number(body.max_devices);
-      if (n < 0) {
-        return NextResponse.json({ error: "max_devices غير صالح" }, { status: 400 });
+      if (n < 1 || n > 64) {
+        return NextResponse.json(
+          { error: "max_devices يجب أن يكون بين 1 و 64" },
+          { status: 400 },
+        );
       }
       maxDevices = Math.floor(n);
     } else {
@@ -86,11 +93,17 @@ export async function POST(req: Request) {
     const startsAt = body.starts_at?.trim()
       ? new Date(body.starts_at.trim())
       : now;
+    const isLifetime = plan === "lifetime";
     const defaultEndOffsetMs =
-      plan === "annual" ? 365 * 24 * 60 * 60 * 1000 : 30 * 24 * 60 * 60 * 1000;
-    const endsAt = body.ends_at?.trim()
-      ? new Date(body.ends_at.trim())
-      : new Date(now.getTime() + defaultEndOffsetMs);
+      plan === "annual"
+        ? 365 * 24 * 60 * 60 * 1000
+        : 30 * 24 * 60 * 60 * 1000;
+    // JWT دائماً يحتاج ends_at — لمدى الحياة نستخدم تاريخاً بعيداً رمزياً
+    const endsAt = isLifetime
+      ? LIFETIME_JWT_ENDS_AT
+      : body.ends_at?.trim()
+        ? new Date(body.ends_at.trim())
+        : new Date(now.getTime() + defaultEndOffsetMs);
 
     if (Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime())) {
       return NextResponse.json(
@@ -120,11 +133,21 @@ export async function POST(req: Request) {
       }
       assignedUserId = aid;
     }
+    if (assignedUserId && assignedUserId !== tenantId) {
+      return NextResponse.json(
+        {
+          error:
+            "tenant_id يجب أن يطابق assigned_user_id عند ربط الترخيص بمستخدم",
+        },
+        { status: 400 },
+      );
+    }
 
     const licenseKeyPlaceholder = `V2-${randomUUID()}`;
     const status = isTrial ? "trial" : "active";
     const trialStartedAt = isTrial ? startsAt.toISOString() : null;
-    const expiresAt = endsAt.toISOString();
+    /** مدى الحياة: بلا نهاية في قاعدة البيانات */
+    const expiresAt = isLifetime ? null : endsAt.toISOString();
 
     const supabase = getSupabaseAdmin();
     const row: Record<string, unknown> = {
@@ -152,6 +175,16 @@ export async function POST(req: Request) {
       );
     }
     insertedId = inserted.id as number;
+
+    // تجنّب لخبطة التطبيق/اللوحة: حساب واحد = ترخيص نشط واحد (الأحدث).
+    if (assignedUserId) {
+      await supabase
+        .from("licenses")
+        .update({ status: "suspended" })
+        .eq("assigned_user_id", assignedUserId)
+        .eq("status", "active")
+        .neq("id", insertedId);
+    }
 
     const privateKey = await importRsaPrivateKeyFromPem(pem);
     const issuedAt = new Date();

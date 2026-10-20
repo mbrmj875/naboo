@@ -1,5 +1,4 @@
 import 'dart:async' show TimeoutException, unawaited, Completer;
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -13,8 +12,10 @@ import '../widgets/app_brand_mark.dart';
 import '../widgets/inputs/app_input.dart';
 import '../theme/erp_input_constants.dart';
 import '../theme/design_tokens.dart';
+import '../widgets/double_back_to_exit_scope.dart';
 import '../widgets/secure_screen.dart';
 import 'auth/email_otp_screen.dart';
+import 'auth/email_pin_reauth_otp_screen.dart';
 import 'auth/complete_owner_profile_screen.dart';
 import 'auth/forgot_password_email_screen.dart';
 import '../widgets/glass/glass_background.dart';
@@ -26,12 +27,24 @@ import '../services/auth/auth_user_messages.dart';
 import '../utils/pin_input_constraints.dart';
 import '../utils/screen_layout.dart';
 import '../widgets/inputs/pin_four_boxes_field.dart';
+import '../widgets/raw_keyboard_inset.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
+}
+
+bool _isNetworkFailure(Object e) {
+  final t = e.toString().toLowerCase();
+  return t.contains('socketexception') ||
+      t.contains('failed host lookup') ||
+      t.contains('network is unreachable') ||
+      t.contains('connection refused') ||
+      t.contains('connection reset') ||
+      t.contains('clientexception') ||
+      t.contains('xmlhttprequest error');
 }
 
 class _LoginScreenState extends State<LoginScreen>
@@ -67,6 +80,17 @@ class _LoginScreenState extends State<LoginScreen>
   final _focusSignupPhone = FocusNode();
   final _focusSignupPwd = FocusNode();
   final _focusSignupConfirm = FocusNode();
+
+  final _formScrollCtrl = ScrollController();
+  double _lastKeyboardBottom = 0;
+
+  final _keyLoginUser = GlobalKey();
+  final _keyLoginPin = GlobalKey();
+  final _keySignupName = GlobalKey();
+  final _keySignupEmail = GlobalKey();
+  final _keySignupPhone = GlobalKey();
+  final _keySignupPin = GlobalKey();
+  final _keySignupConfirm = GlobalKey();
 
   bool _blurredLoginUser = false;
   bool _blurredLoginPass = false;
@@ -158,11 +182,10 @@ class _LoginScreenState extends State<LoginScreen>
   void initState() {
     super.initState();
     _registerBlurListeners();
+    _registerFocusScrollListeners();
     _signupPasswordController.addListener(_onSignupPinChanged);
     _confirmSignupPasswordController.addListener(_onSignupPinChanged);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _focusLoginUser.requestFocus();
-    });
+    // لا تُركّز أي حقل عند الفتح — الكيبورد يظهر فقط بلمس المستخدم.
     _animController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 900),
@@ -173,6 +196,121 @@ class _LoginScreenState extends State<LoginScreen>
     ).animate(CurvedAnimation(parent: _animController, curve: Curves.easeOut));
     _fadeAnim = CurvedAnimation(parent: _animController, curve: Curves.easeIn);
     _animController.forward();
+  }
+
+  /// حركة واحدة هادئة — بدون قفزات ولا سلاسل متضاربة.
+  static const Duration _kMotion = Duration(milliseconds: 280);
+  static const Curve _kMotionCurve = Curves.easeInOutCubic;
+
+  void _registerFocusScrollListeners() {
+    void onFocus(FocusNode node) {
+      if (!node.hasFocus) return;
+      // إعادة بناء لطيّ حقول التسجيل غير النشطة فوق الكيبورد.
+      if (mounted) setState(() {});
+      _scheduleEnsureFocusedFieldVisible();
+    }
+
+    for (final n in <FocusNode>[
+      _focusLoginUser,
+      _focusLoginPass,
+      _focusSignupName,
+      _focusSignupEmail,
+      _focusSignupPhone,
+      _focusSignupPwd,
+      _focusSignupConfirm,
+    ]) {
+      n.addListener(() => onFocus(n));
+    }
+  }
+
+  BuildContext? _focusedFieldContext() {
+    if (_focusLoginUser.hasFocus) return _keyLoginUser.currentContext;
+    if (_focusLoginPass.hasFocus) return _keyLoginPin.currentContext;
+    if (_focusSignupName.hasFocus) return _keySignupName.currentContext;
+    if (_focusSignupEmail.hasFocus) return _keySignupEmail.currentContext;
+    if (_focusSignupPhone.hasFocus) return _keySignupPhone.currentContext;
+    if (_focusSignupPwd.hasFocus) return _keySignupPin.currentContext;
+    if (_focusSignupConfirm.hasFocus) return _keySignupConfirm.currentContext;
+    return null;
+  }
+
+  void _scheduleEnsureFocusedFieldVisible() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _ensureFocusedFieldVisible();
+    });
+  }
+
+  void _ensureFocusedFieldVisible() {
+    if (!mounted || !_formScrollCtrl.hasClients) return;
+    final targetCtx = _focusedFieldContext();
+    if (targetCtx == null) return;
+
+    final box = targetCtx.findRenderObject();
+    if (box is! RenderBox || !box.hasSize) {
+      Scrollable.ensureVisible(
+        targetCtx,
+        duration: _kMotion,
+        curve: _kMotionCurve,
+        alignment: 0.88,
+        alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
+      );
+      return;
+    }
+
+    final fieldTop = box.localToGlobal(Offset.zero).dy;
+    final fieldBottom = fieldTop + box.size.height;
+    final media = MediaQuery.of(context);
+    final keyboardBottom = rawKeyboardBottomInset(context);
+    final visibleTop = media.padding.top + 8;
+    final visibleBottom = media.size.height - keyboardBottom - 8;
+
+    if (keyboardBottom <= 8) {
+      if (fieldTop >= visibleTop && fieldBottom <= visibleBottom) return;
+    } else {
+      const dockSlack = 12.0;
+      final alreadyDocked =
+          fieldBottom <= visibleBottom &&
+          fieldBottom >= visibleBottom - dockSlack - box.size.height * 0.4;
+      if (alreadyDocked && fieldTop >= visibleTop) return;
+    }
+
+    final next = (_formScrollCtrl.offset + (fieldBottom - visibleBottom)).clamp(
+      0.0,
+      _formScrollCtrl.position.maxScrollExtent,
+    );
+    if ((next - _formScrollCtrl.offset).abs() < 0.5) return;
+    // لا تقطع حركة جارية.
+    if (_formScrollCtrl.position.isScrollingNotifier.value) return;
+
+    _formScrollCtrl.animateTo(
+      next,
+      duration: _kMotion,
+      curve: _kMotionCurve,
+    );
+  }
+
+  void _onKeyboardInsetChanged(double keyboardBottom) {
+    final wasOpen = _lastKeyboardBottom > 8;
+    final isOpen = keyboardBottom > 8;
+    if ((keyboardBottom - _lastKeyboardBottom).abs() < 0.5) return;
+    final opening = isOpen && !wasOpen;
+    final closing = !isOpen && wasOpen;
+    _lastKeyboardBottom = keyboardBottom;
+    if (opening) {
+      _scheduleEnsureFocusedFieldVisible();
+      // تصحيح واحد بعد اكتمال فتح الكيبورد تقريباً.
+      Future<void>.delayed(_kMotion, () {
+        if (mounted) _ensureFocusedFieldVisible();
+      });
+      return;
+    }
+    if (closing && _formScrollCtrl.hasClients) {
+      _formScrollCtrl.animateTo(
+        0,
+        duration: _kMotion,
+        curve: _kMotionCurve,
+      );
+    }
   }
 
   void _onSignupPinChanged() {
@@ -197,6 +335,7 @@ class _LoginScreenState extends State<LoginScreen>
     _phoneController.dispose();
     _signupPasswordController.dispose();
     _confirmSignupPasswordController.dispose();
+    _formScrollCtrl.dispose();
     _animController.dispose();
     super.dispose();
   }
@@ -213,9 +352,14 @@ class _LoginScreenState extends State<LoginScreen>
   /// (مثل «لديك حساب» → الدخول، أو «لا يوجد حساب» → التسجيل).
   void _setSignUpMode(bool signUp) {
     if (_isSignUpMode == signUp) return;
+    // أغلق الكيبورد وأزل التركيز حتى لا تقفز الصفحة عند التبديل.
+    FocusManager.instance.primaryFocus?.unfocus();
+    unawaited(SystemChannels.textInput.invokeMethod<void>('TextInput.hide'));
     ScaffoldMessenger.of(context).clearSnackBars();
     setState(() {
       _isSignUpMode = signUp;
+      _blurredLoginUser = false;
+      _blurredLoginPass = false;
       _blurredSignupName = false;
       _blurredSignupEmail = false;
       _blurredSignupPhone = false;
@@ -223,12 +367,8 @@ class _LoginScreenState extends State<LoginScreen>
       _blurredSignupConfirm = false;
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      if (_isSignUpMode) {
-        _focusSignupName.requestFocus();
-      } else {
-        _focusLoginUser.requestFocus();
-      }
+      if (!mounted || !_formScrollCtrl.hasClients) return;
+      _formScrollCtrl.jumpTo(0);
     });
   }
 
@@ -256,6 +396,34 @@ class _LoginScreenState extends State<LoginScreen>
       }
       final err = auth.lastLoginErrorMessage ??
           AuthUserMessages.wrongCredentials;
+
+      // جهاز بلا جلسة محفوظة: تأكيد البريد ثم الدخول بـ PIN (الحساب موجود).
+      if (err == AuthProvider.kLoginEmailReauthOtpRequired) {
+        final email = auth.pendingEmailReauthEmail ??
+            _usernameController.text.trim();
+        messenger.clearSnackBars();
+        _showAuthFeedback(
+          'أرسلنا رمز تحقق إلى بريدك لتأكيد الدخول على هذا الجهاز.',
+          warning: true,
+        );
+        unawaited(
+          nav.push<void>(
+            MaterialPageRoute<void>(
+              builder: (_) => EmailPinReauthOtpScreen(email: email),
+            ),
+          ),
+        );
+        return;
+      }
+
+      // حساب Google: لا تُحوِّل لإنشاء حساب — اطلب زر Google.
+      if (err == AuthProvider.kLoginUseGoogleMessage) {
+        _setSignUpMode(false);
+        _showAuthFeedback(err, warning: true);
+        return;
+      }
+
+      // حساب غير موجود فعلاً → وجّه لإنشاء حساب.
       if (AuthUserMessages.isAccountNotFound(err)) {
         _setSignUpMode(true);
         if (_looksLikeEmail(_usernameController.text.trim())) {
@@ -355,7 +523,7 @@ class _LoginScreenState extends State<LoginScreen>
         },
       );
     } catch (e) {
-      if (e is SocketException) {
+      if (_isNetworkFailure(e)) {
         throw Exception('الخدمة السحابية غير متاحة مؤقتاً');
       }
       rethrow;
@@ -437,7 +605,7 @@ class _LoginScreenState extends State<LoginScreen>
       setState(() => _isLoading = false);
       if (e is TimeoutException) {
         _showAuthFeedback(AuthUserMessages.operationTimeout, warning: true);
-      } else if (e is SocketException) {
+      } else if (_isNetworkFailure(e)) {
         _showAuthFeedback(AuthUserMessages.networkUnavailable, warning: true);
       } else {
         _showAuthFeedback(AuthUserMessages.cloudServiceUnavailable, warning: true);
@@ -672,164 +840,175 @@ class _LoginScreenState extends State<LoginScreen>
 
   @override
   Widget build(BuildContext context) {
-    // 2026-05 (Phase 2): قرار التخطيط أصبح يعتمد على DeviceVariant
-    // (Single Source of Truth) بدل breakpoint رقمي 760. الـ side-by-side
-    // (Brand | Form) يظهر في tabletLG+ (≥840dp). أصغر ⇒ Column مع
-    // Brand مضغوط فوق الفورم.
-    final layout = context.screenLayout;
-    final variant = layout.layoutVariant;
-    final isWide = variant.index >= DeviceVariant.tabletLG.index;
-    final isPhoneCompact = layout.isPhoneVariant;
-    final keyboardH = MediaQuery.viewInsetsOf(context).bottom;
-    final keyboardVisible = keyboardH > 0;
+    // viewInsets مُصفَّرة عالمياً — نقرأ ارتفاع الكيبورد من FlutterView مباشرة.
+    return RawKeyboardInsetBuilder(
+      builder: (context, keyboardBottom) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          _onKeyboardInsetChanged(keyboardBottom);
+        });
+        final layout = context.screenLayout;
+        final variant = layout.layoutVariant;
+        final isWide = variant.index >= DeviceVariant.tabletLG.index;
+        final keyboardVisible = keyboardBottom > 8;
 
-    final base = Theme.of(context);
-    final glassAuthTheme = base.copyWith(
-      colorScheme: base.colorScheme.copyWith(
-        brightness: Brightness.dark,
-        primary: AppColors.accentBlue,
-        secondary: AppColors.accentGold,
-        surface: AppColors.primary,
-        onSurface: Colors.white,
-        onSurfaceVariant: Colors.white.withValues(alpha: 0.72),
-        outline: AppGlass.stroke,
-      ),
-      scaffoldBackgroundColor: Colors.transparent,
-      snackBarTheme: base.snackBarTheme.copyWith(
-        backgroundColor: AppColors.primaryDark.withValues(alpha: 0.95),
-        contentTextStyle: const TextStyle(color: Colors.white, fontSize: 14),
-      ),
-    );
-
-    return SecureScreen(
-      child: Theme(
-      data: glassAuthTheme,
-      child: Scaffold(
-        backgroundColor: Colors.transparent,
-        body: GlassBackground(
-          backgroundImage: const AssetImage('assets/images/splash_bg.png'),
-          child: SafeArea(
-            child: isWide
-                ? Row(
-                    textDirection: TextDirection.rtl,
-                    children: [
-                      Expanded(
-                        flex: 5,
-                        child: _brandPanel(isNarrow: false, collapsed: false),
-                      ),
-                      Expanded(flex: 6, child: _formPanel(isNarrow: false)),
-                    ],
-                  )
-                : Column(
-                    children: [
-                      AnimatedContainer(
-                        duration: const Duration(milliseconds: 220),
-                        curve: Curves.easeOutCubic,
-                        height: isPhoneCompact
-                            ? (keyboardVisible ? 56.0 : 76.0)
-                            : (keyboardVisible ? 120.0 : 290.0),
-                        width: double.infinity,
-                        child: _brandPanel(
-                          isNarrow: true,
-                          collapsed: keyboardVisible,
-                          logoOnly: isPhoneCompact,
-                        ),
-                      ),
-                      Expanded(child: _formPanel(isNarrow: true)),
-                    ],
-                  ),
+        final base = Theme.of(context);
+        final glassAuthTheme = base.copyWith(
+          colorScheme: base.colorScheme.copyWith(
+            brightness: Brightness.dark,
+            primary: AppColors.accentBlue,
+            secondary: AppColors.accentGold,
+            surface: AppColors.primary,
+            onSurface: Colors.white,
+            onSurfaceVariant: Colors.white.withValues(alpha: 0.72),
+            outline: AppGlass.stroke,
           ),
-        ),
-      ),
-      ),
+          scaffoldBackgroundColor: Colors.transparent,
+          snackBarTheme: base.snackBarTheme.copyWith(
+            backgroundColor: AppColors.primaryDark.withValues(alpha: 0.95),
+            contentTextStyle:
+                const TextStyle(color: Colors.white, fontSize: 14),
+          ),
+        );
+
+        return SecureScreen(
+          child: DoubleBackToExitScope(
+            child: Theme(
+              data: glassAuthTheme,
+              child: Scaffold(
+                // لا نترك Scaffold يعيد التحجيم مع IME — نرفع الحقل يدوياً.
+                resizeToAvoidBottomInset: false,
+                backgroundColor: Colors.transparent,
+                body: GlassBackground(
+                  backgroundImage:
+                      const AssetImage('assets/images/splash_bg.png'),
+                  child: SafeArea(
+                    child: isWide
+                        ? Row(
+                            textDirection: TextDirection.rtl,
+                            children: [
+                              Expanded(
+                                flex: 5,
+                                child: _brandPanel(
+                                  isNarrow: false,
+                                  collapsed: false,
+                                ),
+                              ),
+                              Expanded(
+                                flex: 6,
+                                child: _formPanel(
+                                  isNarrow: false,
+                                  keyboardBottom: keyboardBottom,
+                                ),
+                              ),
+                            ],
+                          )
+                        : Column(
+                            children: [
+                              // إخفاء فوري مع الكيبورد — بدون _brandPanel/Column يفيض.
+                              if (!keyboardVisible)
+                                const SizedBox(
+                                  height: 52,
+                                  width: double.infinity,
+                                  child: Center(
+                                    child: AppBrandMark(
+                                      title: 'naboo',
+                                      logoSize: 40,
+                                      titleFontSize: 34,
+                                      titleColor: Color(0xFFF2D36B),
+                                      strokeColor: AppColors.primary,
+                                      borderColor: _gold,
+                                      borderWidth: 2.0,
+                                      showTitle: false,
+                                    ),
+                                  ),
+                                ),
+                              Expanded(
+                                child: _formPanel(
+                                  isNarrow: true,
+                                  keyboardBottom: keyboardBottom,
+                                ),
+                              ),
+                            ],
+                          ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 
   Widget _brandPanel({
     required bool isNarrow,
     required bool collapsed,
-    bool logoOnly = false,
   }) {
-    final showFullBrand = !logoOnly;
-    final logoSize = isNarrow
-        ? (logoOnly
-            ? (collapsed ? 40.0 : 48.0)
-            : (collapsed ? 44.0 : 64.0))
-        : 96.0;
+    final logoSize = isNarrow ? (collapsed ? 44.0 : 64.0) : 96.0;
     final titleSize = isNarrow ? (collapsed ? 34.0 : 44.0) : 64.0;
-    final topPad = isNarrow
-        ? (logoOnly ? 8.0 : (collapsed ? 8.0 : 18.0))
-        : 0.0;
-    final alignment = isNarrow && logoOnly
-        ? AlignmentDirectional.topCenter
-        : Alignment.center;
+    final topPad = isNarrow ? (collapsed ? 8.0 : 18.0) : 0.0;
 
-    final panelBody = Padding(
-      padding: EdgeInsetsDirectional.only(
-        top: topPad,
-        start: isNarrow ? 16 : 32,
-        end: isNarrow ? 16 : 32,
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          AppBrandMark(
-            title: 'naboo',
-            logoSize: logoSize,
-            titleFontSize: titleSize,
-            titleColor: const Color(0xFFF2D36B),
-            strokeColor: AppColors.primary,
-            borderColor: _gold,
-            borderWidth: isNarrow ? 2.0 : 2.4,
-            showTitle: showFullBrand,
-          ),
-          if (showFullBrand && !collapsed) ...[
-            SizedBox(height: isNarrow ? 10 : 20),
-            Text(
-              'نظام إدارة الأعمال',
-              style: GoogleFonts.tajawal(
-                color: Colors.white.withValues(alpha: 0.74),
-                fontSize: isNarrow ? 13 : 17,
-                fontWeight: FontWeight.w500,
-                letterSpacing: 3.0,
-              ),
-            ),
-          ],
-          if (!isNarrow) ...[
-            const SizedBox(height: 36),
-            _feature(Icons.receipt_long_rounded, 'المبيعات والفواتير'),
-            const SizedBox(height: 10),
-            _feature(Icons.account_balance_rounded, 'الحسابات والتقارير'),
-            const SizedBox(height: 10),
-            _feature(Icons.inventory_2_rounded, 'المخزون والمستودعات'),
-          ],
-        ],
-      ),
-    );
-
-    return SizedBox(
-      width: double.infinity,
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final maxH = constraints.maxHeight;
-          if (isNarrow && maxH.isFinite) {
-            return Align(
-              alignment: alignment,
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
-                alignment: alignment,
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(
-                    maxHeight: (maxH - topPad).clamp(0.0, maxH),
-                  ),
-                  child: panelBody,
+    // OverflowBox + ClipRect: المحتوى لا يُضغط في Column ضيق (يمنع RenderFlex overflow).
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final maxH = constraints.maxHeight;
+        if (!maxH.isFinite || maxH < 8) {
+          return const SizedBox.shrink();
+        }
+        return ClipRect(
+          child: OverflowBox(
+            alignment: Alignment.center,
+            maxHeight: double.infinity,
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Padding(
+                padding: EdgeInsetsDirectional.only(
+                  top: topPad,
+                  start: isNarrow ? 16 : 32,
+                  end: isNarrow ? 16 : 32,
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    AppBrandMark(
+                      title: 'naboo',
+                      logoSize: logoSize,
+                      titleFontSize: titleSize,
+                      titleColor: const Color(0xFFF2D36B),
+                      strokeColor: AppColors.primary,
+                      borderColor: _gold,
+                      borderWidth: isNarrow ? 2.0 : 2.4,
+                    ),
+                    if (!collapsed) ...[
+                      SizedBox(height: isNarrow ? 10 : 20),
+                      Text(
+                        'نظام إدارة الأعمال',
+                        style: GoogleFonts.tajawal(
+                          color: Colors.white.withValues(alpha: 0.74),
+                          fontSize: isNarrow ? 13 : 17,
+                          fontWeight: FontWeight.w500,
+                          letterSpacing: 3.0,
+                        ),
+                      ),
+                    ],
+                    if (!isNarrow) ...[
+                      const SizedBox(height: 36),
+                      _feature(Icons.receipt_long_rounded, 'المبيعات والفواتير'),
+                      const SizedBox(height: 10),
+                      _feature(
+                          Icons.account_balance_rounded, 'الحسابات والتقارير'),
+                      const SizedBox(height: 10),
+                      _feature(
+                          Icons.inventory_2_rounded, 'المخزون والمستودعات'),
+                    ],
+                  ],
                 ),
               ),
-            );
-          }
-          return Align(alignment: alignment, child: panelBody);
-        },
-      ),
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -868,7 +1047,11 @@ class _LoginScreenState extends State<LoginScreen>
     );
   }
 
-  Widget _formPanel({required bool isNarrow}) {
+  Widget _formPanel({
+    required bool isNarrow,
+    required double keyboardBottom,
+  }) {
+    final keyboardVisible = keyboardBottom > 8;
     return AnimatedBuilder(
       animation: _animController,
       builder: (_, child) => Opacity(
@@ -878,93 +1061,150 @@ class _LoginScreenState extends State<LoginScreen>
           child: child,
         ),
       ),
-      child: Center(
-        child: SingleChildScrollView(
-          padding: EdgeInsetsDirectional.fromSTEB(
-            isNarrow ? 20 : 32,
-            isNarrow ? 18 : 28,
-            isNarrow ? 20 : 32,
-            (isNarrow ? 24 : 28) + MediaQuery.viewInsetsOf(context).bottom,
-          ),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 520),
-            child: GlassSurface(
-              borderRadius: const BorderRadius.all(Radius.circular(16)),
-              tintColor: AppGlass.surfaceTint,
-              strokeColor: AppGlass.stroke,
-              padding: const EdgeInsetsDirectional.fromSTEB(18, 18, 18, 16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Center(
-                    child: Container(
-                      width: 46,
-                      height: 3,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(2),
-                        gradient: const LinearGradient(
-                          colors: [Color(0xFFB8960C), Color(0xFFFFE08A)],
+      // مفتاح يعيد بناء الارتفاع عند تغيّر الكيبورد بدقّة.
+      child: _KeyboardDock(
+        keyboardBottom: keyboardBottom,
+        builder: (context, imePad) {
+          final padTop = isNarrow ? (keyboardVisible ? 8.0 : 12.0) : 28.0;
+          final padBottom = keyboardVisible ? 8.0 : (isNarrow ? 16.0 : 28.0);
+
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: LayoutBuilder(
+                  builder: (context, bodyConstraints) {
+                    final minH = (bodyConstraints.maxHeight -
+                            padTop -
+                            padBottom)
+                        .clamp(0.0, double.infinity);
+                    return SingleChildScrollView(
+                      controller: _formScrollCtrl,
+                      physics: const ClampingScrollPhysics(),
+                      keyboardDismissBehavior:
+                          ScrollViewKeyboardDismissBehavior.onDrag,
+                      padding: EdgeInsetsDirectional.fromSTEB(
+                        isNarrow ? 20 : 32,
+                        padTop,
+                        isNarrow ? 20 : 32,
+                        padBottom,
+                      ),
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(
+                          minHeight: minH,
+                          maxWidth: 520,
+                        ),
+                        child: Align(
+                          alignment: keyboardVisible
+                              ? Alignment.bottomCenter
+                              : Alignment.center,
+                          child: GlassSurface(
+                            borderRadius:
+                                const BorderRadius.all(Radius.circular(16)),
+                            tintColor: AppGlass.surfaceTint,
+                            strokeColor: AppGlass.stroke,
+                            padding: const EdgeInsetsDirectional.fromSTEB(
+                              18,
+                              18,
+                              18,
+                              16,
+                            ),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                if (!keyboardVisible) ...[
+                                  Center(
+                                    child: Container(
+                                      width: 46,
+                                      height: 3,
+                                      decoration: BoxDecoration(
+                                        borderRadius: BorderRadius.circular(2),
+                                        gradient: const LinearGradient(
+                                          colors: [
+                                            Color(0xFFB8960C),
+                                            Color(0xFFFFE08A),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 16),
+                                  Text(
+                                    _isSignUpMode
+                                        ? 'إنشاء حساب جديد'
+                                        : 'تسجيل الدخول',
+                                    textAlign: TextAlign.center,
+                                    style: GoogleFonts.tajawal(
+                                      fontSize: isNarrow ? 24 : 28,
+                                      fontWeight: FontWeight.w800,
+                                      color: Colors.white,
+                                      letterSpacing: 0.2,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 10),
+                                  Text(
+                                    _isSignUpMode
+                                        ? 'سيصلك رمز تحقق على بريدك الإلكتروني لتأكيد حسابك'
+                                        : 'أدخل البريد الإلكتروني ورمز PIN للدخول',
+                                    textAlign: TextAlign.center,
+                                    style: GoogleFonts.tajawal(
+                                      fontSize: 14,
+                                      color: Colors.white
+                                          .withValues(alpha: 0.72),
+                                      fontWeight: FontWeight.w500,
+                                      height: 1.5,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 20),
+                                  _googleSignInButton(),
+                                  _googleSignInDivider(),
+                                ],
+                                AnimatedSwitcher(
+                                  duration: _kMotion,
+                                  switchInCurve: _kMotionCurve,
+                                  switchOutCurve: _kMotionCurve,
+                                  child: _isSignUpMode
+                                      ? _signUpForm(
+                                          keyboardVisible: keyboardVisible,
+                                        )
+                                      : _loginForm(),
+                                ),
+                                if (!keyboardVisible) ...[
+                                  const SizedBox(height: 12),
+                                  TextButton(
+                                    onPressed:
+                                        _isLoading ? null : _toggleMode,
+                                    style: TextButton.styleFrom(
+                                      padding: const EdgeInsetsDirectional
+                                          .symmetric(vertical: 10),
+                                      foregroundColor:
+                                          const Color(0xFFF5C518),
+                                    ),
+                                    child: Text(
+                                      _isSignUpMode
+                                          ? 'لديك حساب؟ العودة إلى تسجيل الدخول'
+                                          : 'ليس لديك حساب؟ إنشاء حساب جديد',
+                                      style: GoogleFonts.tajawal(
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 14,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
                         ),
                       ),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    _isSignUpMode ? 'إنشاء حساب جديد' : 'تسجيل الدخول',
-                    textAlign: TextAlign.center,
-                    style: GoogleFonts.tajawal(
-                      fontSize: isNarrow ? 24 : 28,
-                      fontWeight: FontWeight.w800,
-                      color: Colors.white,
-                      letterSpacing: 0.2,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  Text(
-                    _isSignUpMode
-                        ? 'سيصلك رمز تحقق على بريدك الإلكتروني لتأكيد حسابك'
-                        : 'أدخل البريد الإلكتروني ورمز PIN للدخول',
-                    textAlign: TextAlign.center,
-                    style: GoogleFonts.tajawal(
-                      fontSize: 14,
-                      color: Colors.white.withValues(alpha: 0.72),
-                      fontWeight: FontWeight.w500,
-                      height: 1.5,
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                  _googleSignInButton(),
-                  _googleSignInDivider(),
-                  AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 320),
-                    switchInCurve: Curves.easeOutCubic,
-                    switchOutCurve: Curves.easeInCubic,
-                    child: _isSignUpMode ? _signUpForm() : _loginForm(),
-                  ),
-                  const SizedBox(height: 12),
-                  TextButton(
-                    onPressed: _isLoading ? null : _toggleMode,
-                    style: TextButton.styleFrom(
-                      padding: const EdgeInsetsDirectional.symmetric(
-                        vertical: 10,
-                      ),
-                      foregroundColor: const Color(0xFFF5C518),
-                    ),
-                    child: Text(
-                      _isSignUpMode
-                          ? 'لديك حساب؟ العودة إلى تسجيل الدخول'
-                          : 'ليس لديك حساب؟ إنشاء حساب جديد',
-                      style: GoogleFonts.tajawal(
-                        fontWeight: FontWeight.w700,
-                        fontSize: 14,
-                      ),
-                    ),
-                  ),
-                ],
+                    );
+                  },
+                ),
               ),
-            ),
-          ),
-        ),
+              if (imePad > 0) SizedBox(height: imePad),
+            ],
+          );
+        },
       ),
     );
   }
@@ -994,43 +1234,49 @@ class _LoginScreenState extends State<LoginScreen>
         key: const ValueKey('login'),
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          AppInput(
-            label: 'البريد أو اسم المستخدم',
-            labelFontWeight: FontWeight.w700,
-            isRequired: true,
-            hint: 'البريد أو اسم الدخول',
-            controller: _usernameController,
-            focusNode: _focusLoginUser,
-            useGlass: true,
-            cursorColor: Colors.white,
-            suffixIcon: Icon(
-              Icons.person_outline_rounded,
-              color: Colors.white.withValues(alpha: 0.82),
-              size: 20,
+          KeyedSubtree(
+            key: _keyLoginUser,
+            child: AppInput(
+              label: 'البريد أو اسم المستخدم',
+              labelFontWeight: FontWeight.w700,
+              isRequired: true,
+              hint: 'البريد أو اسم الدخول',
+              controller: _usernameController,
+              focusNode: _focusLoginUser,
+              useGlass: true,
+              cursorColor: Colors.white,
+              suffixIcon: Icon(
+                Icons.person_outline_rounded,
+                color: Colors.white.withValues(alpha: 0.82),
+                size: 20,
+              ),
+              keyboardType: TextInputType.text,
+              textInputAction: TextInputAction.next,
+              onFieldSubmitted: (_) =>
+                  FocusScope.of(context).requestFocus(_focusLoginPass),
+              validator: validateUser,
             ),
-            keyboardType: TextInputType.text,
-            textInputAction: TextInputAction.next,
-            onFieldSubmitted: (_) =>
-                FocusScope.of(context).requestFocus(_focusLoginPass),
-            validator: validateUser,
           ),
           const SizedBox(height: 14),
-          PinFourBoxesField(
-            useGlass: true,
-            controller: _passwordController,
-            focusNode: _focusLoginPass,
-            label: 'رمز PIN *',
-            obscureText: _obscurePassword,
-            onToggleObscure: () =>
-                setState(() => _obscurePassword = !_obscurePassword),
-            textInputAction: TextInputAction.done,
-            onCompleted: (_) {
-              if (!_isLoading) _login();
-            },
-            onEditingComplete: () {
-              if (!_isLoading) _login();
-            },
-            validator: validatePass,
+          KeyedSubtree(
+            key: _keyLoginPin,
+            child: PinFourBoxesField(
+              useGlass: true,
+              controller: _passwordController,
+              focusNode: _focusLoginPass,
+              label: 'رمز PIN *',
+              obscureText: _obscurePassword,
+              onToggleObscure: () =>
+                  setState(() => _obscurePassword = !_obscurePassword),
+              textInputAction: TextInputAction.done,
+              onCompleted: (_) {
+                if (!_isLoading) _login();
+              },
+              onEditingComplete: () {
+                if (!_isLoading) _login();
+              },
+              validator: validatePass,
+            ),
           ),
           const SizedBox(height: 8),
           Align(
@@ -1154,7 +1400,7 @@ class _LoginScreenState extends State<LoginScreen>
     );
   }
 
-  Widget _signUpForm() {
+  Widget _signUpForm({bool keyboardVisible = false}) {
     String? validateSignupName(String? value) {
       final t = (value ?? '').trim();
       if (!_blurredSignupName) return null;
@@ -1208,6 +1454,26 @@ class _LoginScreenState extends State<LoginScreen>
         _confirmSignupPasswordController.text.trim() !=
             _signupPasswordController.text.trim();
 
+    // مع الكيبورد: الحقل الحالي + التالي فقط — بطاقة أقصر تلتصق بالكيبورد.
+    var step = 0;
+    if (_focusSignupConfirm.hasFocus) {
+      step = 4;
+    } else if (_focusSignupPwd.hasFocus) {
+      step = 3;
+    } else if (_focusSignupPhone.hasFocus) {
+      step = 2;
+    } else if (_focusSignupEmail.hasFocus) {
+      step = 1;
+    } else if (_focusSignupName.hasFocus) {
+      step = 0;
+    }
+    final maxShow = keyboardVisible ? (step + 1).clamp(0, 4) : 4;
+    final showEmail = maxShow >= 1;
+    final showPhone = maxShow >= 2;
+    final showPin = maxShow >= 3;
+    final showConfirm = maxShow >= 4;
+    final showSubmit = !keyboardVisible || showConfirm;
+
     return Form(
       key: _signupFormKey,
       autovalidateMode: AutovalidateMode.always,
@@ -1215,217 +1481,314 @@ class _LoginScreenState extends State<LoginScreen>
         key: const ValueKey('signup'),
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          AppInput(
-            label: 'الاسم التجاري/الشخصي',
-            labelFontWeight: FontWeight.w700,
-            isRequired: true,
-            hint: 'أدخل الاسم',
-            controller: _nameController,
-            focusNode: _focusSignupName,
-            useGlass: true,
-            cursorColor: Colors.white,
-            suffixIcon: Icon(
-              Icons.storefront_outlined,
-              color: Colors.white.withValues(alpha: 0.82),
-              size: 20,
-            ),
-            keyboardType: TextInputType.text,
-            textInputAction: TextInputAction.next,
-            onFieldSubmitted: (_) =>
-                FocusScope.of(context).requestFocus(_focusSignupEmail),
-            validator: validateSignupName,
-          ),
-          const SizedBox(height: 14),
-          AppInput(
-            label: 'البريد الإلكتروني',
-            labelFontWeight: FontWeight.w700,
-            isRequired: true,
-            hint: 'example@domain.com',
-            controller: _emailController,
-            focusNode: _focusSignupEmail,
-            useGlass: true,
-            cursorColor: Colors.white,
-            suffixIcon: Icon(
-              Icons.email_outlined,
-              color: Colors.white.withValues(alpha: 0.82),
-              size: 20,
-            ),
-            keyboardType: TextInputType.emailAddress,
-            textDirection: TextDirection.ltr,
-            textInputAction: TextInputAction.next,
-            onFieldSubmitted: (_) =>
-                FocusScope.of(context).requestFocus(_focusSignupPhone),
-            validator: validateSignupEmail,
-          ),
-          const SizedBox(height: 14),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Flexible(
-                child: Text(
-                  'رقم الجوال',
-                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    color: Colors.white,
-                  ),
-                  maxLines: 2,
-                  textAlign: TextAlign.end,
-                  overflow: TextOverflow.ellipsis,
-                ),
+          KeyedSubtree(
+            key: _keySignupName,
+            child: AppInput(
+              label: 'الاسم التجاري/الشخصي',
+              labelFontWeight: FontWeight.w700,
+              isRequired: true,
+              hint: 'أدخل الاسم',
+              controller: _nameController,
+              focusNode: _focusSignupName,
+              useGlass: true,
+              cursorColor: Colors.white,
+              suffixIcon: Icon(
+                Icons.storefront_outlined,
+                color: Colors.white.withValues(alpha: 0.82),
+                size: 20,
               ),
-              Padding(
-                padding: const EdgeInsetsDirectional.only(start: 4),
-                child: Text(
-                  '*',
-                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    fontSize: 13,
-                    color: Colors.red.shade700,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-            ],
+              keyboardType: TextInputType.text,
+              textInputAction: TextInputAction.next,
+              onFieldSubmitted: (_) =>
+                  FocusScope.of(context).requestFocus(_focusSignupEmail),
+              validator: validateSignupName,
+            ),
           ),
-          const SizedBox(height: 6),
-          Directionality(
-            textDirection: TextDirection.ltr,
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _iraqDialChip(),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: AppInput(
-                    label: ' ',
-                    showLabel: false,
-                    hint: '07701234567',
-                    controller: _phoneController,
-                    focusNode: _focusSignupPhone,
-                    useGlass: true,
-                    cursorColor: Colors.white,
-                    suffixIcon: Icon(
-                      Icons.phone_outlined,
-                      color: Colors.white.withValues(alpha: 0.82),
-                      size: 20,
-                    ),
-                    keyboardType: TextInputType.number,
-                    textDirection: TextDirection.ltr,
-                    textInputAction: TextInputAction.next,
-                    inputFormatters: [
-                      FilteringTextInputFormatter.digitsOnly,
-                      LengthLimitingTextInputFormatter(11),
+          if (showEmail) ...[
+            const SizedBox(height: 14),
+            KeyedSubtree(
+              key: _keySignupEmail,
+              child: AppInput(
+                label: 'البريد الإلكتروني',
+                labelFontWeight: FontWeight.w700,
+                isRequired: true,
+                hint: 'example@domain.com',
+                controller: _emailController,
+                focusNode: _focusSignupEmail,
+                useGlass: true,
+                cursorColor: Colors.white,
+                suffixIcon: Icon(
+                  Icons.email_outlined,
+                  color: Colors.white.withValues(alpha: 0.82),
+                  size: 20,
+                ),
+                keyboardType: TextInputType.emailAddress,
+                textDirection: TextDirection.ltr,
+                textInputAction: TextInputAction.next,
+                onFieldSubmitted: (_) =>
+                    FocusScope.of(context).requestFocus(_focusSignupPhone),
+                validator: validateSignupEmail,
+              ),
+            ),
+          ],
+          if (showPhone) ...[
+            const SizedBox(height: 14),
+            KeyedSubtree(
+              key: _keySignupPhone,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Flexible(
+                        child: Text(
+                          'رقم الجوال',
+                          style:
+                              Theme.of(context).textTheme.titleSmall?.copyWith(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w700,
+                                    color: Colors.white,
+                                  ),
+                          maxLines: 2,
+                          textAlign: TextAlign.end,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsetsDirectional.only(start: 4),
+                        child: Text(
+                          '*',
+                          style:
+                              Theme.of(context).textTheme.titleSmall?.copyWith(
+                                    fontSize: 13,
+                                    color: Colors.red.shade700,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                        ),
+                      ),
                     ],
-                    overlayShadowOnFocus: false,
-                    onChanged: (_) => setState(() {}),
-                    onFieldSubmitted: (_) =>
-                        FocusScope.of(context).requestFocus(_focusSignupPwd),
-                    validator: validateSignupPhone,
                   ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 14),
-          PinFourBoxesField(
-            useGlass: true,
-            controller: _signupPasswordController,
-            focusNode: _focusSignupPwd,
-            label: 'رمز PIN *',
-            obscureText: _obscureSignupPassword,
-            onToggleObscure: () => setState(
-              () => _obscureSignupPassword = !_obscureSignupPassword,
-            ),
-            textInputAction: TextInputAction.next,
-            onCompleted: (_) =>
-                FocusScope.of(context).requestFocus(_focusSignupConfirm),
-            onEditingComplete: () =>
-                FocusScope.of(context).requestFocus(_focusSignupConfirm),
-            validator: validateSignupPin,
-          ),
-          const SizedBox(height: 14),
-          PinFourBoxesField(
-            useGlass: true,
-            controller: _confirmSignupPasswordController,
-            focusNode: _focusSignupConfirm,
-            label: mismatchLabelVisible
-                ? 'تأكيد رمز PIN * — غير مطابق'
-                : 'تأكيد رمز PIN *',
-            obscureText: _obscureConfirmSignupPassword,
-            onToggleObscure: () => setState(
-              () => _obscureConfirmSignupPassword =
-                  !_obscureConfirmSignupPassword,
-            ),
-            textInputAction: TextInputAction.done,
-            onCompleted: (_) {
-              setState(() {});
-              if (!_isLoading && _signupSubmissionReady) _signup();
-            },
-            onEditingComplete: () {
-              if (!_isLoading && _signupSubmissionReady) _signup();
-            },
-            validator: validateConfirm,
-          ),
-          const SizedBox(height: 24),
-          SizedBox(
-            height: 54,
-            child: AnimatedOpacity(
-              duration: const Duration(milliseconds: 200),
-              opacity: _signupSubmissionReady ? 1.0 : 0.5,
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(12),
-                  gradient: const LinearGradient(
-                    colors: [Color(0xFF071A36), Color(0xFF0D1F3C)],
-                  ),
-                  boxShadow: _signupSubmissionReady
-                      ? [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.28),
-                            blurRadius: 12,
-                            offset: const Offset(0, 4),
-                          ),
-                        ]
-                      : [],
-                ),
-                child: ElevatedButton(
-                  onPressed: (_isLoading || !_signupSubmissionReady)
-                      ? null
-                      : _signup,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.transparent,
-                    shadowColor: Colors.transparent,
-                    disabledBackgroundColor: Colors.transparent,
-                    foregroundColor: Colors.white,
-                    disabledForegroundColor: Colors.white70,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                  ),
-                  child: _isLoading
-                      ? const SizedBox(
-                          width: 22,
-                          height: 22,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                      : Text(
-                          'إنشاء الحساب',
-                          style: GoogleFonts.tajawal(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 0.5,
+                  const SizedBox(height: 6),
+                  Directionality(
+                    textDirection: TextDirection.ltr,
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _iraqDialChip(),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: AppInput(
+                            label: ' ',
+                            showLabel: false,
+                            hint: '07701234567',
+                            controller: _phoneController,
+                            focusNode: _focusSignupPhone,
+                            useGlass: true,
+                            cursorColor: Colors.white,
+                            suffixIcon: Icon(
+                              Icons.phone_outlined,
+                              color: Colors.white.withValues(alpha: 0.82),
+                              size: 20,
+                            ),
+                            keyboardType: TextInputType.number,
+                            textDirection: TextDirection.ltr,
+                            textInputAction: TextInputAction.next,
+                            inputFormatters: [
+                              FilteringTextInputFormatter.digitsOnly,
+                              LengthLimitingTextInputFormatter(11),
+                            ],
+                            overlayShadowOnFocus: false,
+                            onChanged: (_) => setState(() {}),
+                            onFieldSubmitted: (_) => FocusScope.of(context)
+                                .requestFocus(_focusSignupPwd),
+                            validator: validateSignupPhone,
                           ),
                         ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          if (showPin) ...[
+            const SizedBox(height: 14),
+            KeyedSubtree(
+              key: _keySignupPin,
+              child: PinFourBoxesField(
+                useGlass: true,
+                controller: _signupPasswordController,
+                focusNode: _focusSignupPwd,
+                label: 'رمز PIN *',
+                obscureText: _obscureSignupPassword,
+                onToggleObscure: () => setState(
+                  () => _obscureSignupPassword = !_obscureSignupPassword,
+                ),
+                textInputAction: TextInputAction.next,
+                onCompleted: (_) =>
+                    FocusScope.of(context).requestFocus(_focusSignupConfirm),
+                onEditingComplete: () =>
+                    FocusScope.of(context).requestFocus(_focusSignupConfirm),
+                validator: validateSignupPin,
+              ),
+            ),
+          ],
+          if (showConfirm) ...[
+            const SizedBox(height: 14),
+            KeyedSubtree(
+              key: _keySignupConfirm,
+              child: PinFourBoxesField(
+                useGlass: true,
+                controller: _confirmSignupPasswordController,
+                focusNode: _focusSignupConfirm,
+                label: mismatchLabelVisible
+                    ? 'تأكيد رمز PIN * — غير مطابق'
+                    : 'تأكيد رمز PIN *',
+                obscureText: _obscureConfirmSignupPassword,
+                onToggleObscure: () => setState(
+                  () => _obscureConfirmSignupPassword =
+                      !_obscureConfirmSignupPassword,
+                ),
+                textInputAction: TextInputAction.done,
+                onCompleted: (_) {
+                  setState(() {});
+                  if (!_isLoading && _signupSubmissionReady) _signup();
+                },
+                onEditingComplete: () {
+                  if (!_isLoading && _signupSubmissionReady) _signup();
+                },
+                validator: validateConfirm,
+              ),
+            ),
+          ],
+          if (showSubmit) ...[
+            const SizedBox(height: 24),
+            SizedBox(
+              height: 54,
+              child: AnimatedOpacity(
+                duration: const Duration(milliseconds: 200),
+                opacity: _signupSubmissionReady ? 1.0 : 0.5,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(12),
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFF071A36), Color(0xFF0D1F3C)],
+                    ),
+                    boxShadow: _signupSubmissionReady
+                        ? [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.28),
+                              blurRadius: 12,
+                              offset: const Offset(0, 4),
+                            ),
+                          ]
+                        : [],
+                  ),
+                  child: ElevatedButton(
+                    onPressed: (_isLoading || !_signupSubmissionReady)
+                        ? null
+                        : _signup,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.transparent,
+                      shadowColor: Colors.transparent,
+                      disabledBackgroundColor: Colors.transparent,
+                      foregroundColor: Colors.white,
+                      disabledForegroundColor: Colors.white70,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: _isLoading
+                        ? const SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : Text(
+                            'إنشاء الحساب',
+                            style: GoogleFonts.tajawal(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                  ),
                 ),
               ),
             ),
-          ),
+          ],
         ],
       ),
     );
+  }
+
+}
+
+/// يحسب حجز الكيبورد من التداخل الفعلي: أسفل اللوحة ↔ أعلى الـ IME.
+/// مستقر لأن قياس اللوحة الكاملة لا يتغيّر عند إضافة الـ SizedBox الداخلي.
+class _KeyboardDock extends StatefulWidget {
+  const _KeyboardDock({
+    required this.keyboardBottom,
+    required this.builder,
+  });
+
+  final double keyboardBottom;
+  final Widget Function(BuildContext context, double imePad) builder;
+
+  @override
+  State<_KeyboardDock> createState() => _KeyboardDockState();
+}
+
+class _KeyboardDockState extends State<_KeyboardDock> {
+  double _imePad = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _measure());
+  }
+
+  @override
+  void didUpdateWidget(covariant _KeyboardDock oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if ((oldWidget.keyboardBottom - widget.keyboardBottom).abs() > 0.5) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _measure());
+    }
+  }
+
+  void _measure() {
+    if (!mounted) return;
+    if (widget.keyboardBottom <= 8) {
+      if (_imePad != 0) setState(() => _imePad = 0);
+      return;
+    }
+    final box = context.findRenderObject();
+    if (box is! RenderBox || !box.hasSize) return;
+
+    final screenH = MediaQuery.sizeOf(context).height;
+    final keyboardTop = screenH - widget.keyboardBottom;
+    final dockBottom = box.localToGlobal(Offset(0, box.size.height)).dy;
+    final overlap =
+        (dockBottom - keyboardTop).clamp(0.0, widget.keyboardBottom);
+    if ((overlap - _imePad).abs() < 0.5) return;
+    setState(() => _imePad = overlap);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // تقدير فوري للإطار الأول قبل اكتمال القياس.
+    if (_imePad <= 0 && widget.keyboardBottom > 8) {
+      final systemBottom = MediaQuery.viewPaddingOf(context).bottom;
+      final estimate =
+          (widget.keyboardBottom - systemBottom).clamp(0.0, double.infinity);
+      WidgetsBinding.instance.addPostFrameCallback((_) => _measure());
+      return widget.builder(context, estimate);
+    }
+    return widget.builder(context, _imePad);
   }
 }

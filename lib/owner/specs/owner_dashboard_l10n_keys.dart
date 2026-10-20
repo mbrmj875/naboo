@@ -42,6 +42,7 @@ abstract class OwnerDashboardL10nKeys {
   static const scReports = 'owner.shortcut.reports';
   static const scAddInvoice = 'owner.shortcut.add_invoice';
   static const scUsers = 'owner.shortcut.users';
+  static const scOilRatings = 'owner.shortcut.oil_ratings';
   static const morningBriefSupermarket = 'owner.morning_brief.supermarket';
 
   // ── v3.1 clothing ──
@@ -93,6 +94,7 @@ const Map<String, String> _fallbackAr = {
   OwnerDashboardL10nKeys.scReports: 'التقارير',
   OwnerDashboardL10nKeys.scAddInvoice: 'بيع سريع',
   OwnerDashboardL10nKeys.scUsers: 'إدارة المستخدمين',
+  OwnerDashboardL10nKeys.scOilRatings: 'تقييمات الفنيين',
   OwnerDashboardL10nKeys.morningBriefSupermarket: 'owner.morning_brief.supermarket',
   OwnerDashboardL10nKeys.clothingVariantShortagesTitle: 'نواقص المقاسات والألوان',
   OwnerDashboardL10nKeys.clothingSlowMoversTitle: 'أرصدة بطيئة الحركة',

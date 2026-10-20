@@ -13,8 +13,10 @@ import 'marketplace/marketplace_catalog_sync_service.dart';
 import 'database_helper.dart';
 import 'tenant_context_service.dart';
 import '../models/new_product_extra_unit.dart';
+import '../models/product_variant_kind.dart';
 import '../utils/app_logger.dart';
 import '../utils/iqd_money.dart';
+import '../utils/sale_grid_search.dart';
 import 'marketplace_sync_service.dart';
 
 class ProductRepository {
@@ -794,6 +796,7 @@ class ProductRepository {
       SELECT COUNT(*) AS c
       FROM products p
       WHERE p.tenantId = ? AND p.isActive = 1
+        AND ${ProductVariantKind.sqlNotFluidFamilyParentOf('p.variantKind')}
       ''',
       [tid],
     );
@@ -828,7 +831,10 @@ class ProductRepository {
   }) async {
     final db = await _db;
     final t = search.trim();
-    final where = <String>['p.isActive = 1'];
+    final where = <String>[
+      'p.isActive = 1',
+      ProductVariantKind.sqlNotFluidFamilyParentOf('p.variantKind'),
+    ];
     final args = <Object?>[];
     if (t.isNotEmpty) {
       final safe = t.replaceAll('%', '').replaceAll('_', '');
@@ -900,6 +906,103 @@ class ProductRepository {
     );
     if (rows.isEmpty) return null;
     return rows.first;
+  }
+
+  /// شبكة البيع: أعمدة العرض فقط، بدون استعلام الوحدة المتداخل.
+  Future<List<Map<String, dynamic>>> listSaleGridProducts({
+    int limit = 240,
+  }) async {
+    final db = await _db;
+    final tid = _tenant.activeTenantId;
+    return db.rawQuery(
+      '''
+      SELECT
+        p.id,
+        p.name,
+        p.barcode,
+        p.productCode,
+        p.sellPrice AS sell,
+        p.minSellPrice AS minSell,
+        p.buyPrice AS buy,
+        p.qty,
+        p.trackInventory,
+        p.allowNegativeStock,
+        p.stockBaseKind AS stockBaseKind,
+        IFNULL(p.isPinned, 0) AS isPinned,
+        p.imagePath,
+        IFNULL(p.isService, 0) AS isService,
+        p.status
+      FROM products p
+      WHERE p.tenantId = ? AND p.isActive = 1
+      ORDER BY p.name COLLATE NOCASE ASC
+      LIMIT ?
+      ''',
+      [tid, limit],
+    );
+  }
+
+  /// بحث شبكة البيع — نفس أعمدة [listSaleGridProducts].
+  Future<List<Map<String, dynamic>>> searchSaleGridProducts(
+    String query, {
+    int limit = 120,
+  }) async {
+    final q = query.trim();
+    if (q.isEmpty) return listSaleGridProducts(limit: limit);
+    final tokens = saleGridSearchTokens(q);
+    if (tokens.isEmpty) return [];
+    final db = await _db;
+    final tid = _tenant.activeTenantId;
+    final where = StringBuffer(
+      '''
+      p.tenantId = ?
+        AND p.isActive = 1
+      ''',
+    );
+    final args = <Object?>[tid];
+    for (final token in tokens) {
+      final like = saleGridLikeContains(token);
+      where.write('''
+        AND (
+          p.name LIKE ? ESCAPE '\\' COLLATE NOCASE
+          OR IFNULL(p.barcode, '') LIKE ? ESCAPE '\\'
+          OR IFNULL(p.productCode, '') LIKE ? ESCAPE '\\' COLLATE NOCASE
+        )
+      ''');
+      args.addAll([like, like, like]);
+    }
+    final whole = tokens.join(' ');
+    args.addAll([whole, whole, saleGridLikeContains(tokens.first), limit]);
+    return db.rawQuery(
+      '''
+      SELECT
+        p.id,
+        p.name,
+        p.barcode,
+        p.productCode,
+        p.sellPrice AS sell,
+        p.minSellPrice AS minSell,
+        p.buyPrice AS buy,
+        p.qty,
+        p.trackInventory,
+        p.allowNegativeStock,
+        p.stockBaseKind AS stockBaseKind,
+        IFNULL(p.isPinned, 0) AS isPinned,
+        p.imagePath,
+        IFNULL(p.isService, 0) AS isService,
+        p.status
+      FROM products p
+      WHERE $where
+      ORDER BY
+        CASE
+          WHEN p.barcode = ? OR p.productCode = ? COLLATE NOCASE THEN 0
+          WHEN p.name LIKE ? ESCAPE '\\' COLLATE NOCASE THEN 1
+          ELSE 2
+        END,
+        p.name COLLATE NOCASE ASC
+      LIMIT ?
+      ''',
+      args,
+    );
   }
 
   /// قائمة أصناف نشطة للوحة الجانبية على الشاشات العريضة (بدون فلتر نصّي).

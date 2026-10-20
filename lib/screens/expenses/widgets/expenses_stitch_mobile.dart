@@ -1,175 +1,190 @@
 import 'dart:async' show unawaited;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 
 import '../../../models/expense.dart';
 import '../../../utils/iraqi_currency_format.dart';
 
-/// مقاسات وألوان Stitch — Expenses Ledger (موبايل).
+/// مقاسات صفحة المصروفات (موبايل).
 abstract final class ExpensesStitchMetrics {
   ExpensesStitchMetrics._();
 
   static const double pagePadding = 16;
   static const double gapSm = 8;
   static const double gapMd = 12;
-  static const double kpiCardWidth = 280;
-  static const double kpiHeight = 112;
   static const double rowRadius = 12;
 
-  static const Color background = Color(0xFFFBF8FC);
-  static const Color navy = Color(0xFF081B37);
-  static const Color gold = Color(0xFFFED752);
-  static const Color onGold = Color(0xFF735D00);
-  static const Color surfaceGray = Color(0xFFE4E1E5);
+  /// توافق خلفي — يُفضّل [ExpensesStitchPalette.of].
+  static const Color background = Color(0xFFF7F6F4);
+  static const Color navy = Color(0xFF0B1F3A);
+  static const Color gold = Color(0xFFE8C547);
+  static const Color onGold = Color(0xFF5C4A00);
   static const Color surfaceWhite = Color(0xFFFFFFFF);
-  static const Color borderMuted = Color(0xFFC5C6CE);
-  static const Color textPrimary = Color(0xFF1B1B1E);
-  static const Color textMuted = Color(0xFF44474D);
+  static const Color borderMuted = Color(0xFFD8D6D2);
+  static const Color textPrimary = Color(0xFF1A1A1A);
+  static const Color textMuted = Color(0xFF5C5C5C);
 }
 
-/// KPI أفقي — «مصروف هذا الشهر» (بطاقة داكنة) + «مصروف اليوم».
-class ExpensesStitchKpiCarousel extends StatelessWidget {
-  const ExpensesStitchKpiCarousel({
-    super.key,
-    required this.items,
-    required this.monthTotal,
-    required this.todayTotal,
+/// ألوان تتبع وضع الثيم (فاتح/ليلي).
+@immutable
+class ExpensesStitchPalette {
+  const ExpensesStitchPalette({
+    required this.background,
+    required this.card,
+    required this.summary,
+    required this.gold,
+    required this.onGold,
+    required this.textPrimary,
+    required this.textMuted,
+    required this.border,
+    required this.amount,
   });
 
-  final List<ExpenseEntry> items;
+  final Color background;
+  final Color card;
+  final Color summary;
+  final Color gold;
+  final Color onGold;
+  final Color textPrimary;
+  final Color textMuted;
+  final Color border;
+  final Color amount;
+
+  factory ExpensesStitchPalette.of(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final isDark = theme.brightness == Brightness.dark;
+    final gold = cs.secondary;
+    return ExpensesStitchPalette(
+      background: theme.scaffoldBackgroundColor,
+      card: isDark ? const Color(0xFF1E293B) : cs.surface,
+      summary: isDark ? const Color(0xFF0F172A) : const Color(0xFF0B1F3A),
+      gold: gold,
+      onGold: isDark ? cs.onSecondary : const Color(0xFF5C4A00),
+      textPrimary: cs.onSurface,
+      textMuted: cs.onSurfaceVariant,
+      border: cs.outline.withValues(alpha: isDark ? 0.45 : 0.55),
+      amount: isDark ? gold : const Color(0xFF0B1F3A),
+    );
+  }
+}
+
+/// ملخص واحد: إجمالي الفترة + اليوم/الشهر.
+class ExpensesStitchSummaryHeader extends StatelessWidget {
+  const ExpensesStitchSummaryHeader({
+    super.key,
+    required this.periodTotal,
+    required this.monthTotal,
+    required this.todayTotal,
+    required this.periodCount,
+  });
+
+  final double periodTotal;
   final double monthTotal;
   final double todayTotal;
+  final int periodCount;
 
   @override
   Widget build(BuildContext context) {
-    final now = DateTime.now();
-    final todayKey = DateTime(now.year, now.month, now.day);
-    var todayCount = 0;
-    var monthCount = 0;
-    for (final e in items) {
-      final d = e.occurredAt;
-      final dKey = DateTime(d.year, d.month, d.day);
-      if (dKey == todayKey) todayCount++;
-      if (d.year == now.year && d.month == now.month) monthCount++;
-    }
-
-    return SizedBox(
-      height: ExpensesStitchMetrics.kpiHeight,
-      child: ListView(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsetsDirectional.only(
-          start: ExpensesStitchMetrics.pagePadding,
-          end: ExpensesStitchMetrics.pagePadding,
+    final p = ExpensesStitchPalette.of(context);
+    return Padding(
+      padding: const EdgeInsetsDirectional.fromSTEB(
+        ExpensesStitchMetrics.pagePadding,
+        8,
+        ExpensesStitchMetrics.pagePadding,
+        4,
+      ),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsetsDirectional.fromSTEB(16, 14, 16, 12),
+        decoration: BoxDecoration(
+          color: p.summary,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: p.border.withValues(alpha: 0.35)),
         ),
-        children: [
-          _KpiCard(
-            label: 'مصروف هذا الشهر',
-            amount: monthTotal,
-            dark: true,
-            footerIcon: Icons.receipt_long_outlined,
-            footer: monthCount > 0
-                ? '$monthCount ${monthCount == 1 ? 'عملية' : 'عمليات'} في الشهر'
-                : 'لا عمليات هذا الشهر',
-          ),
-          const SizedBox(width: ExpensesStitchMetrics.gapMd),
-          _KpiCard(
-            label: 'مصروف اليوم',
-            amount: todayTotal,
-            dark: false,
-            footerIcon: Icons.event_rounded,
-            footer: todayCount > 0
-                ? 'تم تسجيل $todayCount ${todayCount == 1 ? 'عملية' : 'عمليات'}'
-                : 'لا عمليات اليوم',
-          ),
-        ],
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              periodCount > 0
+                  ? 'إجمالي الفترة · $periodCount عملية'
+                  : 'إجمالي الفترة',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+                color: Colors.white.withValues(alpha: 0.75),
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              IraqiCurrencyFormat.formatIqd(periodTotal),
+              textDirection: TextDirection.ltr,
+              textAlign: TextAlign.start,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 26,
+                fontWeight: FontWeight.w800,
+                color: p.gold,
+                height: 1.15,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: _MiniStat(label: 'اليوم', amount: todayTotal),
+                ),
+                Container(
+                  width: 1,
+                  height: 28,
+                  color: Colors.white.withValues(alpha: 0.18),
+                ),
+                Expanded(
+                  child: _MiniStat(label: 'هذا الشهر', amount: monthTotal),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
-class _KpiCard extends StatelessWidget {
-  const _KpiCard({
-    required this.label,
-    required this.amount,
-    required this.dark,
-    required this.footerIcon,
-    required this.footer,
-  });
+class _MiniStat extends StatelessWidget {
+  const _MiniStat({required this.label, required this.amount});
 
   final String label;
   final double amount;
-  final bool dark;
-  final IconData footerIcon;
-  final String footer;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: ExpensesStitchMetrics.kpiCardWidth,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: dark ? ExpensesStitchMetrics.navy : ExpensesStitchMetrics.surfaceGray,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.06),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
+    return Padding(
+      padding: const EdgeInsetsDirectional.symmetric(horizontal: 10),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
             label,
             style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w500,
-              color: dark
-                  ? Colors.white.withValues(alpha: 0.82)
-                  : ExpensesStitchMetrics.textMuted,
+              fontSize: 11,
+              color: Colors.white.withValues(alpha: 0.65),
             ),
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 2),
           Text(
             IraqiCurrencyFormat.formatIqd(amount),
             textDirection: TextDirection.ltr,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              fontSize: 22,
+            style: const TextStyle(
+              fontSize: 14,
               fontWeight: FontWeight.w700,
-              color: dark ? ExpensesStitchMetrics.gold : ExpensesStitchMetrics.textPrimary,
+              color: Colors.white,
             ),
-          ),
-          const Spacer(),
-          Row(
-            children: [
-              Icon(
-                footerIcon,
-                size: 16,
-                color: dark
-                    ? ExpensesStitchMetrics.gold.withValues(alpha: 0.9)
-                    : ExpensesStitchMetrics.onGold,
-              ),
-              const SizedBox(width: 4),
-              Expanded(
-                child: Text(
-                  footer,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w500,
-                    color: dark
-                        ? Colors.white.withValues(alpha: 0.72)
-                        : ExpensesStitchMetrics.onGold,
-                  ),
-                ),
-              ),
-            ],
           ),
         ],
       ),
@@ -177,7 +192,7 @@ class _KpiCard extends StatelessWidget {
   }
 }
 
-/// شريط فلاتر أفقي — تاريخ، فئة، حالة (+ بحث اختياري).
+/// شريط فلاتر مضغوط — تاريخ / فئة / حالة.
 class ExpensesStitchFilterStrip extends StatelessWidget {
   const ExpensesStitchFilterStrip({
     super.key,
@@ -210,22 +225,23 @@ class ExpensesStitchFilterStrip extends StatelessWidget {
       child: Row(
         children: [
           _FilterChip(
-            label: '📅 $dateLabel',
+            icon: Icons.calendar_month_rounded,
+            label: dateLabel,
             active: true,
             onTap: onDateTap,
           ),
           const SizedBox(width: ExpensesStitchMetrics.gapSm),
-          _FilterChip(label: categoryLabel, onTap: onCategoryTap),
+          _FilterChip(
+            icon: Icons.category_outlined,
+            label: categoryLabel,
+            onTap: onCategoryTap,
+          ),
           const SizedBox(width: ExpensesStitchMetrics.gapSm),
-          _FilterChip(label: statusLabel, onTap: onStatusTap),
-          if (onSearchTap != null) ...[
-            const SizedBox(width: ExpensesStitchMetrics.gapSm),
-            _FilterChip(
-              label: searchActive ? '🔍 بحث نشط' : '🔍 بحث',
-              active: searchActive,
-              onTap: onSearchTap!,
-            ),
-          ],
+          _FilterChip(
+            icon: Icons.filter_list_rounded,
+            label: statusLabel,
+            onTap: onStatusTap,
+          ),
         ],
       ),
     );
@@ -236,45 +252,50 @@ class _FilterChip extends StatelessWidget {
   const _FilterChip({
     required this.label,
     required this.onTap,
+    required this.icon,
     this.active = false,
   });
 
   final String label;
   final VoidCallback onTap;
+  final IconData icon;
   final bool active;
 
   @override
   Widget build(BuildContext context) {
+    final p = ExpensesStitchPalette.of(context);
+    final fg = active ? p.onGold : p.textPrimary;
     return Material(
-      color: active
-          ? ExpensesStitchMetrics.gold.withValues(alpha: 0.22)
-          : const Color(0xFFEAE7EB),
-      borderRadius: BorderRadius.circular(999),
+      color: active ? p.gold.withValues(alpha: 0.28) : p.card,
+      borderRadius: BorderRadius.circular(20),
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(999),
+        borderRadius: BorderRadius.circular(20),
         child: Container(
           padding: const EdgeInsetsDirectional.symmetric(
-            horizontal: 12,
-            vertical: 8,
+            horizontal: 10,
+            vertical: 7,
           ),
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(
-              color: active
-                  ? ExpensesStitchMetrics.gold
-                  : ExpensesStitchMetrics.borderMuted,
-            ),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: active ? p.gold : p.border),
           ),
-          child: Text(
-            label,
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: active
-                  ? ExpensesStitchMetrics.onGold
-                  : ExpensesStitchMetrics.textPrimary,
-            ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 15, color: fg),
+              const SizedBox(width: 5),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: fg,
+                ),
+              ),
+              const SizedBox(width: 2),
+              Icon(Icons.expand_more_rounded, size: 16, color: fg),
+            ],
           ),
         ),
       ),
@@ -282,52 +303,41 @@ class _FilterChip extends StatelessWidget {
   }
 }
 
-/// شريط إجمالي الفترة — مضغوط.
+/// توافق خلفي.
 class ExpensesStitchTotalStrip extends StatelessWidget {
   const ExpensesStitchTotalStrip({super.key, required this.total});
 
   final double total;
 
   @override
+  Widget build(BuildContext context) => const SizedBox.shrink();
+}
+
+/// توافق خلفي لاسم الـ KPI القديم.
+class ExpensesStitchKpiCarousel extends StatelessWidget {
+  const ExpensesStitchKpiCarousel({
+    super.key,
+    required this.items,
+    required this.monthTotal,
+    required this.todayTotal,
+  });
+
+  final List<ExpenseEntry> items;
+  final double monthTotal;
+  final double todayTotal;
+
+  @override
   Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsetsDirectional.symmetric(
-        horizontal: ExpensesStitchMetrics.pagePadding,
-      ),
-      padding: const EdgeInsetsDirectional.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: ExpensesStitchMetrics.gold.withValues(alpha: 0.2),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: ExpensesStitchMetrics.gold),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              IraqiCurrencyFormat.formatIqd(total),
-              textDirection: TextDirection.ltr,
-              style: const TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w700,
-                color: ExpensesStitchMetrics.onGold,
-              ),
-            ),
-          ),
-          Text(
-            'إجمالي الفترة',
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: ExpensesStitchMetrics.onGold.withValues(alpha: 0.85),
-            ),
-          ),
-        ],
-      ),
+    return ExpensesStitchSummaryHeader(
+      periodTotal: monthTotal,
+      monthTotal: monthTotal,
+      todayTotal: todayTotal,
+      periodCount: items.length,
     );
   }
 }
 
-/// حقل بحث مضغوط للموبايل (بدون اختصارات لوحة مفاتيح).
+/// حقل بحث مضغوط.
 class ExpensesStitchSearchField extends StatelessWidget {
   const ExpensesStitchSearchField({
     super.key,
@@ -340,46 +350,47 @@ class ExpensesStitchSearchField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final p = ExpensesStitchPalette.of(context);
     return Padding(
       padding: const EdgeInsetsDirectional.fromSTEB(
         ExpensesStitchMetrics.pagePadding,
-        8,
-        ExpensesStitchMetrics.pagePadding,
         4,
+        ExpensesStitchMetrics.pagePadding,
+        0,
       ),
       child: TextField(
         controller: controller,
         focusNode: focusNode,
         textInputAction: TextInputAction.search,
+        style: TextStyle(fontSize: 14, color: p.textPrimary),
         decoration: InputDecoration(
+          isDense: true,
           hintText: 'بحث بالوصف أو الفئة…',
-          prefixIcon: const Icon(Icons.search_rounded, size: 22),
+          hintStyle: TextStyle(fontSize: 13, color: p.textMuted),
+          prefixIcon: Icon(Icons.search_rounded, size: 20, color: p.textMuted),
           suffixIcon: controller.text.trim().isEmpty
               ? null
               : IconButton(
-                  icon: const Icon(Icons.close_rounded, size: 20),
+                  icon: Icon(Icons.close_rounded, size: 18, color: p.textMuted),
                   onPressed: () {
                     controller.clear();
                     focusNode.requestFocus();
                   },
                 ),
           filled: true,
-          fillColor: ExpensesStitchMetrics.surfaceWhite,
-          contentPadding: const EdgeInsets.symmetric(vertical: 0),
+          fillColor: p.card,
+          contentPadding: const EdgeInsets.symmetric(vertical: 10),
           border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(12),
-            borderSide: const BorderSide(color: ExpensesStitchMetrics.borderMuted),
+            borderSide: BorderSide(color: p.border),
           ),
           enabledBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(12),
-            borderSide: const BorderSide(color: ExpensesStitchMetrics.borderMuted),
+            borderSide: BorderSide(color: p.border),
           ),
           focusedBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(12),
-            borderSide: const BorderSide(
-              color: ExpensesStitchMetrics.gold,
-              width: 1.5,
-            ),
+            borderSide: BorderSide(color: p.gold, width: 1.5),
           ),
         ),
       ),
@@ -387,7 +398,7 @@ class ExpensesStitchSearchField extends StatelessWidget {
   }
 }
 
-/// صف مصروف مضغوط — Stitch Ledger row.
+/// صف مصروف في السجل.
 class ExpensesStitchLedgerRow extends StatelessWidget {
   const ExpensesStitchLedgerRow({
     super.key,
@@ -402,74 +413,78 @@ class ExpensesStitchLedgerRow extends StatelessWidget {
   final bool highlighted;
   final VoidCallback onTap;
 
-  static final _rowDateFmt = DateFormat('d MMM', 'en');
-
   @override
   Widget build(BuildContext context) {
-    final title = entry.description.trim().isNotEmpty
-        ? entry.description.trim()
-        : entry.categoryName;
-    final subtitle =
-        '${_rowDateFmt.format(entry.occurredAt)} - ${entry.categoryName}';
+    final p = ExpensesStitchPalette.of(context);
+    final dateLabel = DateFormat('dd/MM', 'en').format(entry.occurredAt);
+    final cat = entry.categoryName.trim();
+    final desc = entry.description.trim().isEmpty
+        ? (cat.isEmpty ? 'بدون وصف' : cat)
+        : entry.description.trim();
+    final statusLabel = entry.isRecurring
+        ? 'متكرر'
+        : switch (entry.status) {
+            ExpenseStatus.paid => 'مدفوع',
+            ExpenseStatus.pending => 'غير مدفوع',
+          };
 
     return Padding(
-      padding: const EdgeInsetsDirectional.only(
-        start: ExpensesStitchMetrics.pagePadding,
-        end: ExpensesStitchMetrics.pagePadding,
-        bottom: 8,
+      padding: const EdgeInsetsDirectional.fromSTEB(
+        ExpensesStitchMetrics.pagePadding,
+        0,
+        ExpensesStitchMetrics.pagePadding,
+        8,
       ),
       child: Material(
-        color: highlighted
-            ? ExpensesStitchMetrics.gold.withValues(alpha: 0.12)
-            : ExpensesStitchMetrics.surfaceWhite,
+        color: highlighted ? p.gold.withValues(alpha: 0.18) : p.card,
         borderRadius: BorderRadius.circular(ExpensesStitchMetrics.rowRadius),
         child: InkWell(
           onTap: onTap,
           borderRadius: BorderRadius.circular(ExpensesStitchMetrics.rowRadius),
           child: Container(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsetsDirectional.fromSTEB(12, 12, 12, 12),
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(ExpensesStitchMetrics.rowRadius),
+              borderRadius:
+                  BorderRadius.circular(ExpensesStitchMetrics.rowRadius),
               border: Border.all(
-                color: highlighted
-                    ? ExpensesStitchMetrics.gold
-                    : ExpensesStitchMetrics.surfaceGray,
+                color: highlighted ? p.gold : p.border.withValues(alpha: 0.7),
               ),
             ),
             child: Row(
               children: [
                 Container(
-                  width: 12,
-                  height: 12,
+                  width: 4,
+                  height: 40,
                   decoration: BoxDecoration(
                     color: categoryColor,
-                    shape: BoxShape.circle,
+                    borderRadius: BorderRadius.circular(4),
                   ),
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: 10),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        title,
+                        desc,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 16,
+                        style: TextStyle(
                           fontWeight: FontWeight.w700,
-                          color: ExpensesStitchMetrics.textPrimary,
+                          fontSize: 14,
+                          color: p.textPrimary,
                         ),
                       ),
-                      const SizedBox(height: 2),
+                      const SizedBox(height: 3),
                       Text(
-                        subtitle,
+                        [
+                          if (cat.isNotEmpty) cat,
+                          dateLabel,
+                          statusLabel,
+                        ].join(' · '),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 10,
-                          color: ExpensesStitchMetrics.textMuted,
-                        ),
+                        style: TextStyle(fontSize: 11, color: p.textMuted),
                       ),
                     ],
                   ),
@@ -478,10 +493,10 @@ class ExpensesStitchLedgerRow extends StatelessWidget {
                 Text(
                   IraqiCurrencyFormat.formatIqd(entry.amount),
                   textDirection: TextDirection.ltr,
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                    color: ExpensesStitchMetrics.textPrimary,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 14,
+                    color: p.amount,
                   ),
                 ),
               ],
@@ -502,40 +517,56 @@ Future<void> showExpensesStitchCategorySheet({
   return showModalBottomSheet<void>(
     context: context,
     showDragHandle: true,
-    builder: (ctx) => SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Padding(
-            padding: EdgeInsets.all(12),
-            child: Text(
-              'اختر الفئة',
-              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
-            ),
+    isScrollControlled: true,
+    builder: (ctx) {
+      final maxH = MediaQuery.sizeOf(ctx).height * 0.7;
+      return SafeArea(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: maxH),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Padding(
+                padding: EdgeInsets.all(12),
+                child: Text(
+                  'فئة المصروف',
+                  style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+                ),
+              ),
+              Flexible(
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [
+                    ListTile(
+                      title: const Text('كل الفئات'),
+                      trailing: selectedId == null
+                          ? const Icon(Icons.check_rounded)
+                          : null,
+                      onTap: () {
+                        onSelected(null);
+                        Navigator.pop(ctx);
+                      },
+                    ),
+                    for (final c in categories)
+                      ListTile(
+                        title: Text(c.name),
+                        trailing: selectedId == c.id
+                            ? const Icon(Icons.check_rounded)
+                            : null,
+                        onTap: () {
+                          onSelected(c.id);
+                          Navigator.pop(ctx);
+                        },
+                      ),
+                    const SizedBox(height: 8),
+                  ],
+                ),
+              ),
+            ],
           ),
-          ListTile(
-            title: const Text('كل الفئات'),
-            trailing: selectedId == null ? const Icon(Icons.check_rounded) : null,
-            onTap: () {
-              onSelected(null);
-              Navigator.pop(ctx);
-            },
-          ),
-          for (final cat in categories)
-            ListTile(
-              title: Text(cat.name),
-              trailing: selectedId == cat.id
-                  ? const Icon(Icons.check_rounded)
-                  : null,
-              onTap: () {
-                onSelected(cat.id);
-                Navigator.pop(ctx);
-              },
-            ),
-          const SizedBox(height: 8),
-        ],
-      ),
-    ),
+        ),
+      );
+    },
   );
 }
 
@@ -554,27 +585,30 @@ Future<void> showExpensesStitchStatusSheet({
     context: context,
     showDragHandle: true,
     builder: (ctx) => SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Padding(
-            padding: EdgeInsets.all(12),
-            child: Text(
-              'حالة المصروف',
-              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.all(12),
+              child: Text(
+                'حالة المصروف',
+                style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+              ),
             ),
-          ),
-          for (final e in options.entries)
-            ListTile(
-              title: Text(e.value),
-              trailing: selected == e.key ? const Icon(Icons.check_rounded) : null,
-              onTap: () {
-                onSelected(e.key);
-                Navigator.pop(ctx);
-              },
-            ),
-          const SizedBox(height: 8),
-        ],
+            for (final e in options.entries)
+              ListTile(
+                title: Text(e.value),
+                trailing:
+                    selected == e.key ? const Icon(Icons.check_rounded) : null,
+                onTap: () {
+                  onSelected(e.key);
+                  Navigator.pop(ctx);
+                },
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
       ),
     ),
   );
@@ -582,10 +616,10 @@ Future<void> showExpensesStitchStatusSheet({
 
 String expensesStitchStatusLabel(String status) {
   return switch (status) {
-    'paid' => 'مدفوع ▾',
-    'pending' => 'غير مدفوع ▾',
-    'recurring' => 'متكرر ▾',
-    _ => 'الكل ▾',
+    'paid' => 'مدفوع',
+    'pending' => 'غير مدفوع',
+    'recurring' => 'متكرر',
+    _ => 'الكل',
   };
 }
 
@@ -593,14 +627,14 @@ String expensesStitchCategoryLabel(
   List<ExpenseCategory> categories,
   int? categoryId,
 ) {
-  if (categoryId == null) return 'كل الفئات ▾';
+  if (categoryId == null) return 'كل الفئات';
   for (final c in categories) {
-    if (c.id == categoryId) return '${c.name} ▾';
+    if (c.id == categoryId) return c.name;
   }
-  return 'كل الفئات ▾';
+  return 'كل الفئات';
 }
 
-/// قائمة السجل — تخطيط Stitch للموبايل.
+/// قائمة السجل — تخطيط موبايل مضغوط.
 class ExpensesStitchLedgerList extends StatelessWidget {
   const ExpensesStitchLedgerList({
     super.key,
@@ -658,36 +692,33 @@ class ExpensesStitchLedgerList extends StatelessWidget {
     return sum;
   }
 
-  String _dateChipLabel() => dateChipLabel;
-
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final p = ExpensesStitchPalette.of(context);
     final contentCount = loading ? 1 : (items.isEmpty ? 1 : items.length);
-    const headerCount = 4;
+    const headerCount = 3;
 
     return ListView.builder(
-      padding: const EdgeInsets.only(bottom: 100),
+      padding: const EdgeInsets.only(bottom: 24),
       itemCount: headerCount + contentCount,
       itemBuilder: (context, index) {
         if (index == 0) {
-          return Padding(
-            padding: const EdgeInsets.only(top: 12, bottom: 8),
-            child: ExpensesStitchKpiCarousel(
-              items: items,
-              monthTotal: _monthTotal(items),
-              todayTotal: _todayTotal(items),
-            ),
+          return ExpensesStitchSummaryHeader(
+            periodTotal: total,
+            monthTotal: _monthTotal(items),
+            todayTotal: _todayTotal(items),
+            periodCount: items.length,
           );
         }
         if (index == 1) {
           return Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
+            padding: const EdgeInsets.symmetric(vertical: 10),
             child: ExpensesStitchFilterStrip(
-              dateLabel: _dateChipLabel(),
-              categoryLabel: expensesStitchCategoryLabel(categories, categoryId),
+              dateLabel: dateChipLabel,
+              categoryLabel:
+                  expensesStitchCategoryLabel(categories, categoryId),
               statusLabel: expensesStitchStatusLabel(status),
-              searchActive: searchCtrl.text.trim().isNotEmpty,
               onDateTap: onShowDateSheet,
               onCategoryTap: () => unawaited(
                 showExpensesStitchCategorySheet(
@@ -704,26 +735,22 @@ class ExpensesStitchLedgerList extends StatelessWidget {
                   onSelected: onStatusChanged,
                 ),
               ),
-              onSearchTap: () => searchFocus.requestFocus(),
             ),
           );
         }
         if (index == 2) {
-          return ExpensesStitchSearchField(
-            controller: searchCtrl,
-            focusNode: searchFocus,
-          );
-        }
-        if (index == 3) {
           return Padding(
-            padding: const EdgeInsets.only(top: 8, bottom: 12),
-            child: ExpensesStitchTotalStrip(total: total),
+            padding: const EdgeInsets.only(bottom: 10),
+            child: ExpensesStitchSearchField(
+              controller: searchCtrl,
+              focusNode: searchFocus,
+            ),
           );
         }
 
         if (loading) {
           return const Padding(
-            padding: EdgeInsets.only(top: 24),
+            padding: EdgeInsets.only(top: 32),
             child: Center(child: CircularProgressIndicator()),
           );
         }
@@ -731,39 +758,33 @@ class ExpensesStitchLedgerList extends StatelessWidget {
           return Padding(
             padding: const EdgeInsetsDirectional.symmetric(
               horizontal: ExpensesStitchMetrics.pagePadding,
-              vertical: 24,
+              vertical: 40,
             ),
             child: Column(
               children: [
                 Icon(
                   Icons.receipt_long_outlined,
-                  size: 48,
-                  color: ExpensesStitchMetrics.gold.withValues(alpha: 0.85),
+                  size: 44,
+                  color: p.textMuted.withValues(alpha: 0.55),
                 ),
                 const SizedBox(height: 12),
-                const Text(
+                Text(
                   'لا توجد مصروفات في هذه الفترة',
                   textAlign: TextAlign.center,
-                  style: TextStyle(fontWeight: FontWeight.w800),
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 15,
+                    color: p.textPrimary,
+                  ),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 6),
                 Text(
-                  'جرّب تغيير الفترة أو أضف مصروفاً جديداً',
+                  'غيّر الفترة من الأعلى أو اضغط + لإضافة مصروف',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     fontSize: 12,
                     color: cs.onSurfaceVariant,
                   ),
-                ),
-                const SizedBox(height: 16),
-                FilledButton.icon(
-                  onPressed: onAddExpense,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: ExpensesStitchMetrics.gold,
-                    foregroundColor: ExpensesStitchMetrics.onGold,
-                  ),
-                  icon: const Icon(Icons.add_rounded),
-                  label: const Text('إضافة مصروف'),
                 ),
               ],
             ),

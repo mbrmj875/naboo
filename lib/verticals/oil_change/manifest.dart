@@ -9,9 +9,12 @@ import '../../owner/specs/owner_dashboard_profile.dart';
 import '../../owner/specs/owner_kpi_catalog.dart';
 import '../../owner/specs/owner_kpi_catalog_entry.dart';
 import 'owner/owner_oil_dashboard_repository.dart';
+import 'screens/oil_change_direct_sale_screen.dart';
 import 'screens/oil_change_form_screen.dart';
 import 'screens/oil_change_hub_screen.dart';
 import 'screens/oil_change_invoices_screen.dart';
+import '../car_wash/screens/car_wash_form_screen.dart';
+import '../car_wash/screens/car_wash_services_screen.dart';
 import 'screens/oil_change_service_form_screen.dart';
 import 'screens/oil_change_services_screen.dart';
 import '../../services/business_setup_settings.dart';
@@ -65,8 +68,16 @@ final class OilChangeVerticalManifest extends VerticalManifest {
               routeId: AppContentRoutes.oilInvoices,
             ),
             NavSubItemSpec(
+              title: 'بيع مباشر',
+              routeId: AppContentRoutes.oilDirectSale,
+            ),
+            NavSubItemSpec(
               title: 'الخدمات وأسعارها',
               routeId: AppContentRoutes.oilChangeServices,
+            ),
+            NavSubItemSpec(
+              title: 'أنواع الغسيل وأسعارها',
+              routeId: AppContentRoutes.carWashServices,
             ),
           ],
         ),
@@ -82,6 +93,10 @@ final class OilChangeVerticalManifest extends VerticalManifest {
         AppContentRoutes.oilChangeServiceCreate: (_) =>
             const OilChangeServiceFormScreen(),
         AppContentRoutes.oilInvoices: (_) => const OilChangeInvoicesScreen(),
+        AppContentRoutes.oilDirectSale: (_) =>
+            const OilChangeDirectSaleScreen(),
+        AppContentRoutes.carWashCreate: (_) => const CarWashFormScreen(),
+        AppContentRoutes.carWashServices: (_) => const CarWashServicesScreen(),
       };
 
   @override
@@ -91,12 +106,34 @@ final class OilChangeVerticalManifest extends VerticalManifest {
         ? HomeDashboardProfile.oilChangeHybrid
         : HomeDashboardProfile.oilChangeService;
 
-    final primary = HomeDashboardAction(
+    final primary = const HomeDashboardAction(
       id: 'oil_new',
       title: 'غيار زيت جديد',
       subtitle: 'تسجيل سيارة وعداد',
       icon: Icons.add_rounded,
       routeId: 'oil_change_create',
+      accentColor: _gold,
+      isPrimary: true,
+    );
+
+    // زر دائم تحت بطاقة غيار الزيت — نفس الشكل، ولا يُخفى من الإعدادات.
+    const directSale = HomeDashboardAction(
+      id: 'oil_direct_sale',
+      title: 'بيع مباشر',
+      subtitle: 'منتجات وقطع بدون غيار',
+      icon: Icons.point_of_sale_rounded,
+      routeId: 'oil_direct_sale',
+      accentColor: _gold,
+      isPrimary: true,
+    );
+
+    // زر ثانٍ تحت الزر الذهبي — يُخفى من «تخصيص الشاشة الرئيسية».
+    const carWash = HomeDashboardAction(
+      id: 'car_wash_new',
+      title: 'غسيل السيارات',
+      subtitle: 'بطاقة غسيل سريعة',
+      icon: Icons.local_car_wash_rounded,
+      routeId: 'car_wash_create',
       accentColor: _gold,
       isPrimary: true,
     );
@@ -162,6 +199,8 @@ final class OilChangeVerticalManifest extends VerticalManifest {
         routeToOilHub: true,
       ),
       primaryCta: primary,
+      pinnedCta: directSale,
+      secondaryCta: carWash,
       secondaryTiles: tiles,
       hideGlanceIds: hide,
       hideNavRouteIds: const {
@@ -377,5 +416,8 @@ final class OilChangeVerticalManifest extends VerticalManifest {
         AppContentRoutes.oilChangeCreate,
         AppContentRoutes.oilChangeServiceCreate,
         AppContentRoutes.oilInvoices,
+        AppContentRoutes.oilDirectSale,
+        AppContentRoutes.carWashCreate,
+        AppContentRoutes.carWashServices,
       ];
 }

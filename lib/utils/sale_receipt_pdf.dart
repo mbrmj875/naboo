@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:barcode/barcode.dart' as bc;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
@@ -14,7 +15,9 @@ import 'package:printing/printing.dart' as printing;
 import '../models/installment.dart';
 import '../models/invoice.dart';
 import '../models/print_settings_data.dart';
+import '../screens/debts/customer_debt_payment_receipt_screen.dart';
 import '../services/database_helper.dart';
+import '../services/effective_store_branding.dart';
 import '../services/print_settings_repository.dart';
 import '../services/thermal_esc_pos_service.dart';
 import '../services/thermal_network_printer_service.dart';
@@ -29,6 +32,22 @@ const _kTajawalBold = 'assets/fonts/Tajawal-Bold.ttf';
 const _kNotoNaskhRegular = 'assets/fonts/NotoNaskhArabic-Regular.ttf';
 const _kNotoNaskhBold = 'assets/fonts/NotoNaskhArabic-Bold.ttf';
 
+/// إعدادات الطباعة مع هوية فرع المستخدم الحالي إن وُجدت.
+Future<PrintSettingsData> _effectivePrintSettings(
+  BuildContext? context,
+  PrintSettingsData? printSettings,
+) async {
+  if (printSettings != null) return printSettings;
+  if (context != null && context.mounted) {
+    try {
+      return await EffectiveStoreBranding.resolveFromContext(context);
+    } catch (e) {
+      AppLogger.warn('SaleReceiptPdf', 'effective branding fallback: $e');
+    }
+  }
+  return PrintSettingsRepository.instance.load();
+}
+
 String _receiptSafe(String? raw) {
   if (raw == null) return '';
   var s = raw.replaceAll('\uFFFD', '').trim();
@@ -42,6 +61,20 @@ List<pw.Widget> _receiptStoreHeaderBlock(
   required pw.Font fontBold,
 }) {
   final out = <pw.Widget>[];
+  final logo = s.storeLogoBytes;
+  if (logo != null) {
+    try {
+      out.add(
+        pw.Center(
+          child: pw.Image(pw.MemoryImage(logo), height: 56),
+        ),
+      );
+      out.add(pw.SizedBox(height: 6));
+    } catch (e) {
+      // شعار تالف لا يجوز أن يمنع طباعة الإيصال.
+      AppLogger.warn('SaleReceiptPdf', 'store logo skipped: $e');
+    }
+  }
   final title = _receiptSafe(s.storeTitleLine);
   if (title.isNotEmpty) {
     out.add(
@@ -1251,7 +1284,7 @@ class SaleReceiptPdf {
   }) async {
     if (!context.mounted) return;
     final settings =
-        printSettings ?? await PrintSettingsRepository.instance.load();
+        await _effectivePrintSettings(context, printSettings);
     if (!context.mounted) return;
     await Navigator.of(context, rootNavigator: true).push<void>(
       MaterialPageRoute<void>(
@@ -1504,84 +1537,19 @@ class SaleReceiptPdf {
     PrintSettingsData? printSettings,
   }) async {
     if (!context.mounted) return;
-    final settings =
-        printSettings ?? await PrintSettingsRepository.instance.load();
-    if (!context.mounted) return;
-    await Navigator.of(context, rootNavigator: true).push<void>(
+    // صفحة عادية داخل التطبيق — ليست منبثقة ولا معاينة PDF تملأ الشاشة.
+    await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
-        fullscreenDialog: true,
-        builder: (ctx) {
-          final w = MediaQuery.sizeOf(ctx).width;
-          final maxPage = math.min(w - 16, 920.0).clamp(200.0, w);
-          return Directionality(
-            textDirection: ui.TextDirection.rtl,
-            child: Scaffold(
-              appBar: AppBar(
-                leading: IconButton(
-                  icon: const Icon(Icons.close_rounded),
-                  tooltip: 'إغلاق',
-                  onPressed: () => Navigator.of(ctx).pop(),
-                ),
-                title: const Text('إيصال تسديد دين'),
-              ),
-              body: ColoredBox(
-                color: Theme.of(ctx).colorScheme.surface,
-                child: printing.PdfPreview(
-                  padding: const EdgeInsets.all(8),
-                  maxPageWidth: maxPage,
-                initialPageFormat: settings.pdfPageFormat,
-                canChangePageFormat: true,
-                canChangeOrientation: false,
-                allowPrinting: false,
-                allowSharing: true,
-                canDebug: false,
-                actions: [
-                  printing.PdfPreviewAction(
-                    icon: const Icon(Icons.print_rounded),
-                    onPressed: (c, b, f) => _safePrintAction(c, b, f),
-                  ),
-                ],
-                pdfFileName:
-                    'debt-receipt-$paymentRowId${receiptInvoiceId != null ? '-$receiptInvoiceId' : ''}.pdf',
-                onPrintError: (context, error) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text(
-                        'لم يتم العثور على طابعة متصلة بالجهاز. يرجى مراجعة توصيل الطابعة.',
-                        style: TextStyle(fontFamily: 'NotoNaskhArabic'),
-                      ),
-                      backgroundColor: Colors.redAccent,
-                      behavior: SnackBarBehavior.floating,
-                    ),
-                  );
-                },
-                build: (() {
-                  final cache = <String, Future<Uint8List>>{};
-                  return (PdfPageFormat format) {
-                    final key =
-                        '$paymentRowId|${receiptInvoiceId ?? 0}|${customerId ?? 0}|${format.width}x${format.height}|${format.marginLeft},${format.marginTop},${format.marginRight},${format.marginBottom}|${settings.hashCode}';
-                    return cache.putIfAbsent(
-                      key,
-                      () => buildCustomerDebtPaymentReceiptBytes(
-                        customerDisplayName: customerDisplayName,
-                        customerId: customerId,
-                        amountApplied: amountApplied,
-                        debtBefore: debtBefore,
-                        debtAfter: debtAfter,
-                        paymentRowId: paymentRowId,
-                        receiptInvoiceId: receiptInvoiceId,
-                        recordedByUserName: recordedByUserName,
-                        pageFormat: format,
-                        settings: settings,
-                      ),
-                    );
-                  };
-                })(),
-                ),
-              ),
-            ),
-          );
-        },
+        builder: (_) => CustomerDebtPaymentReceiptScreen(
+          customerDisplayName: customerDisplayName,
+          customerId: customerId,
+          amountApplied: amountApplied,
+          debtBefore: debtBefore,
+          debtAfter: debtAfter,
+          paymentRowId: paymentRowId,
+          receiptInvoiceId: receiptInvoiceId,
+          recordedByUserName: recordedByUserName,
+        ),
       ),
     );
   }
@@ -1596,7 +1564,7 @@ class SaleReceiptPdf {
     PrintSettingsData? printSettings,
   }) async {
     final settings =
-        printSettings ?? await PrintSettingsRepository.instance.load();
+        await _effectivePrintSettings(null, printSettings);
     final isThermalPaper = settings.paperFormat == PrintPaperFormat.thermal58 ||
         settings.paperFormat == PrintPaperFormat.thermal80;
 
@@ -1618,7 +1586,27 @@ class SaleReceiptPdf {
         return null;
       } catch (e, st) {
         AppLogger.error('SaleReceiptPdf', 'silent thermal print failed', e, st);
-        return 'تعذرت الطباعة الحرارية — تحقق من اتصال الطابعة بالشبكة.';
+        return 'تعذرت الطباعة الحرارية — تحقق من اتصال الطابعة بالشبكة'
+            '${kIsWeb ? ' أو شغّل جسر الطباعة المحلي على جهاز الكاشير.' : '.'}';
+      }
+    }
+
+    if (kIsWeb) {
+      try {
+        final bytes = await buildPdfBytes(
+          invoice: invoice,
+          subtotalBeforeDiscount: subtotalBeforeDiscount,
+          pageFormat: settings.pdfPageFormat,
+          settings: settings,
+        );
+        await printing.Printing.layoutPdf(
+          onLayout: (_) => bytes,
+          format: settings.pdfPageFormat,
+        );
+        return null;
+      } catch (e, st) {
+        AppLogger.error('SaleReceiptPdf', 'web layoutPdf failed', e, st);
+        return 'تعذرت طباعة/حفظ PDF من المتصفح.';
       }
     }
 
@@ -1664,7 +1652,7 @@ class SaleReceiptPdf {
   }) async {
     if (!context.mounted) return;
     final settings =
-        printSettings ?? await PrintSettingsRepository.instance.load();
+        await _effectivePrintSettings(context, printSettings);
     if (!context.mounted) return;
     final isThermalPaper = settings.paperFormat == PrintPaperFormat.thermal58 ||
         settings.paperFormat == PrintPaperFormat.thermal80;
@@ -2064,7 +2052,7 @@ class SaleReceiptPdf {
   }) async {
     if (!context.mounted) return;
     final settings =
-        printSettings ?? await PrintSettingsRepository.instance.load();
+        await _effectivePrintSettings(context, printSettings);
     if (!context.mounted) return;
     await Navigator.of(context, rootNavigator: true).push<void>(
       MaterialPageRoute<void>(

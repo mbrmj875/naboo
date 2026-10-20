@@ -286,8 +286,8 @@ class _AlertChannelsSection extends StatelessWidget {
         const Padding(
           padding: EdgeInsetsDirectional.only(start: 8, end: 8, bottom: 4),
           child: Text(
-            'Push يُرسل من الخادم (FCM) وفق العتبات — التطبيق لا يولّد إشعاراً محلياً. '
-            'عطّل Push للتنبيهات غير الحرجة لتقليل الإزعاج.',
+            'Push يُرسل من الخادم (FCM) وفق العتبات — يصل والقفل/السكون. '
+            'التنبيهات الحرجة مفعّلة افتراضياً؛ عطّل Push لغير الحرجة لتقليل الإزعاج.',
             style: TextStyle(fontSize: 12),
           ),
         ),

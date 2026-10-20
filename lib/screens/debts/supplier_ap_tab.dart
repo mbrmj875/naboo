@@ -41,69 +41,12 @@ class _SupplierApTabState extends State<SupplierApTab> {
   }
 
   Future<void> _addSupplierDialog() async {
-    final nameCtrl = TextEditingController();
-    final phoneCtrl = TextEditingController();
-    final noteCtrl = TextEditingController();
-    final ok = await showDialog<bool>(
+    final result = await showDialog<_NewSupplierDraft>(
       context: context,
-      builder: (ctx) => Directionality(
-        textDirection: TextDirection.rtl,
-        child: AlertDialog(
-          shape: const RoundedRectangleBorder(borderRadius: AppShape.none),
-          title: const Text('مورد جديد'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: nameCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'اسم المورد *',
-                    border: OutlineInputBorder(borderRadius: AppShape.none),
-                  ),
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: phoneCtrl,
-                  keyboardType: TextInputType.phone,
-                  decoration: const InputDecoration(
-                    labelText: 'هاتف (اختياري)',
-                    border: OutlineInputBorder(borderRadius: AppShape.none),
-                  ),
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: noteCtrl,
-                  maxLines: 2,
-                  decoration: const InputDecoration(
-                    labelText: 'ملاحظات',
-                    border: OutlineInputBorder(borderRadius: AppShape.none),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('إلغاء'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('حفظ'),
-            ),
-          ],
-        ),
-      ),
+      builder: (ctx) => const _NewSupplierDialog(),
     );
-    final name = nameCtrl.text.trim();
-    final phone = phoneCtrl.text.trim();
-    final note = noteCtrl.text.trim();
-    nameCtrl.dispose();
-    phoneCtrl.dispose();
-    noteCtrl.dispose();
-    if (ok != true || !mounted) return;
-    if (name.isEmpty) {
+    if (result == null || !mounted) return;
+    if (result.name.isEmpty) {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text('أدخل اسم المورد')));
@@ -111,9 +54,9 @@ class _SupplierApTabState extends State<SupplierApTab> {
     }
     try {
       await DatabaseHelper().insertSupplier(
-        name: name,
-        phone: phone.isEmpty ? null : phone,
-        notes: note.isEmpty ? null : note,
+        name: result.name,
+        phone: result.phone.isEmpty ? null : result.phone,
+        notes: result.notes.isEmpty ? null : result.notes,
       );
     } catch (_) {
       if (mounted) {
@@ -442,4 +385,110 @@ Widget _quickActionChip(
     onPressed: onTap,
     materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
   );
+}
+
+class _NewSupplierDraft {
+  const _NewSupplierDraft({
+    required this.name,
+    required this.phone,
+    required this.notes,
+  });
+
+  final String name;
+  final String phone;
+  final String notes;
+}
+
+/// حوار إنشاء مورد — يملك الـ controllers حتى لا تُتلف أثناء إغلاق الـ Route.
+class _NewSupplierDialog extends StatefulWidget {
+  const _NewSupplierDialog();
+
+  @override
+  State<_NewSupplierDialog> createState() => _NewSupplierDialogState();
+}
+
+class _NewSupplierDialogState extends State<_NewSupplierDialog> {
+  final _nameCtrl = TextEditingController();
+  final _phoneCtrl = TextEditingController();
+  final _noteCtrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _phoneCtrl.dispose();
+    _noteCtrl.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    FocusManager.instance.primaryFocus?.unfocus();
+    Navigator.pop(
+      context,
+      _NewSupplierDraft(
+        name: _nameCtrl.text.trim(),
+        phone: _phoneCtrl.text.trim(),
+        notes: _noteCtrl.text.trim(),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: AlertDialog(
+        shape: const RoundedRectangleBorder(borderRadius: AppShape.none),
+        title: const Text('مورد جديد'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: _nameCtrl,
+                textInputAction: TextInputAction.next,
+                decoration: const InputDecoration(
+                  labelText: 'اسم المورد *',
+                  border: OutlineInputBorder(borderRadius: AppShape.none),
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: _phoneCtrl,
+                keyboardType: TextInputType.phone,
+                textInputAction: TextInputAction.next,
+                decoration: const InputDecoration(
+                  labelText: 'هاتف (اختياري)',
+                  border: OutlineInputBorder(borderRadius: AppShape.none),
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: _noteCtrl,
+                maxLines: 2,
+                textInputAction: TextInputAction.done,
+                onSubmitted: (_) => _submit(),
+                decoration: const InputDecoration(
+                  labelText: 'ملاحظات',
+                  border: OutlineInputBorder(borderRadius: AppShape.none),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              FocusManager.instance.primaryFocus?.unfocus();
+              Navigator.pop(context);
+            },
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            onPressed: _submit,
+            child: const Text('حفظ'),
+          ),
+        ],
+      ),
+    );
+  }
 }

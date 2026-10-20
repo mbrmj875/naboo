@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../utils/app_logger.dart';
 import 'database_helper.dart';
 
 /// يحفظ آخر سياق جلسة (المستخدم + المسار) لاستعادته بعد بوابة PIN.
@@ -56,23 +59,21 @@ abstract final class SessionResumeContext {
     required int userId,
     required String role,
   }) async {
-    final prefs = await SharedPreferences.getInstance();
-    final savedUser = prefs.getInt(_prefResumeUserId);
-    final savedRoot = prefs.getString(_prefResumeRootRoute);
-
-    if (savedUser == userId && savedRoot != null) {
-      if (savedRoot == '/home' || savedRoot == '/open-shift') {
-        if (role == 'owner' && savedRoot == '/open-shift') {
-          return '/home';
-        }
-        return savedRoot;
-      }
-    }
-
     if (role == 'owner') return '/home';
 
-    final open = await DatabaseHelper().getOpenWorkShiftForStaff(userId);
-    if (open != null) return '/home';
+    // لا نثق بمسار محفوظ `/open-shift`: كان يُكتب قبل معرفة الوردية
+    // فيُجبر الموظف على شاشة فتح الوردية حتى لو ورديته مفتوحة.
+    try {
+      final open = await DatabaseHelper()
+          .getOpenWorkShiftForStaff(userId)
+          .timeout(const Duration(milliseconds: 250));
+      if (open != null) return '/home';
+    } on TimeoutException {
+      // استيراد سحابي يمسك الاتصال: ادخل الرئيسية ولا تُبقِ مؤشر الرمز.
+      return '/home';
+    } catch (e) {
+      AppLogger.warn('SessionResume', 'open shift lookup after pin: $e');
+    }
     return '/open-shift';
   }
 

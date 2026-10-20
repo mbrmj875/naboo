@@ -7,6 +7,7 @@ import '../../../utils/iqd_money.dart';
 import '../../../utils/stock_quantity_kind.dart';
 import '../../../owner/models/owner_date_range.dart';
 import '../../../owner/models/owner_kpi_models.dart';
+import '../../../owner/models/owner_period_sale_row.dart';
 
 /// استعلامات v3 لورشة غيار الزيت — [tenantId] إلزامي (لا TenantContext داخلياً).
 class OwnerOilDashboardRepository {
@@ -39,8 +40,8 @@ class OwnerOilDashboardRepository {
     final stats = await _aggregateOilOrdersInRange(
       db,
       tenantId: tenantId,
-      startIso: range.startLocal.toIso8601String(),
-      endExclusiveIso: range.endExclusiveLocal.toIso8601String(),
+      startIso: range.startUtcIso,
+      endExclusiveIso: range.endExclusiveUtcIso,
       staffName: staffName,
     );
     return OilChangesKpi(
@@ -70,6 +71,141 @@ class OwnerOilDashboardRepository {
     );
   }
 
+  /// صفوف مبيعات الفترة — نفس مرشّحات [loadOilChangesInRange] (حساس مالياً).
+  Future<List<OwnerPeriodSaleRow>> listOilSalesInRange({
+    required int tenantId,
+    required OwnerDateRange range,
+    String? staffName,
+    int limit = 80,
+    String? afterCreatedAt,
+    int? afterId,
+  }) async {
+    final db = await _db.database;
+    try {
+      final hasOrderKind =
+          await _tableHasColumn(db, 'service_orders', 'orderKind');
+      final hasInvoice =
+          await _tableHasColumn(db, 'service_orders', 'invoiceId');
+      final hasTech =
+          await _tableHasColumn(db, 'service_orders', 'technicianName');
+      final hasGlobal =
+          await _tableHasColumn(db, 'service_orders', 'global_id');
+      final hasSerial =
+          await _tableHasColumn(db, 'service_orders', 'deviceSerial');
+
+      final where = StringBuffer(
+        "so.tenantId = ? AND (so.deletedAt IS NULL OR TRIM(COALESCE(so.deletedAt,'')) = '') "
+        "AND so.status NOT IN ('cancelled') "
+        "AND so.createdAt >= ? AND so.createdAt < ?",
+      );
+      final args = <Object?>[
+        tenantId,
+        range.startUtcIso,
+        range.endExclusiveUtcIso,
+      ];
+      _appendOilOrderKindFilter(
+        where,
+        args,
+        hasOrderKind: hasOrderKind,
+        alias: 'so',
+      );
+      if (staffName != null && staffName.isNotEmpty && hasTech) {
+        where.write(' AND so.technicianName = ?');
+        args.add(staffName);
+      }
+      if (afterCreatedAt != null &&
+          afterCreatedAt.isNotEmpty &&
+          afterId != null &&
+          afterId > 0) {
+        where.write(
+          ' AND (so.createdAt < ? OR (so.createdAt = ? AND so.id < ?))',
+        );
+        args.addAll([afterCreatedAt, afterCreatedAt, afterId]);
+      }
+
+      final invoiceJoin = hasInvoice
+          ? 'LEFT JOIN invoices i ON i.id = so.invoiceId AND i.tenantId = so.tenantId '
+              'AND i.deleted_at IS NULL AND IFNULL(i.isReturned, 0) = 0'
+          : '';
+      final amountExpr = hasInvoice
+          ? 'CASE WHEN so.invoiceId IS NOT NULL AND so.invoiceId > 0 '
+              'THEN COALESCE(i.total, 0) ELSE 0 END'
+          : '0';
+      final cardExpr =
+          'CASE WHEN so.invoiceId IS NULL OR so.invoiceId <= 0 '
+          'THEN COALESCE(so.agreedPriceFils, so.estimatedPriceFils, 0) ELSE 0 END';
+      final techCol = hasTech ? 'so.technicianName' : "''";
+      final gidCol = hasGlobal ? 'so.global_id' : "''";
+      final serialCol = hasSerial ? 'so.deviceSerial' : "''";
+      final invIdCol = hasInvoice ? 'so.invoiceId' : 'NULL';
+
+      final rows = await db.rawQuery(
+        '''
+        SELECT so.id AS id,
+               so.createdAt AS createdAt,
+               so.customerNameSnapshot AS customerName,
+               so.deviceName AS deviceName,
+               $serialCol AS deviceSerial,
+               $techCol AS technicianName,
+               $gidCol AS globalId,
+               $invIdCol AS invoiceId,
+               $amountExpr AS invTotal,
+               $cardExpr AS cardFils
+        FROM service_orders so
+        $invoiceJoin
+        WHERE ${where.toString()}
+        ORDER BY so.createdAt DESC, so.id DESC
+        LIMIT ?
+        ''',
+        [...args, limit],
+      );
+
+      final out = <OwnerPeriodSaleRow>[];
+      for (final r in rows) {
+        final id = (r['id'] as num?)?.toInt() ?? 0;
+        if (id <= 0) continue;
+        final invId = (r['invoiceId'] as num?)?.toInt();
+        final invTotal = (r['invTotal'] as num?)?.toDouble() ?? 0;
+        final cardFils = (r['cardFils'] as num?)?.toInt() ?? 0;
+        final hasInv = invId != null && invId > 0;
+        final amountFils = hasInv ? IqdMoney.toFils(invTotal) : cardFils;
+        final customer =
+            (r['customerName'] as String?)?.trim().isNotEmpty == true
+                ? (r['customerName'] as String).trim()
+                : 'عميل';
+        final device = (r['deviceName'] as String?)?.trim() ?? '';
+        final serial = (r['deviceSerial'] as String?)?.trim() ?? '';
+        final subtitleParts = <String>[
+          if (device.isNotEmpty) device,
+          if (serial.isNotEmpty) 'لوحة $serial',
+        ];
+        out.add(
+          OwnerPeriodSaleRow(
+            kind: OwnerPeriodSaleKind.oilCard,
+            recordId: id,
+            createdAtIso: (r['createdAt'] as String?) ?? '',
+            title: customer,
+            subtitle:
+                subtitleParts.isEmpty ? null : subtitleParts.join(' · '),
+            amountFils: amountFils,
+            invoiceId: hasInv ? invId : null,
+            orderGlobalId: (r['globalId'] as String?)?.trim(),
+            staffName: (r['technicianName'] as String?)?.trim(),
+          ),
+        );
+      }
+      return out;
+    } catch (e, st) {
+      AppLogger.error(
+        'OwnerOilDashboardRepo',
+        'تعذر تحميل صفوف مبيعات الفترة',
+        e,
+        st,
+      );
+      rethrow;
+    }
+  }
+
   Future<InventoryAlert> loadOilFluidShortages({required int tenantId}) async {
     try {
       final count = await _db.countProductsForLowStockNotifications(
@@ -94,21 +230,22 @@ class OwnerOilDashboardRepository {
     String? staffName,
   }) async {
     final db = await _db.database;
-    final start = range.startLocal.toIso8601String();
-    final end = range.endExclusiveLocal.toIso8601String();
+    // invoices.date محلي بدون Z — service_orders.createdAt بتوقيت UTC.
+    final invoiceStart = range.startLocalIso;
+    final invoiceEnd = range.endExclusiveLocalIso;
 
     final totalFils = await _sumInvoiceSalesFils(
       db,
       tenantId: tenantId,
-      startIso: start,
-      endExclusiveIso: end,
+      startIso: invoiceStart,
+      endExclusiveIso: invoiceEnd,
       staffName: staffName,
     );
     final serviceFils = await _sumOilInvoicedRevenueFils(
       db,
       tenantId: tenantId,
-      startIso: start,
-      endExclusiveIso: end,
+      startIso: invoiceStart,
+      endExclusiveIso: invoiceEnd,
       staffName: staffName,
     );
     final posFils = totalFils > serviceFils ? totalFils - serviceFils : 0;
@@ -133,17 +270,20 @@ class OwnerOilDashboardRepository {
     final rows = await _queryDailyOilRevenue(
       db,
       tenantId: tenantId,
-      startIso: seriesStart.toIso8601String(),
-      endExclusiveIso: endExclusive.toIso8601String(),
+      startIso: seriesStart.toUtc().toIso8601String(),
+      endExclusiveIso: endExclusive.toUtc().toIso8601String(),
       staffName: staffName,
     );
 
     final byDay = <String, int>{};
     for (final row in rows) {
-      final day = (row['day'] as String?) ?? '';
+      final createdRaw = (row['createdAt'] as String?) ?? '';
+      final localDay = _localDayKey(createdRaw);
+      if (localDay == null) continue;
       final invSum = (row['invSum'] as num?)?.toDouble() ?? 0;
       final cardSum = (row['cardSum'] as num?)?.toInt() ?? 0;
-      byDay[day] = IqdMoney.toFils(invSum) + cardSum;
+      byDay[localDay] =
+          (byDay[localDay] ?? 0) + IqdMoney.toFils(invSum) + cardSum;
     }
 
     return _buildSevenDaySeries(byDay, seriesStart);
@@ -330,6 +470,16 @@ class OwnerOilDashboardRepository {
     return false;
   }
 
+  static String? _localDayKey(String iso) {
+    final parsed = DateTime.tryParse(iso);
+    if (parsed == null) return null;
+    final local = parsed.isUtc ? parsed.toLocal() : parsed;
+    final y = local.year.toString().padLeft(4, '0');
+    final m = local.month.toString().padLeft(2, '0');
+    final d = local.day.toString().padLeft(2, '0');
+    return '$y-$m-$d';
+  }
+
   static List<int> _buildSevenDaySeries(
     Map<String, int> byDay,
     DateTime seriesStart,
@@ -373,23 +523,22 @@ class OwnerOilDashboardRepository {
               'AND i.deleted_at IS NULL AND IFNULL(i.isReturned, 0) = 0'
           : '';
       final invoiceSum = hasInvoice
-          ? 'COALESCE(SUM(CASE WHEN so.invoiceId IS NOT NULL AND so.invoiceId > 0 '
-              'THEN i.total ELSE 0 END), 0)'
+          ? 'CASE WHEN so.invoiceId IS NOT NULL AND so.invoiceId > 0 '
+              'THEN COALESCE(i.total, 0) ELSE 0 END'
           : '0';
       const cardSum =
-          'COALESCE(SUM(CASE WHEN so.invoiceId IS NULL OR so.invoiceId <= 0 '
-          'THEN COALESCE(so.agreedPriceFils, so.estimatedPriceFils, 0) ELSE 0 END), 0)';
+          'CASE WHEN so.invoiceId IS NULL OR so.invoiceId <= 0 '
+          'THEN COALESCE(so.agreedPriceFils, so.estimatedPriceFils, 0) ELSE 0 END';
 
       final rows = await db.rawQuery(
         '''
-        SELECT substr(so.createdAt, 1, 10) AS day,
+        SELECT so.createdAt AS createdAt,
                $invoiceSum AS invSum,
                $cardSum AS cardSum
         FROM service_orders so
         $invoiceJoin
         WHERE ${where.toString()}
-        GROUP BY substr(so.createdAt, 1, 10)
-        ORDER BY day ASC
+        ORDER BY so.createdAt ASC
         ''',
         args,
       );

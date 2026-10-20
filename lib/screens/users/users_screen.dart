@@ -3,9 +3,13 @@ import 'dart:async' show unawaited;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../guides/guide_anchor.dart';
+import '../../navigation/content_navigation.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/permissions_provider.dart';
 import '../../services/cloud_sync_service.dart';
 import '../../services/database_helper.dart';
+import '../../services/permission_service.dart';
 import '../../utils/screen_layout.dart';
 import '../../theme/design_tokens.dart';
 import 'employee_identity_screen.dart';
@@ -91,14 +95,23 @@ class _UsersScreenState extends State<UsersScreen> {
     }
   }
 
+  /// مالك / مدير / أو من لديه صلاحية users.manage.
+  bool _canManageUsers(BuildContext context) {
+    final auth = context.read<AuthProvider>();
+    if (auth.isOwner || auth.isAdmin) return true;
+    return context.read<PermissionsProvider>().can(PermissionKeys.usersManage);
+  }
+
   Future<void> _openEditor({Map<String, dynamic>? existing}) async {
     final auth = context.read<AuthProvider>();
-    final canManageUsers = auth.isOwner || auth.isAdmin;
+    final canManageUsers = _canManageUsers(context);
     final existingRole = (existing?['role'] as String? ?? 'staff').trim();
     if (!canManageUsers) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('لا صلاحية — هذا الإجراء متاح لصاحب العمل أو المدير'),
+          content: Text(
+            'لا صلاحية لإضافة مستخدمين — ادخل بحساب صاحب العمل أو امنح صلاحية «إدارة المستخدمين»',
+          ),
         ),
       );
       return;
@@ -113,6 +126,11 @@ class _UsersScreenState extends State<UsersScreen> {
     }
     final result = await Navigator.of(context).push<Object?>(
       MaterialPageRoute(
+        settings: RouteSettings(
+          name: existing == null
+              ? AppContentRoutes.userForm
+              : '${AppContentRoutes.userForm}_edit',
+        ),
         builder: (_) => UserFormScreen(
           existing: existing == null
               ? null
@@ -126,6 +144,7 @@ class _UsersScreenState extends State<UsersScreen> {
     } else if (result is int) {
       await Navigator.of(context).push<void>(
         MaterialPageRoute(
+          settings: const RouteSettings(name: AppContentRoutes.employeeIdentity),
           builder: (_) => EmployeeIdentityScreen(initialUserId: result),
         ),
       );
@@ -136,6 +155,7 @@ class _UsersScreenState extends State<UsersScreen> {
   Future<void> _openIdentity(int userId) async {
     await Navigator.of(context).push<void>(
       MaterialPageRoute(
+        settings: const RouteSettings(name: AppContentRoutes.employeeIdentity),
         builder: (_) => EmployeeIdentityScreen(initialUserId: userId),
       ),
     );
@@ -143,7 +163,7 @@ class _UsersScreenState extends State<UsersScreen> {
 
   Future<void> _deactivate(Map<String, dynamic> row) async {
     final auth = context.read<AuthProvider>();
-    final canManageUsers = auth.isOwner || auth.isAdmin;
+    final canManageUsers = _canManageUsers(context);
     if (!canManageUsers) return;
     final id = row['id'] as int;
     final roleKey = (row['role'] as String? ?? 'staff').trim();
@@ -198,10 +218,37 @@ class _UsersScreenState extends State<UsersScreen> {
   @override
   Widget build(BuildContext context) {
     final auth = context.watch<AuthProvider>();
-    final canManageUsers = auth.isOwner || auth.isAdmin;
+    context.watch<PermissionsProvider>();
+    final canManageUsers = _canManageUsers(context);
 
     final cs = Theme.of(context).colorScheme;
     final gap = ScreenLayout.of(context).pageHorizontalGap;
+    // الشاشة داخل ملاح الرئيسية فوق الشريط السفلي — ارفع الزر ليبقى ظاهراً.
+    final bottomNavClearance =
+        72.0 + MediaQuery.paddingOf(context).bottom;
+
+    final addButton = GuideAnchor(
+      id: OilGuideAnchors.usersFabAdd,
+      child: SizedBox(
+        width: double.infinity,
+        child: FilledButton.icon(
+          onPressed: () => _openEditor(),
+          style: FilledButton.styleFrom(
+            backgroundColor: AppColors.accentGold,
+            foregroundColor: Colors.black87,
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+            ),
+          ),
+          icon: const Icon(Icons.person_add_alt_1_outlined),
+          label: const Text(
+            'مستخدم جديد',
+            style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+          ),
+        ),
+      ),
+    );
 
     return Directionality(
       textDirection: TextDirection.rtl,
@@ -209,18 +256,30 @@ class _UsersScreenState extends State<UsersScreen> {
         backgroundColor: Theme.of(context).scaffoldBackgroundColor,
         appBar: AppBar(
           leading: const BackButton(),
-          title: Text(
-            'المستخدمون',
-            style: TextStyle(
-              fontWeight: FontWeight.bold,
-              fontSize: 18,
-              color: Theme.of(context).colorScheme.onSurface,
+          title: GuideAnchor(
+            id: OilGuideAnchors.usersListTitle,
+            child: Text(
+              'المستخدمون',
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: 18,
+                color: Theme.of(context).colorScheme.onSurface,
+              ),
             ),
           ),
           backgroundColor: cs.surfaceContainerHighest,
           foregroundColor: cs.onSurface,
           elevation: 0,
           actions: [
+            if (canManageUsers)
+              IconButton(
+                tooltip: 'مستخدم جديد',
+                onPressed: () => _openEditor(),
+                icon: const Icon(
+                  Icons.person_add_alt_1_outlined,
+                  color: AppColors.accentGold,
+                ),
+              ),
             IconButton(
               icon: Icon(Icons.refresh_rounded, color: AppColors.accentGold),
               tooltip: 'تحديث',
@@ -231,35 +290,78 @@ class _UsersScreenState extends State<UsersScreen> {
         ),
         body: _loading
             ? const Center(child: CircularProgressIndicator())
-            : _rows.isEmpty
-            ? _buildEmptyState()
-            : RefreshIndicator(
-                onRefresh: _refreshFromServer,
-                child: ListView.separated(
-                  padding: EdgeInsets.symmetric(horizontal: gap, vertical: 16),
-                  itemCount: _rows.length,
-                  separatorBuilder: (_, _) => const SizedBox(height: 10),
-                  itemBuilder: (context, i) => _buildUserCard(_rows[i], auth),
-                ),
-              ),
-        floatingActionButton: canManageUsers
-            ? FloatingActionButton.extended(
-                onPressed: () => _openEditor(),
-                backgroundColor: AppColors.accentGold,
-                foregroundColor: Colors.black87,
-                icon: const Icon(
-                  Icons.person_add_alt_1_outlined,
-                  color: Colors.black87,
-                ),
-                label: Text(
-                  'مستخدم جديد',
-                  style: const TextStyle(
-                    color: Colors.black87,
-                    fontWeight: FontWeight.w700,
+            : Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (canManageUsers)
+                    Padding(
+                      padding: EdgeInsets.fromLTRB(gap, 12, gap, 4),
+                      child: addButton,
+                    )
+                  else
+                    Padding(
+                      padding: EdgeInsets.fromLTRB(gap, 12, gap, 4),
+                      child: Material(
+                        color: cs.errorContainer.withValues(alpha: 0.55),
+                        borderRadius: BorderRadius.circular(12),
+                        child: Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Text(
+                            'لإضافة مستخدم جديد: ادخل من «من سيبدأ العمل؟» بحساب صاحب العمل، '
+                            'أو امنح هذا الموظف صلاحية «إدارة المستخدمين».',
+                            style: TextStyle(
+                              color: cs.onErrorContainer,
+                              fontSize: 13,
+                              height: 1.35,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  Expanded(
+                    child: _rows.isEmpty
+                        ? _buildEmptyState(canManageUsers: canManageUsers)
+                        : RefreshIndicator(
+                            onRefresh: _refreshFromServer,
+                            child: ListView.separated(
+                              padding: EdgeInsets.fromLTRB(
+                                gap,
+                                8,
+                                gap,
+                                16 + bottomNavClearance,
+                              ),
+                              itemCount: _rows.length,
+                              separatorBuilder: (_, _) =>
+                                  const SizedBox(height: 10),
+                              itemBuilder: (context, i) =>
+                                  _buildUserCard(_rows[i], auth),
+                            ),
+                          ),
                   ),
-                ),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
+                ],
+              ),
+        floatingActionButtonLocation: FloatingActionButtonLocation.startFloat,
+        floatingActionButton: canManageUsers
+            ? Padding(
+                padding: EdgeInsets.only(bottom: bottomNavClearance),
+                child: FloatingActionButton.extended(
+                  onPressed: () => _openEditor(),
+                  backgroundColor: AppColors.accentGold,
+                  foregroundColor: Colors.black87,
+                  icon: const Icon(
+                    Icons.person_add_alt_1_outlined,
+                    color: Colors.black87,
+                  ),
+                  label: const Text(
+                    'مستخدم جديد',
+                    style: TextStyle(
+                      color: Colors.black87,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
                 ),
               )
             : null,
@@ -267,7 +369,7 @@ class _UsersScreenState extends State<UsersScreen> {
     );
   }
 
-  Widget _buildEmptyState() {
+  Widget _buildEmptyState({required bool canManageUsers}) {
     final gap = ScreenLayout.of(context).pageHorizontalGap;
     return Center(
       child: Padding(
@@ -282,18 +384,12 @@ class _UsersScreenState extends State<UsersScreen> {
               style: TextStyle(fontSize: 18, color: Colors.grey.shade600),
             ),
             const SizedBox(height: 8),
-            Builder(
-              builder: (context) {
-                final canManageUsers =
-                    context.watch<AuthProvider>().isOwner ||
-                    context.watch<AuthProvider>().isAdmin;
-                return Text(
-                  canManageUsers
-                      ? 'اضغط على زر الإضافة لإنشاء مستخدم جديد'
-                      : 'سجّل دخول صاحب العمل أو المدير لإضافة مستخدمين',
-                  style: TextStyle(fontSize: 13, color: Colors.grey.shade400),
-                );
-              },
+            Text(
+              canManageUsers
+                  ? 'اضغط «مستخدم جديد» أعلى القائمة لإنشاء حساب'
+                  : 'سجّل دخول صاحب العمل من «من سيبدأ العمل؟» لإضافة مستخدمين',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 13, color: Colors.grey.shade400),
             ),
           ],
         ),
@@ -310,7 +406,7 @@ class _UsersScreenState extends State<UsersScreen> {
     final id = (user['id'] as num).toInt();
     final onlyOwnerProtected =
         roleKey == 'owner' && _protectedOwnerIds.contains(id);
-    final canManageUsers = auth.isOwner || auth.isAdmin;
+    final canManageUsers = _canManageUsers(context);
     final canEdit = canManageUsers && (auth.isOwner || roleKey == 'staff');
     final canDeactivate =
         canManageUsers &&

@@ -28,13 +28,14 @@ import '../services/auth/pin_attempt_guard.dart';
 import '../services/auth/secure_session_storage.dart';
 import '../services/auth/registration_session_store.dart';
 import '../services/auth/owner_auth_cloud_service.dart';
+import '../services/auth/cloud_session_freshness_policy.dart';
+import '../services/auth/cloud_session_link_state.dart';
 import '../services/auth/ensure_fresh_session.dart' as session_freshness;
 import '../services/sync_queue_service.dart';
 import '../models/google_sign_in_intent.dart';
 import '../models/google_auth_result.dart';
 import '../models/google_owner_profile_gate.dart';
 import '../models/tenant_cloud_status.dart';
-import '../config/google_oauth_config.dart';
 import '../config/otp_config.dart';
 import '../services/auth/owner_business_vertical_cloud_service.dart';
 import '../services/auth/owner_supabase_credential_store.dart';
@@ -43,7 +44,6 @@ import '../services/auth/auth_network_guard.dart';
 import '../services/auth/auth_user_messages.dart';
 import '../services/auth/native_google_id_token_sign_in_result.dart';
 import '../services/auth/web_app_origin.dart';
-import '../services/auth/web_google_id_token_sign_in.dart';
 import '../services/auth/web_oauth_redirect.dart';
 import '../utils/app_logger.dart';
 import '../utils/auth_validators.dart';
@@ -86,11 +86,13 @@ class AuthProvider extends ChangeNotifier {
   static const String kWebGoogleOAuthRedirectStarted =
       '__web_google_oauth_redirect_started__';
 
-  /// Android/iOS: منتقي حسابات Google الأصلي — لا نُسقط للمتصفح الخارجي.
+  /// Android/iOS/macOS: منتقي حسابات Google الأصلي — لا نُسقط للمتصفح الخارجي.
+  /// Windows/Linux: لا يوجد منتقي أصلي رسمي من google_sign_in → متصفح.
   static bool get _prefersNativeGoogleAccountPicker =>
       !kIsWeb &&
       (defaultTargetPlatform == TargetPlatform.android ||
-          defaultTargetPlatform == TargetPlatform.iOS);
+          defaultTargetPlatform == TargetPlatform.iOS ||
+          defaultTargetPlatform == TargetPlatform.macOS);
 
   /// يُعاد من [_finalizeGoogleOAuthSession] عندما ينوي المستخدم «إنشاء حساب»
   /// لكن الحساب مكتمل مسبقاً على السحابة — يُوجَّه لتسجيل الدخول.
@@ -110,6 +112,14 @@ class AuthProvider extends ChangeNotifier {
   static const String kLoginNoCloudAccountMessage =
       AuthUserMessages.accountNotFound;
 
+  /// الجهاز بلا كلمة Supabase داخلية — يلزم تأكيد بريد (OTP) ثم التحقق من PIN.
+  static const String kLoginEmailReauthOtpRequired =
+      '__login_email_reauth_otp_required__';
+
+  /// حساب Google-only: الدخول اليدوي بالبريد لا يرسل OTP موثوقاً — استخدم زر Google.
+  static const String kLoginUseGoogleMessage =
+      'هذا الحساب سُجّل عبر Google. اضغط «تسجيل بـ Google» ثم أدخل رمز PIN.';
+
   static const String kAuthNetworkUnavailableMessage =
       AuthUserMessages.networkUnavailable;
 
@@ -120,6 +130,7 @@ class AuthProvider extends ChangeNotifier {
 
   bool _isLoggedIn = false;
   int? _userId;
+  String _userGlobalId = '';
   String _username = '';
   String _displayName = '';
   String _role = '';
@@ -128,15 +139,28 @@ class AuthProvider extends ChangeNotifier {
   String _phone = '';
   bool _googleSignInRunning = false;
   bool _ownerPinRestoreOtpVerified = false;
+  /// ويب: بعد إكمال Google OAuth نفرض OTP بريد إن وُجد سر سحابي (مثل جهاز جديد).
+  bool _webForceOwnerPinRestoreOtp = false;
+  bool get webForceOwnerPinRestoreOtp => _webForceOwnerPinRestoreOtp;
   bool _deviceOwnerBound = false;
   /// true بعد مسح SQLite لحساب سحابي — يُلزم نجاح سحب اللقطة قبل متابعة الواجهة.
   bool _pendingCloudWorkspaceRestore = false;
   bool _deviceAccessRevokedPending = false;
   String? _lastLoginErrorMessage;
+  String? _pendingEmailReauthEmail;
+  String? _pendingEmailReauthPin;
 
   bool get isLoggedIn => _isLoggedIn;
   /// آخر سبب فشل [login] — للعرض بدل رسالة «كلمة مرور خاطئة» العامة.
   String? get lastLoginErrorMessage => _lastLoginErrorMessage;
+
+  /// بريد بانتظار تأكيد OTP لإعادة تفعيل الدخول بالبريد+PIN على هذا الجهاز.
+  String? get pendingEmailReauthEmail => _pendingEmailReauthEmail;
+
+  void clearPendingEmailReauth() {
+    _pendingEmailReauthEmail = null;
+    _pendingEmailReauthPin = null;
+  }
 
   bool get deviceOwnerBound => _deviceOwnerBound;
   /// true عندما السيرفر يعتبر هذا الجهاز `revoked` — يُوجَّه لشاشة طلب السماح.
@@ -145,15 +169,30 @@ class AuthProvider extends ChangeNotifier {
   bool get isAdmin => _roleKey == 'admin';
   bool get isOwner => _roleKey == 'owner';
   int? get userId => _userId;
+
+  /// معرّف المستخدم المستقر عبر الأجهزة — مفتاح بيانات فرع الموظف.
+  String get userGlobalId => _userGlobalId;
+
   String get username => _username;
   String get displayName => _displayName.isNotEmpty ? _displayName : _username;
   String get role => _role;
   String get email => _email;
   String get phone => _phone;
 
+  /// يعيد قراءة صف المستخدم من SQLite بعد حفظ بيانات مرتبطة به (مثل فرع الموظف).
+  Future<void> refreshLocalUserIdentity() async {
+    final id = _userId;
+    if (id == null || id <= 0) return;
+    final row = await _db.getUserById(id);
+    if (row == null) return;
+    _setFromRow(row);
+    notifyListeners();
+  }
+
   void _setFromRow(Map<String, dynamic> row) {
     _isLoggedIn = true;
     _userId = row['id'] as int?;
+    _userGlobalId = (row['global_id'] ?? '').toString().trim();
     _username = row['username'] as String? ?? '';
     _displayName = row['displayName'] as String? ?? '';
     _email = row['email'] as String? ?? '';
@@ -367,6 +406,7 @@ class AuthProvider extends ChangeNotifier {
   void _clear({bool preserveTenant = false}) {
     _isLoggedIn = false;
     _userId = null;
+    _userGlobalId = '';
     _username = '';
     _displayName = '';
     _role = '';
@@ -484,20 +524,41 @@ class AuthProvider extends ChangeNotifier {
         AppLogger.warn('AuthProvider', 'repairOwnerRowIfMissing failed: $e');
       }
     }
-    final id = prefs.getInt(_prefUserId);
-    final activeDataOwner = prefs.getString(_prefActiveDataOwner);
+    var id = prefs.getInt(_prefUserId);
+    final pendingGoogleOAuth =
+        (prefs.getString(_prefPendingGoogleOAuthIntent) ?? '').isNotEmpty;
 
     AppLogger.info(
       'AuthProvider',
-      'restoreSession deviceOwnerBound=$_deviceOwnerBound userId=$id',
+      'restoreSession deviceOwnerBound=$_deviceOwnerBound userId=$id '
+      'web=$kIsWeb cloud=${Supabase.instance.client.auth.currentUser?.id} '
+      'pendingOAuth=$pendingGoogleOAuth',
     );
+
+    // ويب: جلسة سحابة بدون ربط — أعد الربط فقط (بدون فتح جلسة تشغيل).
+    // أثناء OAuth معلّق نترك الإكمال لـ tryCompletePendingWebGoogleOAuth (OTP/حراسة).
+    if (kIsWeb &&
+        !pendingGoogleOAuth &&
+        id == null &&
+        !_deviceOwnerBound &&
+        Supabase.instance.client.auth.currentUser != null &&
+        !_googleSignInRunning) {
+      final ok = await restoreWebSessionFromCloudIfNeeded();
+      if (ok) {
+        notifyListeners();
+        return;
+      }
+    }
 
     // إذا لم توجد جلسة محلية (المستخدم سجّل خروج) لكن توجد جلسة Supabase
     // متبقية (ghost session بسبب فشل Keychain)، نُنظّفها بصمت ونتابع لشاشة الدخول.
-    // لا نُعيد ربط الحساب تلقائياً لأن المستخدم قرر الخروج صراحةً.
     // ⚠️ لكن إذا كان الجهاز مربوطاً بمالك (deviceOwnerBound) فالمستخدم قام فقط بـ lockSession
     // ولم يسجل خروج كامل — لا نمسح جلسة Supabase.
-    if (id == null && !_deviceOwnerBound && !_googleSignInRunning) {
+    // ⚠️ ويب: لا نمسح جلسة السحابة هنا — نحاول الاستعادة أعلاه.
+    if (id == null &&
+        !_deviceOwnerBound &&
+        !_googleSignInRunning &&
+        !kIsWeb) {
       final pendingGoogleOAuth =
           (prefs.getString(_prefPendingGoogleOAuthIntent) ?? '').isNotEmpty;
       if (!pendingGoogleOAuth) {
@@ -508,7 +569,6 @@ class AuthProvider extends ChangeNotifier {
             'AuthProvider',
             'restoreSession clearing ghost Supabase session (device NOT bound)',
           );
-          // تنظيف الجلسة الشبحية بصمت
           try {
             await Supabase.instance.client.auth.signOut();
           } catch (e) {
@@ -520,6 +580,19 @@ class AuthProvider extends ChangeNotifier {
         AppLogger.warn('AuthProvider', 'ghost session cleanup failed: $e');
       }
       }
+    }
+
+    // ويب: userId ناقص + جلسة سحابة → اربط الجهاز فقط (بوابة PIN/OTP لاحقاً).
+    if (kIsWeb &&
+        !pendingGoogleOAuth &&
+        id == null &&
+        Supabase.instance.client.auth.currentUser != null) {
+      final ok = await restoreWebSessionFromCloudIfNeeded();
+      if (ok) {
+        notifyListeners();
+        return;
+      }
+      id = prefs.getInt(_prefUserId);
     }
 
     if (id == null) {
@@ -535,7 +608,6 @@ class AuthProvider extends ChangeNotifier {
           TenantContext.instance.set(ownerUid);
         }
         await _refreshTenantContextSilently();
-        // جلسة Supabase قد تنتهي بعد خمول طويل — نُعيدها تلقائياً قبل المزامنة.
         await ensureCloudSessionActive();
         if (Supabase.instance.client.auth.currentUser != null) {
           unawaited(
@@ -557,11 +629,22 @@ class AuthProvider extends ChangeNotifier {
       if (_deviceOwnerBound) {
         await _refreshTenantContextSilently();
       }
+      // ويب: أعد ربط الجهاز من السحابة دون فتح جلسة تشغيل تلقائياً.
+      if (kIsWeb &&
+          !pendingGoogleOAuth &&
+          Supabase.instance.client.auth.currentUser != null) {
+        final ok = await restoreWebSessionFromCloudIfNeeded();
+        if (ok) {
+          notifyListeners();
+          return;
+        }
+      }
       notifyListeners();
       return;
     }
-    // جهاز مربوط: لا نُعيد تسجيل الدخول المحلي تلقائياً — نحفظ تلميح
-    // الاستئناف ونطلب PIN عبر بوابة «من سيبدأ العمل؟».
+    // جهاز مربوط (موبايل + ويب): لا نُعيد تسجيل الدخول المحلي تلقائياً —
+    // نحفظ تلميح الاستئناف ونطلب PIN عبر بوابة «من سيبدأ العمل؟».
+    // جلسة Supabase تبقى لاستعادة الدخول بصمت دون Google من جديد.
     if (_deviceOwnerBound) {
       final role = (row['role'] as String?)?.trim() ?? 'staff';
       await SessionResumeContext.captureBeforeSessionLock(
@@ -603,6 +686,66 @@ class AuthProvider extends ChangeNotifier {
       }
     }
     notifyListeners();
+  }
+
+  /// ويب فقط: من جلسة Supabase أعد صف المالك واربط الجهاز **بدون** فتح جلسة تشغيل.
+  /// مثل الموبايل — OTP / بوابة PIN تفتح الجلسة لاحقاً.
+  Future<bool> restoreWebSessionFromCloudIfNeeded() async {
+    if (!kIsWeb) return false;
+    final user = Supabase.instance.client.auth.currentUser;
+    if (user == null) return false;
+
+    try {
+      final email = (user.email ?? '').trim();
+      final displayName =
+          (user.userMetadata?['full_name'] as String?)?.trim() ??
+          (user.userMetadata?['name'] as String?)?.trim() ??
+          (email.isNotEmpty ? email.split('@').first : 'مالك');
+
+      if (email.isNotEmpty) {
+        await _db.repairOwnerRowIfMissing(
+          supabaseUid: user.id,
+          email: email,
+        );
+      }
+
+      final localId = await _db.upsertGoogleUser(
+        supabaseUid: user.id,
+        email: email.isNotEmpty ? email : 'owner@${user.id}.local',
+        displayName: displayName.isNotEmpty ? displayName : 'مالك',
+        asDeviceOwner: true,
+      );
+
+      final localRow = await _db.getUserById(localId);
+      if (localRow == null) return false;
+
+      await _bindAccountDataScope(
+        'cloud:${user.id}',
+        allowUnsyncedDataLoss: true,
+      );
+      await _bindDeviceToOwner(localRow);
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_prefUserId);
+      await prefs.setString(_prefActiveDataOwner, 'cloud:${user.id}');
+      _clear(preserveTenant: true);
+
+      await _refreshTenantContextSilently();
+      AppLogger.info(
+        'AuthProvider',
+        'restoreWebSessionFromCloudIfNeeded bound localId=$localId '
+        '(no auto login)',
+      );
+      return true;
+    } catch (e, st) {
+      AppLogger.error(
+        'AuthProvider',
+        'restoreWebSessionFromCloudIfNeeded failed',
+        e,
+        st,
+      );
+      return false;
+    }
   }
 
   /// سحب لقطة السحابة (مستخدمون، تخصص العمل، …) بعد ربط الجهاز — للإقلاع والبوابة.
@@ -1139,24 +1282,53 @@ class AuthProvider extends ChangeNotifier {
     final guardScope = 'login_${login.trim().toLowerCase()}';
     final locked = await PinAttemptGuard.remainingLock(guardScope);
     if (locked != null) {
-      _lastLoginErrorMessage =
-          'تم إيقاف المحاولات مؤقتاً بعد إدخالات خاطئة متكررة. '
-          'حاول بعد ${PinAttemptGuard.formatRemaining(locked)}';
-      return false;
+      // قفل قصير غالباً من أخطاء نظام سابقة (مثل «لا يوجد حساب» المضلّل)
+      // كانت تُحسب خطأً كفشل PIN — امسحه للمستوى الأول فقط.
+      if (locked <= const Duration(seconds: 35)) {
+        await PinAttemptGuard.clear(guardScope);
+      } else {
+        _lastLoginErrorMessage =
+            'تم إيقاف المحاولات مؤقتاً بعد إدخالات خاطئة متكررة. '
+            'حاول بعد ${PinAttemptGuard.formatRemaining(locked)}';
+        return false;
+      }
     }
     final ok = await _loginInternal(login, password);
     if (ok) {
       await PinAttemptGuard.recordSuccess(guardScope);
     } else if (_lastLoginErrorMessage != null) {
-      // فشل تحقّق فعلي (وليس خطأ شبكة/سحابة صامت) → يُحتسب لدى الحارس.
-      final newLock = await PinAttemptGuard.recordFailure(guardScope);
-      if (newLock != null) {
-        _lastLoginErrorMessage =
-            'تم إيقاف المحاولات مؤقتاً بعد إدخالات خاطئة متكررة. '
-            'حاول بعد ${PinAttemptGuard.formatRemaining(newLock)}';
+      // مسار تأكيد البريد (OTP) ليس فشلاً لـ PIN — امسح أي قفل قديم مضلّل.
+      if (_lastLoginErrorMessage == kLoginEmailReauthOtpRequired) {
+        await PinAttemptGuard.clear(guardScope);
+      } else if (_shouldCountLoginPinFailure(_lastLoginErrorMessage!)) {
+        // فشل تحقّق PIN/بيانات فقط — لا شبكة ولا «لا يوجد حساب» المضلّل.
+        final newLock = await PinAttemptGuard.recordFailure(guardScope);
+        if (newLock != null) {
+          _lastLoginErrorMessage =
+              'تم إيقاف المحاولات مؤقتاً بعد إدخالات خاطئة متكررة. '
+              'حاول بعد ${PinAttemptGuard.formatRemaining(newLock)}';
+        }
       }
     }
     return ok;
+  }
+
+  /// يُحتسب للقفل فقط عند خطأ بيانات الدخول الحقيقي (PIN/بيانات).
+  bool _shouldCountLoginPinFailure(String message) {
+    final m = message.trim();
+    if (m == kLoginEmailReauthOtpRequired) return false;
+    if (m == kLoginUseGoogleMessage) return false;
+    if (m == kLoginNoCloudAccountMessage) return false;
+    if (m == kAuthNetworkUnavailableMessage) return false;
+    if (m == kAuthServerUnreachableMessage) return false;
+    if (AuthUserMessages.isNetworkRelated(m)) return false;
+    if (m.contains('تم إيقاف المحاولات')) return false;
+    if (m.contains('انتهت جلسة')) return false;
+    if (m.contains('تعذر إرسال رمز')) return false;
+    return m == AuthUserMessages.wrongPin ||
+        m == AuthUserMessages.wrongCredentials ||
+        m.contains('رمز الدخول غير صحيح') ||
+        m.contains('أو رمز PIN غير صحيح');
   }
 
   Future<bool> _loginInternal(String login, String password) async {
@@ -1235,12 +1407,32 @@ class AuthProvider extends ChangeNotifier {
     notifyListeners();
     return true;
   }
-  Future<bool> setLocalAuthUser(int userId) async {
+  Future<bool> setLocalAuthUser(
+    int userId, {
+    bool deferBackgroundWork = false,
+  }) async {
     final row = await _db.getUserById(userId);
     if (row == null) return false;
     if (((row['isActive'] as num?)?.toInt() ?? 0) != 1) return false;
     final prefs = await SharedPreferences.getInstance();
     final deviceBound = prefs.getBool(_prefDeviceOwnerBound) ?? false;
+
+    // بعد رمز صحيح على جهاز مربوط: الجلسة في الذاكرة ثم الشاشة فوراً.
+    // كتابة المستأجر وسحب السحابة تُؤجَّل حتى لا تُحبس خلف معاملة الاستيراد.
+    if (deferBackgroundWork && deviceBound) {
+      _deviceOwnerBound = true;
+      _setFromRow(row);
+      final ownerUid =
+          (prefs.getString(_prefDeviceOwnerSupabaseUid) ?? '').trim();
+      if (ownerUid.isNotEmpty) {
+        await prefs.setString(_prefActiveDataOwner, 'cloud:$ownerUid');
+      }
+      await prefs.setInt(_prefUserId, userId);
+      notifyListeners();
+      unawaited(_completeLocalAuthAfterPaint(row));
+      return true;
+    }
+
     if (!deviceBound) {
       await _bindAccountDataScope(_dataOwnerKeyForRow(row));
     } else {
@@ -1262,14 +1454,55 @@ class AuthProvider extends ChangeNotifier {
       rootRoute: role == 'owner' ? '/home' : '/open-shift',
     );
     await _refreshTenantContextSilently();
-    if (deviceBound) {
-      await ensureCloudSessionActive();
-      if (Supabase.instance.client.auth.currentUser != null) {
-        unawaited(hydrateCloudAccountData(forcePull: false));
+    // تخصص العمل: لا تحجب فتح الواجهة — طبّق في الخلفية.
+    unawaited(() async {
+      try {
+        await OwnerBusinessVerticalCloudService.applyToLocalIfNeeded();
+        await OwnerBusinessVerticalCloudService.syncLocalVerticalToCloudIfMissing();
+      } catch (e) {
+        AppLogger.warn('AuthProvider', 'apply business vertical after gate: $e');
       }
+    }());
+    if (deviceBound) {
+      // جلسة سحابة + مزامنة خفيفة في الخلفية بعد فتح الشاشة.
+      unawaited(() async {
+        try {
+          await ensureCloudSessionActive();
+          if (Supabase.instance.client.auth.currentUser != null) {
+            await hydrateCloudAccountData(forcePull: false);
+          }
+        } catch (e) {
+          AppLogger.warn('AuthProvider', 'post-pin cloud warm: $e');
+        }
+      }());
     }
     notifyListeners();
     return true;
+  }
+
+  /// عمل ما بعد الرمز الصحيح: لا يلمس SQLite ولا الشبكة قبل أن تُرسم الوجهة.
+  Future<void> _completeLocalAuthAfterPaint(Map<String, dynamic> row) async {
+    await Future<void>.delayed(const Duration(milliseconds: 400));
+    try {
+      if (!TenantContextService.instance.loaded) {
+        await _refreshTenantContextSilently();
+      }
+      await _bindDeviceToOwner(row);
+      try {
+        await OwnerBusinessVerticalCloudService.applyToLocalIfNeeded();
+        await OwnerBusinessVerticalCloudService.syncLocalVerticalToCloudIfMissing();
+      } catch (e) {
+        AppLogger.warn('AuthProvider', 'apply business vertical after gate: $e');
+      }
+      if (_deviceOwnerBound) {
+        await ensureCloudSessionActive();
+        if (Supabase.instance.client.auth.currentUser != null) {
+          await hydrateCloudAccountData(forcePull: false);
+        }
+      }
+    } catch (e) {
+      AppLogger.warn('AuthProvider', 'post-pin background warm: $e');
+    }
   }
 
   String _normalizeAuthEmail(String raw) {
@@ -1494,18 +1727,17 @@ class AuthProvider extends ChangeNotifier {
           _lastLoginErrorMessage = kAuthServerUnreachableMessage;
           return false;
         }
-        // كلمة محفوظة من حساب محذوف/مُعاد تسجيله — لا تُعيق مسار OTP.
+        // كلمة محفوظة من حساب محذوف/مُعاد تسجيله — انتقل لتأكيد البريد.
         AppLogger.info(
           'AuthProvider',
           '_loginViaSupabaseFallback: clearing stale stored supabase password',
         );
         await _clearSecureAuthCredentialsForEmail(mail);
-        _lastLoginErrorMessage = kLoginNoCloudAccountMessage;
-        return false;
       }
 
-      _lastLoginErrorMessage = kLoginNoCloudAccountMessage;
-      return false;
+      // لا توجد كلمة داخلية على الجهاز: أكّد البريد بـ OTP ثم تحقق من PIN
+      // (ينطبق على حساب Google وحساب البريد — الدخول المطلوب: إيميل + PIN).
+      return _beginEmailPinReauthOtp(mail: mail, pin: pin);
     } on session_freshness.SessionExpiredException {
       AppLogger.info('AuthProvider', '_loginViaSupabaseFallback: session expired');
       _lastLoginErrorMessage =
@@ -1525,6 +1757,119 @@ class AuthProvider extends ChangeNotifier {
             _userFacingLocalSetupError(emailAlreadyVerified: false);
       }
       return false;
+    }
+  }
+
+  /// يرسل OTP لإعادة تفعيل جهاز بلا كلمة داخلية محفوظة.
+  Future<bool> _beginEmailPinReauthOtp({
+    required String mail,
+    required String pin,
+  }) async {
+    try {
+      await Supabase.instance.client.auth.signInWithOtp(
+        email: mail,
+        shouldCreateUser: false,
+      );
+      _pendingEmailReauthEmail = mail;
+      _pendingEmailReauthPin = pin;
+      _lastLoginErrorMessage = kLoginEmailReauthOtpRequired;
+      return false;
+    } on AuthException catch (e) {
+      final msg = e.message.toLowerCase();
+      if (msg.contains('signups not allowed') ||
+          msg.contains('user not found') ||
+          msg.contains('unable to validate') ||
+          msg.contains('otp_disabled') ||
+          (msg.contains('not found') && msg.contains('user'))) {
+        clearPendingEmailReauth();
+        _lastLoginErrorMessage = kLoginNoCloudAccountMessage;
+        return false;
+      }
+      _lastLoginErrorMessage = _mapEmailOtpSendError(
+        e,
+        genericFallback: 'تعذر إرسال رمز التحقق لإتمام الدخول. حاول لاحقاً.',
+      );
+      return false;
+    } catch (e) {
+      _lastLoginErrorMessage = _mapEmailOtpSendError(
+        e,
+        genericFallback: 'تعذر إرسال رمز التحقق لإتمام الدخول. حاول لاحقاً.',
+      );
+      return false;
+    }
+  }
+
+  /// يضمن وجود كلمة Supabase داخلية محفوظة للدخول بـ البريد+PIN لاحقاً.
+  Future<void> _ensureInternalSupabasePasswordPersisted(String mail) async {
+    final normalized = mail.trim().toLowerCase();
+    if (normalized.isEmpty || !normalized.contains('@')) return;
+    if (Supabase.instance.client.auth.currentUser == null) return;
+
+    final existing =
+        await OwnerSupabaseCredentialStore.instance.read(normalized);
+    if (existing != null && existing.isNotEmpty) return;
+
+    final internalPassword = _generateInternalSupabasePassword();
+    await Supabase.instance.client.auth.updateUser(
+      UserAttributes(password: internalPassword),
+    );
+    await _persistOwnerSupabaseCredential(normalized, internalPassword);
+  }
+
+  /// بعد OTP ناجح لمسار إعادة دخول البريد+PIN على جهاز بلا جلسة محلية.
+  Future<String?> completeEmailPinLoginAfterOtp({
+    required String otp,
+  }) async {
+    final mail = (_pendingEmailReauthEmail ?? '').trim().toLowerCase();
+    final pin = (_pendingEmailReauthPin ?? '').trim();
+    if (mail.isEmpty || !AuthValidators.isValidPin(pin)) {
+      return 'انتهت جلسة الدخول. ارجع وأعد إدخال البريد ورمز PIN.';
+    }
+
+    final verifyErr = await _verifyEmailOtpToken(email: mail, otp: otp);
+    if (verifyErr != null) return verifyErr;
+
+    final ok = await _completeCloudLoginAfterSession(mail: mail, pin: pin);
+    if (!ok) {
+      return _lastLoginErrorMessage ?? AuthUserMessages.wrongPin;
+    }
+
+    // ثبّت كلمة داخلية قوية لهذا الجهاز لتسجيل الدخول التالي بلا OTP.
+    try {
+      final internalPassword = _generateInternalSupabasePassword();
+      await Supabase.instance.client.auth.updateUser(
+        UserAttributes(password: internalPassword),
+      );
+      await _persistOwnerSupabaseCredential(mail, internalPassword);
+    } catch (e) {
+      AppLogger.warn('AuthProvider', 'persist internal pwd after reauth: $e');
+    }
+
+    clearPendingEmailReauth();
+    return null;
+  }
+
+  Future<String?> resendEmailPinReauthOtp() async {
+    final mail = (_pendingEmailReauthEmail ?? '').trim().toLowerCase();
+    if (mail.isEmpty) {
+      return 'انتهت جلسة الدخول. ارجع وأعد إدخال البريد ورمز PIN.';
+    }
+    try {
+      await Supabase.instance.client.auth.signInWithOtp(
+        email: mail,
+        shouldCreateUser: false,
+      );
+      return null;
+    } on AuthException catch (e) {
+      return _mapEmailOtpSendError(
+        e,
+        genericFallback: 'تعذر إعادة إرسال الرمز. حاول لاحقاً.',
+      );
+    } catch (e) {
+      return _mapEmailOtpSendError(
+        e,
+        genericFallback: 'تعذر إعادة إرسال الرمز. حاول لاحقاً.',
+      );
     }
   }
 
@@ -1582,7 +1927,7 @@ class AuthProvider extends ChangeNotifier {
     final user = Supabase.instance.client.auth.currentUser;
     if (user == null || user.email?.toLowerCase() != mail) {
       _lastLoginErrorMessage =
-          'لا توجد جلسة سحابية مطابقة. سجّل الدخول عبر Google.';
+          'تعذّر فتح جلسة الحساب. أعد إدخال البريد ورمز PIN.';
       return false;
     }
 
@@ -2357,56 +2702,119 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
-  /// يحدّث رمز الدخول المحلي + كلمة مرور Supabase (إن كانت الجلسة موجودة بعد verifyOTP).
+  /// يحدّث رمز PIN المحلي (+ `owner_auth_secrets`) بعد OTP.
+  ///
+  /// كلمة مرور Supabase Auth **ليست** الـ PIN: التطبيق يستخدم كلمة داخلية قوية
+  /// ويحفظها في Secure Storage، بينما الـ PIN (4 أرقام) للمستخدم فقط.
   Future<String?> resetLocalAndServerPassword({
     required String email,
     required String newPassword,
   }) async {
     final mail = email.trim().toLowerCase();
+    final pin = newPassword.trim();
     if (mail.isEmpty) return 'أدخل البريد الإلكتروني';
-    if (!AuthValidators.isValidPin(newPassword.trim())) return 'رمز الدخول يجب أن يكون 4 أرقام';
+    if (!AuthValidators.isValidPin(pin)) {
+      return 'رمز الدخول يجب أن يكون 4 أرقام';
+    }
 
-    // 1) تأكد من جلسة OTP ثم حدّث كلمة المرور على السيرفر.
     try {
       final session = Supabase.instance.client.auth.currentSession;
       final user = Supabase.instance.client.auth.currentUser;
       if (session == null || user == null) {
         return 'انتهت جلسة التحقق. أعد طلب رمز التحقق ثم حاول مجدداً.';
       }
+
+      // احتفظ بالجوال من السحابة إن وُجد — مطلوب لرفع owner_auth_secrets.
+      var phone = '';
+      try {
+        final secret = await OwnerAuthCloudService.instance.fetch();
+        phone = secret?.phone.trim() ?? '';
+      } catch (e) {
+        AppLogger.warn('AuthProvider', 'reset PIN fetch cloud secret: $e');
+      }
+
+      // 1) دوّر كلمة Supabase الداخلية القوية — لا ترسل PIN إلى Auth.
+      final internalPassword = _generateInternalSupabasePassword();
       await Supabase.instance.client.auth.updateUser(
-        UserAttributes(password: newPassword),
+        UserAttributes(password: internalPassword),
       );
+      await _persistOwnerSupabaseCredential(mail, internalPassword);
 
       final userEmail = (user.email ?? mail).trim();
       final displayName =
           (user.userMetadata?['full_name'] as String?) ??
           (user.userMetadata?['name'] as String?) ??
           userEmail.split('@').first;
-      await _db.upsertGoogleUser(
+      final localId = await _db.upsertGoogleUser(
         supabaseUid: user.id,
         email: userEmail,
         displayName: displayName,
         asDeviceOwner: true,
       );
+
+      // 2) حدّث PIN محلياً.
+      final salt = PasswordHashing.generateSalt();
+      final hash = await PasswordHashing.hashPin(pin, salt);
+      final ok = await _db.updateUserPasswordByLogin(
+        login: mail,
+        passwordHash: hash,
+        passwordSalt: salt,
+      );
+      if (!ok) return 'تعذر تحديث رمز الدخول محلياً على هذا الجهاز.';
+
+      if (AuthValidators.isValidIraqiPhone(phone)) {
+        final row = await _db.getUserById(localId);
+        if (row != null) {
+          await _db.updateUserAdminBasic(
+            id: localId,
+            displayName: (row['displayName'] ?? displayName).toString(),
+            email: userEmail,
+            phone: phone,
+            jobTitle: (row['jobTitle'] ?? '').toString(),
+            role: ((row['role'] ?? 'owner').toString().trim().isEmpty)
+                ? 'owner'
+                : (row['role'] ?? 'owner').toString(),
+            phone2: (row['phone2'] ?? '').toString(),
+            passwordHash: hash,
+            passwordSalt: salt,
+          );
+        }
+        try {
+          await OwnerAuthCloudService.instance.upsert(
+            phone: phone,
+            pinHash: hash,
+            pinSalt: salt,
+          );
+        } catch (e) {
+          AppLogger.warn('AuthProvider', 'reset PIN push owner_auth_secrets: $e');
+        }
+      } else {
+        await _pushOwnerAuthToCloud(localId);
+      }
+
+      final localRow = await _db.getUserById(localId);
+      if (localRow != null) {
+        await _bindAccountDataScope(
+          'cloud:${user.id}',
+          allowUnsyncedDataLoss: true,
+        );
+        _setFromRow(localRow);
+        await _bindDeviceToOwner(localRow);
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setInt(_prefUserId, localId);
+      }
     } on AuthException catch (e) {
-      AppLogger.warn('AuthProvider', 'reset password server auth failed: ${e.message}');
-      return 'تعذر تحديث كلمة المرور على السيرفر. حاول مرة أخرى.';
+      AppLogger.warn(
+        'AuthProvider',
+        'reset password server auth failed: ${e.message}',
+      );
+      return 'تعذر تحديث رمز الدخول على السحابة. حاول مرة أخرى.';
     } catch (e) {
       AppLogger.warn('AuthProvider', 'reset password server update failed: $e');
-      return 'تعذر تحديث كلمة المرور على السيرفر. تحقق من الاتصال بالإنترنت.';
+      return 'تعذر تحديث رمز الدخول. تحقق من الاتصال بالإنترنت.';
     }
 
-    // 2) حدّث رمز الدخول المحلي.
-    final salt = PasswordHashing.generateSalt();
-    final hash = await PasswordHashing.hashPin(newPassword, salt);
-    final ok = await _db.updateUserPasswordByLogin(
-      login: mail,
-      passwordHash: hash,
-      passwordSalt: salt,
-    );
-    if (!ok) return 'تعذر تحديث رمز الدخول محلياً على هذا الجهاز.';
-
-    // لا نحتفظ بجلسة Supabase الناتجة عن verifyOTP داخل تطبيق محلي.
+    // لا نُبقي جلسة OTP مفتوحة — الدخول اللاحق عبر البريد+PIN + الكلمة الداخلية.
     try {
       await Supabase.instance.client.auth.signOut();
     } catch (e) {
@@ -2588,10 +2996,79 @@ class AuthProvider extends ChangeNotifier {
     return ownerPinRestoreRequiresOtp(localUserId);
   }
 
+  /// على الويب/جهاز جديد: تحقق PIN مقابل السحابة مباشرة (جلسة Google موجودة)
+  /// وثبّت hash محلياً — بدون OTP إضافي لأن معرفة الـ PIN إثبات كافٍ.
+  Future<bool> unlockOwnerWithVerifiedCloudPin({
+    required int localUserId,
+    required String pin,
+  }) async {
+    if (Supabase.instance.client.auth.currentUser == null) return false;
+    final trimmed = pin.trim();
+    if (!AuthValidators.isValidPin(trimmed)) return false;
+    try {
+      final secret = await OwnerAuthCloudService.instance.fetch();
+      if (secret == null || !secret.isComplete) {
+        AppLogger.warn(
+          'AuthProvider',
+          'unlockOwnerWithVerifiedCloudPin: no complete cloud secret',
+        );
+        return false;
+      }
+      final ok = await PasswordHashing.verifyPin(
+        trimmed,
+        secret.pinSalt,
+        secret.pinHash,
+      );
+      if (!ok) return false;
+
+      await _db.applyOwnerAuthFromCloud(
+        id: localUserId,
+        phone: secret.phone,
+        pinHash: secret.pinHash,
+        pinSalt: secret.pinSalt,
+      );
+      AppLogger.info(
+        'AuthProvider',
+        'unlockOwnerWithVerifiedCloudPin: local PIN synced from cloud',
+      );
+      try {
+        await OwnerBusinessVerticalCloudService.applyToLocalIfNeeded();
+      } catch (e) {
+        AppLogger.warn(
+          'AuthProvider',
+          'vertical apply after cloud PIN unlock: $e',
+        );
+      }
+      return true;
+    } catch (e, st) {
+      AppLogger.error(
+        'AuthProvider',
+        'unlockOwnerWithVerifiedCloudPin failed',
+        e,
+        st,
+      );
+      return false;
+    }
+  }
+
   /// يحدد المسار بعد hydrate: bootstrap · OTP · أو إكمال ملف.
   Future<GoogleOwnerProfileGate> resolveGoogleOwnerProfileGate(
     int localUserId,
   ) async {
+    // ويب بعد Google: لا تتخطَّ OTP حتى لو IndexedDB فيه PIN قديم.
+    if (kIsWeb && _webForceOwnerPinRestoreOtp) {
+      try {
+        final secret = await OwnerAuthCloudService.instance.fetch();
+        if (secret != null && secret.isComplete) {
+          return GoogleOwnerProfileGate.cloudHasSecretButLocalEmpty;
+        }
+      } catch (e) {
+        AppLogger.warn(
+          'AuthProvider',
+          'resolveGoogleOwnerProfileGate web force OTP check: $e',
+        );
+      }
+    }
     final row = await _db.getUserById(localUserId);
     if (row != null && isGoogleOwnerProfileCompleteLocal(row)) {
       return GoogleOwnerProfileGate.complete;
@@ -2608,13 +3085,32 @@ class AuthProvider extends ChangeNotifier {
     switch (gate) {
       case GoogleOwnerProfileGate.cloudHasSecretButLocalEmpty:
         final otpErr = await beginOwnerPinRestoreOtpFlow();
-        if (otpErr != null) return otpErr;
+        if (otpErr != null) {
+          if (kIsWeb) _webForceOwnerPinRestoreOtp = false;
+          return otpErr;
+        }
         notifyListeners();
         return kGoogleOwnerPinRestoreOtpRequired;
       case GoogleOwnerProfileGate.needsCompleteProfile:
+        if (kIsWeb) _webForceOwnerPinRestoreOtp = false;
         notifyListeners();
         return kGoogleOwnerProfileRequired;
       case GoogleOwnerProfileGate.complete:
+        if (kIsWeb) _webForceOwnerPinRestoreOtp = false;
+        final mail =
+            (Supabase.instance.client.auth.currentUser?.email ?? '')
+                .trim()
+                .toLowerCase();
+        if (mail.isNotEmpty) {
+          try {
+            await _ensureInternalSupabasePasswordPersisted(mail);
+          } catch (e) {
+            AppLogger.warn(
+              'AuthProvider',
+              'ensure internal pwd after Google login: $e',
+            );
+          }
+        }
         final bootstrapErr =
             await _completeCloudBootstrapAfterRestore(localId);
         if (bootstrapErr != null) return bootstrapErr;
@@ -2663,7 +3159,9 @@ class AuthProvider extends ChangeNotifier {
     // لا نُعيد «إعداد سريع» (اختيار التخصص) بلا جلسة سحابية نشطة.
     final hasCloudSession = Supabase.instance.client.auth.currentUser != null;
     if (!isLoggedIn && !hasCloudSession) {
-      return '/employee-gate';
+      // جهاز مربوط → بوابة PIN دائماً (ويب + موبايل) حتى لو انقطعت الجلسة مؤقتاً.
+      if (deviceOwnerBound) return '/employee-gate';
+      return kIsWeb ? '/login' : '/employee-gate';
     }
 
     try {
@@ -2674,6 +3172,14 @@ class AuthProvider extends ChangeNotifier {
       if (!skipOnboarding) return '/onboarding';
     } catch (e) {
       AppLogger.warn('AuthProvider', 'resolveStartupRouteLight onboarding: $e');
+    }
+
+    // ويب = موبايل: بوابة PIN / حراسة المالك — لا تخطٍ مباشر للوحة.
+    if (kIsWeb && !isLoggedIn && hasCloudSession && !deviceOwnerBound) {
+      final ok = await restoreWebSessionFromCloudIfNeeded();
+      if (!ok) return '/login';
+      final ownerRouteAfterBind = await googleOwnerProfileRouteIfNeeded();
+      if (ownerRouteAfterBind != null) return ownerRouteAfterBind;
     }
 
     if (!isLoggedIn) return '/employee-gate';
@@ -2759,6 +3265,22 @@ class AuthProvider extends ChangeNotifier {
       );
     } catch (e) {
       AppLogger.warn('AuthProvider', 'Google profile metadata update: $e');
+    }
+
+    // فعّل الدخول لاحقاً بـ (البريد + PIN) على هذا الجهاز:
+    // كلمة Supabase داخلية قوية ≠ PIN، وتُحفظ محلياً في Secure Storage.
+    final mail = (Supabase.instance.client.auth.currentUser?.email ?? '')
+        .trim()
+        .toLowerCase();
+    if (mail.isNotEmpty) {
+      try {
+        await _ensureInternalSupabasePasswordPersisted(mail);
+      } catch (e) {
+        AppLogger.warn(
+          'AuthProvider',
+          'Google profile internal password persist: $e',
+        );
+      }
     }
 
     final rowAfter = await _db.getUserById(localId);
@@ -2867,18 +3389,22 @@ class AuthProvider extends ChangeNotifier {
     // (حالة «حذفتُ الحساب ثم أعدت التسجيل بنفس البريد»).
     await _bindAccountDataScope('cloud:${user.id}');
 
-    int localId;
-    try {
-      localId = await _db.upsertGoogleUserSafe(
+    // على الويب: بعد تأكيد السيرفر نسمح بإعادة ربط uid لنفس البريد مباشرة،
+    // مع إعادة محاولة إنشاء الصف إن فشل أول قراءة بعد مسح القاعدة.
+    Future<int> upsertLocal({required bool allowRelink}) {
+      return _db.upsertGoogleUserSafe(
         supabaseUid: user.id,
         email: email,
         displayName: displayName,
         asDeviceOwner: true,
+        allowUidRelink: allowRelink,
       );
+    }
+
+    int localId;
+    try {
+      localId = await upsertLocal(allowRelink: kIsWeb);
     } on GoogleIdentityCollisionException {
-      // صف محلي قديم بنفس البريد لكن uid مختلف. السيرفر أكّد للتو
-      // (assert_identity_link_allowed) أن البريد غير مربوط بأي حساب حي آخر
-      // ⇒ الـ uid المحلي يتيم (حساب محذوف) — يُسمح بإعادة الربط.
       AppLogger.warn(
         'AuthProvider',
         'orphan local uid for this email — relinking after server assert',
@@ -2891,30 +3417,60 @@ class AuthProvider extends ChangeNotifier {
           newValueJson: jsonEncode({'newSupabaseUid': user.id}),
         ),
       );
+      if (kIsWeb) {
+        try {
+          await _db.closeAndDeleteDatabaseFile();
+        } catch (e, st) {
+          AppLogger.error(
+            'AuthProvider',
+            'web DB wipe before relink failed',
+            e,
+            st,
+          );
+        }
+      }
       try {
-        localId = await _db.upsertGoogleUserSafe(
-          supabaseUid: user.id,
-          email: email,
-          displayName: displayName,
-          asDeviceOwner: true,
-          allowUidRelink: true,
-        );
+        localId = await upsertLocal(allowRelink: true);
       } on GoogleIdentityCollisionException catch (e) {
         await _signOutSupabaseAfterFailedGoogleLink();
         return e.message;
       }
     }
 
-    final row = await _db.getUserById(localId);
+    var row = await _db.getUserById(localId);
+    if (row == null && kIsWeb) {
+      AppLogger.warn(
+        'AuthProvider',
+        'web getUserById null after upsert — retry once',
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      try {
+        localId = await upsertLocal(allowRelink: true);
+      } catch (e, st) {
+        AppLogger.error('AuthProvider', 'web upsert retry failed', e, st);
+      }
+      row = await _db.getUserById(localId);
+    }
     if (row == null) {
       await _signOutSupabaseAfterFailedGoogleLink();
-      return 'تعذر إنشاء حساب محلي لهذا المستخدم.';
+      AppLogger.warn(
+        'AuthProvider',
+        'local user missing after upsert localId=$localId kIsWeb=$kIsWeb',
+      );
+      return kIsWeb
+          ? 'تعذر إنشاء حساب محلي في المتصفح. امسح بيانات الموقع لهذا العنوان ثم أعد تسجيل الدخول.'
+          : 'تعذر إنشاء حساب محلي لهذا المستخدم.';
     }
 
     _setFromRow(row);
     await _bindDeviceToOwner(row);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_prefUserId, localId);
+
+    // ويب: بعد عودة Google نفرض حراسة OTP مثل جهاز جديد (حتى مع PIN محلي قديم).
+    if (kIsWeb) {
+      _webForceOwnerPinRestoreOtp = true;
+    }
 
     await hydrateCloudAccountData(
       timeout: const Duration(seconds: 20),
@@ -2950,17 +3506,9 @@ class AuthProvider extends ChangeNotifier {
       final client = Supabase.instance.client;
 
       if (kIsWeb) {
-        // مسار ID token المباشر (بدون إعادة توجيه) إن ضُبط GOOGLE_WEB_CLIENT_ID.
-        if (GoogleOAuthConfig.isWebIdTokenEnabled) {
-          final idTokenOk = await signInWithGoogleIdTokenOnWeb();
-          if (idTokenOk) {
-            return _mapFinalizeResult(
-              await _finalizeGoogleOAuthSession(intent: intent),
-            );
-          }
-        }
-        // مسار إعادة التوجيه — الصفحة ستُعاد تحميلها والإكمال في شاشة الإقلاع
-        // عبر [tryCompletePendingWebGoogleOAuth].
+        // الويب: إعادة توجيه Supabase OAuth فقط — لا GIS / google_sign_in.
+        // GIS يتطلب تسجيل كل نطاق في Authorized JavaScript origins
+        // (origin_mismatch). مسار Supabase يستخدم redirect_uri = callback السحابة.
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString(_prefPendingGoogleOAuthIntent, intent.name);
         final res = await client.auth.getOAuthSignInUrl(
@@ -3133,6 +3681,7 @@ class AuthProvider extends ChangeNotifier {
       final bootstrapErr =
           await _completeCloudBootstrapAfterRestore(localUserId);
       if (bootstrapErr != null) return bootstrapErr;
+      if (kIsWeb) _webForceOwnerPinRestoreOtp = false;
       notifyListeners();
       return null;
     } finally {
@@ -3415,10 +3964,12 @@ class AuthProvider extends ChangeNotifier {
       ),
     );
     final prefs = await SharedPreferences.getInstance();
+    // مثل الموبايل: امسح جلسة التشغيل المحلية — جلسة Supabase تبقى في التخزين.
     await prefs.remove(_prefUserId);
 
     _isLoggedIn = false;
     _userId = null;
+    _userGlobalId = '';
     _username = '';
     _displayName = '';
     _role = '';
@@ -3498,12 +4049,32 @@ class AuthProvider extends ChangeNotifier {
     if (session != null) {
       try {
         await session_freshness.ensureFreshSession();
+        _publishCloudLinkConnected();
         return true;
-      } on session_freshness.SessionExpiredException {
-        try {
-          await Supabase.instance.client.auth.signOut();
-        } catch (e) {
-          AppLogger.warn('AuthProvider', 'silent restore signOut stale: $e');
+      } on session_freshness.SessionRefreshTransientException catch (e) {
+        // مهلة/شبكة: أبقِ الجلسة المحلية — لا signOut (يمنع قتل refresh token).
+        if (!session.isExpired) {
+          AppLogger.warn(
+            'AuthProvider',
+            'silent restore refresh deferred (transient): $e',
+          );
+          _publishCloudLinkDegraded();
+          return true;
+        }
+        AppLogger.warn(
+          'AuthProvider',
+          'silent restore transient with expired jwt — try credential restore: $e',
+        );
+      } on session_freshness.SessionExpiredException catch (e) {
+        if (shouldSignOutAfterEnsureFreshFailure(e)) {
+          try {
+            await Supabase.instance.client.auth.signOut();
+          } catch (signOutErr) {
+            AppLogger.warn(
+              'AuthProvider',
+              'silent restore signOut stale: $signOutErr',
+            );
+          }
         }
       } catch (e) {
         if (!session.isExpired) {
@@ -3511,6 +4082,7 @@ class AuthProvider extends ChangeNotifier {
             'AuthProvider',
             'silent restore refresh deferred (network): $e',
           );
+          _publishCloudLinkDegraded();
           return true;
         }
         AppLogger.warn('AuthProvider', 'silent restore refresh: $e');
@@ -3518,7 +4090,10 @@ class AuthProvider extends ChangeNotifier {
     }
 
     final ownerRow = await getLocalOwnerRow();
-    if (ownerRow == null) return false;
+    if (ownerRow == null) {
+      _publishCloudLinkAfterSilentMiss();
+      return false;
+    }
 
     final candidates = <String>[];
     void addMail(String? value) {
@@ -3542,6 +4117,7 @@ class AuthProvider extends ChangeNotifier {
             'AuthProvider',
             'silent Google cloud session restored (no stored password)',
           );
+          _publishCloudLinkConnected();
           return true;
         }
       } catch (e) {
@@ -3559,10 +4135,12 @@ class AuthProvider extends ChangeNotifier {
       );
       if (outcome == _SupabaseSignInOutcome.success) {
         AppLogger.info('AuthProvider', 'silent cloud session restored');
+        _publishCloudLinkConnected();
         return true;
       }
       if (outcome == _SupabaseSignInOutcome.networkError) {
         AppLogger.warn('AuthProvider', 'silent restore blocked by network');
+        _publishCloudLinkDegraded();
         return false;
       }
       AppLogger.info(
@@ -3579,6 +4157,7 @@ class AuthProvider extends ChangeNotifier {
         );
         if (googleOk) {
           AppLogger.info('AuthProvider', 'silent Google cloud session restored');
+          _publishCloudLinkConnected();
           return true;
         }
       } catch (e) {
@@ -3586,7 +4165,25 @@ class AuthProvider extends ChangeNotifier {
       }
     }
 
+    _publishCloudLinkAfterSilentMiss();
     return false;
+  }
+
+  void _publishCloudLinkConnected() {
+    CloudSessionLinkController.instance.markConnected();
+  }
+
+  void _publishCloudLinkDegraded() {
+    CloudSessionLinkController.instance.markDegraded();
+  }
+
+  /// فشل الاستعادة الصامتة: قفل فقط إذا لم تبقَ جلسة. الشبكة تبقى متدهورة.
+  void _publishCloudLinkAfterSilentMiss() {
+    if (Supabase.instance.client.auth.currentUser != null) {
+      CloudSessionLinkController.instance.markDegraded();
+      return;
+    }
+    CloudSessionLinkController.instance.markLocked();
   }
 
   Future<bool> _hasStoredOwnerPassword(List<String> emails) async {
@@ -3626,6 +4223,7 @@ class AuthProvider extends ChangeNotifier {
         }),
       ),
     );
+    CloudSessionLinkController.instance.pauseAfterIntentionalSignOut();
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_prefUserId);
     // لا نمسح OwnerSupabaseCredentialStore عند الخروج العادي — يُستخدم لاستعادة
@@ -3640,6 +4238,17 @@ class AuthProvider extends ChangeNotifier {
     await _clearSupabaseFallbackSession();
     await CloudSyncService.instance.stopForSignOut();
     await LicenseService.instance.resetLicenseStateForDataScopeChange();
+    // على الويب فقط: مسح قاعدة IndexedDB عند الخروج اليدوي (ليس عند خمول).
+    if (kIsWeb) {
+      try {
+        await _db.closeAndDeleteDatabaseFile();
+        final prefsAfter = await SharedPreferences.getInstance();
+        await prefsAfter.remove(_prefActiveDataOwner);
+        await prefsAfter.remove(_prefDeviceOwnerBound);
+      } catch (e, st) {
+        AppLogger.error('AuthProvider', 'web logout DB wipe failed', e, st);
+      }
+    }
     AppSessionLifecycle.resetAfterSignOut();
     _deviceAccessRevokedPending = false;
     await SessionResumeContext.clear();

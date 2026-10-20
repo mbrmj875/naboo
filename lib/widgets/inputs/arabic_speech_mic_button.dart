@@ -1,12 +1,27 @@
-import 'dart:async' show unawaited;
+import 'dart:async' show Timer, unawaited;
+import 'dart:math' as math;
 
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter/foundation.dart' show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:speech_to_text/speech_recognition_error.dart';
 import 'package:speech_to_text/speech_recognition_result.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 
+import 'arabic_speech_helpers.dart';
+
+/// على macOS استدعاء SpeechToText.initialize قد يقتل العملية بـ TCC
+/// (حتى مع وجود NSSpeechRecognitionUsageDescription في بيئات debug).
+bool get _blockSpeechEngineOnPlatform {
+  if (kIsWeb) return true;
+  return defaultTargetPlatform == TargetPlatform.macOS;
+}
+
 /// زر مايك داخل حقل النص — اضغط للاستماع ثم يُكتب النص مباشرة في الحقل.
+///
+/// محسَّن للهجة العراقية: تهيئة مبكرة، تفضيل `ar_IQ`/خليجي، سحابة عند الاتصال،
+/// إعادة استماع تلقائية حتى يضغط المستخدم للإيقاف، وصمت أطول في البداية
+/// للأصوات الهادئة ثم تقصير الصمت بعد أول كلام للاستجابة السريعة.
 class ArabicSpeechMicButton extends StatefulWidget {
   const ArabicSpeechMicButton({
     super.key,
@@ -21,41 +36,162 @@ class ArabicSpeechMicButton extends StatefulWidget {
   final VoidCallback? onTextUpdated;
   final String tooltip;
 
+  /// يجهّز محرك الصوت مسبقاً (locale + صلاحية) لتقليل تأخير أول ضغط.
+  static Future<void> warmUp() => _ArabicSpeechMicButtonState.warmUpShared();
+
   @override
   State<ArabicSpeechMicButton> createState() => _ArabicSpeechMicButtonState();
 }
 
 class _ArabicSpeechMicButtonState extends State<ArabicSpeechMicButton> {
-  final stt.SpeechToText _speech = stt.SpeechToText();
+  static final stt.SpeechToText _speech = stt.SpeechToText();
+  static String? _sharedLocaleId;
+  static Future<bool>? _initFuture;
+  static bool? _cachedOnline;
+  static DateTime? _onlineCheckedAt;
 
-  var _initialized = false;
   var _listening = false;
   var _starting = false;
+  var _wantListening = false;
   var _heardWords = false;
-  String? _localeId;
+  var _ownsSession = false;
+  double _soundLevel = 0;
+  int _autoRestartCount = 0;
+
   String _prefixBeforeSession = '';
   String _sessionCommitted = '';
   String _currentPartial = '';
 
+  Timer? _restartTimer;
+  Timer? _soundDecayTimer;
+
+  static const _maxAutoRestarts = 40;
+  static const _initialPause = Duration(seconds: 12);
+  static const _activePause = Duration(seconds: 5);
+  static const _maxListen = Duration(minutes: 3);
+
+  static Future<void> warmUpShared() async {
+    if (_blockSpeechEngineOnPlatform) return;
+    try {
+      await _ensureSharedInitialized(
+        onStatus: (_) {},
+        onError: (_) {},
+      );
+    } catch (_) {
+      // فشل التهيئة المسبقة لا يمنع فتح الشاشة — يُعاد المحاولة عند ضغط المايك.
+      _initFuture = null;
+    }
+  }
+
+  static Future<bool> _ensureSharedInitialized({
+    required void Function(String) onStatus,
+    required void Function(SpeechRecognitionError) onError,
+  }) async {
+    if (_blockSpeechEngineOnPlatform) return false;
+
+    // SpeechToText مفرد: أعد ربط المستمعين دائماً لصاحب الجلسة الحالي.
+    _speech.statusListener = onStatus;
+    _speech.errorListener = onError;
+
+    if (_speech.isAvailable && _initFuture == null) {
+      _sharedLocaleId ??= await _resolveArabicLocaleStatic();
+      return true;
+    }
+
+    _initFuture ??= () async {
+      final ok = await _speech.initialize(
+        onStatus: onStatus,
+        onError: onError,
+        finalTimeout: const Duration(milliseconds: 700),
+        options: [
+          // تجنّب طلب بلوتوث غير لازم — يسرّع init على أندرويد.
+          stt.SpeechToText.androidNoBluetooth,
+        ],
+      );
+      if (ok) {
+        _sharedLocaleId = await _resolveArabicLocaleStatic();
+      }
+      return ok;
+    }();
+
+    final ok = await _initFuture!;
+    // بعد أول init، المستمعون يُثبَّتون داخلياً — أعد التعيين يدوياً.
+    _speech.statusListener = onStatus;
+    _speech.errorListener = onError;
+    if (!ok) _initFuture = null;
+    return ok;
+  }
+
+  static Future<String?> _resolveArabicLocaleStatic() async {
+    final locales = await _speech.locales();
+    final picked = pickBestArabicSpeechLocale(locales.map((l) => l.localeId));
+    if (picked != null) return picked;
+    final system = await _speech.systemLocale();
+    return system?.localeId;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    // لا تهيئة تلقائية على macOS — تمنع قتل التطبيق عند فتح بطاقة الزيت.
+    if (!_blockSpeechEngineOnPlatform) {
+      unawaited(
+        _ensureSharedInitialized(
+          onStatus: _onStatus,
+          onError: _onSpeechError,
+        ),
+      );
+      unawaited(_refreshOnlineCache());
+    }
+  }
+
   @override
   void dispose() {
-    unawaited(_speech.stop());
-    unawaited(_speech.cancel());
+    _restartTimer?.cancel();
+    _soundDecayTimer?.cancel();
+    final shouldStop = _wantListening || _ownsSession || _listening;
+    _wantListening = false;
+    _ownsSession = false;
+    if (shouldStop && _speech.isListening) {
+      unawaited(_speech.stop());
+    }
     super.dispose();
   }
 
-  Future<bool> _ensureInitialized() async {
-    if (_initialized && _speech.isAvailable) {
-      if (await _speech.hasPermission) return true;
-      _initialized = false;
+  Future<void> _refreshOnlineCache() async {
+    try {
+      final results = await Connectivity().checkConnectivity();
+      _cachedOnline = results.any(
+        (r) =>
+            r == ConnectivityResult.mobile ||
+            r == ConnectivityResult.wifi ||
+            r == ConnectivityResult.ethernet,
+      );
+      _onlineCheckedAt = DateTime.now();
+    } catch (_) {
+      // افترض اتصالاً — السحابة أفضل للهجة؛ الفشل يُعالَج في onError.
+      _cachedOnline = true;
+      _onlineCheckedAt = DateTime.now();
     }
+  }
 
-    final ok = await _speech.initialize(
+  Future<bool> _isOnline() async {
+    final checked = _onlineCheckedAt;
+    if (_cachedOnline != null &&
+        checked != null &&
+        DateTime.now().difference(checked) < const Duration(seconds: 20)) {
+      return _cachedOnline!;
+    }
+    await _refreshOnlineCache();
+    return _cachedOnline ?? true;
+  }
+
+  Future<bool> _ensureInitialized() async {
+    final ok = await _ensureSharedInitialized(
       onStatus: _onStatus,
       onError: _onSpeechError,
     );
     if (!mounted) return false;
-
     if (!ok) {
       final permitted = await _speech.hasPermission;
       _showSnack(
@@ -65,68 +201,81 @@ class _ArabicSpeechMicButtonState extends State<ArabicSpeechMicButton> {
       );
       return false;
     }
-
-    _localeId = await _resolveArabicLocale();
-    if (_localeId == null) {
-      final system = await _speech.systemLocale();
-      _localeId = system?.localeId;
+    if (!await _speech.hasPermission) {
+      _showSnack('اضغط المايك واختر «السماح» لاستخدام الميكروفون');
+      return false;
     }
-
-    _initialized = true;
     return true;
   }
 
-  Future<String?> _resolveArabicLocale() async {
-    final locales = await _speech.locales();
-    const preferred = ['ar-IQ', 'ar_SA', 'ar_EG', 'ar'];
-    for (final code in preferred) {
-      for (final l in locales) {
-        if (l.localeId == code) return l.localeId;
-      }
-    }
-    for (final l in locales) {
-      if (l.localeId.startsWith('ar')) return l.localeId;
-    }
-    return null;
-  }
-
-  Future<bool> _deviceHasNetwork() async {
-    final results = await Connectivity().checkConnectivity();
-    return results.any(
-      (r) =>
-          r == ConnectivityResult.mobile ||
-          r == ConnectivityResult.wifi ||
-          r == ConnectivityResult.ethernet,
-    );
-  }
-
   void _onStatus(String status) {
-    if (!mounted) return;
+    if (!mounted || !_ownsSession) return;
+
     if (status == stt.SpeechToText.listeningStatus) {
-      setState(() => _listening = true);
-    } else if (status == stt.SpeechToText.notListeningStatus ||
+      setState(() {
+        _listening = true;
+        _starting = false;
+      });
+      return;
+    }
+
+    if (status == stt.SpeechToText.notListeningStatus ||
         status == stt.SpeechToText.doneStatus) {
       setState(() {
         _listening = false;
         _starting = false;
+        _soundLevel = 0;
       });
+      // إعادة تشغيل تلقائية طالما المستخدم لم يوقف المايك — ضروري لأن أندرويد
+      // يقطع الجلسة بسرعة عند الكلام الهادئ أو التوقف القصير باللهجة.
+      if (_wantListening) {
+        _scheduleAutoRestart();
+      } else {
+        _ownsSession = false;
+      }
     }
+  }
+
+  void _scheduleAutoRestart() {
+    if (!_wantListening || !_ownsSession) return;
+    if (_autoRestartCount >= _maxAutoRestarts) {
+      _wantListening = false;
+      _ownsSession = false;
+      _showSnack('انتهت جلسة الإملاء — اضغط المايك للمتابعة');
+      return;
+    }
+    _restartTimer?.cancel();
+    _restartTimer = Timer(const Duration(milliseconds: 280), () {
+      if (!mounted || !_wantListening || !_ownsSession) return;
+      if (_speech.isListening) return;
+      _autoRestartCount++;
+      unawaited(_startListening(isRestart: true));
+    });
   }
 
   bool _isTransientError(String code) {
     return code.contains('error_no_match') ||
         code.contains('error_speech_timeout') ||
         code.contains('error_busy') ||
-        code.contains('error_client');
+        code.contains('error_client') ||
+        code.contains('error_retry');
   }
 
   void _onSpeechError(SpeechRecognitionError error) {
-    if (!mounted) return;
+    if (!mounted || !_ownsSession) return;
 
     final code = error.errorMsg;
 
-    // أخطاء عابرة أثناء الاستماع — لا نُظهر رسالة ولا نُوقف المايك.
     if (_isTransientError(code)) {
+      // أخطاء عابرة: أعد الاستماع بهدوء إن الجلسة ما زالت مطلوبة.
+      if (_wantListening) {
+        setState(() {
+          _listening = false;
+          _starting = false;
+        });
+        _scheduleAutoRestart();
+        return;
+      }
       if (_speech.isListening) return;
       setState(() {
         _listening = false;
@@ -139,7 +288,9 @@ class _ArabicSpeechMicButtonState extends State<ArabicSpeechMicButton> {
     }
 
     if (code.contains('error_permission')) {
-      _initialized = false;
+      _wantListening = false;
+      _ownsSession = false;
+      _initFuture = null;
       setState(() {
         _listening = false;
         _starting = false;
@@ -150,7 +301,19 @@ class _ArabicSpeechMicButtonState extends State<ArabicSpeechMicButton> {
 
     if (code.contains('error_network') ||
         code.contains('error_network_timeout') ||
-        code.contains('error_server')) {
+        code.contains('error_server') ||
+        code.contains('error_too_many_requests')) {
+      _cachedOnline = false;
+      _onlineCheckedAt = DateTime.now();
+      if (_wantListening) {
+        setState(() {
+          _listening = false;
+          _starting = false;
+        });
+        // أعد المحاولة على الجهاز عند فشل الشبكة.
+        _scheduleAutoRestart();
+        return;
+      }
       if (_speech.isListening) return;
       setState(() {
         _listening = false;
@@ -160,7 +323,6 @@ class _ArabicSpeechMicButtonState extends State<ArabicSpeechMicButton> {
       return;
     }
 
-    // أخطاء أخرى — لا نُقطع الجلسة إن كان المايك ما زال يعمل.
     if (_speech.isListening) return;
     setState(() {
       _listening = false;
@@ -184,106 +346,151 @@ class _ArabicSpeechMicButtonState extends State<ArabicSpeechMicButton> {
   Future<void> _toggleListening() async {
     if (!widget.enabled || _starting) return;
 
-    if (_listening || _speech.isListening) {
-      if (_currentPartial.isNotEmpty) {
-        _sessionCommitted = _mergeChunk(_sessionCommitted, _currentPartial);
-        _currentPartial = '';
-        _applySessionTextToField();
-      }
-      await _speech.stop();
-      if (mounted) {
-        setState(() {
-          _listening = false;
-          _starting = false;
-        });
-      }
+    if (_blockSpeechEngineOnPlatform) {
+      _showSnack('الإملاء بالصوت غير متاح على macOS حالياً — اكتب يدوياً');
+      return;
+    }
+
+    if (_wantListening || _listening || _speech.isListening) {
+      await _stopByUser();
       return;
     }
 
     setState(() {
       _starting = true;
+      _wantListening = true;
+      _ownsSession = true;
       _heardWords = false;
+      _autoRestartCount = 0;
+      _soundLevel = 0;
     });
+
+    _prefixBeforeSession = widget.controller.text.trim();
+    _sessionCommitted = '';
+    _currentPartial = '';
+
+    await _startListening(isRestart: false);
+  }
+
+  Future<void> _stopByUser() async {
+    _restartTimer?.cancel();
+    _wantListening = false;
+    _ownsSession = false;
+
+    if (_currentPartial.isNotEmpty) {
+      _sessionCommitted = mergeSpeechChunk(_sessionCommitted, _currentPartial);
+      _currentPartial = '';
+      _applySessionTextToField();
+    }
+
+    if (_speech.isListening) {
+      await _speech.stop();
+    }
+    if (mounted) {
+      setState(() {
+        _listening = false;
+        _starting = false;
+        _soundLevel = 0;
+      });
+    }
+  }
+
+  Future<void> _startListening({required bool isRestart}) async {
+    if (!_wantListening || !mounted) return;
 
     try {
       final ready = await _ensureInitialized();
-      if (!ready || !mounted) return;
+      if (!ready || !mounted || !_wantListening) {
+        if (mounted) {
+          setState(() {
+            _starting = false;
+            _listening = false;
+            _wantListening = false;
+            _ownsSession = false;
+          });
+        }
+        return;
+      }
 
-      _prefixBeforeSession = widget.controller.text.trim();
-      _sessionCommitted = '';
-      _currentPartial = '';
-
+      // لا تستدعِ cancel() — يدمّر المتعرف ويبطئ إعادة التشغيل.
       if (_speech.isListening) {
         await _speech.stop();
+        await Future<void>.delayed(const Duration(milliseconds: 120));
       }
-      await _speech.cancel();
 
-      final online = await _deviceHasNetwork();
+      final online = await _isOnline();
+      // السحابة أدق للهجة العراقية؛ على الجهاز فقط عند عدم الاتصال.
+      final onDevice = !online;
+
+      if (!mounted || !_wantListening) return;
+
+      if (!isRestart) {
+        setState(() => _starting = true);
+      }
+
       await _speech.listen(
-        localeId: _localeId,
+        localeId: _sharedLocaleId,
         onResult: _onResult,
+        onSoundLevelChange: _onSoundLevel,
         listenOptions: stt.SpeechListenOptions(
           listenMode: stt.ListenMode.dictation,
           partialResults: true,
-          onDevice: !online,
-          listenFor: const Duration(seconds: 120),
-          pauseFor: const Duration(seconds: 8),
+          onDevice: onDevice,
+          listenFor: _maxListen,
+          // صمت أطول في البداية → يلتقط الكلام الهادئ ولا يقطع بسرعة.
+          pauseFor: _heardWords ? _activePause : _initialPause,
           cancelOnError: false,
+          autoPunctuation: true,
         ),
       );
 
-      // على بعض الأجهزة listen() تُرجع false لكن المايك يعمل فعلاً.
-      await Future<void>.delayed(const Duration(milliseconds: 450));
       if (!mounted) return;
-
+      // لا ننتظر 450ms — onStatus يضبط الحالة؛ إن بدأ فوراً حدّث الواجهة.
       if (_speech.isListening) {
         setState(() {
           _listening = true;
           _starting = false;
         });
-        return;
-      }
-
-      setState(() {
-        _listening = false;
-        _starting = false;
-      });
-      _showSnack('تعذّر تشغيل المايك — حاول مرة أخرى');
-    } catch (_) {
-      if (!mounted) return;
-      setState(() {
-        _listening = false;
-        _starting = false;
-      });
-      _showSnack('تعذّر تشغيل المايك — حاول مرة أخرى');
-    } finally {
-      if (mounted && _starting && !_speech.isListening) {
+      } else if (_wantListening) {
+        // بعض الأجهزة تتأخر قليلاً قبل listeningStatus.
         setState(() => _starting = false);
       }
+    } catch (_) {
+      if (!mounted) return;
+      if (_wantListening && _autoRestartCount < _maxAutoRestarts) {
+        _scheduleAutoRestart();
+        return;
+      }
+      setState(() {
+        _listening = false;
+        _starting = false;
+        _wantListening = false;
+        _ownsSession = false;
+      });
+      _showSnack('تعذّر تشغيل المايك — حاول مرة أخرى');
     }
   }
 
-  String _joinText(String first, String second) {
-    if (first.isEmpty) return second;
-    if (second.isEmpty) return first;
-    return '$first $second';
-  }
-
-  /// يدمج مقطعاً جديداً دون مسح ما سبق — يدعم التوقف القصير ثم متابعة الكلام.
-  String _mergeChunk(String existing, String incoming) {
-    if (incoming.isEmpty) return existing;
-    if (existing.isEmpty) return incoming;
-    if (existing == incoming) return existing;
-    if (incoming.startsWith(existing)) return incoming;
-    if (existing.endsWith(incoming)) return existing;
-    return _joinText(existing, incoming);
+  void _onSoundLevel(double level) {
+    if (!mounted || !_ownsSession) return;
+    // المستوى من المحرك غالباً سالب (dB)؛ حوّله لإشارة مرئية ناعمة.
+    final normalized = ((level + 2) / 10).clamp(0.0, 1.0);
+    if ((normalized - _soundLevel).abs() < 0.05 && normalized > 0) return;
+    setState(() => _soundLevel = normalized.toDouble());
+    _soundDecayTimer?.cancel();
+    _soundDecayTimer = Timer(const Duration(milliseconds: 350), () {
+      if (!mounted) return;
+      if (_soundLevel > 0) setState(() => _soundLevel = 0);
+    });
   }
 
   String _composeSessionText() {
     final body = _currentPartial.isEmpty
         ? _sessionCommitted
-        : _mergeChunk(_sessionCommitted, _currentPartial);
-    return _joinText(_prefixBeforeSession, body);
+        : mergeSpeechChunk(_sessionCommitted, _currentPartial);
+    if (_prefixBeforeSession.isEmpty) return body;
+    if (body.isEmpty) return _prefixBeforeSession;
+    return '$_prefixBeforeSession $body';
   }
 
   void _applySessionTextToField() {
@@ -294,33 +501,31 @@ class _ArabicSpeechMicButtonState extends State<ArabicSpeechMicButton> {
     widget.onTextUpdated?.call();
   }
 
-  /// هل [later] امتداد أو تصحيح لـ [earlier] (نفس المقطع)؟
-  bool _isSameOrRefinement(String earlier, String later) {
-    if (earlier.isEmpty || later.isEmpty) return true;
-    final e = earlier.trim();
-    final l = later.trim();
-    if (e == l) return true;
-    if (l.startsWith(e) || e.startsWith(l)) return true;
-    return false;
-  }
-
-  /// يثبّت المقطع الجاري في الذاكرة قبل بدء مقطع جديد.
   void _commitCurrentPartialIfNewSegment(String incoming) {
     if (_currentPartial.isEmpty) return;
-    if (_isSameOrRefinement(_currentPartial, incoming)) return;
-    _sessionCommitted = _mergeChunk(_sessionCommitted, _currentPartial);
+    if (isSpeechSameOrRefinement(_currentPartial, incoming)) return;
+    _sessionCommitted = mergeSpeechChunk(_sessionCommitted, _currentPartial);
     _currentPartial = '';
   }
 
   void _onResult(SpeechRecognitionResult result) {
-    final spoken = result.recognizedWords.trim();
+    if (!_ownsSession) return;
+    final spoken = polishIraqiSpeechText(result.recognizedWords);
     if (spoken.isEmpty) return;
 
+    final wasFirst = !_heardWords;
     _heardWords = true;
+
+    // بعد أول كلام: قصّر مهلة الصمت لاستجابة أسرع بين الجمل.
+    if (wasFirst) {
+      try {
+        _speech.changePauseFor(_activePause);
+      } catch (_) {}
+    }
 
     if (result.finalResult) {
       _commitCurrentPartialIfNewSegment(spoken);
-      _sessionCommitted = _mergeChunk(_sessionCommitted, spoken);
+      _sessionCommitted = mergeSpeechChunk(_sessionCommitted, spoken);
       _currentPartial = '';
     } else {
       _commitCurrentPartialIfNewSegment(spoken);
@@ -333,7 +538,9 @@ class _ArabicSpeechMicButtonState extends State<ArabicSpeechMicButton> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final active = _listening || _starting || _speech.isListening;
+    final active = _wantListening || _listening || _starting || _speech.isListening;
+    final hearing = active && _soundLevel > 0.12;
+    final pulse = hearing ? (0.55 + 0.45 * math.min(1.0, _soundLevel)) : 1.0;
 
     return IconButton(
       tooltip: widget.tooltip,
@@ -341,9 +548,14 @@ class _ArabicSpeechMicButtonState extends State<ArabicSpeechMicButton> {
       padding: EdgeInsets.zero,
       constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
       onPressed: !widget.enabled ? null : () => unawaited(_toggleListening()),
-      icon: Icon(
-        active ? Icons.mic_rounded : Icons.mic_none_rounded,
-        color: active ? cs.error : cs.primary,
+      icon: Transform.scale(
+        scale: pulse,
+        child: Icon(
+          active ? Icons.mic_rounded : Icons.mic_none_rounded,
+          color: hearing
+              ? cs.error
+              : (active ? cs.error.withValues(alpha: 0.85) : cs.primary),
+        ),
       ),
     );
   }

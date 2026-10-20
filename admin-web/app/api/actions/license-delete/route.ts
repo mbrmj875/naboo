@@ -4,10 +4,19 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 /** حذف صف ترخيص نهائياً من جدول licenses (service role). */
 export async function POST(req: Request) {
   try {
-    const body = (await req.json()) as { licenseId?: number };
+    const body = (await req.json()) as {
+      licenseId?: number;
+      confirmPhrase?: string;
+    };
     const licenseId = Number(body.licenseId);
     if (!Number.isFinite(licenseId) || licenseId <= 0) {
       return NextResponse.json({ error: "معرّف الترخيص غير صالح" }, { status: 400 });
+    }
+    if ((body.confirmPhrase ?? "").trim() !== "حذف") {
+      return NextResponse.json(
+        { error: "اكتب كلمة «حذف» للتأكيد" },
+        { status: 400 },
+      );
     }
     const supabase = getSupabaseAdmin();
     const { error } = await supabase.from("licenses").delete().eq("id", licenseId);

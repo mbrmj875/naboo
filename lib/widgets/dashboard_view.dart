@@ -1,6 +1,5 @@
 import 'dart:async' show unawaited;
 import 'dart:convert' show jsonDecode, jsonEncode;
-import 'dart:io' show File;
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -11,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../home/specs/home_dashboard_spec.dart';
 import '../verticals/oil_change/home/oil_change_home_dashboard.dart';
+import '../verticals/restaurant/screens/restaurant_pos_home.dart';
 import '../providers/auth_provider.dart';
 
 import '../models/recent_activity_entry.dart';
@@ -23,6 +23,7 @@ import '../utils/screen_layout.dart';
 import 'dashboard_recent_activity.dart';
 import 'home_glance_orbit.dart';
 import '../theme/design_tokens.dart';
+import 'product_media_image.dart';
 
 // ── Design Tokens ─────────────────────────────────────────────────────────────
 const _kTeal = Color(0xFF0D9488);
@@ -129,6 +130,38 @@ class _ModernDashboard extends StatelessWidget {
     final spec = dashboardSpec;
     final useOilGrid =
         spec != null && spec.showOilKpiGrid && onDashboardAction != null;
+    final useRestaurantPos = spec != null && spec.showRestaurantPosHome;
+
+    if (useRestaurantPos) {
+      return ColoredBox(
+        color: AppColors.surfaceDark,
+        child: SingleChildScrollView(
+          padding: EdgeInsets.symmetric(
+            horizontal: pad,
+            vertical: sl.isHandsetForLayout ? 12 : 16,
+          ),
+          child: Align(
+            alignment: Alignment.topCenter,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: maxContent),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _DashHeader(
+                    isDark: true,
+                    subtitle: spec.greetingSubtitle,
+                    trailingEmoji: '',
+                  ),
+                  SizedBox(height: sectionGap),
+                  const RestaurantPosHome(isDark: true),
+                  SizedBox(height: sl.isHandsetForLayout ? 20 : 28),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
 
     Widget sectionWidget(String id) {
       switch (id) {
@@ -2303,17 +2336,35 @@ class _PinnedProductsRailState extends State<_PinnedProductsRail> {
 
   Widget _heroThumb(Map<String, dynamic> p, Color border) {
     final path = (p['imagePath'] as String?)?.trim();
-    if (!kIsWeb &&
-        path != null &&
-        path.isNotEmpty &&
-        File(path).existsSync()) {
+    final url = (p['imageUrl'] as String?)?.trim();
+    final media = (path != null && path.isNotEmpty)
+        ? path
+        : (url != null && url.isNotEmpty ? url : null);
+    if (media != null && media.isNotEmpty) {
       return ClipRRect(
         borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
-        child: Image.file(
-          File(path),
+        child: ProductMediaImage(
+          pathOrUrl: media,
           fit: BoxFit.cover,
           width: double.infinity,
           height: double.infinity,
+          placeholder: DecoratedBox(
+            decoration: BoxDecoration(
+              color: widget.isDark
+                  ? Colors.white.withValues(alpha: 0.06)
+                  : const Color(0xFFF1F5F9),
+              borderRadius:
+                  const BorderRadius.vertical(top: Radius.circular(12)),
+              border: Border.all(color: border),
+            ),
+            child: Center(
+              child: Icon(
+                Icons.inventory_2_outlined,
+                size: 44,
+                color: _dashTextMuted(widget.isDark),
+              ),
+            ),
+          ),
         ),
       );
     }

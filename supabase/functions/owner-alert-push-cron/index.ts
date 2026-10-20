@@ -7,7 +7,7 @@
 //
 // Secrets:
 //   FCM_SERVICE_ACCOUNT_JSON
-//   CRON_SECRET (optional Bearer guard)
+//   CRON_SECRET (required Bearer guard — fail closed if missing)
 //   SUPABASE_SERVICE_ROLE_KEY (auto in Edge runtime)
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
@@ -22,9 +22,9 @@ Deno.serve(async (req) => {
     return new Response('Method Not Allowed', { status: 405 });
   }
 
-  const cronSecret = Deno.env.get('CRON_SECRET');
+  const cronSecret = (Deno.env.get('CRON_SECRET') ?? '').trim();
   const authHeader = req.headers.get('Authorization') ?? '';
-  if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
+  if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
     return new Response('Unauthorized', { status: 401 });
   }
 

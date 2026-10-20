@@ -15,7 +15,7 @@ abstract class OilChangeWhatsappUserMessages {
       case OilChangeWhatsappNotifyReason.timeout:
         return 'السيرفر لم يستجب — أعد المحاولة لاحقاً';
       case OilChangeWhatsappNotifyReason.unauthorized:
-        return 'فشل التحقق من أمان الإرسال — تواصل مع دعم نابو';
+        return 'انتهت جلسة البرنامج — اخرج من الحساب ثم ادخل من جديد وأعد الإرسال';
       case OilChangeWhatsappNotifyReason.rateLimited:
         return 'تم إرسال رسائل كثيرة — انتظر قليلاً ثم أعد المحاولة';
       case OilChangeWhatsappNotifyReason.whatsappDisconnected:
@@ -25,7 +25,9 @@ abstract class OilChangeWhatsappUserMessages {
       case OilChangeWhatsappNotifyReason.invalidPhone:
         return 'رقم الزبون غير صالح — أضف رقماً صحيحاً';
       case OilChangeWhatsappNotifyReason.serverError:
-        return 'خطأ في إعداد n8n — راجع عقدة Respond to Webhook ثم أعد المحاولة';
+        return 'سيرفر الإرسال رفض الطلب — انتظر دقيقة ثم أعد المحاولة';
+      case OilChangeWhatsappNotifyReason.insufficientWallet:
+        return 'رصيد الرسائل غير كافٍ أو انتهت فاتورة الباقة — جدّد الباقة ثم أعد المحاولة';
       case OilChangeWhatsappNotifyReason.unknown:
         return 'تعذّر الإرسال التلقائي — تحقق من الإعدادات أو أعد المحاولة';
     }

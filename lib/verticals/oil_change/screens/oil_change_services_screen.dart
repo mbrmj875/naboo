@@ -3,6 +3,7 @@ import 'dart:async' show unawaited;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../../guides/guide_anchor.dart';
 import '../models/oil_change_service_item.dart';
 import '../../../navigation/content_navigation.dart';
 import '../services/oil_change_services_repository.dart';
@@ -190,29 +191,38 @@ class _OilChangeServicesScreenState extends State<OilChangeServicesScreen> {
                   children: [
                     Padding(
                       padding: EdgeInsetsDirectional.fromSTEB(pad, 12, pad, 8),
-                      child: _BasePriceCard(
-                        controller: _basePriceCtrl,
-                        saving: _savingBase,
-                        onSave: _saveBasePrice,
+                      child: GuideAnchor(
+                        id: OilGuideAnchors.servicesBasePrice,
+                        child: _BasePriceCard(
+                          controller: _basePriceCtrl,
+                          saving: _savingBase,
+                          onSave: _saveBasePrice,
+                        ),
                       ),
                     ),
                     Padding(
                       padding: EdgeInsetsDirectional.fromSTEB(pad, 0, pad, 8),
-                      child: Row(
-                        children: [
-                          Text(
-                            'خدمات إضافية',
-                            style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                                  fontWeight: FontWeight.w800,
-                                ),
-                          ),
-                          const Spacer(),
-                          FilledButton.tonalIcon(
-                            onPressed: () => unawaited(_openServiceForm()),
-                            icon: const Icon(Icons.add_rounded),
-                            label: const Text('إضافة خدمة'),
-                          ),
-                        ],
+                      child: GuideAnchor(
+                        id: OilGuideAnchors.servicesExtrasList,
+                        child: Row(
+                          children: [
+                            Text(
+                              'خدمات إضافية',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .titleSmall
+                                  ?.copyWith(
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                            ),
+                            const Spacer(),
+                            FilledButton.tonalIcon(
+                              onPressed: () => unawaited(_openServiceForm()),
+                              icon: const Icon(Icons.add_rounded),
+                              label: const Text('إضافة خدمة'),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                     Expanded(
@@ -240,6 +250,7 @@ class _OilChangeServicesScreenState extends State<OilChangeServicesScreen> {
                                   IqdMoney.fromFils(s.priceFils),
                                 );
                                 return OilChangeRoyalCard.listTileCard(
+                                  context: context,
                                   cs: cs,
                                   onTap: () =>
                                       unawaited(_openServiceForm(existing: s)),
@@ -304,6 +315,7 @@ class _BasePriceCard extends StatelessWidget {
     return DecoratedBox(
       decoration: OilChangeRoyalCard.decoration(
         cs,
+        context: context,
         radius: 12,
         backgroundColor: OilChangeRoyalCard.gold.withValues(alpha: 0.06),
       ),

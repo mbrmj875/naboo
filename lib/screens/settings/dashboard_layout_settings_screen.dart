@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../guides/guide_anchor.dart';
+import '../../providers/business_features_provider.dart';
 import '../../providers/dashboard_layout_provider.dart';
 
 /// إعدادات إظهار أقسام الرئيسية وترتيبها (سحب وإفلات).
@@ -11,6 +13,8 @@ class DashboardLayoutSettingsScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final layout = context.watch<DashboardLayoutProvider>();
+    final oilChangeOn =
+        context.watch<BusinessFeaturesProvider>().data.enableOilChange;
 
     return Directionality(
       textDirection: TextDirection.rtl,
@@ -91,6 +95,41 @@ class DashboardLayoutSettingsScreen extends StatelessWidget {
                 );
               },
             ),
+            if (oilChangeOn) ...[
+              const SizedBox(height: 16),
+              Text(
+                'أزرار إضافية',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                  color: cs.onSurface,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Card(
+                margin: const EdgeInsets.only(bottom: 8),
+                child: GuideAnchor(
+                  id: OilGuideAnchors.settingsCarWashToggle,
+                  child: ListTile(
+                    contentPadding: const EdgeInsetsDirectional.only(
+                      start: 16,
+                      end: 12,
+                    ),
+                    title: const Text(
+                      'زر غسيل السيارات',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    subtitle: const Text(
+                      'يظهر تحت بطاقة «بيع مباشر» — لكل موظف، ويُحفظ حتى بعد إغلاق التطبيق. بطاقة البيع المباشر تبقى ظاهرة دائماً',
+                    ),
+                    trailing: Switch.adaptive(
+                      value: layout.carWashButtonVisible,
+                      onChanged: layout.setCarWashButtonVisible,
+                    ),
+                  ),
+                ),
+              ),
+            ],
             const SizedBox(height: 20),
             OutlinedButton.icon(
               onPressed: () async {

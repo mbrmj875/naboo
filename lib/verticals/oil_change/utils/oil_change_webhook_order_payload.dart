@@ -1,4 +1,5 @@
 import '../../../utils/iqd_money.dart';
+import '../../../utils/iraqi_currency_format.dart';
 import '../models/oil_change_filter_kind.dart';
 import 'oil_change_filter_format.dart';
 
@@ -35,9 +36,21 @@ Map<String, dynamic> buildOilChangeWebhookOrderPayload({
           .toList();
 
   final filters = <String>[];
-  for (final kind in OilChangeFilterKind.all) {
-    final name = (order[kind.nameColumnKey] ?? '').toString().trim();
-    if (name.isNotEmpty) filters.add('${kind.label}: $name');
+  final labelByCode = <String, String>{
+    for (final k in OilChangeFilterKind.builtins) k.code: k.label,
+  };
+  for (final line in oilFilterLinesDataFromRow(order)) {
+    final kindLabel = (line.label?.trim().isNotEmpty == true)
+        ? line.label!.trim()
+        : (labelByCode[line.code] ?? 'فلتر');
+    if (line.name.isEmpty) {
+      if (line.priceFils <= 0) continue;
+      filters.add(
+        '$kindLabel — ${IraqiCurrencyFormat.formatIqd(IqdMoney.fromFils(line.priceFils))}',
+      );
+    } else {
+      filters.add('$kindLabel: ${line.name}');
+    }
   }
 
   final payload = <String, dynamic>{

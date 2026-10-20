@@ -180,6 +180,7 @@ class _GradeCard extends StatelessWidget {
                   child: TextField(
                     controller: grade.buyCtrl,
                     keyboardType: TextInputType.number,
+                    inputFormatters: [IraqiCurrencyFormat.moneyInputFormatter()],
                     decoration: InputDecoration(
                       labelText: 'سعر الشراء / لتر',
                       border: const OutlineInputBorder(),
@@ -197,6 +198,7 @@ class _GradeCard extends StatelessWidget {
                   child: TextField(
                     controller: grade.sellCtrl,
                     keyboardType: TextInputType.number,
+                    inputFormatters: [IraqiCurrencyFormat.moneyInputFormatter()],
                     decoration: InputDecoration(
                       labelText: 'سعر البيع / لتر',
                       border: const OutlineInputBorder(),
@@ -357,6 +359,7 @@ class _PackRow extends StatelessWidget {
           TextField(
             controller: pack.sellCtrl,
             keyboardType: TextInputType.number,
+            inputFormatters: [IraqiCurrencyFormat.moneyInputFormatter()],
             decoration: InputDecoration(
               labelText: 'سعر البيع (اختياري)',
               border: const OutlineInputBorder(),

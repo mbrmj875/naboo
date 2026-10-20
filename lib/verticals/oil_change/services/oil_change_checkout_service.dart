@@ -2,10 +2,10 @@ import '../../../models/invoice.dart';
 import '../../../services/cloud_sync_service.dart';
 import '../../../services/database_helper.dart';
 import '../../../services/license_service.dart';
+import '../../../services/sale_debt_caps_validator.dart';
 import '../../../services/service_orders_repository.dart';
 import '../../../utils/invoice_validation.dart';
 import '../../../utils/iqd_money.dart';
-import '../../../utils/iraqi_currency_format.dart';
 import 'oil_change_invoice_builder.dart';
 
 /// نتيجة إتمام بيع بطاقة غيار زيت داخلياً (بدون فتح شاشة البيع).
@@ -162,35 +162,12 @@ class OilChangeCheckoutService {
     required String customerName,
     required int remainderFils,
   }) async {
-    final debtSet = await _db.getDebtSettings();
-    final remD = IqdMoney.fromFils(remainderFils);
-
-    if (debtSet.enforceSingleInvoiceCapAtSale &&
-        debtSet.maxOpenRemainingPerInvoice > 0 &&
-        remD > debtSet.maxOpenRemainingPerInvoice + 1e-6) {
-      throw OilChangeCheckoutException(
-        'حد الدين للفاتورة: المتبقي (${IraqiCurrencyFormat.formatIqd(remD)}) '
-        'يتجاوز السقف ${IraqiCurrencyFormat.formatIqd(debtSet.maxOpenRemainingPerInvoice)}.',
-      );
-    }
-
-    if (debtSet.enforceCustomerCapAtSale &&
-        debtSet.maxTotalOpenDebtPerCustomer > 0) {
-      var existing = 0.0;
-      if (customerId != null && customerId > 0) {
-        existing = await _db.sumOpenCreditDebtForCustomer(customerId);
-      } else if (customerName.trim().isNotEmpty) {
-        existing = await _db.sumOpenCreditDebtForUnlinkedCustomerName(
-          customerName,
-        );
-      }
-      if (existing + remD > debtSet.maxTotalOpenDebtPerCustomer + 1e-6) {
-        throw OilChangeCheckoutException(
-          'حد الدين للعميل: الدين الحالي ≈ ${IraqiCurrencyFormat.formatIqd(existing)} '
-          'والفاتورة تضيف ${IraqiCurrencyFormat.formatIqd(remD)} '
-          '(يتجاوز ${IraqiCurrencyFormat.formatIqd(debtSet.maxTotalOpenDebtPerCustomer)}).',
-        );
-      }
-    }
+    final error = await SaleDebtCapsValidator.validate(
+      customerId: customerId,
+      customerName: customerName,
+      remainderFils: remainderFils,
+      db: _db,
+    );
+    if (error != null) throw OilChangeCheckoutException(error);
   }
 }

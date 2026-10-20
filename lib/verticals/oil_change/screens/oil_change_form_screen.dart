@@ -20,14 +20,20 @@ class OilChangeFormScreen extends StatelessWidget {
     this.editOrderId,
     this.editOrderGlobalId,
     this.prefillFromOrder,
+    this.amendInvoicedOrder = false,
   }) : assert(
-          editOrderId == null || prefillFromOrder == null,
-          'لا يجمع التعديل مع التعبئة لبطاقة جديدة',
+          !amendInvoicedOrder || editOrderId != null,
+          'تصحيح الفاتورة يتطلب بطاقة موجودة',
         );
 
   final int? editOrderId;
   final String? editOrderGlobalId;
+
+  /// لقطة صف من السجل لفتح فوري (تعديل/تصحيح أو بطاقة جديدة من زيارة سابقة).
   final Map<String, dynamic>? prefillFromOrder;
+
+  /// تعديل بطاقة مكتملة مربوطة بفاتورة — يحدّث نفس الفاتورة والصندوق.
+  final bool amendInvoicedOrder;
 
   @override
   Widget build(BuildContext context) {
@@ -35,13 +41,15 @@ class OilChangeFormScreen extends StatelessWidget {
       editOrderId: editOrderId,
       prefillFromOrder: prefillFromOrder,
     );
+    final keySuffix = amendInvoicedOrder ? 'amend' : 'std';
     return OilChangeOrderFormScreen(
       key: ValueKey(
-        stable != null ? 'oil-form-$stable' : 'oil-form-new',
+        stable != null ? 'oil-form-$stable-$keySuffix' : 'oil-form-new',
       ),
       editOrderId: editOrderId,
       editOrderGlobalId: editOrderGlobalId,
       prefillFromOrder: prefillFromOrder,
+      amendInvoicedOrder: amendInvoicedOrder,
     );
   }
 }

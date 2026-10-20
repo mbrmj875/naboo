@@ -42,37 +42,49 @@ class OwnerDateRange {
     }
   }
 
-  /// بداية النطاق (محلي) — نهاية = الآن.
+  /// بداية النطاق بالتوقيت المحلي (منتصف ليل اليوم الأول).
   DateTime get startLocal {
     final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
     switch (kind) {
       case OwnerDateRangeKind.today:
-        return DateTime(now.year, now.month, now.day);
+        return today;
       case OwnerDateRangeKind.thisWeek:
-        final weekday = now.weekday;
-        return DateTime(now.year, now.month, now.day)
-            .subtract(Duration(days: weekday - 1));
+        // آخر 7 أيام تقويمية شاملة اليوم — متوافق مع مخطط «آخر 7 أيام».
+        return today.subtract(const Duration(days: 6));
       case OwnerDateRangeKind.thisMonth:
         return DateTime(now.year, now.month, 1);
       case OwnerDateRangeKind.custom:
-        return customStart ?? DateTime(now.year, now.month, now.day);
+        return customStart ?? today;
     }
   }
 
+  /// نهاية حصرية محلية: بداية غدٍ للفترات الحيّة حتى يشمل يوم اليوم كاملاً.
   DateTime get endExclusiveLocal {
     final now = DateTime.now();
+    final tomorrow = DateTime(now.year, now.month, now.day)
+        .add(const Duration(days: 1));
     switch (kind) {
       case OwnerDateRangeKind.today:
-        return DateTime(now.year, now.month, now.day).add(const Duration(days: 1));
       case OwnerDateRangeKind.thisWeek:
       case OwnerDateRangeKind.thisMonth:
-        return now.add(const Duration(milliseconds: 1));
+        return tomorrow;
       case OwnerDateRangeKind.custom:
         final end = customEnd ?? now;
         return DateTime(end.year, end.month, end.day)
             .add(const Duration(days: 1));
     }
   }
+
+  /// حدود ISO محلية — لأعمدة مثل `invoices.date` المخزّنة بتوقيت جدار محلي بدون Z.
+  String get startLocalIso => startLocal.toIso8601String();
+
+  String get endExclusiveLocalIso => endExclusiveLocal.toIso8601String();
+
+  /// حدود ISO بتوقيت UTC — لأعمدة مثل `service_orders.createdAt` (تُحفظ بـ toUtc).
+  String get startUtcIso => startLocal.toUtc().toIso8601String();
+
+  String get endExclusiveUtcIso => endExclusiveLocal.toUtc().toIso8601String();
 
   String get salesTitleAr {
     switch (kind) {

@@ -43,10 +43,26 @@ void main() {
         enableInstallments: false,
       );
       expect(payload['vertical'], 'clothing_store');
-      expect(payload['pushAlertIds'], ['debt_customers']);
+      final pushIds = (payload['pushAlertIds'] as List).cast<String>();
+      expect(pushIds, contains('debt_customers'));
+      expect(pushIds, isNot(contains('oil_stock_shortage')));
+      // افتراضات حرجة ما زالت مفعّلة ما لم تُعطَّل صراحةً.
+      expect(pushIds, contains('installment_overdue'));
+      expect(pushIds, contains('retail_stock_shortage'));
       expect(
         (payload['featureFlags'] as Map)['enableInstallments'],
         isFalse,
+      );
+    });
+
+    test('critical alerts default to push enabled when unset', () {
+      const channels = OwnerAlertChannelPrefs.defaults;
+      expect(channels.forAlert('debt_customers').enablePush, isTrue);
+      expect(channels.forAlert('oil_stock_shortage').enablePush, isTrue);
+      expect(channels.forAlert('clothing_slow_movers').enablePush, isFalse);
+      expect(
+        channels.pushEnabledAlertIds(),
+        containsAll(kDefaultPushEnabledAlertIds),
       );
     });
 

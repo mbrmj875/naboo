@@ -1,6 +1,7 @@
 import '../../../services/app_settings_repository.dart';
 import '../models/tenant_whatsapp_gateway_record.dart';
 import '../services/oil_change_whatsapp_gateway_repository.dart';
+import '../services/oil_change_whatsapp_gateway_service.dart';
 
 /// يخزّن آخر حالة معروفة لجلسة واتساب المحل — محلياً + سحابة.
 class OilChangeWhatsappStatusStore {
@@ -45,9 +46,38 @@ class OilChangeWhatsappStatusStore {
     }
   }
 
+  /// بعد فشل إرسال مصنَّف كانقطاع: يسأل السيرفر حياً.
+  /// عند false_alarm/connected → متصل محلياً فوراً (بدون بانر).
+  /// عند confirmed → منفصل محلياً.
+  /// عند status_unchanged → لا نفرض منفصل.
   Future<void> markDisconnected() async {
+    if (!OilChangeWhatsappGatewayRepository.instance.hasCloudSession) {
+      // بلا سحابة لا نقدر نؤكد — لا نكتب منفصل تخميناً.
+      return;
+    }
+    final result =
+        await OilChangeWhatsappGatewayRepository.instance.reportDisconnected();
+    if (result.shouldTreatAsConnected) {
+      await _writeLocal(OilChangeWhatsappGatewayStatus.connected);
+      return;
+    }
+    if (result.confirmedNotOpen) {
+      await _writeLocal(OilChangeWhatsappGatewayStatus.disconnected);
+      return;
+    }
+    // status_unchanged / فشل — اترك المحلي كما هو.
+  }
+
+  /// يحدّث التخزين المحلي فقط (بدون بلاغ سحابي) — مثلاً عند فتح شاشة الربط وهي غير متصلة.
+  Future<void> markDisconnectedLocalOnly() async {
     await _writeLocal(OilChangeWhatsappGatewayStatus.disconnected);
-    await OilChangeWhatsappGatewayRepository.instance.reportDisconnected();
+  }
+
+  /// فصل متعمّد لجلسة واتساب (يلغي الربط على Evolution إن أمكن + السحابة + المحلي).
+  Future<WhatsappDisconnectResult> disconnectGateway() async {
+    final result = await OilChangeWhatsappGatewayService.instance.disconnect();
+    await _writeLocal(OilChangeWhatsappGatewayStatus.disconnected);
+    return result;
   }
 
   /// مزامنة من السيرفر — تُستدعى عند فتح سجل الغيار.

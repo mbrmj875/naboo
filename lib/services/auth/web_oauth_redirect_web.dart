@@ -1,6 +1,6 @@
 import 'dart:html' as html;
 
-/// إعادة توجيه كاملة في نفس التبويب — يتجنب تبويب OAuth المنفصل الذي يعلق الواجهة.
+/// استبدال الصفحة الحالية بـ Google OAuth — يقلّل رجوع المتصفح لشاشة الدخول.
 void redirectBrowserToOAuth(String url) {
-  html.window.location.assign(url);
+  html.window.location.replace(url);
 }

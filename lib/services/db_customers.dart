@@ -379,16 +379,15 @@ LEFT JOIN (
     String normalizedDigits, {
     int? excludeCustomerId,
   }) async {
-    if (normalizedDigits.isEmpty) return null;
+    final needle = CustomerValidation.phoneMatchKey(normalizedDigits);
+    if (needle == null || needle.isEmpty) return null;
     final db = await database;
     final rows = await db.query('customers', columns: ['id', 'phone']);
     for (final r in rows) {
       final cid = r['id'] as int;
       if (excludeCustomerId != null && cid == excludeCustomerId) continue;
-      final stored = CustomerValidation.normalizePhoneDigits(
-        r['phone']?.toString(),
-      );
-      if (stored != null && stored == normalizedDigits) return cid;
+      final stored = CustomerValidation.phoneMatchKey(r['phone']?.toString());
+      if (stored != null && stored == needle) return cid;
     }
     final extras = await db.query(
       'customer_extra_phones',
@@ -397,10 +396,8 @@ LEFT JOIN (
     for (final r in extras) {
       final cid = r['customerId'] as int;
       if (excludeCustomerId != null && cid == excludeCustomerId) continue;
-      final stored = CustomerValidation.normalizePhoneDigits(
-        r['phone']?.toString(),
-      );
-      if (stored != null && stored == normalizedDigits) return cid;
+      final stored = CustomerValidation.phoneMatchKey(r['phone']?.toString());
+      if (stored != null && stored == needle) return cid;
     }
     return null;
   }
@@ -417,7 +414,7 @@ LEFT JOIN (
     ];
     final seen = <String>{};
     for (final raw in all) {
-      final n = CustomerValidation.normalizePhoneDigits(raw);
+      final n = CustomerValidation.phoneMatchKey(raw);
       if (n == null || n.isEmpty) continue;
       if (!seen.add(n)) {
         throw DuplicateCustomerPhoneException(
@@ -426,7 +423,7 @@ LEFT JOIN (
       }
     }
     for (final raw in all) {
-      final n = CustomerValidation.normalizePhoneDigits(raw);
+      final n = CustomerValidation.phoneMatchKey(raw);
       if (n == null || n.isEmpty) continue;
       final other = await findCustomerIdOwningNormalizedPhoneAnywhere(
         n,
@@ -673,10 +670,11 @@ LEFT JOIN (
 
   Future<Map<String, dynamic>?> getCustomerById(int id) async {
     final db = await database;
+    final tenantId = await _resolveActiveTenantIdForLocalDb(db);
     final rows = await db.query(
       'customers',
-      where: 'id = ?',
-      whereArgs: [id],
+      where: 'id = ? AND tenantId = ?',
+      whereArgs: [id, tenantId],
       limit: 1,
     );
     return rows.isEmpty ? null : rows.first;
@@ -753,25 +751,36 @@ LEFT JOIN (
     };
   }
 
-  /// عدد فواتير «آجل» وخطط تقسيط مرتبطة بكل عميل (دفعة واحدة).
-  Future<Map<int, ({int creditInvoices, int installmentPlans})>>
-      getCustomerFinanceCountsBatch(Iterable<int> customerIds) async {
+  /// عدد فواتير «آجل» المفتوحة ومتبقيها (فلس) وخطط تقسيط لكل عميل.
+  Future<
+      Map<
+          int,
+          ({
+            int creditInvoices,
+            int installmentPlans,
+            int openRemainingFils,
+          })>> getCustomerFinanceCountsBatch(Iterable<int> customerIds) async {
     final ids = customerIds.toSet().toList();
     if (ids.isEmpty) return {};
     final db = await database;
     final placeholders = List.filled(ids.length, '?').join(',');
-    final args = <Object?>[...ids, InvoiceType.credit.index];
+    final creditType = InvoiceType.credit.index;
+    final rem = MoneySql.invoiceOpenRemainingFils;
 
     final creditRows = await db.rawQuery(
       '''
-      SELECT customerId AS cid, COUNT(*) AS c
+      SELECT customerId AS cid,
+             COUNT(*) AS c,
+             COALESCE(SUM($rem), 0) AS remFils
       FROM invoices
       WHERE customerId IN ($placeholders)
         AND type = ?
         AND IFNULL(isReturned, 0) = 0
+        AND deleted_at IS NULL
+        AND ($rem) > 0
       GROUP BY customerId
       ''',
-      args,
+      <Object?>[...ids, creditType],
     );
 
     final planRows = await db.rawQuery(
@@ -784,18 +793,21 @@ LEFT JOIN (
       ids,
     );
 
-    final out = <int, ({int creditInvoices, int installmentPlans})>{};
+    final out =
+        <int, ({int creditInvoices, int installmentPlans, int openRemainingFils})>{};
     for (final id in ids) {
-      out[id] = (creditInvoices: 0, installmentPlans: 0);
+      out[id] = (creditInvoices: 0, installmentPlans: 0, openRemainingFils: 0);
     }
     for (final r in creditRows) {
       final cid = r['cid'] as int?;
       final c = (r['c'] as num?)?.toInt() ?? 0;
+      final remFils = (r['remFils'] as num?)?.toInt() ?? 0;
       if (cid == null) continue;
       final prev = out[cid]!;
       out[cid] = (
         creditInvoices: c,
         installmentPlans: prev.installmentPlans,
+        openRemainingFils: remFils,
       );
     }
     for (final r in planRows) {
@@ -806,9 +818,115 @@ LEFT JOIN (
       out[cid] = (
         creditInvoices: prev.creditInvoices,
         installmentPlans: c,
+        openRemainingFils: prev.openRemainingFils,
       );
     }
     return out;
+  }
+
+  /// معرّفات العملاء الذين عليهم فاتورة آجل مفتوحة (متبقٍ > 0).
+  ///
+  /// نفس تعريف لوحة صاحب العمل / شاشة الديون — بدون رصيد بطاقة موجب وحده.
+  Future<Set<int>> listCustomerIdsWithOpenDebt() async {
+    final db = await database;
+    final tid = await _resolveActiveTenantIdForLocalDb(db);
+    final creditType = InvoiceType.credit.index;
+    final rem = MoneySql.invoiceOpenRemainingFils;
+    final remI = MoneySql.invoiceOpenRemainingFilsOf('i');
+
+    final byIdRows = await db.rawQuery(
+      '''
+      SELECT DISTINCT customerId AS cid
+      FROM invoices
+      WHERE tenantId = ?
+        AND customerId IS NOT NULL
+        AND customerId > 0
+        AND type = ?
+        AND IFNULL(isReturned, 0) = 0
+        AND deleted_at IS NULL
+        AND ($rem) > 0
+      ''',
+      [tid, creditType],
+    );
+
+    final out = <int>{};
+    for (final r in byIdRows) {
+      final cid = (r['cid'] as num?)?.toInt();
+      if (cid != null && cid > 0) out.add(cid);
+    }
+
+    // فواتير آجل بلا customerId: ربط بعميل واحد فقط إن طابق الاسم فريداً.
+    final byNameRows = await db.rawQuery(
+      '''
+      SELECT DISTINCT LOWER(TRIM(i.customerName)) AS nk
+      FROM invoices i
+      WHERE i.tenantId = ?
+        AND i.type = ?
+        AND IFNULL(i.isReturned, 0) = 0
+        AND i.deleted_at IS NULL
+        AND (i.customerId IS NULL OR i.customerId <= 0)
+        AND TRIM(IFNULL(i.customerName, '')) != ''
+        AND ($remI) > 0
+      ''',
+      [tid, creditType],
+    );
+    for (final r in byNameRows) {
+      final nk = (r['nk'] ?? '').toString().trim();
+      if (nk.isEmpty) continue;
+      final cust = await db.rawQuery(
+        '''
+        SELECT id FROM customers
+        WHERE tenantId = ? AND LOWER(TRIM(name)) = ?
+        LIMIT 2
+        ''',
+        [tid, nk],
+      );
+      if (cust.length == 1) {
+        final id = (cust.first['id'] as num?)?.toInt();
+        if (id != null && id > 0) out.add(id);
+      }
+    }
+
+    return out;
+  }
+
+  /// جلب صفوف عملاء بمعرّفاتهم (لعرض قائمة المدينين كاملة دون اعتماد على الصفحة الحالية).
+  Future<List<Map<String, dynamic>>> getCustomersByIds(
+    Iterable<int> ids, {
+    String sortKey = 'name_asc',
+  }) async {
+    final idList = ids.where((id) => id > 0).toSet().toList();
+    if (idList.isEmpty) return const [];
+    final db = await database;
+    final tid = await _resolveActiveTenantIdForLocalDb(db);
+    final placeholders = List.filled(idList.length, '?').join(',');
+    final orderBy = switch (sortKey) {
+      'balance_desc' =>
+        'customers.balance DESC, customers.name COLLATE NOCASE ASC',
+      'name_desc' => 'customers.name COLLATE NOCASE DESC',
+      _ => 'customers.name COLLATE NOCASE ASC',
+    };
+    return db.rawQuery(
+      '''
+      SELECT
+        customers.id,
+        customers.name,
+        customers.phone,
+        customers.email,
+        customers.address,
+        customers.notes,
+        customers.balance,
+        customers.loyaltyPoints,
+        customers.createdAt,
+        customers.updatedAt,
+        0 AS purchaseTotal
+      FROM customers
+      WHERE customers.tenantId = ?
+        AND customers.id IN ($placeholders)
+      ORDER BY $orderBy
+      ''',
+      <Object?>[tid, ...idList],
+    );
   }
 
   /// تطابق اسم عميل واحد فقط (لربط الفاتورة بنقاط الولاء).

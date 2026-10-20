@@ -3,6 +3,8 @@ import 'dart:async' show Timer, unawaited;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../../guides/guide_anchor.dart';
+import '../../../providers/dashboard_layout_provider.dart';
 import '../../../providers/shift_provider.dart';
 import '../../../services/cloud_sync_service.dart';
 import '../../../theme/app_corner_style.dart';
@@ -10,6 +12,7 @@ import '../../../theme/design_tokens.dart';
 import '../../../utils/iraqi_currency_format.dart';
 import '../../../utils/iqd_money.dart';
 import '../../../utils/screen_layout.dart';
+import '../utils/oil_change_layout.dart';
 import '../widgets/oil_change_royal_card.dart';
 import '../../../home/home_kpi_repository.dart';
 import '../../../home/specs/home_dashboard_spec.dart';
@@ -112,91 +115,118 @@ class _OilChangeHomeDashboardState extends State<OilChangeHomeDashboard> {
     return action.showAlert;
   }
 
-  @override
-  Widget build(BuildContext context) {
+  /// زر ذهبي عريض — يستعمله الزر الرئيسي والزر الثاني (غسيل السيارات).
+  Widget _buildGoldCta(HomeDashboardAction action, {bool compact = false}) {
     final ac = context.appCorners;
     final sl = ScreenLayout.of(context);
     final gold = OilChangeRoyalCard.gold;
+    final handset = sl.isHandsetForLayout;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => widget.onAction(action),
+        borderRadius: ac.md,
+        child: Container(
+          width: double.infinity,
+          padding: EdgeInsets.symmetric(
+            horizontal: handset ? 16 : 20,
+            vertical: compact
+                ? (handset ? 12 : 14)
+                : (handset ? 16 : 18),
+          ),
+          decoration: BoxDecoration(
+            borderRadius: ac.md,
+            gradient: LinearGradient(
+              begin: AlignmentDirectional.topStart,
+              end: AlignmentDirectional.bottomEnd,
+              colors: compact
+                  ? [
+                      gold.withValues(alpha: 0.80),
+                      gold.withValues(alpha: 0.60),
+                    ]
+                  : [
+                      gold.withValues(alpha: 0.92),
+                      gold.withValues(alpha: 0.72),
+                    ],
+            ),
+            border: Border.all(
+              color: gold.withValues(alpha: 0.95),
+              width: 1.75,
+            ),
+            boxShadow: oilChangeGoldGlowOf(
+              context,
+              blurRadius: 14,
+              offset: const Offset(0, 4),
+            ),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                action.icon,
+                color: Colors.white,
+                size: compact ? 26 : 32,
+              ),
+              SizedBox(width: compact ? 12 : 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      action.title,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w900,
+                        fontSize: compact ? 16 : 18,
+                        color: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      action.subtitle,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: compact ? 12 : 13,
+                        color: Colors.white.withValues(alpha: 0.9),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(
+                Icons.arrow_forward_rounded,
+                color: Colors.white.withValues(alpha: 0.95),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final primary = widget.spec.primaryCta;
+    final pinned = widget.spec.pinnedCta;
     final tiles = widget.spec.secondaryTiles;
+    final secondary = widget.spec.secondaryCta;
+    final showSecondary = secondary != null &&
+        context.watch<DashboardLayoutProvider>().carWashButtonVisible;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         if (primary != null) ...[
-          Material(
-            color: Colors.transparent,
-            child: InkWell(
-              onTap: () => widget.onAction(primary),
-              borderRadius: ac.md,
-              child: Container(
-                width: double.infinity,
-                padding: EdgeInsets.symmetric(
-                  horizontal: sl.isHandsetForLayout ? 16 : 20,
-                  vertical: sl.isHandsetForLayout ? 16 : 18,
-                ),
-                decoration: BoxDecoration(
-                  borderRadius: ac.md,
-                  gradient: LinearGradient(
-                    begin: AlignmentDirectional.topStart,
-                    end: AlignmentDirectional.bottomEnd,
-                    colors: [
-                      gold.withValues(alpha: 0.92),
-                      gold.withValues(alpha: 0.72),
-                    ],
-                  ),
-                  border: Border.all(
-                    color: gold.withValues(alpha: 0.95),
-                    width: 1.75,
-                  ),
-                  boxShadow: const [
-                    BoxShadow(
-                      color: AppGlass.goldGlow,
-                      blurRadius: 14,
-                      offset: Offset(0, 4),
-                    ),
-                  ],
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      primary.icon,
-                      color: Colors.white,
-                      size: 32,
-                    ),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            primary.title,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w900,
-                              fontSize: 18,
-                              color: Colors.white,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            primary.subtitle,
-                            style: TextStyle(
-                              fontWeight: FontWeight.w600,
-                              fontSize: 13,
-                              color: Colors.white.withValues(alpha: 0.9),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Icon(
-                      Icons.arrow_forward_rounded,
-                      color: Colors.white.withValues(alpha: 0.95),
-                    ),
-                  ],
-                ),
-              ),
-            ),
+          _buildGoldCta(primary),
+          const SizedBox(height: 12),
+        ],
+        if (pinned != null) ...[
+          _buildGoldCta(pinned),
+          const SizedBox(height: 12),
+        ],
+        if (showSecondary) ...[
+          GuideAnchor(
+            id: OilGuideAnchors.homeCarWashCta,
+            child: _buildGoldCta(secondary, compact: true),
           ),
           const SizedBox(height: 12),
         ],

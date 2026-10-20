@@ -6,6 +6,7 @@ int _notifToFils(double value) => (value * 1000).round();
 extension DbNotifications on DatabaseHelper {
   static const String _lowStockProductsWhere = '''
     tenantId = ? AND isActive = 1 AND IFNULL(trackInventory, 1) = 1
+      AND ${ProductVariantKind.sqlNotFluidFamilyParent}
       AND (
         qty <= 0
         OR (IFNULL(lowStockThreshold, 0) > 0 AND qty <= lowStockThreshold)

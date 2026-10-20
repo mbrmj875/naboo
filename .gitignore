@@ -1,5 +1,12 @@
+# Local secrets / agent runtime (never commit)
+.local/
+
+# Advisor session state (verdicts and consult logs)
+.cursor/advisor/
+
 # Miscellaneous
 *.class
+*.hprof
 *.log
 *.pyc
 *.swp
@@ -59,6 +66,7 @@ app.*.map.json
 .env
 .env.*
 !.env.example
+!.env.waha.example
 env/*.env
 !env/*.env.example
 *.pem

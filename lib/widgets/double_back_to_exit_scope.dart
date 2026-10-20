@@ -1,72 +1,45 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
-/// على الهاتف: الضغط الأول على زر الرجوع يُظهر تنبيهاً،
-/// والثاني خلال [interval] يغلق التطبيق نهائياً.
-class DoubleBackToExitScope extends StatefulWidget {
+import '../navigation/app_exit_back.dart';
+import '../navigation/app_system_back.dart';
+
+/// يمنع الخروج المباشر من مسار الجذر: رجوع داخلي أولاً ثم تأكيد الخروج.
+///
+/// يُفضَّل على الشاشات الجذرية. الملاح الداخلي عبر [AppSystemBack].
+class DoubleBackToExitScope extends StatelessWidget {
   const DoubleBackToExitScope({
     super.key,
     required this.child,
     this.enabled = true,
-    this.message = 'اضغط مرة أخرى للخروج من التطبيق',
-    this.interval = const Duration(seconds: 2),
-    this.onBackPressed,
+    @Deprecated('Ignored — use AppSystemBack.register') this.onBackPressed,
+    @Deprecated('Ignored — fixed copy in AppExitBack') this.message,
+    @Deprecated('Ignored — fixed interval in AppExitBack') this.interval,
   });
 
   final Widget child;
   final bool enabled;
-  final String message;
-  final Duration interval;
-
-  /// إن أعاد `true` فُسِّر الضغط كرجوع داخلي ولا يُحسب للخروج.
   final bool Function()? onBackPressed;
-
-  @override
-  State<DoubleBackToExitScope> createState() => _DoubleBackToExitScopeState();
-}
-
-class _DoubleBackToExitScopeState extends State<DoubleBackToExitScope> {
-  DateTime? _lastPromptAt;
-
-  void _handleBack() {
-    if (!widget.enabled) {
-      SystemNavigator.pop();
-      return;
-    }
-
-    if (widget.onBackPressed?.call() == true) return;
-
-    final now = DateTime.now();
-    final last = _lastPromptAt;
-    if (last != null && now.difference(last) <= widget.interval) {
-      SystemNavigator.pop();
-      return;
-    }
-
-    _lastPromptAt = now;
-    final messenger = ScaffoldMessenger.maybeOf(context);
-    messenger
-      ?..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(widget.message),
-          duration: widget.interval,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-  }
+  final String? message;
+  final Duration? interval;
 
   @override
   Widget build(BuildContext context) {
-    if (!widget.enabled) return widget.child;
+    if (!enabled || kIsWeb) return child;
 
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
-        _handleBack();
+        _handle();
       },
-      child: widget.child,
+      child: child,
     );
+  }
+
+  Future<void> _handle() async {
+    if (onBackPressed?.call() == true) return;
+    if (await AppSystemBack.tryPopNested()) return;
+    await AppExitBack.onRootBackAttempt();
   }
 }

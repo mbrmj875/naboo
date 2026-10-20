@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart' hide TextDirection;
+import '../../../guides/guide_anchor.dart';
+import '../../../guides/guide_controller.dart';
 import '../../../theme/design_tokens.dart';
 import '../../../models/customer_record.dart';
 import '../models/oil_change_hydraulic_card_slot.dart';
@@ -16,9 +18,11 @@ import '../models/oil_change_oil_catalog_entry.dart';
 import '../models/oil_change_product_line.dart';
 import '../models/oil_change_service_item.dart';
 import '../services/oil_change_filter_catalog_repository.dart';
+import '../services/oil_change_filter_kinds_repository.dart';
 import '../services/oil_change_hydraulic_catalog_repository.dart';
 import '../services/oil_change_oil_catalog_repository.dart';
 import '../../../screens/customers/customer_form_screen.dart';
+import '../../../services/customer_search_index.dart';
 import '../../../services/database_helper.dart';
 import '../../../services/tenant_context_service.dart';
 import '../../../services/product_repository.dart';
@@ -36,23 +40,36 @@ import '../../../widgets/barcode_input_launcher.dart';
 import '../widgets/oil_change_customer_name_field.dart';
 import '../widgets/oil_change_products_card.dart';
 import '../widgets/oil_change_royal_card.dart';
+import '../widgets/oil_change_save_success_overlay.dart';
+import '../widgets/oil_change_technician_field.dart';
 import '../widgets/product_picker_dialog.dart';
 import '../widgets/oil_change_form_theme.dart';
 import '../../../theme/sale_brand.dart';
 import '../widgets/oil_change_filter_catalog_sheet.dart';
 import '../widgets/oil_change_hydraulic_catalog_sheet.dart';
 import '../widgets/oil_change_oil_catalog_sheet.dart';
+import '../utils/oil_change_advance_autofill.dart';
+import '../utils/oil_change_agreed_total.dart';
+import '../utils/oil_change_amend_whatsapp.dart';
+import '../utils/oil_field_select_all.dart';
+import '../utils/oil_change_finance.dart';
+import '../utils/oil_change_layout.dart';
 import '../utils/oil_change_lookup_normalize.dart';
 import '../utils/oil_change_prefill_guard.dart';
 import '../utils/oil_change_customer_debt.dart';
 import '../utils/oil_change_filter_format.dart';
 import '../utils/oil_change_log_format.dart';
+import '../services/oil_notes_money_ai_client.dart';
+import '../utils/oil_notes_money_parser.dart';
+import '../widgets/oil_notes_money_preview_bar.dart';
 import '../../../utils/shift_actor_conflict_guard.dart';
 import '../../../services/print_settings_repository.dart';
 import '../../../providers/auth_provider.dart';
+import '../../../providers/customers_provider.dart';
 import '../../../providers/global_barcode_route_bridge.dart';
 import '../../../providers/shift_provider.dart';
 import '../services/oil_change_checkout_service.dart';
+import '../services/oil_change_post_sale_service.dart';
 import '../services/oil_change_whatsapp_notify_service.dart';
 import '../utils/oil_change_whatsapp_user_messages.dart';
 import '../services/oil_change_product_scan.dart';
@@ -63,6 +80,7 @@ import '../utils/oil_service_whatsapp_message.dart';
 import '../../../utils/sale_receipt_pdf.dart';
 import '../../../utils/screen_layout.dart';
 import '../../../widgets/adaptive/adaptive_form_container.dart';
+import '../../../widgets/raw_keyboard_inset.dart';
 import '../../../navigation/app_root_navigator_key.dart';
 import '../../../models/print_settings_data.dart';
 import '../../../navigation/content_navigation.dart';
@@ -80,6 +98,19 @@ enum _OilFormOptionalSection {
 enum _OilSubmitIntent { complete, suspend }
 
 /// مهمة ما بعد الحفظ — طباعة وواتساب دون حجب واجهة البطاقة.
+/// نتيجة اشتقاق درجات الهيدروليك لخانة واحدة مع مصدرها، لإبطالها عند تغيّره.
+class _HydraulicGradeCache {
+  const _HydraulicGradeCache({
+    required this.source,
+    required this.brand,
+    required this.entries,
+  });
+
+  final List<OilChangeHydraulicCatalogEntry> source;
+  final String brand;
+  final List<OilChangeHydraulicCatalogEntry> entries;
+}
+
 class _OilPostSaveJob {
   const _OilPostSaveJob({
     required this.order,
@@ -89,8 +120,14 @@ class _OilPostSaveJob {
     required this.printSettings,
     required this.waAuto,
     required this.waManual,
+    required this.waAskRating,
     required this.priorOpenDebtFils,
     required this.isEdit,
+    this.wasSuspendedSave = false,
+    this.completingSuspendedSale = false,
+    this.isAmendInvoiced = false,
+    this.sendWhatsappForPhoneChange = false,
+    this.productsSummary = '',
     this.checkoutError,
   });
 
@@ -101,8 +138,20 @@ class _OilPostSaveJob {
   final PrintSettingsData printSettings;
   final bool waAuto;
   final bool waManual;
+  final bool waAskRating;
   final int priorOpenDebtFils;
   final bool isEdit;
+  /// حفظ كتعليق (بطاقة جديدة أو إعادة تعليق).
+  final bool wasSuspendedSave;
+  /// «حفظ وبيع» لبطاقة كانت معلّقة — يُسمح بإرسال واتساب مرة واحدة.
+  final bool completingSuspendedSale;
+  /// تصحيح بطاقة مفوترة.
+  final bool isAmendInvoiced;
+  /// عند التصحيح فقط: تغيّر رقم الهاتف → أرسل قالب البطاقة العادي للرقم الجديد.
+  final bool sendWhatsappForPhoneChange;
+
+  /// أسماء المنتجات المرفقة — سطر واحد لقالب البطاقة الطويلة.
+  final String productsSummary;
   final String? checkoutError;
 }
 
@@ -113,14 +162,20 @@ class OilChangeOrderFormScreen extends StatefulWidget {
     this.editOrderId,
     this.editOrderGlobalId,
     this.prefillFromOrder,
+    this.amendInvoicedOrder = false,
   }) : assert(
-          editOrderId == null || prefillFromOrder == null,
-          'لا يجمع التعديل مع التعبئة لبطاقة جديدة',
+          !amendInvoicedOrder || editOrderId != null,
+          'تصحيح الفاتورة يتطلب بطاقة موجودة',
         );
 
   final int? editOrderId;
   final String? editOrderGlobalId;
+
+  /// لقطة صف محلية لرسم النموذج فوراً عند التعديل/التصحيح بدون انتظار.
   final Map<String, dynamic>? prefillFromOrder;
+
+  /// تعديل بطاقة مكتملة مربوطة بفاتورة — يحدّث نفس الفاتورة والصندوق.
+  final bool amendInvoicedOrder;
 
   bool get isEdit => editOrderId != null && editOrderId! > 0;
   bool get isNewCard => !isEdit;
@@ -138,7 +193,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   // Controllers
   final _customerName = TextEditingController();
   final _customerFocus = FocusNode();
-  final _customerPhone = TextEditingController();
+  final _customerPhone = TextEditingController(text: '07');
   
   final _deviceName = TextEditingController(); // اسم السيارة
   final _carModel = TextEditingController();    // موديل السيارة
@@ -155,10 +210,26 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   final _issue = TextEditingController(); // الملاحظات
   final _technicianName = TextEditingController(); // اسم الفني
 
+  /// مبالغ مؤكَّدة من الملاحظات (فلس) — تُضاف للمجموع بعد زر «إضافة للمجموع».
+  int _notesExtrasFils = 0;
+  bool _notesExtrasConfirmed = false;
+  String? _notesExtrasDismissedKey;
+  OilNotesMoneyParseResult _notesMoneyPreview = OilNotesMoneyParseResult.empty;
+  Timer? _notesMoneyDebounce;
+  /// يجمع ضربات الحجم/المبالغ حتى لا يُعاد بناء النموذج كاملاً كل إطار.
+  Timer? _checkoutUiDebounce;
+  bool _notesMoneyAiLoading = false;
+  final _notesMoneyAi = OilNotesMoneyAiClient();
+  /// نتيجة محلية أخيرة — تُمرَّر كتلميح للتحليل الذكي.
+  OilNotesMoneyParseResult _notesMoneyLocalHint =
+      OilNotesMoneyParseResult.empty;
+  /// نص الملاحظات الذي بُني عليه آخر تحليل AI.
+  String? _notesMoneyAiForText;
+
   // Dropdowns Selection
   String? _selectedViscosity;
   final _oilSizeAmount = TextEditingController();
-  String _selectedSizeUnit = 'ml';
+  String _selectedSizeUnit = 'L';
   String? _selectedFilterType;
 
   // Checklist of 8 requested services
@@ -168,10 +239,35 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   int _basePriceFils = 0;
   bool _agreedTotalManual = false;
   bool _advanceManuallyEdited = false;
+  bool _syncingAgreed = false;
+  int? _lastAutoSyncedTotalFils;
+  bool _syncingOdometerNext = false;
+  String? _openDebtRequestKey;
+  ThemeData? _formTheme;
+
+  /// إطار أول خفيف: AppBar فوراً ثم الجسم بعد إطار واحد.
+  bool _formBodyReady = false;
+
+  List<OilChangeOilCatalogEntry>? _oilBrandItemsSource;
+  List<String> _oilBrandItemsCache = const [];
+  List<OilChangeOilCatalogEntry>? _oilViscosityEntriesSource;
+  String? _oilViscosityEntriesBrand;
+  List<OilChangeOilCatalogEntry> _oilViscosityEntriesCache = const [];
+  List<OilChangeHydraulicCatalogEntry>? _hydraulicBrandItemsSource;
+  List<String> _hydraulicBrandItemsCache = const [];
+  final Map<OilChangeHydraulicCardSlot, _HydraulicGradeCache>
+      _hydraulicGradeEntriesCache = {};
+
+  /// الكتابة الجارية في حقل المبلغ مصدرها الحساب التلقائي لا المستخدم.
+  bool _syncingAdvance = false;
 
   bool _oilCustomerProvided = false;
   /// إعداد المحل: ربط بطاقة الغيار بأصناف المخزون (زيت المحل).
   bool _stockFromWarehouseEnabled = true;
+  /// إعداد المحل: إظهار كل قسم من «إضافات عند الحاجة» على حدة.
+  final Map<_OilFormOptionalSection, bool> _optionalExtraVisible = {
+    for (final s in _OilFormOptionalSection.values) s: true,
+  };
   int? _oilStockProductId;
   int? _oilWarehouseId;
   double _oilAvailableLiters = 0;
@@ -196,9 +292,9 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   final _powerHydraulic = OilChangeHydraulicCardSlot.power();
   List<OilChangeFilterCatalogEntry> _filterProductCatalog = const [];
   bool _filterProductCatalogLoading = false;
-  final _engineFilter = OilChangeFilterSlot();
-  final _airFilter = OilChangeFilterSlot();
-  final _gearFilter = OilChangeFilterSlot();
+  List<OilChangeFilterKind> _filterKinds =
+      List<OilChangeFilterKind>.from(OilChangeFilterKind.builtins);
+  final Map<String, OilChangeFilterSlot> _filterSlotsByCode = {};
   List<OilPickLine> _hydraulicStockPickLines = const [];
   bool _hydraulicStockPickLinesLoading = false;
 
@@ -209,9 +305,16 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   int? _editOilWarehouseId;
   bool _editOilCustomerProvided = false;
   int _editInvoiceId = 0;
+  /// هاتف البطاقة عند فتح التصحيح (مقفول بعد التحميل) — لكشف تغيّر الرقم فقط.
+  String? _baselineCustomerPhoneDigits;
+  bool _baselineCustomerPhoneLocked = false;
 
   bool _hydratingEdit = false;
   bool _saving = false;
+  /// بعد حفظ ناجح أو موافقة المستخدم على المغادرة.
+  bool _leaveGateAllowPop = false;
+  /// بصمة الحقول بعد التحميل/الفتح — للمقارنة عند الرجوع.
+  String? _leaveGateCleanFingerprint;
   Object? _error;
   String? _errorText;
 
@@ -232,6 +335,10 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   String _status = 'pending';
   bool _odometerNextTouched = false;
   final Set<_OilFormOptionalSection> _expandedOptional = {};
+  /// يمنع جدولة مزامنة الدليل في كل إطار — فقط عند تغيّر الخطوة.
+  String? _lastGuideSyncKey;
+  /// يُبطِل ردود DeepSeek المتأخرة بعد مغادرة/تعديل النص.
+  int _notesMoneyAiGeneration = 0;
   final List<OilChangeProductLine> _oilProductLines = [];
   String? _orderGlobalId;
   GlobalBarcodeRouteBridge? _barcodeBridge;
@@ -243,8 +350,8 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   PrintSettingsData? _cachedPrintSettings;
   bool? _waAutoAfterSave;
   bool? _waManualAfterSave;
+  bool? _waAskRatingAfterSave;
   Timer? _plateVehicleSyncDebounce;
-  Timer? _customerNameVisitSyncDebounce;
   bool _vehicleSyncInFlight = false;
   bool _vehicleSyncQueued = false;
   /// آخر لوحة جُلب لها سجل تلقائياً بنجاح — يمنع إعادة المزامنة لنفس اللوحة.
@@ -286,23 +393,32 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       _status = 'pending';
     }
     _customerName.addListener(_onCustomerNameTyped);
-    if (!widget.isEdit) {
-      _customerName.addListener(_onCustomerNameChangedForVisitSync);
-    }
-    _odometerCurrent.addListener(_maybeSuggestNextOdometer);
-    _odometerNext.addListener(() {
-      if (_odometerDigits(_odometerNext.text).isNotEmpty) {
-        _odometerNextTouched = true;
-      }
-    });
+    // لا مزامنة زيارة تلقائية عند الكتابة في الاسم — التعبئة فقط باختيار من قائمة الاقتراحات.
+    _odometerNext.addListener(_onOdometerNextTyped);
     _agreed.addListener(_onAgreedManualEdit);
     _advance.addListener(_onAdvanceManualEdit);
+    _issue.addListener(_onIssueNotesChanged);
     if (!widget.isEdit) {
       _deviceSerial.addListener(_onPlateFieldChanged);
     }
     if (widget.isEdit) {
-      _hydratingEdit = true;
-      unawaited(_load());
+      final warm = _warmEditPrefillRow();
+      if (warm != null) {
+        // فتح فوري من صف السجل المحلي — بلا سبنر وبلا إنترنت.
+        _hydrateEditFieldsFromRow(warm);
+        _hydratingEdit = false;
+        _formBodyReady = true;
+        _seedPhoneBaselineFromRow(warm);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          _markLeaveGateClean();
+          _attachOilBarcodeHandler();
+        });
+        unawaited(_loadEditSupportingData(warm));
+      } else {
+        _hydratingEdit = true;
+        unawaited(_load());
+      }
     } else if (widget.prefillFromOrder != null) {
       _allowAutoVisitLookup = false;
       _applyInitialPrefillSnapshot(widget.prefillFromOrder!);
@@ -319,44 +435,107 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
         }
       });
     } else {
-      unawaited(_loadOilCatalog());
-      unawaited(_loadOilProductCatalog());
-      unawaited(_loadHydraulicProductCatalog());
-      unawaited(_loadFilterProductCatalog());
-      unawaited(_loadFluidStockSettings());
+      // إطار أول خفيف: لا تحميل كتالوج/مخزون قبل رسم الصفحة.
+      // لا نستدعِ ArabicSpeechMicButton.warmUp هنا — على macOS يقتل التطبيق (TCC).
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        unawaited(_loadOilCatalog());
+        unawaited(_loadOilProductCatalog());
+        unawaited(_loadFluidStockSettings());
+      });
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _attachOilBarcodeHandler();
     });
+    // أظهر الهيكل فوراً ثم املأ الجسم — إحساس فتح أسرع.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        setState(() => _formBodyReady = true);
+        if (!widget.isEdit) {
+          _markLeaveGateClean();
+        }
+      }
+    });
     if (widget.oilChangeMode) {
-      unawaited(_warmPostSaveSettings());
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_warmPostSaveSettings());
+      });
     }
+    // فهرس العملاء بعد سكون الواجهة — لا ينافس فتح الصفحة ولا الكيبورد.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      Future<void>.delayed(const Duration(milliseconds: 900), () {
+        if (!mounted) return;
+        unawaited(CustomerSearchIndex.instance.ensureFresh());
+      });
+    });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // بناء الثيم يخصّص ThemeData وستة حدود إدخال؛ لا داعي لتكراره كل إطار.
+    _formTheme = OilChangeFormTheme.wrap(context, Theme.of(context));
+    final guide = context.read<GuideController>();
+    if (!identical(_guideListenable, guide)) {
+      _guideListenable?.removeListener(_onGuideControllerChanged);
+      _guideListenable = guide;
+      _guideListenable!.addListener(_onGuideControllerChanged);
+    }
+  }
+
+  GuideController? _guideListenable;
+
+  void _onGuideControllerChanged() {
+    final guide = _guideListenable;
+    if (guide == null || !mounted) return;
+    final step = guide.currentStep;
+    final syncKey = guide.isRunning
+        ? '${step?.anchorId}|${step?.action}|${step?.title}'
+        : 'off';
+    if (_lastGuideSyncKey == syncKey) return;
+    _lastGuideSyncKey = syncKey;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _syncGuideCatalogActions(guide);
+    });
   }
 
   Future<void> _warmPostSaveSettings() async {
     if (_cachedPrintSettings != null &&
         _waAutoAfterSave != null &&
-        _waManualAfterSave != null) {
+        _waManualAfterSave != null &&
+        _waAskRatingAfterSave != null) {
       return;
     }
     final results = await Future.wait([
       PrintSettingsRepository.instance.load(),
       OilChangeSettings.whatsappAutoAfterSaveEnabled(),
       OilChangeSettings.whatsappManualAfterSaveEnabled(),
+      OilChangeSettings.whatsappAskRatingAfterSaveEnabled(),
     ]);
     if (!mounted) return;
     _cachedPrintSettings = results[0] as PrintSettingsData;
     _waAutoAfterSave = results[1] as bool;
     _waManualAfterSave = results[2] as bool;
+    _waAskRatingAfterSave = results[3] as bool;
   }
 
   Future<void> _loadFluidStockSettings({bool awaitStockLoads = false}) async {
     final oilOn = await OilChangeSettings.stockFromWarehouseEnabled();
     final hydOn = await OilChangeSettings.hydraulicStockFromWarehouseEnabled();
+    final extras = await OilChangeSettings.loadOptionalExtraFlags();
     if (!mounted) return;
     setState(() {
       _stockFromWarehouseEnabled = oilOn;
       _hydraulicStockFromWarehouseEnabled = hydOn;
+      for (final section in _OilFormOptionalSection.values) {
+        _optionalExtraVisible[section] =
+            extras[_toOptionalExtraKind(section)] ?? true;
+      }
+      _expandedOptional.removeWhere((s) {
+        if (_optionalExtraVisible[s] ?? true) return false;
+        return !_optionalSectionHasData(s);
+      });
       if (!oilOn) {
         _oilStockProductId = null;
         _oilWarehouseId = null;
@@ -386,12 +565,51 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     }
   }
 
+  OilOptionalExtraKind _toOptionalExtraKind(_OilFormOptionalSection section) {
+    return switch (section) {
+      _OilFormOptionalSection.products => OilOptionalExtraKind.products,
+      _OilFormOptionalSection.filters => OilOptionalExtraKind.filters,
+      _OilFormOptionalSection.hydraulicGear =>
+        OilOptionalExtraKind.hydraulicGear,
+      _OilFormOptionalSection.hydraulicPower =>
+        OilOptionalExtraKind.hydraulicPower,
+      _OilFormOptionalSection.services => OilOptionalExtraKind.services,
+    };
+  }
+
+  bool _isOptionalSectionEnabled(_OilFormOptionalSection section) {
+    return _optionalExtraVisible[section] ?? true;
+  }
+
+  bool get _anyOptionalExtrasEnabled =>
+      _OilFormOptionalSection.values.any(_shouldRenderOptionalSection);
+
+  bool _optionalSectionHasData(_OilFormOptionalSection section) {
+    return switch (section) {
+      _OilFormOptionalSection.products => _oilProductLines.isNotEmpty,
+      _OilFormOptionalSection.filters => _filterKinds.any(
+          (k) => _filterSlotFor(k).hasSelection,
+        ),
+      _OilFormOptionalSection.hydraulicGear =>
+        _hydraulicSlotHasData(_gearHydraulic),
+      _OilFormOptionalSection.hydraulicPower =>
+        _hydraulicSlotHasData(_powerHydraulic),
+      _OilFormOptionalSection.services => _selectedOilServiceIds.isNotEmpty,
+    };
+  }
+
+  /// يظهر القسم إن كان مفعّلاً في الإعدادات، أو فيه بيانات محفوظة (تعديل بطاقة).
+  bool _shouldRenderOptionalSection(_OilFormOptionalSection section) {
+    return _isOptionalSectionEnabled(section) ||
+        _optionalSectionHasData(section) ||
+        _expandedOptional.contains(section);
+  }
+
   // ── Shared with repair (108 methods, 21 stubbed) ──
 
   void _markOilFluidUserEdited() {
     _oilFluidUserEdited = true;
     _plateVehicleSyncDebounce?.cancel();
-    _customerNameVisitSyncDebounce?.cancel();
   }
 
   bool get _isPrefillFromLog => widget.prefillFromOrder != null;
@@ -422,6 +640,8 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   }
 
   void _onAgreedManualEdit() {
+    // إعادة الحساب تكتب في الحقل، وعدّها تعديلاً يدوياً كانت تُجمّد الإجمالي.
+    if (_syncingAgreed) return;
     _agreedTotalManual = true;
     if (!_advanceManuallyEdited) {
       _syncAdvanceFromTotal(_parseFils(_agreed));
@@ -430,25 +650,222 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   }
 
   void _onAdvanceManualEdit() {
+    // التعبئة التلقائية تكتب في الحقل أيضاً، وعدّها تعديلاً يدوياً كان يجمّد
+    // المبلغ على صفر فيتحوّل الإجمالي كله إلى دين على الزبون.
+    if (_syncingAdvance) return;
     _advanceManuallyEdited = true;
+    _clampAdvanceToCheckoutTotal();
     _onOilCheckoutFieldsChanged();
   }
 
+  /// المبلغ المستلم لا يتجاوز الإجمالي — قص فوري عند التعديل اليدوي.
+  void _clampAdvanceToCheckoutTotal() {
+    final totalF = _oilCheckoutTotalFils();
+    if (totalF <= 0) return;
+    final paidF = _parseFils(_advance);
+    if (paidF <= totalF) return;
+    _syncingAdvance = true;
+    try {
+      _assignControllerText(_advance, _formatAdvanceIqd(totalF));
+    } finally {
+      _syncingAdvance = false;
+    }
+  }
+
+  /// عرض مبالغ البطاقة بدون كسور ومع فواصل آلاف (68,000 وليس 68000 أو 68,000.00).
+  String _formatIqdWhole(int fils) {
+    if (fils <= 0) return '0';
+    return IraqiCurrencyFormat.formatInt(IqdMoney.fromFils(fils).round());
+  }
+
+  /// توافق الاسم السابق — نفس [_formatIqdWhole].
+  String _formatAdvanceIqd(int fils) => _formatIqdWhole(fils);
+
   void _syncAdvanceFromTotal(int totalFils) {
-    final label = totalFils <= 0
-        ? IraqiCurrencyFormat.formatDecimal2(0)
-        : IraqiCurrencyFormat.formatDecimal2(IqdMoney.fromFils(totalFils));
-    _assignControllerText(_advance, label);
+    final label = _formatAdvanceIqd(totalFils);
+    _syncingAdvance = true;
+    try {
+      _assignControllerText(_advance, label);
+    } finally {
+      _syncingAdvance = false;
+    }
+  }
+
+  void _onIssueNotesChanged() {
+    if (_notesMoneyAiLoading) {
+      _notesMoneyAiGeneration++;
+      if (mounted) setState(() => _notesMoneyAiLoading = false);
+    }
+    _notesMoneyDebounce?.cancel();
+    _notesMoneyDebounce = Timer(
+      const Duration(milliseconds: 400),
+      _refreshNotesMoneyPreview,
+    );
+  }
+
+  void _refreshNotesMoneyPreview() {
+    if (!mounted) return;
+    final text = _issue.text;
+    final key = text.trim();
+    if (_notesExtrasDismissedKey != null && _notesExtrasDismissedKey == key) {
+      setState(() {
+        _notesMoneyPreview = OilNotesMoneyParseResult.empty;
+        _notesMoneyLocalHint = OilNotesMoneyParseResult.empty;
+      });
+      return;
+    }
+    if (_notesExtrasDismissedKey != null &&
+        _notesExtrasDismissedKey != key) {
+      _notesExtrasDismissedKey = null;
+    }
+
+    final parsed = parseOilNotesMoney(text);
+    _notesMoneyLocalHint = parsed;
+    if (_notesExtrasConfirmed) {
+      if (parsed.totalFils != _notesExtrasFils) {
+        setState(() {
+          _notesExtrasConfirmed = false;
+          _notesExtrasFils = 0;
+          _notesMoneyPreview = parsed;
+          _notesMoneyAiForText = null;
+          _agreedTotalManual = false;
+        });
+        _recalculateOilTotal();
+      } else {
+        setState(() => _notesMoneyPreview = OilNotesMoneyParseResult.empty);
+      }
+      return;
+    }
+
+    // إن تغيّر النص بعد التحليل الذكي — ارجع للاكتشاف المحلي.
+    if (_notesMoneyPreview.isFromAi && _notesMoneyAiForText != key) {
+      setState(() {
+        _notesMoneyPreview = parsed;
+        _notesMoneyAiForText = null;
+      });
+      return;
+    }
+    if (_notesMoneyPreview.isFromAi) return;
+
+    setState(() => _notesMoneyPreview = parsed);
+  }
+
+  Future<void> _requestNotesMoneyAi() async {
+    final text = _issue.text.trim();
+    if (text.length < 3 || _notesMoneyAiLoading) return;
+    final gen = ++_notesMoneyAiGeneration;
+    setState(() => _notesMoneyAiLoading = true);
+    final ai = await _notesMoneyAi.analyze(
+      notes: text,
+      localHint: _notesMoneyLocalHint.isNotEmpty
+          ? _notesMoneyLocalHint
+          : parseOilNotesMoney(text),
+    );
+    if (!mounted || gen != _notesMoneyAiGeneration) return;
+    setState(() {
+      _notesMoneyAiLoading = false;
+      if (ai != null && ai.isNotEmpty) {
+        _notesMoneyPreview = ai;
+        _notesMoneyAiForText = text;
+        _notesExtrasConfirmed = false;
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'تعذّر التحليل الذكي الآن — يمكنك الاعتماد على الاكتشاف المحلي أو إعادة المحاولة',
+            ),
+          ),
+        );
+      }
+    });
+  }
+
+  void _confirmNotesMoneyExtras(int fils) {
+    if (fils <= 0) return;
+    setState(() {
+      _notesExtrasFils = fils;
+      _notesExtrasConfirmed = true;
+      _notesMoneyPreview = OilNotesMoneyParseResult.empty;
+      _agreedTotalManual = false;
+    });
+    _recalculateOilTotal();
+  }
+
+  void _dismissNotesMoneyExtras() {
+    _notesMoneyAiGeneration++;
+    setState(() {
+      _notesExtrasDismissedKey = _issue.text.trim();
+      _notesMoneyPreview = OilNotesMoneyParseResult.empty;
+      _notesMoneyAiLoading = false;
+      _notesMoneyAiForText = null;
+    });
   }
 
   void _resetOilCheckoutAutoAdvance() {
     _advanceManuallyEdited = false;
-    _syncAdvanceFromTotal(_oilCheckoutTotalFils());
+    final total = _oilCheckoutTotalFils();
+    _lastAutoSyncedTotalFils = total;
+    _syncAdvanceFromTotal(total);
+  }
+
+  /// مصدر الحقيقة الوحيد للمبلغ المستلم ما دام المستخدم لم يكتبه بنفسه.
+  ///
+  /// يُستدعى من مسارات إعادة الحساب / تغيّر حقول الدفع — وليس من داخل build.
+  void _ensureAdvanceMatchesTotal(int totalFils) {
+    if (!OilChangeAdvanceAutofill.shouldSync(
+      manuallyEdited: _advanceManuallyEdited,
+      currentAdvanceFils: _parseFils(_advance),
+      totalFils: totalFils,
+      lastSyncedTotalFils: _lastAutoSyncedTotalFils,
+    )) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final total = _oilCheckoutTotalFils();
+      if (!OilChangeAdvanceAutofill.shouldSync(
+        manuallyEdited: _advanceManuallyEdited,
+        currentAdvanceFils: _parseFils(_advance),
+        totalFils: total,
+        lastSyncedTotalFils: _lastAutoSyncedTotalFils,
+      )) {
+        return;
+      }
+      _lastAutoSyncedTotalFils = total;
+      setState(() => _syncAdvanceFromTotal(total));
+    });
+  }
+
+  void _onOdometerNextTyped() {
+    if (_syncingOdometerNext) return;
+    if (_odometerDigits(_odometerNext.text).isNotEmpty) {
+      _odometerNextTouched = true;
+    }
   }
 
   void _onOilCheckoutFieldsChanged() {
     if (!mounted) return;
-    setState(() {});
+    _ensureAdvanceMatchesTotal(_oilCheckoutTotalFils());
+    _scheduleCheckoutUiRefresh();
+  }
+
+  /// تحديث واجهة الدفع/الإجمالي بدون عاصفة setState أثناء الكتابة أو الضغط المطوّل.
+  void _scheduleCheckoutUiRefresh({
+    Duration delay = const Duration(milliseconds: 90),
+  }) {
+    _checkoutUiDebounce?.cancel();
+    _checkoutUiDebounce = Timer(delay, () {
+      if (mounted) setState(() {});
+    });
+  }
+
+  void _onOilOrHydraulicVolumeChanged({
+    required void Function() syncStockLiters,
+  }) {
+    syncStockLiters();
+    _agreedTotalManual = false;
+    _recalculateOilTotal();
+    _scheduleCheckoutUiRefresh();
   }
 
   void _assignControllerText(TextEditingController controller, String value) {
@@ -460,12 +877,44 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     FilteringTextInputFormatter.allow(RegExp(r'[0-9٠-٩۰-۹]')),
   ];
 
+  /// حجم المحرك: أرقام + فاصلة عشرية واحدة (مثل 1.8).
+  static final _engineSizeInputFormatters = [
+    FilteringTextInputFormatter.allow(RegExp(r'[0-9٠-٩۰-۹.]')),
+    TextInputFormatter.withFunction((oldValue, newValue) {
+      final t = newValue.text;
+      if ('.'.allMatches(t).length <= 1) return newValue;
+      return oldValue;
+    }),
+  ];
+
   String get _carModelForSave =>
       OilChangeLookupNormalize.toWesternDigits(_carModel.text.trim());
 
   static final _odometerInputFormatters = [
     IraqiCurrencyFormat.moneyInputFormatter(),
   ];
+
+  static final _iraqiMobilePhoneFormatters =
+      CustomerValidation.iraqiMobileInputFormatters();
+
+  void _resetCustomerPhonePrefix() {
+    _setCustomerPhoneField(null);
+  }
+
+  void _setCustomerPhoneField(String? raw) {
+    final t = (raw ?? '').trim();
+    final next = t.isEmpty
+        ? '07'
+        : CustomerValidation.coerceIraqiMobileDigits(t);
+    _assignControllerText(_customerPhone, next);
+    final sel = next == '07' ? 2 : next.length;
+    _customerPhone.selection = TextSelection.collapsed(offset: sel);
+  }
+
+  bool get _customerPhoneIsBlank {
+    final t = _customerPhone.text.trim();
+    return t.isEmpty || t == '07';
+  }
 
   String _odometerDigits(String display) =>
       display.replaceAll(',', '').trim();
@@ -547,11 +996,33 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   }
 
   int _oilCheckoutTotalFils() {
-    final agreed = _parseFils(_agreed);
-    return agreed > 0 ? agreed : _cardGrandTotalFils();
+    return OilChangeAgreedTotal.checkoutTotalFils(
+      agreedFils: _parseFils(_agreed),
+      cardGrandFils: _cardGrandTotalFils(),
+      manuallyEdited: _agreedTotalManual,
+    );
   }
 
-  int _oilCheckoutPaidFils() => _parseFils(_advance);
+  /// بعد تحميل البنود: إن كان المتفق عليه ناقصاً (فلتر بلا إجمالي) أعد الحساب.
+  void _reconcileAgreedAfterHydrate() {
+    final card = _cardGrandTotalFils();
+    final agreed = _parseFils(_agreed);
+    _agreedTotalManual = OilChangeAgreedTotal.isManualOnHydration(
+      agreedFils: agreed > 0 ? agreed : null,
+      cardGrandFils: card,
+    );
+    if (!_agreedTotalManual) {
+      _recalculateOilTotal();
+    }
+  }
+
+  int _oilCheckoutPaidFils() {
+    final paid = _parseFils(_advance);
+    final total = _oilCheckoutTotalFils();
+    if (total > 0 && paid > total) return total;
+    if (paid < 0) return 0;
+    return paid;
+  }
 
   int _oilCheckoutRemainderFils() {
     final total = _oilCheckoutTotalFils();
@@ -692,14 +1163,14 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   Future<void> _refreshAvailableLiters() async {
     final pid = _oilStockProductId;
     final wid = _oilWarehouseId;
-    if (pid == null || pid <= 0 || wid == null || wid <= 0) {
+    if (pid == null || pid <= 0) {
       if (mounted) setState(() => _oilAvailableLiters = 0);
       return;
     }
     try {
       final q = await OilChangeStockService.instance.availableLiters(
         productId: pid,
-        warehouseId: wid,
+        warehouseId: wid ?? 0,
       );
       if (mounted) setState(() => _oilAvailableLiters = q);
     } catch (_) {}
@@ -801,14 +1272,14 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   ) async {
     final pid = slot.stockProductId;
     final wid = slot.warehouseId;
-    if (pid == null || pid <= 0 || wid == null || wid <= 0) {
+    if (pid == null || pid <= 0) {
       if (mounted) setState(() => slot.availableLiters = 0);
       return;
     }
     try {
       final q = await OilChangeStockService.instance.availableLiters(
         productId: pid,
-        warehouseId: wid,
+        warehouseId: wid ?? 0,
       );
       if (mounted) setState(() => slot.availableLiters = q);
     } catch (_) {}
@@ -856,16 +1327,32 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     }
   }
 
-  List<String> get _oilBrandDropdownItems =>
+  /// اشتقاق القوائم يفرز الكتالوج ويزيل المكرر؛ كان يتكرّر ~15 مرة في كل
+  /// إعادة بناء. الكتالوجات تُستبدل بقائمة جديدة عند التحميل، فالمقارنة
+  /// بالهوية كافية لإبطال المخزون المؤقت.
+  List<String> get _oilBrandDropdownItems {
+    if (!identical(_oilBrandItemsSource, _oilProductCatalog)) {
+      _oilBrandItemsSource = _oilProductCatalog;
+      _oilBrandItemsCache =
       OilChangeOilCatalogRepository.brandNamesFrom(_oilProductCatalog);
+    }
+    return _oilBrandItemsCache;
+  }
 
   List<OilChangeOilCatalogEntry> get _oilViscosityDropdownEntries {
     final brand = _selectedOilBrand;
     if (brand == null || brand.isEmpty) return const [];
-    return OilChangeOilCatalogRepository.entriesForBrand(
+    if (!identical(_oilViscosityEntriesSource, _oilProductCatalog) ||
+        _oilViscosityEntriesBrand != brand) {
+      _oilViscosityEntriesSource = _oilProductCatalog;
+      _oilViscosityEntriesBrand = brand;
+      _oilViscosityEntriesCache =
+          OilChangeOilCatalogRepository.entriesForBrand(
       _oilProductCatalog,
       brand,
     );
+    }
+    return _oilViscosityEntriesCache;
   }
 
   String? get _oilBrandDropdownValue {
@@ -928,10 +1415,10 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     OilChangeOilCatalogEntry? entry;
     if (vis != null && vis.isNotEmpty) {
       entry = OilChangeOilCatalogRepository.entryForBrandViscosity(
-        _oilProductCatalog,
-        brandName: _selectedOilBrand!,
-        viscosity: vis,
-      );
+      _oilProductCatalog,
+      brandName: _selectedOilBrand!,
+      viscosity: vis,
+    );
     }
     entry ??= _uniqueCatalogEntryForBrand(_selectedOilBrand!);
     if (entry != null) {
@@ -957,7 +1444,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
         if (liters != null && liters > 0) {
           _oilSizeAmount.text =
               formatOilVolumeDisplay((liters * 1000).round());
-          _selectedSizeUnit = 'ml';
+          _selectedSizeUnit = 'L';
         }
       }
     }
@@ -1074,8 +1561,14 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   void _recalculateOilTotal() {
     if (_agreedTotalManual) return;
     final total = _cardGrandTotalFils();
-    _agreed.text = IraqiCurrencyFormat.formatDecimal2(IqdMoney.fromFils(total));
+    _syncingAgreed = true;
+    try {
+      _agreed.text = _formatIqdWhole(total);
+    } finally {
+      _syncingAgreed = false;
+    }
     if (!_advanceManuallyEdited) {
+      _lastAutoSyncedTotalFils = total;
       _syncAdvanceFromTotal(total);
     }
   }
@@ -1103,21 +1596,25 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   }
 
   OilChangeFilterSlot _filterSlotFor(OilChangeFilterKind kind) {
-    return switch (kind) {
-      OilChangeFilterKind.engine => _engineFilter,
-      OilChangeFilterKind.air => _airFilter,
-      OilChangeFilterKind.gear => _gearFilter,
-    };
+    return _filterSlotsByCode.putIfAbsent(kind.code, OilChangeFilterSlot.new);
   }
 
   Future<void> _loadFilterProductCatalog() async {
     if (mounted) setState(() => _filterProductCatalogLoading = true);
     try {
+      final kinds =
+          await OilChangeFilterKindsRepository.instance.listActive();
       final list =
           await OilChangeFilterCatalogRepository.instance.listActive();
+      final resolved = [
+        for (final e in list) e.withResolvedKind(kinds),
+      ];
       if (!mounted) return;
       setState(() {
-        _filterProductCatalog = list;
+        _filterKinds = kinds.isEmpty
+            ? List<OilChangeFilterKind>.from(OilChangeFilterKind.builtins)
+            : kinds;
+        _filterProductCatalog = resolved;
         _filterProductCatalogLoading = false;
         _reconcileAllFilterSelections();
       });
@@ -1134,7 +1631,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
         _filterProductCatalog,
         id,
       );
-      if (entry == null || entry.kind != kind) {
+      if (entry == null || entry.kind.code != kind.code) {
         slot.catalogEntryId = null;
       } else {
         slot.applyEntry(entry);
@@ -1155,7 +1652,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   }
 
   void _reconcileAllFilterSelections() {
-    for (final kind in OilChangeFilterKind.all) {
+    for (final kind in _filterKinds) {
       _reconcileFilterSelectionFor(kind);
     }
   }
@@ -1163,7 +1660,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   int _filtersTotalFils() {
     if (!widget.oilChangeMode) return 0;
     var total = 0;
-    for (final kind in OilChangeFilterKind.all) {
+    for (final kind in _filterKinds) {
       final slot = _filterSlotFor(kind);
       if (slot.hasSelection) total += slot.priceFils;
     }
@@ -1173,12 +1670,12 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   String? _filterTypeSummaryForSave() {
     if (!widget.oilChangeMode) return _selectedFilterType;
     final parts = <String>[];
-    for (final kind in OilChangeFilterKind.all) {
+    for (final kind in _filterKinds) {
       final slot = _filterSlotFor(kind);
       if (!slot.hasSelection) continue;
       final line = oilFilterLineLabel(
         kindLabel: kind.label,
-        name: slot.name!,
+        name: slot.name ?? '',
         priceFils: slot.priceFils,
       );
       if (line != null) parts.add(line);
@@ -1186,39 +1683,77 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     return parts.isEmpty ? null : parts.join(' · ');
   }
 
+  List<OilFilterLineData> _oilFilterLinesForSave() {
+    final out = <OilFilterLineData>[];
+    for (final kind in _filterKinds) {
+      final slot = _filterSlotFor(kind);
+      if (!slot.hasSelection) continue;
+      out.add(
+        OilFilterLineData(
+          code: kind.code,
+          name: (slot.name ?? '').trim(),
+          priceFils: slot.priceFils,
+          catalogEntryId: slot.catalogEntryId,
+          label: kind.label,
+        ),
+      );
+    }
+    return out;
+  }
+
+  String? _oilFiltersJsonForSave() {
+    final lines = _oilFilterLinesForSave();
+    if (lines.isEmpty) return null;
+    return encodeOilFiltersJson(lines);
+  }
+
   void _loadFiltersFromRow(Map<String, dynamic> row) {
-    _engineFilter.loadFromRow(
-      row,
-      nameKey: OilChangeFilterKind.engine.nameColumnKey,
-      priceKey: OilChangeFilterKind.engine.priceColumnKey,
-    );
-    _airFilter.loadFromRow(
-      row,
-      nameKey: OilChangeFilterKind.air.nameColumnKey,
-      priceKey: OilChangeFilterKind.air.priceColumnKey,
-    );
-    _gearFilter.loadFromRow(
-      row,
-      nameKey: OilChangeFilterKind.gear.nameColumnKey,
-      priceKey: OilChangeFilterKind.gear.priceColumnKey,
-    );
-    if (!_engineFilter.hasSelection &&
-        !_airFilter.hasSelection &&
-        !_gearFilter.hasSelection) {
+    for (final slot in _filterSlotsByCode.values) {
+      slot.clear();
+    }
+    final lines = oilFilterLinesDataFromRow(row);
+    if (lines.isNotEmpty) {
+      for (final line in lines) {
+        final slot = _filterSlotsByCode.putIfAbsent(
+          line.code,
+          OilChangeFilterSlot.new,
+        );
+        slot.catalogEntryId = line.catalogEntryId;
+        slot.name = line.name.isEmpty ? null : line.name;
+        slot.priceFils = line.priceFils;
+      }
+    } else {
+      for (final kind in OilChangeFilterKind.builtins) {
+        _filterSlotFor(kind).loadFromRow(
+          row,
+          nameKey: kind.nameColumnKey,
+          priceKey: kind.priceColumnKey,
+        );
+      }
+    }
+    final hasAny = _filterSlotsByCode.values.any((s) => s.hasSelection);
+    if (!hasAny) {
       final legacy = (row['filterType'] ?? '').toString().trim();
       if (legacy.isNotEmpty) {
-        _engineFilter.name = legacy;
-        _engineFilter.priceFils = 0;
+        final slot = _filterSlotFor(OilChangeFilterKind.engine);
+        slot.name = legacy;
+        slot.priceFils = 0;
       }
     }
     _reconcileAllFilterSelections();
     _expandOptionalSectionsFromData();
   }
 
-  List<String> get _hydraulicBrandDropdownItems =>
+  List<String> get _hydraulicBrandDropdownItems {
+    if (!identical(_hydraulicBrandItemsSource, _hydraulicProductCatalog)) {
+      _hydraulicBrandItemsSource = _hydraulicProductCatalog;
+      _hydraulicBrandItemsCache =
       OilChangeHydraulicCatalogRepository.brandNamesFrom(
         _hydraulicProductCatalog,
       );
+    }
+    return _hydraulicBrandItemsCache;
+  }
 
   void _reconcileHydraulicCatalogSelectionFor(OilChangeHydraulicCardSlot slot) {
     if (_hydraulicFluidUserEditedFor(slot)) {
@@ -1297,18 +1832,22 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   }
 
   int _hydraulicMaterialSellFilsEstFor(OilChangeHydraulicCardSlot slot) {
-    final liters = slot.litersForPricing();
-    if (liters <= 1e-9) return 0;
+    final ml = parseOilVolumeDisplay(slot.sizeAmount.text);
+    if (ml <= 0) return 0;
     if (slot.customerProvided) return 0;
     if (_usesWarehouseHydraulicPickerFor(slot)) {
       if ((slot.stockProductId ?? 0) <= 0) return 0;
       final sell = _selectedHydraulicSellPerLiterIqdFor(slot);
       if (sell == null || sell <= 0) return 0;
-      return IqdMoney.toFils(sell * liters);
+      return sellFilsForVolumeMl(
+        sellPerLiterFils: IqdMoney.toFils(sell),
+        milliliters: ml,
+      );
     }
     if (_usesCatalogHydraulicPricingFor(slot)) {
-      return IqdMoney.toFils(
-        IqdMoney.fromFils(slot.catalogSellPerLiterFils!) * liters,
+      return sellFilsForVolumeMl(
+        sellPerLiterFils: slot.catalogSellPerLiterFils!,
+        milliliters: ml,
       );
     }
     return 0;
@@ -1320,7 +1859,8 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       _hydraulicMaterialSellFilsEstFor(_gearHydraulic) +
       _hydraulicMaterialSellFilsEstFor(_powerHydraulic) +
       _filtersTotalFils() +
-      _oilProductLinesTotalFils();
+      _oilProductLinesTotalFils() +
+      _notesExtrasFils;
 
   String? _hydraulicSizeValueForSaveFor(OilChangeHydraulicCardSlot slot) =>
       slot.sizeValueForSave(
@@ -1328,39 +1868,28 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
         effectiveCustomerProvided: _effectiveHydraulicCustomerProvidedFor(slot),
       );
 
-  void _maybeSuggestNextOdometer() {
-    if (_odometerNextTouched) return;
-    final raw = _odometerCurrent.text.replaceAll(',', '').trim();
-    final cur = int.tryParse(raw);
-    if (cur == null || cur <= 0) return;
-    final suggested = cur + 5000;
-    final nextRaw = _odometerNext.text.replaceAll(',', '').trim();
-    final next = int.tryParse(nextRaw);
-    if (nextRaw.isEmpty || next == suggested - 5000) {
-      _odometerNext.text = IraqiCurrencyFormat.formatInt(suggested);
-    }
-  }
-
+  /// كانت تقترح «الحالية + 5000» تلقائياً — أُوقفت بطلب المستخدم.
   void _parseOilSize(String? stored) {
     if (stored == null || stored.trim().isEmpty) {
       _oilSizeAmount.clear();
-      _selectedSizeUnit = 'ml';
+      _selectedSizeUnit = 'L';
       return;
     }
     final raw = stored.trim();
     if (raw == 'Q') {
+      // قيمة قديمة بلا رقم — تجاهل.
       _oilSizeAmount.clear();
-      _selectedSizeUnit = 'Q';
+      _selectedSizeUnit = 'L';
       return;
     }
     final ml = oilSizeStoredToMilliliters(raw);
     if (ml > 0) {
       _oilSizeAmount.text = formatOilVolumeDisplay(ml);
-      _selectedSizeUnit = 'ml';
+      _selectedSizeUnit = 'L';
       return;
     }
     _oilSizeAmount.clear();
-    _selectedSizeUnit = 'ml';
+    _selectedSizeUnit = 'L';
   }
 
   void _applyVehicleRecord(
@@ -1397,16 +1926,18 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     _normalizeCarModelDisplay();
     textCtrl(_deviceSerial, 'deviceSerial');
     textCtrl(_engineSize, 'engineSize');
-    if (replaceAll || _odometerDigits(_odometerCurrent.text).isEmpty) {
-      _assignOdometerText(
-        _odometerCurrent,
-        (r['odometerCurrent'] ?? '').toString(),
-      );
-    }
-    final nextOdo = (r['odometerNext'] ?? '').toString();
-    if (replaceAll || _odometerDigits(_odometerNext.text).isEmpty) {
-      _assignOdometerText(_odometerNext, nextOdo);
-      if (_odometerDigits(nextOdo).isNotEmpty) _odometerNextTouched = true;
+    if (!widget.isEdit) {
+      if (replaceAll || _odometerDigits(_odometerCurrent.text).isEmpty) {
+        _assignOdometerText(
+          _odometerCurrent,
+          (r['odometerCurrent'] ?? '').toString(),
+        );
+      }
+      final nextOdo = (r['odometerNext'] ?? '').toString();
+      if (replaceAll || _odometerDigits(_odometerNext.text).isEmpty) {
+        _assignOdometerText(_odometerNext, nextOdo);
+        if (_odometerDigits(nextOdo).isNotEmpty) _odometerNextTouched = true;
+      }
     }
     if (!skipOilAndHydraulic) {
       textCtrl(_oilType, 'oilType');
@@ -1440,7 +1971,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
           if (liters != null && liters > 0) {
             _oilSizeAmount.text =
                 formatOilVolumeDisplay((liters * 1000).round());
-            _selectedSizeUnit = 'ml';
+            _selectedSizeUnit = 'L';
           }
         }
       }
@@ -1481,11 +2012,14 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
         IqdMoney.fromFils((r['estimatedPriceFils'] as num?)?.toInt() ?? 0),
       );
       final agreedF = (r['agreedPriceFils'] as num?)?.toInt();
-      _agreed.text = agreedF == null
-          ? ''
-          : IraqiCurrencyFormat.formatDecimal2(IqdMoney.fromFils(agreedF));
-      _advance.text = IraqiCurrencyFormat.formatDecimal2(
-        IqdMoney.fromFils((r['advancePaymentFils'] as num?)?.toInt() ?? 0),
+      _syncingAgreed = true;
+      try {
+        _agreed.text = agreedF == null ? '' : _formatIqdWhole(agreedF);
+      } finally {
+        _syncingAgreed = false;
+      }
+      _advance.text = _formatAdvanceIqd(
+        (r['advancePaymentFils'] as num?)?.toInt() ?? 0,
       );
       _serviceId = (r['serviceId'] as num?)?.toInt();
       final req = parseOilRequestedServices(r['requestedServices']?.toString());
@@ -1495,8 +2029,12 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       if (_agreed.text.trim().isEmpty) {
         final agreedF = (r['agreedPriceFils'] as num?)?.toInt();
         if (agreedF != null) {
-          _agreed.text =
-              IraqiCurrencyFormat.formatDecimal2(IqdMoney.fromFils(agreedF));
+          _syncingAgreed = true;
+          try {
+            _agreed.text = _formatIqdWhole(agreedF);
+          } finally {
+            _syncingAgreed = false;
+          }
         }
       }
       if (_selectedOilServiceIds.isEmpty) {
@@ -1587,30 +2125,20 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     );
   }
 
-  Future<void> _syncVehicleFromCustomerName(String name) async {
-    if (widget.isEdit) return;
-    if (_blocksAutoVisitLookup()) return;
-    final n = name.trim();
-    if (n.isEmpty) return;
-    final nameKey = OilChangeLookupNormalize.normalizeNameKey(n);
-    if (nameKey.isNotEmpty && nameKey == _lastAutoSyncedCustomerKey) return;
-
-    await _applyLastVisitFromRepository(
-      fetch: () => OilChangeOrdersRepository.instance
-          .getLatestOilChangeByCustomerName(n),
-      foundMessage: widget.isOilNewCard
-          ? 'تم جلب آخر زيارة لهذا الاسم — بطاقة جديدة'
-          : 'تم جلب بيانات آخر زيارة لهذا الاسم',
-      notFoundMessage: 'لا يوجد سجل غيار سابق بهذا الاسم',
-      showFeedback: false,
-      overwriteExisting: false,
-      onCustomerApplied: nameKey.isNotEmpty ? nameKey : n,
-    );
-  }
-
   void _applyLastVisitForNewCard(Map<String, dynamic> r) {
+    // احفظ ما كتبه المستخدم قبل المزامنة المتأخرة (لوحة/عميل) حتى لا تُستبدل قراءاته.
+    final userCurrent = _odometerDigits(_odometerCurrent.text);
+    final userNext = _odometerDigits(_odometerNext.text);
     _applyVehicleRecord(r, replaceAll: true);
-    _applyNewVisitOdometerFromLogRow(r);
+    if (userCurrent.isNotEmpty) {
+      _assignOdometerText(_odometerCurrent, userCurrent);
+    } else {
+      _applyNewVisitOdometerFromLogRow(r);
+    }
+    if (userNext.isNotEmpty) {
+      _assignOdometerText(_odometerNext, userNext);
+      _odometerNextTouched = true;
+    }
     _reconcileOilFluidAfterVisitLoad(r);
     _advanceManuallyEdited = false;
     _agreedTotalManual = false;
@@ -1621,6 +2149,8 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   }
 
   void _mergeLastVisitForNewCard(Map<String, dynamic> r) {
+    final userCurrent = _odometerDigits(_odometerCurrent.text);
+    final userNext = _odometerDigits(_odometerNext.text);
     _applyVehicleRecord(
       r,
       replaceAll: false,
@@ -1628,8 +2158,14 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       skipHydraulicGear: _hydraulicGearUserEdited,
       skipHydraulicPower: _hydraulicPowerUserEdited,
     );
-    if (_odometerDigits(_odometerCurrent.text).isEmpty) {
+    if (userCurrent.isNotEmpty) {
+      _assignOdometerText(_odometerCurrent, userCurrent);
+    } else if (_odometerDigits(_odometerCurrent.text).isEmpty) {
       _applyNewVisitOdometerFromLogRow(r);
+    }
+    if (userNext.isNotEmpty) {
+      _assignOdometerText(_odometerNext, userNext);
+      _odometerNextTouched = true;
     }
     if (!_oilFluidUserEdited) {
       _reconcileOilFluidAfterVisitLoad(r);
@@ -1656,11 +2192,36 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       return;
     }
     _plateVehicleSyncDebounce?.cancel();
-    _customerNameVisitSyncDebounce?.cancel();
     _vehicleSyncInFlight = true;
     try {
       final row = await fetch();
       if (!mounted) return;
+      // بعد await: ألغِ التطبيق إن تغيّرت اللوحة/العميل (نتيجة متأخرة).
+      if (onPlateApplied != null && onPlateApplied.trim().isNotEmpty) {
+        final expected = onPlateApplied.trim();
+        final currentKey = OilChangeLookupNormalize.normalizePlateKey(
+          _deviceSerial.text.trim(),
+        );
+        if (currentKey != expected &&
+            _deviceSerial.text.trim() != expected) {
+          return;
+        }
+      }
+      if (onCustomerApplied != null && onCustomerApplied.trim().isNotEmpty) {
+        final expected = onCustomerApplied.trim();
+        if (expected.startsWith('id:')) {
+          final id = int.tryParse(expected.substring(3));
+          if (id != null && id > 0 && _customerId != id) return;
+        } else {
+          final nameKey = OilChangeLookupNormalize.normalizeNameKey(
+            _customerName.text.trim(),
+          );
+          if (nameKey != expected &&
+              _customerName.text.trim() != expected) {
+            return;
+          }
+        }
+      }
       if (row == null) {
         if (showFeedback) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -1730,22 +2291,18 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     final plate = _deviceSerial.text.trim();
     if (plate.length >= 3) {
       await _syncVehicleFromPlate();
-      return;
     }
-    final name = _customerName.text.trim();
-    if (name.length >= 2) {
-      await _onCustomerNameSettled(expectedName: name);
-    }
+    // لا تعبئة تلقائية بالاسم — الاختيار من قائمة الاقتراحات فقط.
   }
 
   void _applyNewVisitOdometerFromLogRow(Map<String, dynamic> r) {
+    if (widget.isEdit) return;
+    if (_odometerDigits(_odometerCurrent.text).isNotEmpty) return;
     final nextRaw =
         (r['odometerNext'] ?? '').toString().replaceAll(',', '').trim();
     final next = int.tryParse(nextRaw);
     if (next != null && next > 0) {
       _assignOdometerText(_odometerCurrent, next.toString());
-      _odometerNextTouched = false;
-      _maybeSuggestNextOdometer();
       return;
     }
     final nextOdo = (r['odometerNext'] ?? '').toString();
@@ -1760,7 +2317,8 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       _status == OilChangeOrderStatus.suspended;
 
   bool get _oilCheckoutFinalized =>
-      _status == 'delivered' || _status == 'cancelled';
+      !widget.amendInvoicedOrder &&
+      (_status == 'delivered' || _status == 'cancelled');
 
 
   void _onPlateFieldChanged() {
@@ -1806,10 +2364,11 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     try {
       await _loadFluidStockSettings(awaitStockLoads: true);
       if (widget.isOilNewCard) {
-        await _loadOilCatalog();
-        await _loadOilProductCatalog();
-        await _loadHydraulicProductCatalog();
-        await _loadFilterProductCatalog();
+        // زيت + خدمات أولاً؛ فلاتر/هيدروليك تُحمَّل إن وُجدت بيانات أو عند التوسيع.
+        await Future.wait([
+          _loadOilCatalog(),
+          _loadOilProductCatalog(),
+        ]);
       }
       if (!mounted) return;
       setState(() {
@@ -1841,6 +2400,9 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
 
   void _onCustomerNameTyped() {
     if (_suspendCustomerIdClear) return;
+    // تعبئة سجل زيارة تكتب الاسم برمجياً؛ اعتبارها كتابة يدوية كان يفكّ ربط
+    // العميل ويمسح هاتفه فور «جلب آخر زيارة».
+    if (_applyingVehicleRecord) return;
     if (_customerId == null) return;
     final typed = _customerName.text.trim();
     if (_linkedCustomerName != null && typed == _linkedCustomerName) {
@@ -1850,27 +2412,10 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     setState(() {
       _customerId = null;
       _linkedCustomerName = null;
-      _customerPhone.clear();
+      _resetCustomerPhonePrefix();
       _lastAutoSyncedCustomerKey = null;
     });
     unawaited(_refreshCustomerOpenDebt());
-  }
-
-  void _onCustomerNameChangedForVisitSync() {
-    if (!widget.isOilNewCard ||
-        _suspendCustomerIdClear ||
-        _applyingVehicleRecord) {
-      return;
-    }
-    _customerNameVisitSyncDebounce?.cancel();
-    final expectedName = _customerName.text.trim();
-    _customerNameVisitSyncDebounce = Timer(
-      const Duration(milliseconds: 550),
-      () {
-        if (_customerName.text.trim() != expectedName) return;
-        unawaited(_onCustomerNameSettled(expectedName: expectedName));
-      },
-    );
   }
 
   /// عند فتح بطاقة من السجل: ربط [customerId] تلقائياً من السجل أو الاسم أو الهاتف.
@@ -1924,12 +2469,12 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
                   OilChangeLookupNormalize.normalizeNameKey(dbName)) {
             _assignControllerText(_customerName, dbName);
           }
-          if (snapshotPhone.isNotEmpty && _customerPhone.text.trim().isEmpty) {
-            _customerPhone.text = snapshotPhone;
+          if (snapshotPhone.isNotEmpty && _customerPhoneIsBlank) {
+            _setCustomerPhoneField(snapshotPhone);
           } else if (row != null) {
             final phone = (row['phone'] ?? '').toString().trim();
-            if (phone.isNotEmpty && _customerPhone.text.trim().isEmpty) {
-              _customerPhone.text = phone;
+            if (phone.isNotEmpty && _customerPhoneIsBlank) {
+              _setCustomerPhoneField(phone);
             }
           }
         });
@@ -1948,16 +2493,12 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     if (q.length < 2) return false;
     final qKey = OilChangeLookupNormalize.normalizeNameKey(q);
     try {
-      final rows = await _customersDb.queryCustomersPage(
-        query: q,
-        statusArabic: 'الكل',
-        sortKey: 'name_asc',
-        limit: 24,
-        offset: 0,
-      );
+      // الفهرس نفسه الذي يغذّي الاقتراحات: كان هنا استعلام ثانٍ مطابق للاستعلام
+      // الذي نفّذه حقل البحث قبل 310 مللي ثانية.
+      await CustomerSearchIndex.instance.ensureFresh();
+      final matches = CustomerSearchIndex.instance.searchRecords(q, limit: 24);
       CustomerRecord? exact;
-      for (final row in rows) {
-        final c = CustomerRecord.fromMap(row);
+      for (final c in matches) {
         if (OilChangeLookupNormalize.normalizeNameKey(c.name) == qKey) {
           exact = c;
           break;
@@ -1968,59 +2509,13 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       setState(() {
         _customerId = exact!.id;
         _linkedCustomerName = exact.name.trim();
-        if (phone.isNotEmpty && _customerPhone.text.trim().isEmpty) {
-          _customerPhone.text = phone;
+        if (phone.isNotEmpty && _customerPhoneIsBlank) {
+          _setCustomerPhoneField(phone);
         }
       });
       return true;
     } catch (_) {
       return false;
-    }
-  }
-
-  Future<void> _onCustomerNameSettled({String? expectedName}) async {
-    if (!widget.isOilNewCard || widget.isEdit || _applyingVehicleRecord) return;
-    if (_suspendCustomerIdClear) return;
-
-    final name = _customerName.text.trim();
-    if (expectedName != null && name != expectedName) return;
-    if (name.length < 2) {
-      if (_customerId == null && mounted) {
-        setState(() {
-          _customerOpenDebtFils = 0;
-          _customerOpenDebtLoading = false;
-        });
-      }
-      return;
-    }
-
-    final nameKey = OilChangeLookupNormalize.normalizeNameKey(name);
-    final linkedKey = _linkedCustomerName == null
-        ? null
-        : OilChangeLookupNormalize.normalizeNameKey(_linkedCustomerName!);
-    final alreadySynced =
-        nameKey.isNotEmpty && nameKey == _lastAutoSyncedCustomerKey;
-
-    if (_customerId != null && nameKey == linkedKey) {
-      await _refreshCustomerOpenDebt();
-      if (!alreadySynced && !_blocksAutoVisitLookup()) {
-        await _syncVehicleFromCustomer(_customerId!, fallbackName: name);
-      }
-      return;
-    }
-
-    if (_customerId == null) {
-      await _tryResolveCustomerFromTypedName(name);
-    }
-
-    await _refreshCustomerOpenDebt();
-
-    if (_blocksAutoVisitLookup()) return;
-
-    if (_customerId != null && _customerId! > 0) {
-      await _syncVehicleFromCustomer(_customerId!, fallbackName: name);
-    } else {
-      await _syncVehicleFromCustomerName(name);
     }
   }
 
@@ -2045,7 +2540,200 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     final ml = (liters * 1000).round();
     if (ml <= 0) return;
     _oilSizeAmount.text = formatOilVolumeDisplay(ml);
-    _selectedSizeUnit = 'ml';
+    _selectedSizeUnit = 'L';
+  }
+
+  /// لقطة السجل إن طابقت بطاقة التعديل — للفتح الفوري محلياً.
+  Map<String, dynamic>? _warmEditPrefillRow() {
+    if (!widget.isEdit) return null;
+    final warm = widget.prefillFromOrder;
+    if (warm == null) return null;
+    final warmId = (warm['id'] as num?)?.toInt();
+    if (warmId == null || warmId <= 0) return null;
+    if (warmId != widget.editOrderId) return null;
+    return Map<String, dynamic>.from(warm);
+  }
+
+  void _seedPhoneBaselineFromRow(Map<String, dynamic> row) {
+    if (_baselineCustomerPhoneLocked) return;
+    _baselineCustomerPhoneDigits = _normalizedPhoneKey(
+      (row['customerPhone'] ?? _customerPhone.text).toString(),
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _baselineCustomerPhoneLocked) return;
+      _baselineCustomerPhoneDigits = _normalizedPhoneKey(_customerPhone.text);
+      _baselineCustomerPhoneLocked = true;
+    });
+  }
+
+  /// يملأ حقول التعديل من صف محلي — بدون await.
+  void _hydrateEditFieldsFromRow(Map<String, dynamic> row) {
+    final svcId = (row['serviceId'] as num?)?.toInt();
+    final edm = (row['expectedDurationMinutes'] as num?)?.toInt() ?? 0;
+    final h = edm > 0 ? edm ~/ 60 : 0;
+    final m = edm > 0 ? edm % 60 : 0;
+
+    _customerId = (row['customerId'] as num?)?.toInt();
+    _customerName.text = (row['customerNameSnapshot'] ?? '').toString();
+    _setCustomerPhoneField((row['customerPhone'] ?? '').toString());
+
+    _deviceName.text = (row['deviceName'] ?? '').toString();
+    _carModel.text = OilChangeLookupNormalize.toWesternDigits(
+      (row['carModel'] ?? '').toString(),
+    );
+    _deviceSerial.text = (row['deviceSerial'] ?? '').toString();
+    _engineSize.text = (row['engineSize'] ?? '').toString();
+
+    _assignOdometerText(
+      _odometerCurrent,
+      (row['odometerCurrent'] ?? '').toString(),
+    );
+    _assignOdometerText(
+      _odometerNext,
+      (row['odometerNext'] ?? '').toString(),
+    );
+    if (_odometerDigits(_odometerNext.text).isNotEmpty) {
+      _odometerNextTouched = true;
+    }
+    _oilType.text = (row['oilType'] ?? '').toString();
+    _selectedViscosity = row['oilViscosity']?.toString().isEmpty == true
+        ? null
+        : row['oilViscosity']?.toString();
+    final catSell = (row['oilSellPerLiterFils'] as num?)?.toInt();
+    _catalogSellPerLiterFils =
+        catSell != null && catSell > 0 ? catSell : null;
+    _reconcileOilCatalogSelection();
+    _reconcileOilStockLineSelection();
+    _parseOilSize(row['oilSize']?.toString());
+    _selectedFilterType = row['filterType']?.toString().isEmpty == true
+        ? null
+        : row['filterType']?.toString();
+    _loadFiltersFromRow(row);
+
+    _status = (row['status'] ?? 'pending').toString();
+    if (OilChangeOrderStatus.isSuspended(row)) {
+      _allowAutoVisitLookup = false;
+    }
+    _serviceId = svcId;
+    _estimated.text = IraqiCurrencyFormat.formatDecimal2(
+      IqdMoney.fromFils((row['estimatedPriceFils'] as num?)?.toInt() ?? 0),
+    );
+    final agreedF = (row['agreedPriceFils'] as num?)?.toInt();
+    _syncingAgreed = true;
+    try {
+      _agreed.text = agreedF == null ? '' : _formatIqdWhole(agreedF);
+    } finally {
+      _syncingAgreed = false;
+    }
+    final advF = (row['advancePaymentFils'] as num?)?.toInt() ?? 0;
+    _advance.text = _formatAdvanceIqd(advF);
+    _issue.text = (row['issueDescription'] ?? '').toString();
+    _technicianName.text = (row['technicianName'] ?? '').toString();
+
+    _openedAtUtc =
+        DateTime.tryParse((row['createdAt'] ?? '').toString())?.toUtc();
+    _workStartedAtUtc =
+        DateTime.tryParse((row['workStartedAt'] ?? '').toString())?.toUtc();
+    _etaHours = h;
+    _etaMinutes = m;
+    final pd = (row['promisedDeliveryAt'] ?? '').toString().trim();
+    _promisedDeliveryStoredIso = pd.isEmpty ? null : pd;
+
+    _matchServiceNamesToIds(
+      parseOilRequestedServices(row['requestedServices']?.toString()),
+    );
+    _advanceManuallyEdited = OilChangeAdvanceAutofill.isManualOnHydration(
+      agreedFils: agreedF,
+      advanceFils: advF,
+    );
+    _oilCustomerProvided =
+        ((row['oilCustomerProvided'] as num?)?.toInt() ?? 0) != 0;
+    _oilStockProductId = (row['oilProductId'] as num?)?.toInt();
+    _oilWarehouseId = (row['oilWarehouseId'] as num?)?.toInt();
+    final liters = (row['oilLitersUsed'] as num?)?.toDouble();
+    if (liters != null && liters > 0) {
+      _oilLitersStock.text = liters % 1 == 0
+          ? liters.toInt().toString()
+          : liters.toString();
+    }
+    _editStockVoucherId = (row['stockVoucherId'] as num?)?.toInt();
+    _editOilLitersUsed = liters ?? 0;
+    _editOilProductId = _oilStockProductId;
+    _editOilWarehouseId = _oilWarehouseId;
+    _editOilCustomerProvided = _oilCustomerProvided;
+    _editInvoiceId = (row['invoiceId'] as num?)?.toInt() ?? 0;
+    if (_stockFromWarehouseEnabled &&
+        _oilStockProductId != null &&
+        _oilWarehouseId != null) {
+      unawaited(_refreshAvailableLiters());
+    }
+    if (_usesWarehouseOilPicker && _oilLitersStock.text.trim().isNotEmpty) {
+      _syncOilSizeRecordFromStockLiters();
+    }
+    _gearHydraulic.loadFromRow(
+      row,
+      stockEnabled: _hydraulicStockFromWarehouseEnabled,
+    );
+    _powerHydraulic.loadFromRow(
+      row,
+      stockEnabled: _hydraulicStockFromWarehouseEnabled,
+    );
+    _reconcileHydraulicCatalogSelectionFor(_gearHydraulic);
+    _reconcileHydraulicCatalogSelectionFor(_powerHydraulic);
+    if (_hydraulicStockFromWarehouseEnabled) {
+      _reconcileHydraulicStockLineSelectionFor(_gearHydraulic);
+      _reconcileHydraulicStockLineSelectionFor(_powerHydraulic);
+      if (_gearHydraulic.stockProductId != null &&
+          _gearHydraulic.warehouseId != null) {
+        unawaited(_refreshHydraulicAvailableLitersFor(_gearHydraulic));
+      }
+      if (_powerHydraulic.stockProductId != null &&
+          _powerHydraulic.warehouseId != null) {
+        unawaited(_refreshHydraulicAvailableLitersFor(_powerHydraulic));
+      }
+    }
+
+    _applyOptionalExpansionFromData();
+    if (_customerId != null && _customerId! > 0) {
+      _linkedCustomerName = _customerName.text.trim();
+    }
+    _reconcileAgreedAfterHydrate();
+  }
+
+  /// كتالوجات ومخزون بعد ظهور النموذج — لا يحجب التعديل.
+  Future<void> _loadEditSupportingData(Map<String, dynamic> row) async {
+    try {
+      await _loadFluidStockSettings(awaitStockLoads: false);
+      await Future.wait([
+        _loadOilCatalog(),
+        _loadOilProductCatalog(),
+        _loadFilterProductCatalog(),
+      ]);
+      if (!mounted) return;
+      setState(() {
+        _reconcileOilCatalogSelection();
+        _reconcileOilStockLineSelection();
+        _reconcileHydraulicCatalogSelectionFor(_gearHydraulic);
+        _reconcileHydraulicCatalogSelectionFor(_powerHydraulic);
+        if (_hydraulicStockFromWarehouseEnabled) {
+          _reconcileHydraulicStockLineSelectionFor(_gearHydraulic);
+          _reconcileHydraulicStockLineSelectionFor(_powerHydraulic);
+        }
+        _applyOptionalExpansionFromData();
+      });
+      final svcId = (row['serviceId'] as num?)?.toInt();
+      if (svcId != null && svcId > 0) {
+        unawaited(_loadServiceProductIfNeeded());
+      }
+      final og = (row['global_id'] ?? row['globalId'] ?? '').toString().trim();
+      if (og.isNotEmpty) {
+        await _loadOilProductLinesForOrder(og);
+      }
+      if (!mounted) return;
+      setState(_reconcileAgreedAfterHydrate);
+    } catch (e, st) {
+      AppLogger.error('OilChangeForm', 'edit supporting data', e, st);
+    }
   }
 
   Future<void> _load() async {
@@ -2067,146 +2755,16 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       if (r == null) throw StateError('not_found');
       final row = r;
 
-      await _loadFluidStockSettings();
-      await _loadOilCatalog();
-      await _loadOilProductCatalog();
-      await _loadFilterProductCatalog();
-
-      final svcId = (row['serviceId'] as num?)?.toInt();
-      String? svcName;
-      if (svcId != null && svcId > 0) {
-        final prodRow = await ProductRepository().getProductById(svcId);
-        svcName = prodRow == null ? null : (prodRow['name'] ?? '').toString().trim();
-      }
-      final edm = (r['expectedDurationMinutes'] as num?)?.toInt() ?? 0;
-      final h = edm > 0 ? edm ~/ 60 : 0;
-      final m = edm > 0 ? edm % 60 : 0;
-
+      // أظهر النموذج فوراً من SQLite المحلي — الكتالوجات لاحقاً.
       setState(() {
-        _customerId = (row['customerId'] as num?)?.toInt();
-        _customerName.text = (row['customerNameSnapshot'] ?? '').toString();
-        _customerPhone.text = (row['customerPhone'] ?? '').toString();
-
-        _deviceName.text = (row['deviceName'] ?? '').toString();
-        _carModel.text = OilChangeLookupNormalize.toWesternDigits(
-          (row['carModel'] ?? '').toString(),
-        );
-        _deviceSerial.text = (row['deviceSerial'] ?? '').toString();
-        _engineSize.text = (row['engineSize'] ?? '').toString();
-
-        _assignOdometerText(
-          _odometerCurrent,
-          (row['odometerCurrent'] ?? '').toString(),
-        );
-        _assignOdometerText(
-          _odometerNext,
-          (row['odometerNext'] ?? '').toString(),
-        );
-        _oilType.text = (row['oilType'] ?? '').toString();
-        _selectedViscosity = row['oilViscosity']?.toString().isEmpty == true
-            ? null
-            : row['oilViscosity']?.toString();
-        final catSell = (row['oilSellPerLiterFils'] as num?)?.toInt();
-        _catalogSellPerLiterFils =
-            catSell != null && catSell > 0 ? catSell : null;
-        _reconcileOilCatalogSelection();
-        _reconcileOilStockLineSelection();
-        _parseOilSize(row['oilSize']?.toString());
-        _selectedFilterType = row['filterType']?.toString().isEmpty == true
-            ? null
-            : row['filterType']?.toString();
-        _loadFiltersFromRow(row);
-
-        _status = (row['status'] ?? 'pending').toString();
-        _serviceId = svcId;
-        _serviceName = svcName;
-        _estimated.text = IraqiCurrencyFormat.formatDecimal2(
-          IqdMoney.fromFils((row['estimatedPriceFils'] as num?)?.toInt() ?? 0),
-        );
-        final agreedF = (row['agreedPriceFils'] as num?)?.toInt();
-        _agreed.text = agreedF == null
-            ? ''
-            : IraqiCurrencyFormat.formatDecimal2(IqdMoney.fromFils(agreedF));
-        final advF = (row['advancePaymentFils'] as num?)?.toInt() ?? 0;
-        _advance.text = IraqiCurrencyFormat.formatDecimal2(
-          IqdMoney.fromFils(advF),
-        );
-        _issue.text = (row['issueDescription'] ?? '').toString();
-        _technicianName.text = (row['technicianName'] ?? '').toString();
-
-        _openedAtUtc =
-            DateTime.tryParse((row['createdAt'] ?? '').toString())?.toUtc();
-        _workStartedAtUtc =
-            DateTime.tryParse((row['workStartedAt'] ?? '').toString())?.toUtc();
-        _etaHours = h;
-        _etaMinutes = m;
-        final pd = (row['promisedDeliveryAt'] ?? '').toString().trim();
-        _promisedDeliveryStoredIso = pd.isEmpty ? null : pd;
-
-        _matchServiceNamesToIds(
-          parseOilRequestedServices(row['requestedServices']?.toString()),
-        );
-        _agreedTotalManual = agreedF != null && agreedF > 0;
-        _advanceManuallyEdited = advF > 0 &&
-            agreedF != null &&
-            agreedF > 0 &&
-            advF != agreedF;
-        _oilCustomerProvided =
-            ((row['oilCustomerProvided'] as num?)?.toInt() ?? 0) != 0;
-        _oilStockProductId = (row['oilProductId'] as num?)?.toInt();
-        _oilWarehouseId = (row['oilWarehouseId'] as num?)?.toInt();
-        final liters = (row['oilLitersUsed'] as num?)?.toDouble();
-        if (liters != null && liters > 0) {
-          _oilLitersStock.text = liters % 1 == 0
-              ? liters.toInt().toString()
-              : liters.toString();
-        }
-        _editStockVoucherId = (row['stockVoucherId'] as num?)?.toInt();
-        _editOilLitersUsed = liters ?? 0;
-        _editOilProductId = _oilStockProductId;
-        _editOilWarehouseId = _oilWarehouseId;
-        _editOilCustomerProvided = _oilCustomerProvided;
-        _editInvoiceId = (row['invoiceId'] as num?)?.toInt() ?? 0;
-        if (_stockFromWarehouseEnabled &&
-            _oilStockProductId != null &&
-            _oilWarehouseId != null) {
-          unawaited(_refreshAvailableLiters());
-        }
-        if (_usesWarehouseOilPicker &&
-            _oilLitersStock.text.trim().isNotEmpty) {
-          _syncOilSizeRecordFromStockLiters();
-        }
-        _gearHydraulic.loadFromRow(
-          row,
-          stockEnabled: _hydraulicStockFromWarehouseEnabled,
-        );
-        _powerHydraulic.loadFromRow(
-          row,
-          stockEnabled: _hydraulicStockFromWarehouseEnabled,
-        );
-        _reconcileHydraulicCatalogSelectionFor(_gearHydraulic);
-        _reconcileHydraulicCatalogSelectionFor(_powerHydraulic);
-        if (_hydraulicStockFromWarehouseEnabled) {
-          _reconcileHydraulicStockLineSelectionFor(_gearHydraulic);
-          _reconcileHydraulicStockLineSelectionFor(_powerHydraulic);
-          if (_gearHydraulic.stockProductId != null &&
-              _gearHydraulic.warehouseId != null) {
-            unawaited(_refreshHydraulicAvailableLitersFor(_gearHydraulic));
-          }
-          if (_powerHydraulic.stockProductId != null &&
-              _powerHydraulic.warehouseId != null) {
-            unawaited(_refreshHydraulicAvailableLitersFor(_powerHydraulic));
-          }
-        }
-
-        _applyOptionalExpansionFromData();
+        _hydrateEditFieldsFromRow(row);
         _hydratingEdit = false;
+        _formBodyReady = true;
       });
-      final og = (row['global_id'] ?? '').toString().trim();
-      if (og.isNotEmpty) {
-        await _loadOilProductLinesForOrder(og);
-      }
-      if (mounted) _attachOilBarcodeHandler();
+      _seedPhoneBaselineFromRow(row);
+      _markLeaveGateClean();
+      _attachOilBarcodeHandler();
+      unawaited(_loadEditSupportingData(row));
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -2236,12 +2794,18 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   }
   Future<void> _refreshCustomerOpenDebt() async {
     if (!widget.oilChangeMode) return;
+    final name = _customerName.text.trim();
+    // تُستدعى من ستة مواضع، وقد تتزامن ثلاث مرات لاختيار عميل واحد.
+    final requestKey = '${_customerId ?? 0}|$name';
+    if (_openDebtRequestKey == requestKey && _customerOpenDebtLoading) return;
+    _openDebtRequestKey = requestKey;
     if (mounted) setState(() => _customerOpenDebtLoading = true);
     try {
       final fils = await loadCustomerOpenDebtFils(
         customerId: _customerId,
-        customerName: _customerName.text.trim(),
+        customerName: name,
       );
+      if (_openDebtRequestKey != requestKey) return; // سبقه طلب أحدث
       if (!mounted) return;
       setState(() {
         _customerOpenDebtFils = fils;
@@ -2278,7 +2842,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       _lastAutoSyncedPlate = null;
       _customerName.text = name;
       if (phone.isNotEmpty) {
-        _customerPhone.text = phone;
+        _setCustomerPhoneField(phone);
       }
       _customerName.selection = TextSelection.collapsed(offset: name.length);
     });
@@ -2447,17 +3011,383 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   Future<void> _openNewCustomer() async {
     if (_hydratingEdit || _saving) return;
     final rec = await Navigator.of(context).push<CustomerRecord>(
-      MaterialPageRoute(
+      FastContentPageRoute(
         builder: (_) => const CustomerFormScreen(),
       ),
     );
     if (!mounted || rec == null) return;
+    CustomerSearchIndex.instance.invalidate();
     await _applyCustomerSelection(rec);
+  }
+
+  void _markLeaveGateClean() {
+    _leaveGateCleanFingerprint = _leaveGateFingerprint();
+  }
+
+  Future<void> _confirmAndClearOilFormFields() async {
+    if (_saving || _hydratingEdit || !widget.isNewCard) return;
+    if (!_hasUnsavedOilDraft() &&
+        _customerName.text.trim().isEmpty &&
+        _deviceSerial.text.trim().isEmpty &&
+        _odometerDigits(_odometerCurrent.text).isEmpty) {
+      // لا شيء يُمسح — لا حوار بلا سبب.
+      return;
+    }
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => Directionality(
+        textDirection: TextDirection.rtl,
+        child: AlertDialog(
+          title: const Text('مسح الحقول'),
+          content: const Text(
+            'هل تريد مسح كل حقول البطاقة؟ لا يمكن التراجع عن ذلك.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('إلغاء'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('مسح الكل'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || ok != true) return;
+    _clearAllOilFormFields();
+  }
+
+  void _clearAllOilFormFields() {
+    _plateVehicleSyncDebounce?.cancel();
+    _notesMoneyDebounce?.cancel();
+    _checkoutUiDebounce?.cancel();
+    _notesMoneyAiGeneration++;
+
+    _suspendCustomerIdClear = true;
+    _applyingVehicleRecord = true;
+    try {
+      _customerName.clear();
+      _resetCustomerPhonePrefix();
+      _deviceName.clear();
+      _carModel.clear();
+      _deviceSerial.clear();
+      _engineSize.clear();
+      _odometerCurrent.clear();
+      _odometerNext.clear();
+      _oilType.clear();
+      _oilSizeAmount.clear();
+      _oilLitersStock.clear();
+      _estimated.text = '0';
+      _agreed.clear();
+      _advance.text = '0';
+      _issue.clear();
+      _technicianName.clear();
+
+      _customerId = null;
+      _linkedCustomerName = null;
+      _customerOpenDebtFils = 0;
+      _customerOpenDebtLoading = false;
+      _priorOpenDebtFilsAtCheckout = 0;
+
+      _selectedViscosity = null;
+      _selectedSizeUnit = 'L';
+      _selectedFilterType = null;
+      _selectedOilBrand = null;
+      _selectedOilFamilyKey = null;
+      _selectedServices.clear();
+      _selectedOilServiceIds.clear();
+      _oilProductLines.clear();
+      _orderGlobalId = null;
+
+      _oilCustomerProvided = false;
+      _oilStockProductId = null;
+      _oilAvailableLiters = 0;
+      _oilPickSellPerLiter = null;
+      _catalogSellPerLiterFils = null;
+      _basePriceFils = 0;
+
+      _gearHydraulic.clear();
+      _powerHydraulic.clear();
+      for (final slot in _filterSlotsByCode.values) {
+        slot.clear();
+      }
+
+      _notesExtrasFils = 0;
+      _notesExtrasConfirmed = false;
+      _notesExtrasDismissedKey = null;
+      _notesMoneyPreview = OilNotesMoneyParseResult.empty;
+      _notesMoneyLocalHint = OilNotesMoneyParseResult.empty;
+      _notesMoneyAiLoading = false;
+      _notesMoneyAiForText = null;
+
+      _agreedTotalManual = false;
+      _advanceManuallyEdited = false;
+      _lastAutoSyncedTotalFils = null;
+      _odometerNextTouched = false;
+      _oilFluidUserEdited = false;
+      _hydraulicGearUserEdited = false;
+      _hydraulicPowerUserEdited = false;
+      _expandedOptional.clear();
+
+      _lastAutoSyncedPlate = null;
+      _lastAutoSyncedCustomerKey = null;
+      _prefillPlateAtOpen = null;
+      _allowAutoVisitLookup = true;
+      _vehicleSyncQueued = false;
+      _error = null;
+      _errorText = null;
+      _status = 'pending';
+    } finally {
+      _suspendCustomerIdClear = false;
+      _applyingVehicleRecord = false;
+    }
+
+    if (!mounted) return;
+    setState(() {});
+    _markLeaveGateClean();
+    FocusScope.of(context).unfocus();
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    messenger?.hideCurrentSnackBar();
+    messenger?.showSnackBar(
+      const SnackBar(
+        content: Text('تم مسح كل الحقول'),
+        behavior: SnackBarBehavior.floating,
+        duration: Duration(seconds: 2),
+      ),
+    );
+  }
+
+  String _leaveGateFingerprint() {
+    final filterSig = _filterSlotsByCode.entries
+        .where((e) => e.value.hasSelection)
+        .map((e) => '${e.key}:${e.value.catalogEntryId ?? e.value.name}')
+        .join(',');
+    final productsSig = _oilProductLines
+        .map((l) => '${l.productId}:${l.quantity}')
+        .join(',');
+    return [
+      _customerName.text.trim(),
+      _customerPhone.text.trim(),
+      _deviceName.text.trim(),
+      _deviceSerial.text.trim(),
+      _carModel.text.trim(),
+      _engineSize.text.trim(),
+      _odometerDigits(_odometerCurrent.text),
+      _odometerDigits(_odometerNext.text),
+      _oilType.text.trim(),
+      _issue.text.trim(),
+      _technicianName.text.trim(),
+      _agreed.text.trim(),
+      (_customerId ?? 0).toString(),
+      filterSig,
+      productsSig,
+      _oilCustomerProvided ? '1' : '0',
+      (_oilStockProductId ?? 0).toString(),
+      _oilSizeAmount.text.trim(),
+      _oilLitersStock.text.trim(),
+    ].join('\u{1e}');
+  }
+
+  bool _hasUnsavedOilDraft() {
+    if (_leaveGateAllowPop) return false;
+    if (_hydratingEdit || !_formBodyReady) return false;
+    final clean = _leaveGateCleanFingerprint;
+    if (clean == null) {
+      // بطاقة جديدة قبل تثبيت البصمة: أي إدخال جوهري = مسودة.
+      return _customerName.text.trim().isNotEmpty ||
+          !_customerPhoneIsBlank ||
+          _deviceName.text.trim().isNotEmpty ||
+          _deviceSerial.text.trim().isNotEmpty ||
+          _carModel.text.trim().isNotEmpty ||
+          _odometerDigits(_odometerCurrent.text).isNotEmpty ||
+          _issue.text.trim().isNotEmpty ||
+          _oilProductLines.isNotEmpty ||
+          _filterSlotsByCode.values.any((s) => s.hasSelection);
+    }
+    return _leaveGateFingerprint() != clean;
+  }
+
+  Future<bool> _confirmLeaveOilFormIfDirty() async {
+    if (!_hasUnsavedOilDraft()) return true;
+    final leave = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => Directionality(
+        textDirection: TextDirection.rtl,
+        child: AlertDialog(
+          title: const Text('بيانات غير محفوظة'),
+          content: const Text(
+            'أدخلت بيانات في البطاقة ولم تُحفظ بعد. هل تريد المغادرة وفقدان هذه الحقول؟',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('البقاء'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('مغادرة'),
+            ),
+          ],
+        ),
+      ),
+    );
+    return leave == true;
+  }
+
+  /// عند حفظ البطاقة بالاسم/الهاتف مباشرة: إنشاء أو ربط سجل في جدول العملاء
+  /// ليظهر في إدارة العملاء وقائمة الاتصال.
+  Future<void> _ensureCustomerRecordFromOilForm({
+    required String customerName,
+    required String phoneRaw,
+  }) async {
+    final name = customerName.trim();
+    if (name.isEmpty || name == '—') return;
+
+    final nameErr = CustomerValidation.name(name);
+    if (nameErr != null) return;
+
+    final e164 = CustomerValidation.toE164IraqMobile(phoneRaw);
+    final phoneOk = e164 != null &&
+        CustomerValidation.iraqiMobilePhone(phoneRaw) == null;
+    final phoneForSave = phoneOk ? e164 : null;
+
+    final tenantCtx = TenantContextService.instance;
+    if (!tenantCtx.loaded) {
+      await DatabaseHelper().ensureDefaultTenantSeedIfNeeded();
+      await tenantCtx.load();
+    }
+    final tenantId = tenantCtx.requireActiveTenantId();
+
+    Future<void> linkLocal(int cid) async {
+      if (!mounted) return;
+      _suspendCustomerIdClear = true;
+      setState(() {
+        _customerId = cid;
+        _linkedCustomerName = name;
+      });
+      // تصحيح مفوتر: لا تؤخر الحفظ بانتظار اصطناعي.
+      if (!widget.amendInvoicedOrder) {
+        await Future<void>.delayed(const Duration(milliseconds: 40));
+      }
+      _suspendCustomerIdClear = false;
+    }
+
+    /// يزامن اسم (وهاتف إن لزم) سجل العملاء المرتبط عند تصحيح البطاقة أو الحفظ.
+    Future<void> syncLinkedCustomerProfile(int cid) async {
+      try {
+        final row = await _customersDb.getCustomerById(cid);
+        if (row == null) return;
+
+        final currentName = (row['name']?.toString() ?? '').trim();
+        final currentPhoneKey =
+            CustomerValidation.phoneMatchKey(row['phone']?.toString());
+        final nameChanged =
+            OilChangeLookupNormalize.normalizeNameKey(currentName) !=
+                OilChangeLookupNormalize.normalizeNameKey(name);
+        // هاتف: املأ الفارغ دائماً؛ وعند التصحيح حدّث إن تغيّر في النموذج.
+        final phoneForSaveKey = CustomerValidation.phoneMatchKey(phoneForSave);
+        final phoneChanged = phoneForSave != null &&
+            phoneForSave.isNotEmpty &&
+            (currentPhoneKey == null ||
+                currentPhoneKey.isEmpty ||
+                (widget.amendInvoicedOrder &&
+                    phoneForSaveKey != currentPhoneKey));
+
+        if (!nameChanged && !phoneChanged) return;
+
+        final extras = await _customersDb.getCustomerExtraPhones(cid);
+        final phoneOut = phoneChanged
+            ? phoneForSave
+            : (row['phone']?.toString());
+        await _customersDb.updateCustomer(
+          id: cid,
+          name: name,
+          phone: phoneOut,
+          email: row['email']?.toString(),
+          address: row['address']?.toString(),
+          notes: row['notes']?.toString(),
+          extraPhones: extras,
+        );
+      } catch (e, st) {
+        AppLogger.error(
+          'OilChangeForm',
+          'sync linked customer profile failed',
+          e,
+          st,
+        );
+      }
+    }
+
+    try {
+      var cid = _customerId;
+      if (cid != null && cid > 0) {
+        await syncLinkedCustomerProfile(cid);
+        await linkLocal(cid);
+        CustomerSearchIndex.instance.invalidate();
+        if (mounted) {
+          unawaited(context.read<CustomersProvider>().refresh());
+        }
+        return;
+      }
+
+      if (phoneForSave != null) {
+        cid = await _customersDb.findCustomerIdOwningNormalizedPhoneAnywhere(
+          phoneForSave,
+        );
+      }
+      if (cid == null || cid <= 0) {
+        cid = await _customersDb.tryResolveCustomerIdByExactName(name);
+      }
+
+      if (cid != null && cid > 0) {
+        await linkLocal(cid);
+        await syncLinkedCustomerProfile(cid);
+      } else {
+        try {
+          final newId = await _customersDb.insertCustomer(
+            name: name,
+            phone: phoneForSave,
+            tenantId: tenantId,
+          );
+          await linkLocal(newId);
+        } on DuplicateCustomerPhoneException {
+          if (phoneForSave != null) {
+            final existing =
+                await _customersDb.findCustomerIdOwningNormalizedPhoneAnywhere(
+              phoneForSave,
+            );
+            if (existing != null && existing > 0) {
+              await linkLocal(existing);
+              await syncLinkedCustomerProfile(existing);
+            }
+          }
+        }
+      }
+
+      CustomerSearchIndex.instance.invalidate();
+      if (mounted) {
+        unawaited(context.read<CustomersProvider>().refresh());
+      }
+    } catch (e, st) {
+      AppLogger.error(
+        'OilChangeForm',
+        'ensure customer from oil form failed',
+        e,
+        st,
+      );
+    }
   }
 
 
   Future<void> _openDurationWheel() async {
-    throw UnimplementedError('shared: _openDurationWheel');
+    // وضع الزيت لا يعرض هذا المسار؛ تجنّب انهيار إن وُصل إليه خطأً.
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('تحديد المدة غير متاح في بطاقة غيار الزيت')),
+    );
   }
 
   Future<void> _applyServicePricing(int? productId) async {
@@ -2479,16 +3409,21 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
 
 
   Future<void> _pickService() async {
-    throw UnimplementedError('shared: _pickService');
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('اختيار الخدمة غير متاح في بطاقة غيار الزيت')),
+    );
   }
 
   Map<String, dynamic> _orderSnapshotFromForm() {
-    final sizeAmt = _oilSizeAmount.text.trim();
-    final sizeVal = sizeAmt.isEmpty ? null : '$sizeAmt $_selectedSizeUnit';
+    final sizeVal = _oilSizeValueForSave();
+    final phoneRaw = _customerPhone.text.trim();
+    final phoneStored =
+        CustomerValidation.toE164IraqMobile(phoneRaw) ?? phoneRaw;
     return {
       if (_customerId != null && _customerId! > 0) 'customerId': _customerId,
       'customerNameSnapshot': _customerName.text.trim(),
-      'customerPhone': _customerPhone.text.trim(),
+      'customerPhone': phoneStored,
       'deviceName': _deviceName.text.trim(),
       'carModel': _carModelForSave,
       'engineSize': _engineSize.text.trim(),
@@ -2508,12 +3443,15 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       'powerHydraulicCustomerProvided':
           _powerHydraulic.customerProvided ? 1 : 0,
       'filterType': _filterTypeSummaryForSave(),
-      'engineFilterName': _engineFilter.name,
-      'engineFilterPriceFils': _engineFilter.priceFils,
-      'airFilterName': _airFilter.name,
-      'airFilterPriceFils': _airFilter.priceFils,
-      'gearFilterName': _gearFilter.name,
-      'gearFilterPriceFils': _gearFilter.priceFils,
+      'oilFiltersJson': _oilFiltersJsonForSave(),
+      'engineFilterName': _filterSlotFor(OilChangeFilterKind.engine).name,
+      'engineFilterPriceFils':
+          _filterSlotFor(OilChangeFilterKind.engine).priceFils,
+      'airFilterName': _filterSlotFor(OilChangeFilterKind.air).name,
+      'airFilterPriceFils': _filterSlotFor(OilChangeFilterKind.air).priceFils,
+      'gearFilterName': _filterSlotFor(OilChangeFilterKind.gear).name,
+      'gearFilterPriceFils':
+          _filterSlotFor(OilChangeFilterKind.gear).priceFils,
       'requestedServices': widget.oilChangeMode
           ? _oilServiceNamesForSave()
           : _selectedServices.join(','),
@@ -2541,88 +3479,74 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     required int? powerHydWh,
     required double powerHydLiters,
   }) async {
-    final tasks = <Future<void>>[];
-
+    // تسلسلي عمداً: التشغيل المتوازي كان يترك صرفاً جزئياً عند فشل فرع.
     if (_stockFromWarehouseEnabled &&
         !oilCustomer &&
         oilPid != null &&
-        oilWh != null &&
         oilLiters > 0) {
-      tasks.add(() async {
-        final voucherId =
-            await OilChangeStockService.instance.issueForOilChangeOrder(
-          orderId: savedId,
-          productId: oilPid,
-          liters: oilLiters,
-          warehouseId: oilWh,
-          notes: 'صرف زيت',
-        );
-        await OilChangeOrdersRepository.instance.updateOilChangeOrder(
-          savedId,
-          patchOilStockFields: true,
-          stockVoucherId: voucherId,
-          oilProductId: oilPid,
-          oilLitersUsed: oilLiters,
-          oilCustomerProvided: false,
-          oilWarehouseId: oilWh,
-        );
-      }());
+      final voucherId =
+          await OilChangeStockService.instance.issueForOilChangeOrder(
+        orderId: savedId,
+        productId: oilPid,
+        liters: oilLiters,
+        warehouseId: oilWh ?? 0,
+        notes: 'صرف زيت',
+      );
+      await OilChangeOrdersRepository.instance.updateOilChangeOrder(
+        savedId,
+        patchOilStockFields: true,
+        stockVoucherId: voucherId,
+        oilProductId: oilPid,
+        oilLitersUsed: oilLiters,
+        oilCustomerProvided: false,
+        oilWarehouseId: oilWh,
+      );
     }
 
     if (_hydraulicStockFromWarehouseEnabled &&
         !hydCustomer &&
         hydPid != null &&
-        hydWh != null &&
         hydLiters > 0) {
-      tasks.add(() async {
-        final hydVoucherId =
-            await OilChangeStockService.instance.issueForOilChangeOrder(
-          orderId: savedId,
-          productId: hydPid,
-          liters: hydLiters,
-          warehouseId: hydWh,
-          notes: 'صرف هيدروليك الكير',
-        );
-        await OilChangeOrdersRepository.instance.updateOilChangeOrder(
-          savedId,
-          patchHydraulicStockFields: true,
-          hydraulicStockVoucherId: hydVoucherId,
-          hydraulicProductId: hydPid,
-          hydraulicLitersUsed: hydLiters,
-          hydraulicCustomerProvided: false,
-          hydraulicWarehouseId: hydWh,
-        );
-      }());
+      final hydVoucherId =
+          await OilChangeStockService.instance.issueForOilChangeOrder(
+        orderId: savedId,
+        productId: hydPid,
+        liters: hydLiters,
+        warehouseId: hydWh ?? 0,
+        notes: 'صرف هيدروليك الكير',
+      );
+      await OilChangeOrdersRepository.instance.updateOilChangeOrder(
+        savedId,
+        patchHydraulicStockFields: true,
+        hydraulicStockVoucherId: hydVoucherId,
+        hydraulicProductId: hydPid,
+        hydraulicLitersUsed: hydLiters,
+        hydraulicCustomerProvided: false,
+        hydraulicWarehouseId: hydWh,
+      );
     }
 
     if (_hydraulicStockFromWarehouseEnabled &&
         !powerHydCustomer &&
         powerHydPid != null &&
-        powerHydWh != null &&
         powerHydLiters > 0) {
-      tasks.add(() async {
-        final powerVoucherId =
-            await OilChangeStockService.instance.issueForOilChangeOrder(
-          orderId: savedId,
-          productId: powerHydPid,
-          liters: powerHydLiters,
-          warehouseId: powerHydWh,
-          notes: 'صرف هيدروليك الباور',
-        );
-        await OilChangeOrdersRepository.instance.updateOilChangeOrder(
-          savedId,
-          patchPowerHydraulicStockFields: true,
-          powerHydraulicStockVoucherId: powerVoucherId,
-          powerHydraulicProductId: powerHydPid,
-          powerHydraulicLitersUsed: powerHydLiters,
-          powerHydraulicCustomerProvided: false,
-          powerHydraulicWarehouseId: powerHydWh,
-        );
-      }());
-    }
-
-    if (tasks.isNotEmpty) {
-      await Future.wait(tasks);
+      final powerVoucherId =
+          await OilChangeStockService.instance.issueForOilChangeOrder(
+        orderId: savedId,
+        productId: powerHydPid,
+        liters: powerHydLiters,
+        warehouseId: powerHydWh ?? 0,
+        notes: 'صرف هيدروليك الباور',
+      );
+      await OilChangeOrdersRepository.instance.updateOilChangeOrder(
+        savedId,
+        patchPowerHydraulicStockFields: true,
+        powerHydraulicStockVoucherId: powerVoucherId,
+        powerHydraulicProductId: powerHydPid,
+        powerHydraulicLitersUsed: powerHydLiters,
+        powerHydraulicCustomerProvided: false,
+        powerHydraulicWarehouseId: powerHydWh,
+      );
     }
   }
 
@@ -2634,11 +3558,27 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     );
   }
 
+  /// مفتاح مقارنة هاتف — أرقام غربية فقط بدون فواصل.
+  String _normalizedPhoneKey(String? raw) {
+    final western = OilChangeLookupNormalize.toWesternDigits(raw ?? '');
+    return CustomerValidation.normalizePhoneDigits(western) ?? '';
+  }
+
+  bool _phoneChangedFromAmendBaseline() {
+    return oilChangeAmendShouldResendWhatsapp(
+      amendInvoicedOrder: widget.amendInvoicedOrder,
+      currentPhoneDigits: _normalizedPhoneKey(_customerPhone.text),
+      baselinePhoneDigits: _baselineCustomerPhoneDigits,
+    );
+  }
+
   Future<_OilPostSaveJob?> _buildOilPostSaveJob({
     required Map<String, dynamic>? savedOrder,
     required int? orderId,
     required bool openInvoice,
     bool skipPostSaveActions = false,
+    bool wasSuspendedSave = false,
+    bool completingSuspendedSale = false,
   }) async {
     if (!widget.oilChangeMode) return null;
     if (skipPostSaveActions) return null;
@@ -2652,8 +3592,24 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
 
     int? invoiceId;
     String? checkoutError;
+    final amending = widget.amendInvoicedOrder;
 
-    if (openInvoice && orderId != null && orderId > 0 && mounted) {
+    if (amending && orderId != null && orderId > 0 && mounted) {
+      final auth = context.read<AuthProvider>();
+      final staff = auth.username.trim();
+      try {
+        final result = await OilChangePostSaleService.instance.amendFromOrder(
+          orderId: orderId,
+          actorUsername: staff.isEmpty ? null : staff,
+          actorUserId: auth.userId,
+        );
+        invoiceId = result.invoiceId;
+      } on OilChangePostSaleException catch (e) {
+        checkoutError = 'حُفظت البطاقة لكن تعذر تعديل الفاتورة: ${e.message}';
+      } catch (e) {
+        checkoutError = 'تعذر تعديل الفاتورة: $e';
+      }
+    } else if (openInvoice && orderId != null && orderId > 0 && mounted) {
       final staff = context.read<AuthProvider>().username.trim();
       try {
         final result = await OilChangeCheckoutService.instance.completeFromOrder(
@@ -2669,9 +3625,30 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       }
     }
 
-    await _warmPostSaveSettings();
-    final printData =
-        _cachedPrintSettings ?? await PrintSettingsRepository.instance.load();
+    final phoneChangedOnAmend = _phoneChangedFromAmendBaseline();
+    // عند تغيّر الرقم في التصحيح: أرسل دائماً قالب البطاقة العادي (مسار auto).
+    final waAuto = phoneChangedOnAmend
+        ? true
+        : (amending ? false : (_waAutoAfterSave ?? false));
+    final waManual = phoneChangedOnAmend
+        ? false
+        : (amending ? false : (_waManualAfterSave ?? false));
+
+    if (phoneChangedOnAmend) {
+      AppLogger.info(
+        'oil_change_wa',
+        'amend phone changed → will send normal card template '
+            'from=${_baselineCustomerPhoneDigits ?? ''} '
+            'to=${_normalizedPhoneKey(_customerPhone.text)}',
+      );
+      await _warmPostSaveSettings();
+    } else if (!amending) {
+      await _warmPostSaveSettings();
+    }
+
+    final printData = amending && !phoneChangedOnAmend
+        ? (_cachedPrintSettings ?? PrintSettingsData.defaults())
+        : (_cachedPrintSettings ?? await PrintSettingsRepository.instance.load());
     _cachedPrintSettings = printData;
 
     return _OilPostSaveJob(
@@ -2680,10 +3657,23 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       invoiceId: invoiceId,
       customerPhone: _customerPhone.text.trim(),
       printSettings: printData,
-      waAuto: _waAutoAfterSave ?? false,
-      waManual: _waManualAfterSave ?? false,
+      waAuto: waAuto,
+      waManual: waManual,
+      waAskRating: _waAskRatingAfterSave ?? true,
       priorOpenDebtFils: _priorOpenDebtFilsAtCheckout,
       isEdit: widget.isEdit,
+      wasSuspendedSave: wasSuspendedSave,
+      completingSuspendedSale: completingSuspendedSale,
+      isAmendInvoiced: amending,
+      sendWhatsappForPhoneChange: phoneChangedOnAmend,
+      productsSummary: _oilProductLines
+          .where((line) => line.productName.trim().isNotEmpty)
+          .map(
+            (line) => line.quantity > 1
+                ? '${line.productName.trim()} ×${line.quantity}'
+                : line.productName.trim(),
+          )
+          .join('، '),
       checkoutError: checkoutError,
     );
   }
@@ -2698,8 +3688,16 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     if (job.checkoutError != null && job.checkoutError!.trim().isNotEmpty) {
       _showRootSnackBar(
         job.checkoutError!,
-        duration: const Duration(seconds: 7),
+            duration: const Duration(seconds: 7),
       );
+    }
+
+    // تصحيح فاتورة مكتملة: لا طباعة؛ واتساب فقط إن تغيّر رقم الهاتف (قالب البطاقة العادي).
+    if (job.isAmendInvoiced) {
+      if (job.sendWhatsappForPhoneChange) {
+        await _runOilPostSaveWhatsapp(job);
+      }
+      return;
     }
 
     await Future.wait([
@@ -2724,15 +3722,44 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       if (printErr != null) {
         _showRootSnackBar(printErr);
       }
-    } catch (e) {
+      } catch (e) {
       _showRootSnackBar('تعذرت الطباعة: $e');
     }
   }
 
   Future<void> _runOilPostSaveWhatsapp(_OilPostSaveJob job) async {
     final phone = job.customerPhone;
-    if (job.isEdit || phone.isEmpty) return;
-    if (!job.waAuto && !job.waManual) return;
+
+    final allowAmendPhoneWhatsapp =
+        job.isAmendInvoiced && job.sendWhatsappForPhoneChange;
+
+    // الصمت هنا كان يظهر للمستخدم كأن الرسالة أُرسلت ولم تصل.
+    if (!job.waAuto && !job.waManual) {
+      if (phone.isNotEmpty &&
+          (allowAmendPhoneWhatsapp ||
+              !job.isEdit ||
+              job.completingSuspendedSale)) {
+        _showRootSnackBar(
+          'لم تُرسل رسالة واتساب: خيار الإرسال بعد الحفظ مُطفأ '
+          'في إعدادات غيار الزيت.',
+          duration: const Duration(seconds: 7),
+        );
+      }
+      return;
+    }
+    if (phone.isEmpty) {
+      _showRootSnackBar(
+        'لم تُرسل رسالة واتساب: رقم الزبون فارغ في البطاقة.',
+        duration: const Duration(seconds: 6),
+      );
+      return;
+    }
+    // واتساب عند الحفظ/البيع، أو عند تصحيح البطاقة إذا تغيّر رقم الهاتف فقط.
+    if (job.isEdit &&
+        !job.completingSuspendedSale &&
+        !allowAmendPhoneWhatsapp) {
+      return;
+    }
 
     if (job.waAuto) {
       try {
@@ -2744,6 +3771,10 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
           storeFooter: job.printSettings.footerExtra,
           orderId: job.orderId,
           invoiceId: job.invoiceId,
+          includeRatingAsk: job.waAskRating,
+          productsSummary: job.productsSummary,
+          printSettings: job.printSettings,
+          phoneCorrectionResend: allowAmendPhoneWhatsapp,
         );
         final err = OilChangeWhatsappUserMessages.errorSnackbarForOutcome(
           outcome,
@@ -2764,6 +3795,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       storeTitle: job.printSettings.storeTitleLine,
       storeFooter: job.printSettings.footerExtra,
       priorOpenDebtFils: job.priorOpenDebtFils,
+      includeRatingAsk: job.waAskRating,
     );
     final ctx = appRootNavigatorKey.currentContext;
     if (ctx == null || !ctx.mounted) return;
@@ -2797,7 +3829,6 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       );
       return false;
     }
-    if (warehouseId == null) return true;
     var credit = 0.0;
     if (widget.isEdit &&
         _editInvoiceId <= 0 &&
@@ -2807,10 +3838,10 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
         slot.editWarehouseId == warehouseId) {
       credit = slot.editLitersUsed;
     }
-    final avail = await OilChangeStockService.instance.availableLiters(
-      productId: productId,
-      warehouseId: warehouseId,
-    );
+      final avail = await OilChangeStockService.instance.availableLiters(
+        productId: productId,
+        warehouseId: warehouseId ?? 0,
+      );
     if (avail + credit + 1e-9 < liters) {
       if (!mounted) return false;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -2831,6 +3862,10 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
 
     if (_customerName.text.trim().isEmpty) {
       missing.add('بيانات العميل: اسم العميل');
+    }
+    final phoneErr = _oilCustomerPhoneRequiredError(_customerPhone.text);
+    if (phoneErr != null) {
+      missing.add('بيانات العميل: رقم الهاتف');
     }
 
     if (_deviceName.text.trim().isEmpty) {
@@ -2878,6 +3913,19 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     return missing;
   }
 
+  /// رقم الهاتف إلزامي في بطاقة الغيار — فارغ أو غير عراقي صالح.
+  String? _oilCustomerPhoneRequiredError(String? raw) {
+    final t = (raw ?? '').trim();
+    if (t.isEmpty) return 'رقم الهاتف مطلوب';
+    return CustomerValidation.iraqiMobilePhone(t);
+  }
+
+  String? _oilCustomerNameRequiredError(String? raw) {
+    final t = (raw ?? '').trim();
+    if (t.isEmpty) return 'اسم العميل مطلوب';
+    return CustomerValidation.name(t);
+  }
+
   Future<void> _showOilChangeCoreMissingDialog(List<String> missing) async {
     if (!mounted || missing.isEmpty) return;
     await showDialog<void>(
@@ -2905,16 +3953,52 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     bool openInvoice = false,
     _OilSubmitIntent intent = _OilSubmitIntent.complete,
   }) async {
-    final suspending = !widget.isEdit && intent == _OilSubmitIntent.suspend;
+    final reSuspending =
+        widget.isEdit &&
+        intent == _OilSubmitIntent.suspend &&
+        _oilEditCompletingSuspended;
+    final suspending =
+        (!widget.amendInvoicedOrder) &&
+        ((!widget.isEdit && intent == _OilSubmitIntent.suspend) ||
+            reSuspending);
+    // قبل تغيير الحالة — لإرسال واتساب عند إكمال معلّقة.
+    final completingSuspendedSale =
+        !widget.amendInvoicedOrder &&
+        widget.isEdit &&
+        _oilEditCompletingSuspended &&
+        intent == _OilSubmitIntent.complete;
 
-    if (!widget.isEdit && !suspending) {
+    if (widget.amendInvoicedOrder) {
+      openInvoice = false;
+    } else if (!widget.isEdit && !suspending) {
       openInvoice = true;
     }
-    if (_oilEditCompletingSuspended) {
+    if (completingSuspendedSale) {
       openInvoice = true;
     }
     if (_hydratingEdit || _saving) return;
 
+    if (widget.amendInvoicedOrder && intent == _OilSubmitIntent.suspend) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('لا يمكن تعليق بطاقة مكتملة أثناء التصحيح.'),
+          ),
+        );
+      }
+      return;
+    }
+
+    // ألغِ مزامنة لوحة متأخرة حتى لا تُفسِد القراءات عند الحفظ/التعليق.
+    _plateVehicleSyncDebounce?.cancel();
+
+    // قفل فوري قبل أي await — يمنع نقراً مزدوجاً يكرّر البطاقة/المخزون/الفاتورة.
+    _saving = true;
+    if (mounted) {
+      setState(() => _error = null);
+    }
+
+    try {
     final conflict = ShiftActorConflictGuard.evaluate(
       sessionUserId: context.read<AuthProvider>().userId,
       activeShift: context.read<ShiftProvider>().activeShift,
@@ -2942,6 +4026,22 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     }
 
     if (suspending) {
+      final nameErr = _oilCustomerNameRequiredError(_customerName.text);
+      final phoneErr = _oilCustomerPhoneRequiredError(_customerPhone.text);
+      if (nameErr != null || phoneErr != null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                nameErr != null && phoneErr != null
+                    ? 'أدخل اسم العميل ورقم الهاتف قبل تعليق الفاتورة.'
+                    : (nameErr ?? phoneErr)!,
+              ),
+            ),
+          );
+        }
+        return;
+      }
       if (_deviceSerial.text.trim().isEmpty) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -2966,7 +4066,9 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
         await _showOilChangeCoreMissingDialog(missingCore);
         return;
       }
-      _status = OilChangeOrderStatus.completed;
+      _status = widget.amendInvoicedOrder
+          ? OilChangeOrderStatus.delivered
+          : OilChangeOrderStatus.completed;
     }
 
     final serialOut = _deviceSerial.text.trim();
@@ -2984,19 +4086,24 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     final powerHydSizeVal = _hydraulicSizeValueForSaveFor(_powerHydraulic);
 
     final estF = _parseFils(_estimated);
-    final agreedRaw = _agreed.text.trim().replaceAll(',', '');
-    final agreedD = agreedRaw.isEmpty ? null : double.tryParse(agreedRaw);
-    var agreedF = agreedD == null ? null : IqdMoney.toFils(agreedD);
-        {
-      final cardTotal = _cardGrandTotalFils();
-      if (agreedF == null || agreedF <= 0) {
-        agreedF = cardTotal > 0 ? cardTotal : null;
-      }
-    }
-    final advF = _parseFils(_advance);
+    final agreedF = OilChangeAgreedTotal.agreedFilsForSave(
+      agreedFils: _parseFils(_agreed),
+      cardGrandFils: _cardGrandTotalFils(),
+      manuallyEdited: _agreedTotalManual,
+    );
+    final agreedFOrNull = agreedF > 0 ? agreedF : null;
+    final advRaw = _parseFils(_advance);
+    final totalCap = agreedFOrNull ?? _cardGrandTotalFils();
+    final advF = totalCap > 0 && advRaw > totalCap ? totalCap : advRaw;
+
+    await _ensureCustomerRecordFromOilForm(
+      customerName: customerNameOut,
+      phoneRaw: _customerPhone.text.trim(),
+    );
+    if (!mounted) return;
 
     if (openInvoice) {
-      final totalF = agreedF ?? _cardGrandTotalFils();
+      final totalF = agreedFOrNull ?? _cardGrandTotalFils();
       final remainderF = totalF > 0 ? (totalF - advF).clamp(0, totalF) : 0;
       if (remainderF > 500 && (_customerId == null || _customerId! <= 0)) {
         if (mounted) {
@@ -3075,7 +4182,6 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
         !oilCustomer &&
         !_usesCatalogOilPricing &&
         oilLiters > 0 &&
-        oilWh != null &&
         oilPid != null) {
       var creditLiters = 0.0;
       if (widget.isEdit &&
@@ -3088,7 +4194,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       }
       final avail = await OilChangeStockService.instance.availableLiters(
         productId: oilPid,
-        warehouseId: oilWh,
+        warehouseId: oilWh ?? 0,
       );
       if (avail + creditLiters + 1e-9 < oilLiters) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -3130,20 +4236,20 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       _priorOpenDebtFilsAtCheckout = _customerOpenDebtFils;
     }
 
-    final postSaveWarmup = _warmPostSaveSettings();
+    final amendingFastPath = widget.amendInvoicedOrder;
+    final amendPhoneResend = amendingFastPath && _phoneChangedFromAmendBaseline();
+    final postSaveWarmup = (amendingFastPath && !amendPhoneResend)
+        ? Future<void>.value()
+        : _warmPostSaveSettings();
 
     {
-      await DatabaseHelper().ensureDefaultTenantSeedIfNeeded();
       final tenantCtx = TenantContextService.instance;
       if (!tenantCtx.loaded) {
+        await DatabaseHelper().ensureDefaultTenantSeedIfNeeded();
         await tenantCtx.load();
       }
     }
 
-    setState(() {
-      _saving = true;
-      _error = null;
-    });
     try {
       await postSaveWarmup;
       int? savedId;
@@ -3159,10 +4265,12 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
           deviceSerial: serialOut,
           serviceId: _serviceId,
           estimatedPriceFils: estF,
-          agreedPriceFils: agreedF,
+          agreedPriceFils: agreedFOrNull,
           advancePaymentFils: advF,
           status: _status,
           issueDescription: _issue.text.trim(),
+          // إكمال معلّقة → يوم السجل = يوم الحفظ والبيع (وليس يوم التعليق).
+          stampCreatedAtAsNow: completingSuspendedSale,
           patchEtaFields: true,
           expectedDurationMinutes: etaMins,
           promisedDeliveryAt: promIso,
@@ -3174,16 +4282,31 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
           oilViscosity: _selectedViscosity,
           oilSize: sizeVal,
           filterType: _filterTypeSummaryForSave(),
-          engineFilterName:
-              _engineFilter.hasSelection ? _engineFilter.name : null,
-          engineFilterPriceFils:
-              _engineFilter.hasSelection ? _engineFilter.priceFils : null,
-          airFilterName: _airFilter.hasSelection ? _airFilter.name : null,
+          oilFiltersJson: _oilFiltersJsonForSave(),
+          engineFilterName: _filterSlotFor(OilChangeFilterKind.engine)
+                  .hasSelection
+              ? _filterSlotFor(OilChangeFilterKind.engine).name
+              : null,
+          engineFilterPriceFils: _filterSlotFor(OilChangeFilterKind.engine)
+                  .hasSelection
+              ? _filterSlotFor(OilChangeFilterKind.engine).priceFils
+              : null,
+          airFilterName:
+              _filterSlotFor(OilChangeFilterKind.air).hasSelection
+                  ? _filterSlotFor(OilChangeFilterKind.air).name
+                  : null,
           airFilterPriceFils:
-              _airFilter.hasSelection ? _airFilter.priceFils : null,
-          gearFilterName: _gearFilter.hasSelection ? _gearFilter.name : null,
+              _filterSlotFor(OilChangeFilterKind.air).hasSelection
+                  ? _filterSlotFor(OilChangeFilterKind.air).priceFils
+                  : null,
+          gearFilterName:
+              _filterSlotFor(OilChangeFilterKind.gear).hasSelection
+                  ? _filterSlotFor(OilChangeFilterKind.gear).name
+                  : null,
           gearFilterPriceFils:
-              _gearFilter.hasSelection ? _gearFilter.priceFils : null,
+              _filterSlotFor(OilChangeFilterKind.gear).hasSelection
+                  ? _filterSlotFor(OilChangeFilterKind.gear).priceFils
+                  : null,
           requestedServices: widget.oilChangeMode
               ? _oilServiceNamesForSave()
               : _selectedServices.join(','),
@@ -3214,7 +4337,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
         );
         savedId = widget.editOrderId;
         final editId = widget.editOrderId!;
-        if (_editInvoiceId <= 0) {
+        if (_editInvoiceId <= 0 || widget.amendInvoicedOrder) {
           try {
             if (_stockFromWarehouseEnabled) {
               final newOilVoucherId =
@@ -3322,7 +4445,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
           deviceSerial: serialOut,
           serviceId: _serviceId,
           estimatedPriceFils: estF,
-          agreedPriceFils: agreedF,
+          agreedPriceFils: agreedFOrNull,
           advancePaymentFils: advF,
           status: _status,
           issueDescription: _issue.text.trim(),
@@ -3336,16 +4459,31 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
           oilViscosity: _selectedViscosity,
           oilSize: sizeVal,
           filterType: _filterTypeSummaryForSave(),
-          engineFilterName:
-              _engineFilter.hasSelection ? _engineFilter.name : null,
-          engineFilterPriceFils:
-              _engineFilter.hasSelection ? _engineFilter.priceFils : null,
-          airFilterName: _airFilter.hasSelection ? _airFilter.name : null,
+          oilFiltersJson: _oilFiltersJsonForSave(),
+          engineFilterName: _filterSlotFor(OilChangeFilterKind.engine)
+                  .hasSelection
+              ? _filterSlotFor(OilChangeFilterKind.engine).name
+              : null,
+          engineFilterPriceFils: _filterSlotFor(OilChangeFilterKind.engine)
+                  .hasSelection
+              ? _filterSlotFor(OilChangeFilterKind.engine).priceFils
+              : null,
+          airFilterName:
+              _filterSlotFor(OilChangeFilterKind.air).hasSelection
+                  ? _filterSlotFor(OilChangeFilterKind.air).name
+                  : null,
           airFilterPriceFils:
-              _airFilter.hasSelection ? _airFilter.priceFils : null,
-          gearFilterName: _gearFilter.hasSelection ? _gearFilter.name : null,
+              _filterSlotFor(OilChangeFilterKind.air).hasSelection
+                  ? _filterSlotFor(OilChangeFilterKind.air).priceFils
+                  : null,
+          gearFilterName:
+              _filterSlotFor(OilChangeFilterKind.gear).hasSelection
+                  ? _filterSlotFor(OilChangeFilterKind.gear).name
+                  : null,
           gearFilterPriceFils:
-              _gearFilter.hasSelection ? _gearFilter.priceFils : null,
+              _filterSlotFor(OilChangeFilterKind.gear).hasSelection
+                  ? _filterSlotFor(OilChangeFilterKind.gear).priceFils
+                  : null,
           requestedServices: _oilServiceNamesForSave(),
           customerPhone: _customerPhone.text.trim(),
           technicianName: _technicianName.text.trim(),
@@ -3391,9 +4529,19 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
         if (!suspending || _oilProductLines.isNotEmpty) {
           await _persistOilProductLines(savedId);
         }
-        savedOrder = await OilChangeOrdersRepository.instance.getOilChangeOrderById(
-          savedId,
-        );
+        if (widget.amendInvoicedOrder) {
+          // لا إعادة قراءة من DB — لقطة النموذج كافية لمسار التصحيح المحلي.
+          savedOrder = _orderSnapshotFromForm();
+          savedOrder['id'] = savedId;
+          if (_editInvoiceId > 0) {
+            savedOrder['invoiceId'] = _editInvoiceId;
+          }
+        } else {
+          savedOrder =
+              await OilChangeOrdersRepository.instance.getOilChangeOrderById(
+            savedId,
+          );
+        }
       }
       if (!mounted) return;
 
@@ -3401,15 +4549,29 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
         savedOrder: savedOrder,
         orderId: savedId,
         openInvoice: openInvoice,
-        skipPostSaveActions: suspending,
+        // واتساب فقط عند الحفظ/البيع — لا عند التعليق ولا إعادة التعليق ولا الإسقاط.
+        wasSuspendedSave: false,
+        completingSuspendedSale: completingSuspendedSale && openInvoice,
       );
       if (!mounted) return;
 
       if (suspending) {
         setState(() => _saving = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('تم تعليق الفاتورة — يمكنك استكمالها لاحقاً')),
+          SnackBar(
+            content: Text(
+              widget.isEdit
+                  ? 'تم إعادة تعليق البطاقة'
+                  : 'تم تعليق الفاتورة — يمكنك استكمالها لاحقاً',
+            ),
+          ),
         );
+        // لا جدول واتساب عند التعليق — النقل للمعلّقة فقط.
+        if (widget.isEdit) {
+          _leaveGateAllowPop = true;
+          Navigator.pop(context, true);
+          return;
+        }
         unawaited(
           Navigator.of(context).pushReplacement(
             contentMaterialRoute(
@@ -3423,6 +4585,54 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       }
 
       setState(() => _saving = false);
+
+      final soldOk = postSaveJob != null &&
+          postSaveJob.checkoutError == null &&
+          (postSaveJob.invoiceId ?? 0) > 0;
+      final amendOk = widget.amendInvoicedOrder &&
+          postSaveJob != null &&
+          postSaveJob.checkoutError == null &&
+          (postSaveJob.invoiceId ?? 0) > 0;
+
+      if (widget.amendInvoicedOrder &&
+          postSaveJob != null &&
+          (postSaveJob.checkoutError ?? '').trim().isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(postSaveJob.checkoutError!),
+            duration: const Duration(seconds: 7),
+          ),
+        );
+        return;
+      }
+
+      AppLogger.info(
+        'oil_change_save',
+        'saved id=$savedId invoice=${postSaveJob?.invoiceId} '
+            'openInvoice=$openInvoice amend=${widget.amendInvoicedOrder} '
+            'phoneWa=${postSaveJob?.sendWhatsappForPhoneChange} '
+            'err=${postSaveJob?.checkoutError}',
+      );
+
+      // تصحيح مفوتر: أغلق فوراً بدون أنيميشن ~2ث — العمل محلي.
+      // واتساب (إن تغيّر الرقم) يُجدول بعد الإغلاق عبر نفس مسار post-save.
+      if (amendOk) {
+        _leaveGateAllowPop = true;
+        Navigator.pop(context, true);
+        _scheduleOilPostSaveJob(postSaveJob!);
+        return;
+      }
+
+      // البطاقة محفوظة فعلاً حتى لو تعذّر البيع؛ تفصيل البيع يصل في تنبيه لاحق.
+      if (savedId != null && savedId > 0) {
+        await showOilChangeSaveSuccessOverlay(
+          context,
+          message: soldOk ? 'تم الحفظ والبيع بنجاح' : 'تم حفظ البطاقة بنجاح',
+        );
+        if (!mounted) return;
+      }
+
+      _leaveGateAllowPop = true;
       Navigator.pop(context, true);
       if (postSaveJob != null) {
         _scheduleOilPostSaveJob(postSaveJob);
@@ -3434,6 +4644,13 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
         _errorText = _friendlyError(e);
         _saving = false;
       });
+    }
+    } finally {
+      // أي خروج مبكر (تحقق فاشل) يحرّر القفل؛ مسارات النجاح تضبط _saving=false مسبقاً.
+      if (_saving) {
+        _saving = false;
+        if (mounted) setState(() {});
+      }
     }
   }
 
@@ -3459,9 +4676,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     if (_oilProductLines.isNotEmpty) {
       _expandedOptional.add(_OilFormOptionalSection.products);
     }
-    if (_engineFilter.hasSelection ||
-        _airFilter.hasSelection ||
-        _gearFilter.hasSelection) {
+    if (_filterKinds.any((k) => _filterSlotFor(k).hasSelection)) {
       _expandedOptional.add(_OilFormOptionalSection.filters);
     }
     if (_hydraulicSlotHasData(_gearHydraulic)) {
@@ -3473,6 +4688,26 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     if (_selectedOilServiceIds.isNotEmpty) {
       _expandedOptional.add(_OilFormOptionalSection.services);
     }
+    _ensureDeferredCatalogsForExpanded();
+  }
+
+  /// تحميل فلاتر/هيدروليك فقط عند الحاجة (توسيع أو بيانات موجودة).
+  void _ensureDeferredCatalogsForExpanded() {
+    final needFilters =
+        _expandedOptional.contains(_OilFormOptionalSection.filters);
+    final needHydraulic =
+        _expandedOptional.contains(_OilFormOptionalSection.hydraulicGear) ||
+            _expandedOptional.contains(_OilFormOptionalSection.hydraulicPower);
+    if (needFilters &&
+        _filterProductCatalog.isEmpty &&
+        !_filterProductCatalogLoading) {
+      unawaited(_loadFilterProductCatalog());
+    }
+    if (needHydraulic &&
+        _hydraulicProductCatalog.isEmpty &&
+        !_hydraulicProductCatalogLoading) {
+      unawaited(_loadHydraulicProductCatalog());
+    }
   }
 
   void _expandOptionalSectionsFromData() {
@@ -3480,12 +4715,23 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   }
 
   Widget _buildOilPriceBreakdownSummary(ColorScheme cs) {
+    // كل مجموع كان يُحسب مرتين (مرة في الشرط ومرة داخل النص)؛ يُحسب هنا مرة.
+    final oilFils = _oilMaterialSellFilsEst();
+    final gearFils = _hydraulicMaterialSellFilsEstFor(_gearHydraulic);
+    final powerFils = _hydraulicMaterialSellFilsEstFor(_powerHydraulic);
+    final filtersFils = _filtersTotalFils();
+    final productsFils = _oilProductLinesTotalFils();
+    final servicesFils = _oilServicesTotalFils();
+    final notesFils = _notesExtrasFils;
+
     if (_basePriceFils <= 0 &&
         _selectedOilServiceIds.isEmpty &&
-        _oilMaterialSellFilsEst() <= 0 &&
-        _hydraulicMaterialSellFilsEstFor(_gearHydraulic) <= 0 &&
-        _hydraulicMaterialSellFilsEstFor(_powerHydraulic) <= 0 &&
-        _filtersTotalFils() <= 0) {
+        oilFils <= 0 &&
+        gearFils <= 0 &&
+        powerFils <= 0 &&
+        filtersFils <= 0 &&
+        productsFils <= 0 &&
+        notesFils <= 0) {
       return const SizedBox.shrink();
     }
 
@@ -3512,7 +4758,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
             if (_basePriceFils > 0 || _selectedOilServiceIds.isNotEmpty) ...[
               const SizedBox(height: 6),
               Text(
-                'مجموع الخدمات: ${_formatFilsLabel(_oilServicesTotalFils())}',
+                'مجموع الخدمات: ${_formatFilsLabel(servicesFils)}',
                 style: TextStyle(
                   fontWeight: FontWeight.w800,
                   color: cs.primary,
@@ -3520,47 +4766,55 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
                 textAlign: TextAlign.start,
               ),
             ],
-            if (_oilMaterialSellFilsEst() > 0) ...[
+            if (oilFils > 0) ...[
               const SizedBox(height: 4),
               Text(
                 'زيت (${formatOilLitersDisplay(_oilLitersForPricing())} لتر): '
-                '${_formatFilsLabel(_oilMaterialSellFilsEst())}',
+                '${_formatFilsLabel(oilFils)}',
                 textAlign: TextAlign.start,
               ),
             ],
-            if (_hydraulicMaterialSellFilsEstFor(_gearHydraulic) > 0) ...[
+            if (gearFils > 0) ...[
               const SizedBox(height: 4),
               Text(
                 'هيدروليك الكير (${formatOilLitersDisplay(_gearHydraulic.litersForPricing())} لتر): '
-                '${_formatFilsLabel(_hydraulicMaterialSellFilsEstFor(_gearHydraulic))}',
+                '${_formatFilsLabel(gearFils)}',
                 textAlign: TextAlign.start,
               ),
             ],
-            if (_hydraulicMaterialSellFilsEstFor(_powerHydraulic) > 0) ...[
+            if (powerFils > 0) ...[
               const SizedBox(height: 4),
               Text(
                 'هيدروليك الباور (${formatOilLitersDisplay(_powerHydraulic.litersForPricing())} لتر): '
-                '${_formatFilsLabel(_hydraulicMaterialSellFilsEstFor(_powerHydraulic))}',
+                '${_formatFilsLabel(powerFils)}',
                 textAlign: TextAlign.start,
               ),
             ],
-            if (_filtersTotalFils() > 0) ...[
+            if (filtersFils > 0) ...[
               const SizedBox(height: 4),
               Text(
-                'الفلاتر: ${_formatFilsLabel(_filtersTotalFils())}',
+                'الفلاتر: ${_formatFilsLabel(filtersFils)}',
                 textAlign: TextAlign.start,
               ),
             ],
-            if (_oilProductLinesTotalFils() > 0) ...[
+            if (productsFils > 0) ...[
               const SizedBox(height: 4),
               Text(
-                'منتجات إضافية: ${_formatFilsLabel(_oilProductLinesTotalFils())}',
+                'منتجات إضافية: ${_formatFilsLabel(productsFils)}',
+                textAlign: TextAlign.start,
+              ),
+            ],
+            if (notesFils > 0) ...[
+              const SizedBox(height: 4),
+              Text(
+                'إضافات من الملاحظات: ${_formatFilsLabel(notesFils)}',
                 textAlign: TextAlign.start,
               ),
             ],
             const SizedBox(height: 4),
             Text(
-              'إجمالي البيع: ${_formatFilsLabel(_cardGrandTotalFils())}',
+              'إجمالي البيع: '
+              '${_formatFilsLabel(servicesFils + oilFils + gearFils + powerFils + filtersFils + productsFils + notesFils)}',
               style: TextStyle(
                 fontWeight: FontWeight.w900,
                 color: cs.tertiary,
@@ -3575,14 +4829,17 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   }
 
   Widget _buildOilTechnicianNotesSection(BuildContext context, bool busy) {
-    return OilChangeRoyalCard.section(
-      context: context,
-      title: 'الفني والملاحظات',
-      icon: Icons.edit_note_rounded,
-      children: _buildOilTechnicianAndNotesFields(
-        context,
-        busy,
-        compact: true,
+    return GuideAnchor(
+      id: OilGuideAnchors.formTechnician,
+      child: OilChangeRoyalCard.section(
+        context: context,
+        title: 'الفني والملاحظات',
+        icon: Icons.edit_note_rounded,
+        children: _buildOilTechnicianAndNotesFields(
+          context,
+          busy,
+          compact: true,
+        ),
       ),
     );
   }
@@ -3593,21 +4850,15 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     required bool compact,
   }) {
     return [
-      TextFormField(
+      OilChangeTechnicianField(
         controller: _technicianName,
         enabled: !busy,
-        decoration: InputDecoration(
-          labelText: 'اسم الفني المسؤول',
-          border: const OutlineInputBorder(),
-          isDense: compact,
-          prefixIcon: const Icon(Icons.handyman_rounded, size: 20),
-          hintText: 'مثال: أحمد علي',
-        ),
-        textAlign: TextAlign.start,
+        isDense: compact,
       ),
       SizedBox(height: compact ? 8 : 10),
       TextFormField(
         controller: _issue,
+        onTap: oilFieldSelectAllOnDoubleTap(_issue),
         enabled: !busy,
         decoration: InputDecoration(
           labelText: 'ملاحظات وتفاصيل إضافية',
@@ -3616,13 +4867,41 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
           suffixIcon: ArabicSpeechMicButton(
             controller: _issue,
             enabled: !busy,
-            onTextUpdated: () => setState(() {}),
+            onTextUpdated: () {
+              _onIssueNotesChanged();
+              setState(() {});
+            },
           ),
         ),
         minLines: compact ? 2 : 3,
         maxLines: compact ? 4 : 6,
         textAlign: TextAlign.start,
       ),
+      if (_notesMoneyPreview.isNotEmpty ||
+          _notesMoneyAiLoading ||
+          (_issue.text.trim().length >= 12 && !_notesExtrasConfirmed))
+        OilNotesMoneyPreviewBar(
+          result: _notesMoneyPreview,
+          enabled: !busy,
+          aiLoading: _notesMoneyAiLoading,
+          showAiEvenIfEmpty: _issue.text.trim().length >= 12,
+          onRequestAi: busy ? null : () => unawaited(_requestNotesMoneyAi()),
+          onConfirm: _confirmNotesMoneyExtras,
+          onDismiss: _dismissNotesMoneyExtras,
+        )
+      else if (_notesExtrasConfirmed && _notesExtrasFils > 0)
+        Padding(
+          padding: const EdgeInsetsDirectional.only(top: 8),
+          child: Text(
+            'مضاف من الملاحظات: ${IraqiCurrencyFormat.formatIqd(IqdMoney.fromFils(_notesExtrasFils))}',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: Theme.of(context).colorScheme.primary,
+            ),
+            textAlign: TextAlign.start,
+          ),
+        ),
     ];
   }
 
@@ -3632,48 +4911,52 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     required bool compact,
   }) {
     final cs = Theme.of(context).colorScheme;
+    // المجاميع تُحسب مرة واحدة: كانت تُستدعى ~25 مرة في كل إعادة بناء، وكل
+    // استدعاء يمرّ على كتالوج الخدمات والمنتجات والفلاتر.
     final totalF = _oilCheckoutTotalFils();
-    final paidF = _oilCheckoutPaidFils();
-    final remainderF = _oilCheckoutRemainderFils();
+    final paidF = _parseFils(_advance);
+    final remainderF = (totalF - paidF).clamp(0, totalF);
     final totalLabel = _formatFilsLabel(totalF);
     final remainderLabel = _formatFilsLabel(remainderF);
     final hasDebt = remainderF > 500;
     final customerName = _customerName.text.trim();
     final linkedCustomer = _customerId != null && _customerId! > 0;
     final showBreakdown = _basePriceFils > 0 ||
-        _selectedOilServiceIds.isNotEmpty ||
-        _oilMaterialSellFilsEst() > 0 ||
-        _hydraulicMaterialSellFilsEstFor(_gearHydraulic) > 0 ||
-        _hydraulicMaterialSellFilsEstFor(_powerHydraulic) > 0 ||
-        _filtersTotalFils() > 0 ||
-        _oilProductLinesTotalFils() > 0;
+                _selectedOilServiceIds.isNotEmpty ||
+        _cardGrandTotalFils() > 0;
 
     final agreedField = TextFormField(
-      controller: _agreed,
-      enabled: !busy,
-      decoration: InputDecoration(
-        labelText: 'مبلغ الخدمات (د.ع)',
+              controller: _agreed,
+              onTap: oilFieldSelectAllOnTap(_agreed),
+              enabled: !busy,
+              decoration: InputDecoration(
+                labelText: 'الإجمالي المتفق عليه (د.ع)',
         border: const OutlineInputBorder(),
         isDense: true,
-        helperText: _agreedTotalManual
-            ? 'معدّل يدوياً — «إعادة الحساب» يجمع الكل'
-            : 'تبديل الزيت + الخدمات + الزيت والهيدروليك',
-        helperMaxLines: 2,
-      ),
-      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-      validator: (v) {
-        final s = (v ?? '').trim().replaceAll(',', '');
-        if (s.isEmpty) return null;
-        final n = double.tryParse(s);
-        if (n == null || n < 0) return 'مبلغ غير صحيح';
-        return null;
-      },
-      textDirection: TextDirection.ltr,
-      textAlign: TextAlign.start,
+                helperText: _agreedTotalManual
+                    ? 'معدّل يدوياً — «إعادة الحساب» يجمع الكل'
+                    : 'زيت + فلاتر + هيدروليك + خدمات + منتجات',
+                helperMaxLines: 2,
+              ),
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: false,
+                signed: false,
+              ),
+              inputFormatters: [IraqiCurrencyFormat.moneyInputFormatter()],
+              validator: (v) {
+                final s = (v ?? '').trim().replaceAll(',', '');
+                if (s.isEmpty) return null;
+                final n = double.tryParse(s);
+                if (n == null || n < 0) return 'مبلغ غير صحيح';
+                return null;
+              },
+              textDirection: TextDirection.ltr,
+              textAlign: TextAlign.start,
     );
 
     final advanceField = TextFormField(
       controller: _advance,
+      onTap: oilFieldSelectAllOnTap(_advance),
       enabled: !busy,
       decoration: InputDecoration(
         labelText: 'المبلغ المستلم',
@@ -3681,13 +4964,29 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
         isDense: true,
         prefixIcon: const Icon(Icons.payments_outlined, size: 20),
         helperText: _advanceManuallyEdited
-            ? 'يمكنك تعديل المبلغ — الفرق يُسجَّل ديناً على العميل'
-            : 'يُملأ تلقائياً من الإجمالي — عدّله إن دفع أقل',
+            ? 'لا يتجاوز الإجمالي — الفرق إن وُجد يُسجَّل ديناً على العميل'
+            : 'يُملأ تلقائياً من الإجمالي — عدّله إن دفع أقل (لا أكثر)',
         helperMaxLines: 2,
       ),
-      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+      keyboardType: const TextInputType.numberWithOptions(
+        decimal: false,
+        signed: false,
+      ),
+      inputFormatters: [IraqiCurrencyFormat.moneyInputFormatter()],
       textDirection: TextDirection.ltr,
       textAlign: TextAlign.start,
+      validator: (v) {
+        final s = (v ?? '').trim().replaceAll(',', '');
+        if (s.isEmpty) return null;
+        final n = double.tryParse(s);
+        if (n == null || n < 0) return 'مبلغ غير صحيح';
+        final paidF = IqdMoney.toFils(n);
+        final totalF = _oilCheckoutTotalFils();
+        if (totalF > 0 && paidF > totalF) {
+          return 'لا يمكن أن يتجاوز الإجمالي';
+        }
+        return null;
+      },
     );
 
     Widget totalHero() {
@@ -3699,57 +4998,57 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
           compact ? 12 : 14,
           compact ? 10 : 12,
         ),
-        decoration: BoxDecoration(
-          color: AppColors.accentGold.withValues(alpha: 0.15),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
+              decoration: BoxDecoration(
+                color: AppColors.accentGold.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
             color: AppColors.accentGold.withValues(alpha: 0.55),
-          ),
-        ),
-        child: Row(
-          children: [
-            Icon(
-              Icons.receipt_long_rounded,
-              color: AppColors.accentGold,
-              size: compact ? 20 : 22,
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'الإجمالي',
-                    style: TextStyle(
-                      fontSize: compact ? 12 : 13,
-                      color: cs.onSurfaceVariant,
-                      fontWeight: FontWeight.w700,
-                    ),
-                    textAlign: TextAlign.start,
-                  ),
-                  Text(
-                    totalLabel,
-                    style: TextStyle(
-                      fontWeight: FontWeight.w900,
-                      fontSize: compact ? 18 : 22,
-                      color: AppColors.accentGold,
-                    ),
-                    textDirection: TextDirection.ltr,
-                    textAlign: TextAlign.start,
-                  ),
-                ],
+                ),
               ),
+              child: Row(
+                children: [
+            Icon(
+                    Icons.receipt_long_rounded,
+                    color: AppColors.accentGold,
+              size: compact ? 20 : 22,
+                  ),
+            const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'الإجمالي',
+                          style: TextStyle(
+                      fontSize: compact ? 12 : 13,
+                            color: cs.onSurfaceVariant,
+                      fontWeight: FontWeight.w700,
+                          ),
+                          textAlign: TextAlign.start,
+                        ),
+                        Text(
+                          totalLabel,
+                          style: TextStyle(
+                            fontWeight: FontWeight.w900,
+                      fontSize: compact ? 18 : 22,
+                            color: AppColors.accentGold,
+                          ),
+                          textDirection: TextDirection.ltr,
+                          textAlign: TextAlign.start,
+                        ),
+                      ],
+                    ),
             ),
-            if (totalF > 0 && !_advanceManuallyEdited)
+            if (totalF > 0 && _advanceManuallyEdited)
               IconButton(
-                tooltip: 'إعادة ملء المبلغ المستلم',
+                tooltip: 'إرجاع المبلغ المستلم إلى الإجمالي',
                 onPressed: busy
                     ? null
                     : () => setState(_resetOilCheckoutAutoAdvance),
-                icon: Icon(Icons.sync_rounded, color: cs.primary, size: 20),
+                icon: Icon(Icons.undo_rounded, color: cs.primary, size: 20),
+                  ),
+                ],
               ),
-          ],
-        ),
       );
     }
 
@@ -3810,28 +5109,28 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
+                Text(
                     debtText,
-                    style: TextStyle(
-                      fontSize: 12,
+                  style: TextStyle(
+                    fontSize: 12,
                       fontWeight: FontWeight.w800,
                       color: cs.onErrorContainer,
-                    ),
-                    textDirection: TextDirection.ltr,
-                    textAlign: TextAlign.start,
                   ),
+                  textDirection: TextDirection.ltr,
+                  textAlign: TextAlign.start,
+                ),
                   if (!linkedCustomer) ...[
                     const SizedBox(height: 4),
-                    Text(
+                Text(
                       'اختر عميلاً مسجّلاً لربط الدين بحسابه',
-                      style: TextStyle(
+                  style: TextStyle(
                         fontSize: 11,
                         color: cs.onErrorContainer.withValues(alpha: 0.85),
-                      ),
-                      textAlign: TextAlign.start,
-                    ),
-                  ],
-                ],
+                  ),
+                  textAlign: TextAlign.start,
+                ),
+              ],
+            ],
               ),
             ),
           ],
@@ -3921,76 +5220,117 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   List<Widget> _buildOilCheckoutActionButtons(BuildContext context, bool busy) {
     return [
       const SizedBox(height: 12),
-      if (widget.isOilNewCard) ...[
-        SizedBox(
-          width: double.infinity,
-          child: OutlinedButton.icon(
-            style: OutlinedButton.styleFrom(
-              foregroundColor: AppColors.accentGold,
-              side: BorderSide(
-                color: AppColors.accentGold.withValues(alpha: 0.65),
-              ),
-              padding: const EdgeInsetsDirectional.symmetric(
-                horizontal: 20,
-                vertical: 14,
-              ),
-            ),
-            onPressed: busy
-                ? null
-                : () => _submit(intent: _OilSubmitIntent.suspend),
-            icon: const Icon(Icons.pause_circle_outline_rounded),
-            label: Text(
-              _saving ? 'جارٍ التعليق…' : 'تعليق الفاتورة',
-              style: const TextStyle(fontWeight: FontWeight.w800),
-            ),
-          ),
-        ),
-        const SizedBox(height: 10),
-      ],
-      SizedBox(
-        width: double.infinity,
-        child: widget.isEdit
-            ? FilledButton.icon(
-                style: FilledButton.styleFrom(
-                  backgroundColor: AppColors.accentGold,
-                  foregroundColor: Colors.black,
-                  padding: const EdgeInsetsDirectional.symmetric(
-                    horizontal: 20,
-                    vertical: 14,
+            if (widget.isOilNewCard) ...[
+              GuideAnchor(
+                id: OilGuideAnchors.formSuspend,
+                child: SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.accentGold,
+                    side: BorderSide(
+                      color: AppColors.accentGold.withValues(alpha: 0.65),
+                    ),
+                    padding: const EdgeInsetsDirectional.symmetric(
+                      horizontal: 20,
+                      vertical: 14,
+                    ),
+                  ),
+                  onPressed: busy
+                      ? null
+                      : () => _submit(intent: _OilSubmitIntent.suspend),
+                  icon: const Icon(Icons.pause_circle_outline_rounded),
+                  label: Text(
+                    _saving ? 'جارٍ التعليق…' : 'تعليق الفاتورة',
+                    style: const TextStyle(fontWeight: FontWeight.w800),
                   ),
                 ),
-                onPressed: busy
-                    ? null
-                    : () => _submit(openInvoice: _oilEditCompletingSuspended),
-                icon: Icon(
-                  _oilEditCompletingSuspended
-                      ? Icons.point_of_sale_rounded
-                      : Icons.save_rounded,
-                ),
-                label: Text(
-                  _saving
-                      ? 'جارٍ الحفظ…'
-                      : (_oilEditCompletingSuspended ? 'حفظ وبيع' : 'حفظ'),
-                  style: const TextStyle(fontWeight: FontWeight.w800),
-                ),
-              )
-            : FilledButton.icon(
-                style: FilledButton.styleFrom(
-                  backgroundColor: AppColors.accentGold,
-                  foregroundColor: Colors.black,
-                  padding: const EdgeInsetsDirectional.symmetric(
-                    horizontal: 20,
-                    vertical: 14,
+              ),
+              ),
+              const SizedBox(height: 10),
+            ] else if (_oilEditCompletingSuspended &&
+                !widget.amendInvoicedOrder) ...[
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.accentGold,
+                    side: BorderSide(
+                      color: AppColors.accentGold.withValues(alpha: 0.65),
+                    ),
+                    padding: const EdgeInsetsDirectional.symmetric(
+                      horizontal: 20,
+                      vertical: 14,
+                    ),
+                  ),
+                  onPressed: busy
+                      ? null
+                      : () => _submit(intent: _OilSubmitIntent.suspend),
+                  icon: const Icon(Icons.pause_circle_outline_rounded),
+                  label: Text(
+                    _saving ? 'جارٍ التعليق…' : 'إعادة التعليق',
+                    style: const TextStyle(fontWeight: FontWeight.w800),
                   ),
                 ),
-                onPressed: busy ? null : () => _submit(openInvoice: true),
-                icon: const Icon(Icons.point_of_sale_rounded),
-                label: Text(
-                  _saving ? 'جارٍ الحفظ…' : 'حفظ وبيع',
-                  style: const TextStyle(fontWeight: FontWeight.w800),
-                ),
               ),
-      ),
+              const SizedBox(height: 10),
+            ],
+            GuideAnchor(
+              id: OilGuideAnchors.formSave,
+              child: SizedBox(
+              width: double.infinity,
+              child: widget.isEdit
+                  ? FilledButton.icon(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: AppColors.accentGold,
+                        foregroundColor: Colors.black,
+                        padding: const EdgeInsetsDirectional.symmetric(
+                          horizontal: 20,
+                          vertical: 14,
+                        ),
+                      ),
+                      onPressed: busy
+                          ? null
+                          : () => _submit(
+                                openInvoice: _oilEditCompletingSuspended &&
+                                    !widget.amendInvoicedOrder,
+                              ),
+                      icon: Icon(
+                        widget.amendInvoicedOrder
+                            ? Icons.edit_rounded
+                            : (_oilEditCompletingSuspended
+                                ? Icons.point_of_sale_rounded
+                                : Icons.save_rounded),
+                      ),
+                      label: Text(
+                        _saving
+                            ? 'جارٍ الحفظ…'
+                            : (widget.amendInvoicedOrder
+                                ? 'حفظ التعديل على الفاتورة'
+                                : (_oilEditCompletingSuspended
+                                    ? 'حفظ وبيع'
+                                    : 'حفظ')),
+                        style: const TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                    )
+                  : FilledButton.icon(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: AppColors.accentGold,
+                        foregroundColor: Colors.black,
+                        padding: const EdgeInsetsDirectional.symmetric(
+                          horizontal: 20,
+                          vertical: 14,
+                        ),
+                      ),
+                      onPressed: busy ? null : () => _submit(openInvoice: true),
+                      icon: const Icon(Icons.point_of_sale_rounded),
+                      label: Text(
+                        _saving ? 'جارٍ الحفظ…' : 'حفظ وبيع',
+                        style: const TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                    ),
+            ),
+            ),
     ];
   }
 
@@ -4039,17 +5379,21 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
 
   int _oilMaterialSellFilsEst() {
     if (_oilCustomerProvided) return 0;
-    final liters = _oilLitersForPricing();
-    if (liters <= 1e-9) return 0;
+    final ml = parseOilVolumeDisplay(_oilSizeAmount.text);
+    if (ml <= 0) return 0;
     if (_usesShopOilFromStock || _usesWarehouseOilPicker) {
       final sell = _selectedOilSellPerLiterIqd();
       if (sell == null || sell <= 0) return 0;
       if ((_oilStockProductId ?? 0) <= 0) return 0;
-      return IqdMoney.toFils(sell * liters);
+      return sellFilsForVolumeMl(
+        sellPerLiterFils: IqdMoney.toFils(sell),
+        milliliters: ml,
+      );
     }
     if (_usesCatalogOilPricing) {
-      return IqdMoney.toFils(
-        IqdMoney.fromFils(_catalogSellPerLiterFils!) * liters,
+      return sellFilsForVolumeMl(
+        sellPerLiterFils: _catalogSellPerLiterFils!,
+        milliliters: ml,
       );
     }
     return 0;
@@ -4117,9 +5461,8 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       final liters = _oilLitersForPricing();
       if (liters <= 0) return null;
       final ml = (liters * 1000).round();
-      return '${formatOilVolumeDisplay(ml)} L';
+      return oilSizeDisplayToStored(formatOilVolumeDisplay(ml));
     }
-    if (_selectedSizeUnit == 'Q') return 'Q';
     final stored = oilSizeDisplayToStored(_oilSizeAmount.text);
     if (stored.isEmpty) return null;
     return stored;
@@ -4134,7 +5477,6 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       _hydraulicPowerUserEdited = true;
     }
     _plateVehicleSyncDebounce?.cancel();
-    _customerNameVisitSyncDebounce?.cancel();
   }
 
   void _clearOilStockSelection() {
@@ -4231,11 +5573,75 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     _recalculateOilTotal();
   }
 
+  bool _oilCatalogGuideOpen = false;
+  bool _filterCatalogGuideOpen = false;
+  bool _hydraulicCatalogGuideOpen = false;
+
+  void _syncGuideCatalogActions(GuideController guide) {
+    final action = guide.currentStep?.action;
+    if (!guide.isRunning) {
+      _closeGuideCatalogSheetsIfNeeded();
+      return;
+    }
+    if (action == 'oil.expand_extras') {
+      final anchor = guide.currentStep?.anchorId ?? '';
+      final toAdd = <_OilFormOptionalSection>{};
+      if (anchor.contains('filter') || anchor.contains('hydraulic')) {
+        if (anchor.contains('filter')) {
+          toAdd.add(_OilFormOptionalSection.filters);
+        }
+        if (anchor.contains('hydraulic')) {
+          toAdd.add(_OilFormOptionalSection.hydraulicGear);
+        }
+      } else {
+        toAdd.add(_OilFormOptionalSection.filters);
+        toAdd.add(_OilFormOptionalSection.hydraulicGear);
+      }
+      final needsExpand =
+          toAdd.any((section) => !_expandedOptional.contains(section));
+      if (needsExpand) {
+        setState(() => _expandedOptional.addAll(toAdd));
+        _ensureDeferredCatalogsForExpanded();
+      }
+    }
+    if (action == 'oil.open_oil_catalog' && !_oilCatalogGuideOpen) {
+      unawaited(_openOilCatalogManage());
+    } else if (action == 'oil.open_filter_catalog' && !_filterCatalogGuideOpen) {
+      setState(() {
+        _expandedOptional.add(_OilFormOptionalSection.filters);
+      });
+      _ensureDeferredCatalogsForExpanded();
+      unawaited(_openFilterCatalogManage(OilChangeFilterKind.engine));
+    } else if (action == 'oil.open_hydraulic_catalog' &&
+        !_hydraulicCatalogGuideOpen) {
+      setState(() {
+        _expandedOptional.add(_OilFormOptionalSection.hydraulicGear);
+      });
+      _ensureDeferredCatalogsForExpanded();
+      unawaited(_openHydraulicCatalogManageFor(_gearHydraulic));
+    }
+  }
+
+  void _closeGuideCatalogSheetsIfNeeded() {
+    if (!mounted) return;
+    if (_oilCatalogGuideOpen ||
+        _filterCatalogGuideOpen ||
+        _hydraulicCatalogGuideOpen) {
+      Navigator.of(context).maybePop();
+    }
+  }
+
   Future<void> _openOilCatalogManage() async {
-    await showOilChangeOilCatalogSheet(
-      context,
-      manageOnly: true,
-    );
+    if (_oilCatalogGuideOpen) return;
+    _oilCatalogGuideOpen = true;
+    try {
+      await showOilChangeOilCatalogSheet(
+        context,
+        manageOnly: true,
+      );
+    } finally {
+      _oilCatalogGuideOpen = false;
+    }
     if (!mounted) return;
     await _loadOilProductCatalog();
     setState(() {
@@ -4252,7 +5658,12 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   void _onFilterEntryChanged(OilChangeFilterKind kind, int? entryId) {
     final slot = _filterSlotFor(kind);
     if (entryId == null) {
-      setState(() => slot.clear());
+      setState(() {
+        slot.clear();
+        if (OilChangeAgreedTotal.shouldClearManualOnComponentChange()) {
+          _agreedTotalManual = false;
+        }
+      });
       _recalculateOilTotal();
       return;
     }
@@ -4264,16 +5675,25 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     setState(() {
       slot.applyEntry(entry);
       _expandedOptional.add(_OilFormOptionalSection.filters);
+      if (OilChangeAgreedTotal.shouldClearManualOnComponentChange()) {
+        _agreedTotalManual = false;
+      }
     });
     _recalculateOilTotal();
   }
 
   Future<void> _openFilterCatalogManage(OilChangeFilterKind kind) async {
-    await showOilChangeFilterCatalogSheet(
-      context,
-      manageOnly: true,
-      initialKind: kind,
-    );
+    if (_filterCatalogGuideOpen) return;
+    _filterCatalogGuideOpen = true;
+    try {
+      await showOilChangeFilterCatalogSheet(
+        context,
+        manageOnly: true,
+        initialKind: kind,
+      );
+    } finally {
+      _filterCatalogGuideOpen = false;
+    }
     if (!mounted) return;
     await _loadFilterProductCatalog();
     setState(() {
@@ -4325,9 +5745,14 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
                     (e) => DropdownMenuItem(
                       value: e.id,
                       child: Text(
-                        e.priceFils > 0
-                            ? '${e.name} — ${_formatFilsLabel(e.priceFils)}'
-                            : e.name,
+                        () {
+                          final label = e.name.trim().isEmpty
+                              ? 'بدون اسم'
+                              : e.name.trim();
+                          return e.priceFils > 0
+                              ? '$label — ${_formatFilsLabel(e.priceFils)}'
+                              : label;
+                        }(),
                         textAlign: TextAlign.start,
                       ),
                     ),
@@ -4339,12 +5764,15 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
               ),
             ),
             const SizedBox(width: 4),
-            IconButton.filledTonal(
-              onPressed: busy
-                  ? null
-                  : () => unawaited(_openFilterCatalogManage(kind)),
-              tooltip: 'إدارة أسعار ${kind.label}',
-              icon: const Icon(Icons.add_rounded),
+            GuideAnchor(
+              id: OilGuideAnchors.formFilterCatalogBtn,
+              child: IconButton.filledTonal(
+                onPressed: busy
+                    ? null
+                    : () => unawaited(_openFilterCatalogManage(kind)),
+                tooltip: 'إدارة أسعار ${kind.label}',
+                icon: const Icon(Icons.add_rounded),
+              ),
             ),
           ],
         ),
@@ -4369,10 +5797,22 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   ) {
     final brand = slot.selectedBrand;
     if (brand == null || brand.isEmpty) return const [];
-    return OilChangeHydraulicCatalogRepository.entriesForBrand(
+    final cached = _hydraulicGradeEntriesCache[slot];
+    if (cached != null &&
+        identical(cached.source, _hydraulicProductCatalog) &&
+        cached.brand == brand) {
+      return cached.entries;
+    }
+    final entries = OilChangeHydraulicCatalogRepository.entriesForBrand(
       _hydraulicProductCatalog,
       brand,
     );
+    _hydraulicGradeEntriesCache[slot] = _HydraulicGradeCache(
+      source: _hydraulicProductCatalog,
+      brand: brand,
+      entries: entries,
+    );
+    return entries;
   }
 
   String? _hydraulicBrandDropdownValueFor(OilChangeHydraulicCardSlot slot) {
@@ -4467,13 +5907,19 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   }
 
   Future<void> _openHydraulicCatalogManageFor(OilChangeHydraulicCardSlot slot) async {
+    if (_hydraulicCatalogGuideOpen) return;
     final seedBrand = _hydraulicBrandDropdownValueFor(slot) ??
         (slot.type.text.trim().isEmpty ? null : slot.type.text.trim());
-    await showOilChangeHydraulicCatalogSheet(
-      context,
-      manageOnly: true,
-      initialBrandName: seedBrand,
-    );
+    _hydraulicCatalogGuideOpen = true;
+    try {
+      await showOilChangeHydraulicCatalogSheet(
+        context,
+        manageOnly: true,
+        initialBrandName: seedBrand,
+      );
+    } finally {
+      _hydraulicCatalogGuideOpen = false;
+    }
     if (!mounted) return;
     await _loadHydraulicProductCatalog();
     setState(() {
@@ -4496,61 +5942,6 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     return false;
   }
 
-  Widget _buildOilChangeContextBanner(ColorScheme cs) {
-    if (!widget.isOilNewCard) return const SizedBox.shrink();
-    final fromLog = widget.prefillFromOrder != null;
-    return Container(
-      margin: const EdgeInsetsDirectional.only(bottom: 14),
-      padding: const EdgeInsetsDirectional.all(12),
-      decoration: BoxDecoration(
-        color: AppColors.accentGold.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: AppColors.accentGold.withValues(alpha: 0.45),
-        ),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(
-            fromLog ? Icons.content_copy_rounded : Icons.add_card_rounded,
-            color: AppColors.accentGold,
-            size: 22,
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  fromLog ? 'من السجل → زيارة جديدة' : 'بطاقة غيار زيت جديدة',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w900,
-                    color: OilChangeFormTheme.emphasisText(context),
-                    fontSize: 14,
-                  ),
-                  textAlign: TextAlign.start,
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  fromLog
-                      ? 'البيانات من آخر زيارة في السجل. «حفظ وبيع» يُنشئ بطاقة جديدة — السجل القديم لا يُعدَّل.'
-                      : 'اللوحة أو العميل يجلبان آخر زيارة للتعبئة. «حفظ وبيع» يُنشئ بطاقة وفاتورة جديدة.',
-                  style: TextStyle(
-                    fontSize: 12,
-                    height: 1.4,
-                    color: OilChangeFormTheme.secondaryText(context),
-                  ),
-                  textAlign: TextAlign.start,
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _responsivePair(
     BuildContext context, {
     required Widget first,
@@ -4558,8 +5949,9 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     double gap = 12,
     bool sideBySideOnPhone = false,
   }) {
-    final layout = context.screenLayout;
-    if (layout.isPhoneVariant && !sideBySideOnPhone) {
+    // sideBySideOnPhone: فوق 400dp يبقى صفاً حتى على الهاتف؛ تحت 400 يُطوى دائماً.
+    if (oilChangePreferStackedFieldsOf(context) ||
+        (context.screenLayout.isPhoneVariant && !sideBySideOnPhone)) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -4580,19 +5972,20 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   }
 
   Widget _compactSideBySide({
+    required BuildContext context,
     required Widget start,
     required Widget end,
     int startFlex = 1,
     int endFlex = 1,
     double gap = 8,
   }) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Expanded(flex: startFlex, child: start),
-        SizedBox(width: gap),
-        Expanded(flex: endFlex, child: end),
-      ],
+    return oilChangeFieldPair(
+      context: context,
+      start: start,
+      end: end,
+      startFlex: startFlex,
+      endFlex: endFlex,
+      gap: gap,
     );
   }
 
@@ -4732,13 +6125,21 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   }
 
   void _toggleOptionalSection(_OilFormOptionalSection section) {
+    if (!_isOptionalSectionEnabled(section) &&
+        !_optionalSectionHasData(section)) {
+      return;
+    }
+    final expanding = !_expandedOptional.contains(section);
     setState(() {
-      if (_expandedOptional.contains(section)) {
-        _expandedOptional.remove(section);
-      } else {
+      if (expanding) {
         _expandedOptional.add(section);
+      } else {
+        _expandedOptional.remove(section);
       }
     });
+    if (expanding) {
+      _ensureDeferredCatalogsForExpanded();
+    }
   }
 
   String? _hydraulicCollapsedHint(OilChangeHydraulicCardSlot slot) {
@@ -4780,11 +6181,8 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
           ? null
           : '${_oilProductLines.length} صنف',
       _OilFormOptionalSection.filters => () {
-          final n = [
-            if (_engineFilter.hasSelection) _engineFilter.name,
-            if (_airFilter.hasSelection) _airFilter.name,
-            if (_gearFilter.hasSelection) _gearFilter.name,
-          ].whereType<String>().length;
+          final n =
+              _filterKinds.where((k) => _filterSlotFor(k).hasSelection).length;
           if (n == 0) return null;
           return '$n فلتر محدد';
         }(),
@@ -4832,8 +6230,23 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   }
 
   Widget _buildOilOptionalQuickBar(ColorScheme cs, bool busy) {
-    const sections = _OilFormOptionalSection.values;
-    return Container(
+    final sections = _OilFormOptionalSection.values
+        .where(
+          (s) =>
+              _isOptionalSectionEnabled(s) || _optionalSectionHasData(s),
+        )
+        .toList(growable: false);
+    if (sections.isEmpty) return const SizedBox.shrink();
+
+    final firstRow = sections.length <= 3
+        ? sections
+        : sections.sublist(0, 3);
+    final secondRow =
+        sections.length > 3 ? sections.sublist(3) : const <_OilFormOptionalSection>[];
+
+    return GuideAnchor(
+      id: OilGuideAnchors.formExtras,
+      child: Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsetsDirectional.fromSTEB(10, 8, 10, 8),
       decoration: BoxDecoration(
@@ -4868,34 +6281,39 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
           const SizedBox(height: 6),
           Row(
             children: [
-              for (var i = 0; i < 3; i++) ...[
+              for (var i = 0; i < firstRow.length; i++) ...[
                 if (i > 0) const SizedBox(width: 6),
                 Expanded(
-                  child: _buildOptionalSectionChip(cs, busy, sections[i]),
+                  child: _buildOptionalSectionChip(cs, busy, firstRow[i]),
                 ),
               ],
             ],
           ),
-          const SizedBox(height: 6),
-          Row(
-            children: [
-              for (var i = 3; i < sections.length; i++) ...[
-                if (i > 3) const SizedBox(width: 6),
-                Expanded(
-                  child: _buildOptionalSectionChip(cs, busy, sections[i]),
-                ),
+          if (secondRow.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                for (var i = 0; i < secondRow.length; i++) ...[
+                  if (i > 0) const SizedBox(width: 6),
+                  Expanded(
+                    child: _buildOptionalSectionChip(cs, busy, secondRow[i]),
+                  ),
+                ],
               ],
-            ],
-          ),
+            ),
+          ],
         ],
       ),
+    ),
     );
   }
 
+  /// [childrenBuilder] دالة لا قائمة جاهزة: القسم المطوي كان يُبنى بالكامل ثم
+  /// يُرمى في كل إعادة بناء، وهو أثقل جزء في الشاشة (بطاقات الفلاتر والهيدروليك).
   Widget _buildOilOptionalSection(
     BuildContext context, {
     required _OilFormOptionalSection section,
-    required List<Widget> children,
+    required List<Widget> Function() childrenBuilder,
   }) {
     final expanded = _expandedOptional.contains(section);
     return AnimatedSize(
@@ -4907,18 +6325,21 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
               context: context,
               title: _optionalSectionTitle(section),
               icon: _optionalSectionIcon(section),
-              children: children,
+              children: childrenBuilder(),
             )
           : const SizedBox(width: double.infinity),
     );
   }
 
   Widget _buildOilCheckoutSectionCard(BuildContext context, bool busy) {
-    return OilChangeRoyalCard.section(
-      context: context,
-      title: 'السعر والدفع',
-      icon: Icons.payments_outlined,
-      children: _oilCheckoutFields(context, busy, compact: true),
+    return GuideAnchor(
+      id: OilGuideAnchors.formPayment,
+      child: OilChangeRoyalCard.section(
+        context: context,
+        title: 'السعر والدفع',
+        icon: Icons.payments_outlined,
+        children: _oilCheckoutFields(context, busy, compact: true),
+      ),
     );
   }
 
@@ -5061,7 +6482,11 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     );
   }
 
-  Widget _buildWarehouseOilPickRow(ColorScheme cs, bool busy) {
+  Widget _buildWarehouseOilPickRow(
+    BuildContext context,
+    ColorScheme cs,
+    bool busy,
+  ) {
     if (!_usesWarehouseOilPicker) return const SizedBox.shrink();
     final families = _oilFamilyDropdownOptions;
     final visLines = _oilStockLinesForSelectedFamily;
@@ -5096,81 +6521,76 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
             ],
           )
         else
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                flex: 2,
-                child: DropdownButtonFormField<int>(
-                  value: familyKeyValid ? _selectedOilFamilyKey : null,
-                  decoration: const InputDecoration(
-                    labelText: 'زيت من المخزون',
-                    border: OutlineInputBorder(),
-                    isDense: true,
-                    hintText: 'اختر العائلة',
-                  ),
-                  isExpanded: true,
-                  items: families
-                      .map(
-                        (f) => DropdownMenuItem(
-                          value: f.key,
-                          child: Text(
-                            f.label,
-                            textAlign: TextAlign.start,
-                          ),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: busy ? null : _onOilFamilyDropdownChanged,
-                ),
+          oilChangeFieldPair(
+            context: context,
+            startFlex: 2,
+            endFlex: 1,
+            gap: 6,
+            start: DropdownButtonFormField<int>(
+              value: familyKeyValid ? _selectedOilFamilyKey : null,
+              decoration: const InputDecoration(
+                labelText: 'زيت من المخزون',
+                border: OutlineInputBorder(),
+                isDense: true,
+                hintText: 'اختر العائلة',
               ),
-              const SizedBox(width: 6),
-              Expanded(
-                child: showViscosityDropdown
-                    ? DropdownButtonFormField<int>(
-                        value: _oilStockViscosityProductId,
-                        decoration: InputDecoration(
-                          labelText: 'اللزوجة',
-                          border: const OutlineInputBorder(),
-                          isDense: true,
-                          hintText: familyKeyValid
-                              ? 'اختر اللزوجة'
-                              : 'اختر العائلة أولاً',
-                        ),
-                        isExpanded: true,
-                        items: visLines
-                            .where((l) => l.viscosity.isNotEmpty)
-                            .map(
-                              (l) => DropdownMenuItem(
-                                value: l.linkedProductId,
-                                child: Text(
-                                  l.viscosity,
-                                  textAlign: TextAlign.start,
-                                ),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: busy || !familyKeyValid
-                            ? null
-                            : _onOilStockViscosityChanged,
-                      )
-                    : InputDecorator(
-                        decoration: const InputDecoration(
-                          labelText: 'اللزوجة',
-                          border: OutlineInputBorder(),
-                          isDense: true,
-                        ),
-                        child: Text(
-                          _selectedViscosity ??
-                              (familyKeyValid && visLines.isNotEmpty
-                                  ? '—'
-                                  : '—'),
-                          textAlign: TextAlign.start,
-                          style: const TextStyle(fontWeight: FontWeight.w700),
-                        ),
+              isExpanded: true,
+              items: families
+                  .map(
+                    (f) => DropdownMenuItem(
+                      value: f.key,
+                      child: Text(
+                        f.label,
+                        textAlign: TextAlign.start,
                       ),
-              ),
-            ],
+                    ),
+                  )
+                  .toList(),
+              onChanged: busy ? null : _onOilFamilyDropdownChanged,
+            ),
+            end: showViscosityDropdown
+                ? DropdownButtonFormField<int>(
+                    value: _oilStockViscosityProductId,
+                    decoration: InputDecoration(
+                      labelText: 'اللزوجة',
+                      border: const OutlineInputBorder(),
+                      isDense: true,
+                      hintText: familyKeyValid
+                          ? 'اختر اللزوجة'
+                          : 'اختر العائلة أولاً',
+                    ),
+                    isExpanded: true,
+                    items: visLines
+                        .where((l) => l.viscosity.isNotEmpty)
+                        .map(
+                          (l) => DropdownMenuItem(
+                            value: l.linkedProductId,
+                            child: Text(
+                              l.viscosity,
+                              textAlign: TextAlign.start,
+                            ),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: busy || !familyKeyValid
+                        ? null
+                        : _onOilStockViscosityChanged,
+                  )
+                : InputDecorator(
+                    decoration: const InputDecoration(
+                      labelText: 'اللزوجة',
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                    child: Text(
+                      _selectedViscosity ??
+                          (familyKeyValid && visLines.isNotEmpty
+                              ? '—'
+                              : '—'),
+                      textAlign: TextAlign.start,
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  ),
           ),
         if ((_oilStockProductId ?? 0) > 0) ...[
           const SizedBox(height: 6),
@@ -5287,6 +6707,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   }
 
   Widget _buildWarehouseHydraulicPickRowFor(
+    BuildContext context,
     ColorScheme cs,
     bool busy,
     OilChangeHydraulicCardSlot slot, {
@@ -5328,84 +6749,79 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
             ],
           )
         else
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                flex: 2,
-                child: DropdownButtonFormField<int>(
-                  value: familyKeyValid ? slot.selectedFamilyKey : null,
-                  decoration: InputDecoration(
-                    labelText: stockLabel,
-                    border: const OutlineInputBorder(),
-                    isDense: true,
-                    hintText: 'اختر العائلة',
-                  ),
-                  isExpanded: true,
-                  items: families
-                      .map(
-                        (f) => DropdownMenuItem(
-                          value: f.key,
-                          child: Text(
-                            f.label,
-                            textAlign: TextAlign.start,
-                          ),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: busy
-                      ? null
-                      : (v) => _onHydraulicFamilyDropdownChangedFor(slot, v),
-                ),
+          oilChangeFieldPair(
+            context: context,
+            startFlex: 2,
+            endFlex: 1,
+            gap: 6,
+            start: DropdownButtonFormField<int>(
+              value: familyKeyValid ? slot.selectedFamilyKey : null,
+              decoration: InputDecoration(
+                labelText: stockLabel,
+                border: const OutlineInputBorder(),
+                isDense: true,
+                hintText: 'اختر العائلة',
               ),
-              const SizedBox(width: 6),
-              Expanded(
-                child: showGradeDropdown
-                    ? DropdownButtonFormField<int>(
-                        value: _hydraulicStockGradeProductIdFor(slot),
-                        decoration: InputDecoration(
-                          labelText: 'الدرجة',
-                          border: const OutlineInputBorder(),
-                          isDense: true,
-                          hintText: familyKeyValid
-                              ? 'اختر الدرجة'
-                              : 'اختر العائلة أولاً',
-                        ),
-                        isExpanded: true,
-                        items: gradeLines
-                            .where((l) => l.viscosity.isNotEmpty)
-                            .map(
-                              (l) => DropdownMenuItem(
-                                value: l.linkedProductId,
-                                child: Text(
-                                  l.viscosity,
-                                  textAlign: TextAlign.start,
-                                ),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: busy || !familyKeyValid
-                            ? null
-                            : (v) =>
-                                _onHydraulicStockGradeDropdownChangedFor(slot, v),
-                      )
-                    : InputDecorator(
-                        decoration: const InputDecoration(
-                          labelText: 'الدرجة',
-                          border: OutlineInputBorder(),
-                          isDense: true,
-                        ),
-                        child: Text(
-                          slot.selectedGrade ??
-                              (familyKeyValid && gradeLines.isNotEmpty
-                                  ? '—'
-                                  : '—'),
-                          textAlign: TextAlign.start,
-                          style: const TextStyle(fontWeight: FontWeight.w700),
-                        ),
+              isExpanded: true,
+              items: families
+                  .map(
+                    (f) => DropdownMenuItem(
+                      value: f.key,
+                      child: Text(
+                        f.label,
+                        textAlign: TextAlign.start,
                       ),
-              ),
-            ],
+                    ),
+                  )
+                  .toList(),
+              onChanged: busy
+                  ? null
+                  : (v) => _onHydraulicFamilyDropdownChangedFor(slot, v),
+            ),
+            end: showGradeDropdown
+                ? DropdownButtonFormField<int>(
+                    value: _hydraulicStockGradeProductIdFor(slot),
+                    decoration: InputDecoration(
+                      labelText: 'الدرجة',
+                      border: const OutlineInputBorder(),
+                      isDense: true,
+                      hintText: familyKeyValid
+                          ? 'اختر الدرجة'
+                          : 'اختر العائلة أولاً',
+                    ),
+                    isExpanded: true,
+                    items: gradeLines
+                        .where((l) => l.viscosity.isNotEmpty)
+                        .map(
+                          (l) => DropdownMenuItem(
+                            value: l.linkedProductId,
+                            child: Text(
+                              l.viscosity,
+                              textAlign: TextAlign.start,
+                            ),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: busy || !familyKeyValid
+                        ? null
+                        : (v) =>
+                            _onHydraulicStockGradeDropdownChangedFor(slot, v),
+                  )
+                : InputDecorator(
+                    decoration: const InputDecoration(
+                      labelText: 'الدرجة',
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                    child: Text(
+                      slot.selectedGrade ??
+                          (familyKeyValid && gradeLines.isNotEmpty
+                              ? '—'
+                              : '—'),
+                      textAlign: TextAlign.start,
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  ),
           ),
         if ((slot.stockProductId ?? 0) > 0) ...[
           const SizedBox(height: 6),
@@ -5481,78 +6897,72 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
           ),
         ),
         if (_showCatalogHydraulicFieldsFor(slot))
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                flex: 2,
-                child: DropdownButtonFormField<String>(
-                  value: _hydraulicBrandDropdownValueFor(slot),
-                  decoration: InputDecoration(
-                    labelText: catalogNameLabel,
-                    border: const OutlineInputBorder(),
-                    isDense: true,
-                    hintText: _hydraulicProductCatalogLoading
-                        ? 'جاري التحميل…'
-                        : (_hydraulicBrandDropdownItems.isEmpty
-                            ? 'أضف من +'
-                            : 'اختر الاسم'),
-                  ),
-                  isExpanded: true,
-                  items: _hydraulicBrandDropdownItems
-                      .map(
-                        (b) => DropdownMenuItem(
-                          value: b,
-                          child: Text(b, textAlign: TextAlign.start),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: busy ||
-                          (_hydraulicProductCatalogLoading &&
-                              _hydraulicBrandDropdownItems.isEmpty)
-                      ? null
-                      : (b) => _onHydraulicBrandDropdownChangedFor(slot, b),
-                ),
+          oilChangeFieldPairWithAction(
+            context: context,
+            start: DropdownButtonFormField<String>(
+              value: _hydraulicBrandDropdownValueFor(slot),
+              decoration: InputDecoration(
+                labelText: catalogNameLabel,
+                border: const OutlineInputBorder(),
+                isDense: true,
+                hintText: _hydraulicProductCatalogLoading
+                    ? 'جاري التحميل…'
+                    : (_hydraulicBrandDropdownItems.isEmpty
+                        ? 'أضف من +'
+                        : 'اختر الاسم'),
               ),
-              const SizedBox(width: 6),
-              Expanded(
-                child: DropdownButtonFormField<String>(
-                  value: _hydraulicGradeDropdownValueFor(slot),
-                  decoration: InputDecoration(
-                    labelText: 'الدرجة',
-                    border: const OutlineInputBorder(),
-                    isDense: true,
-                    hintText: _hydraulicBrandDropdownValueFor(slot) == null
-                        ? 'اختر الاسم أولاً'
-                        : (_hydraulicGradeDropdownEntriesFor(slot).isEmpty
-                            ? 'لا درجات'
-                            : 'اختر الدرجة'),
-                  ),
-                  isExpanded: true,
-                  items: _hydraulicGradeDropdownEntriesFor(slot)
-                      .map(
-                        (e) => DropdownMenuItem(
-                          value: e.grade,
-                          child: Text(e.grade, textAlign: TextAlign.start),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: busy ||
-                          _hydraulicBrandDropdownValueFor(slot) == null ||
-                          _hydraulicGradeDropdownEntriesFor(slot).isEmpty
-                      ? null
-                      : (g) => _onHydraulicGradeDropdownChangedFor(slot, g),
-                ),
+              isExpanded: true,
+              items: _hydraulicBrandDropdownItems
+                  .map(
+                    (b) => DropdownMenuItem(
+                      value: b,
+                      child: Text(b, textAlign: TextAlign.start),
+                    ),
+                  )
+                  .toList(),
+              onChanged: busy ||
+                      (_hydraulicProductCatalogLoading &&
+                          _hydraulicBrandDropdownItems.isEmpty)
+                  ? null
+                  : (b) => _onHydraulicBrandDropdownChangedFor(slot, b),
+            ),
+            end: DropdownButtonFormField<String>(
+              value: _hydraulicGradeDropdownValueFor(slot),
+              decoration: InputDecoration(
+                labelText: 'الدرجة',
+                border: const OutlineInputBorder(),
+                isDense: true,
+                hintText: _hydraulicBrandDropdownValueFor(slot) == null
+                    ? 'اختر الاسم أولاً'
+                    : (_hydraulicGradeDropdownEntriesFor(slot).isEmpty
+                        ? 'لا درجات'
+                        : 'اختر الدرجة'),
               ),
-              const SizedBox(width: 4),
-              IconButton.filledTonal(
+              isExpanded: true,
+              items: _hydraulicGradeDropdownEntriesFor(slot)
+                  .map(
+                    (e) => DropdownMenuItem(
+                      value: e.grade,
+                      child: Text(e.grade, textAlign: TextAlign.start),
+                    ),
+                  )
+                  .toList(),
+              onChanged: busy ||
+                      _hydraulicBrandDropdownValueFor(slot) == null ||
+                      _hydraulicGradeDropdownEntriesFor(slot).isEmpty
+                  ? null
+                  : (g) => _onHydraulicGradeDropdownChangedFor(slot, g),
+            ),
+            action: GuideAnchor(
+              id: OilGuideAnchors.formHydraulicCatalogBtn,
+              child: IconButton.filledTonal(
                 onPressed: busy
                     ? null
                     : () => unawaited(_openHydraulicCatalogManageFor(slot)),
                 tooltip: 'إضافة هيدروليك / درجة للكتالوج',
                 icon: const Icon(Icons.add_rounded),
               ),
-            ],
+            ),
           ),
         _buildHydraulicSourceSegmentFor(
           cs,
@@ -5564,6 +6974,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
           customerHint: customerHint,
         ),
         _buildWarehouseHydraulicPickRowFor(
+          context,
           cs,
           busy,
           slot,
@@ -5577,13 +6988,13 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
             enabled: !busy,
             labelText: volumeLabel,
             onChanged: () {
-              if (_usesWarehouseHydraulicPickerFor(slot)) {
-                _syncHydraulicLitersFromStepperFor(slot);
-              }
-              setState(() {
-                _agreedTotalManual = false;
-                _recalculateOilTotal();
-              });
+              _onOilOrHydraulicVolumeChanged(
+                syncStockLiters: () {
+                  if (_usesWarehouseHydraulicPickerFor(slot)) {
+                    _syncHydraulicLitersFromStepperFor(slot);
+                  }
+                },
+              );
             },
           ),
         ],
@@ -5764,12 +7175,22 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
           maxWidth: maxWidth,
           child: Form(
             key: _formKey,
-            child: ListView(
+            child: RawKeyboardInsetBuilder(
+              builder: (context, keyboardBottom) {
+                final safeBottom = MediaQuery.viewPaddingOf(context).bottom;
+                // حجز شريط النظام + جزء من IME دون مبالغة مع adjustPan.
+                final bottomPad = 24 +
+                    80 +
+                    safeBottom +
+                    (keyboardBottom > 8
+                        ? (keyboardBottom * 0.45).clamp(0.0, 220.0)
+                        : 0.0);
+                return ListView(
               padding: EdgeInsetsDirectional.fromSTEB(
                 pagePad,
                 14,
                 pagePad,
-                24,
+                bottomPad,
               ),
               children: [
               if (_error != null) ...[
@@ -5789,71 +7210,82 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
               ],
 
               if (!widget.oilChangeMode) _buildScheduleBanner(cs),
-              if (widget.isOilNewCard) _buildOilChangeContextBanner(cs),
 
               // 1. بيانات العميل
-              _buildSectionCard(
+              GuideAnchor(
+                id: OilGuideAnchors.formCustomer,
+                child: _buildSectionCard(
                 context,
                 title: 'بيانات العميل',
                 icon: Icons.person_outline_rounded,
                 children: [
-                  if (widget.oilChangeMode)
+                  if (widget.oilChangeMode) ...[
+                    GuideAnchor(
+                      id: OilGuideAnchors.formCustomerName,
+                      child: OilChangeCustomerNameField(
+                        controller: _customerName,
+                        focusNode: _customerFocus,
+                        enabled: !busy,
+                        customerLinked: _customerId != null,
+                        onSelected: (c) =>
+                            unawaited(_applyCustomerSelection(c)),
+                        validator: _oilCustomerNameRequiredError,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Expanded(
-                          flex: 3,
-                          child: OilChangeCustomerNameField(
-                            controller: _customerName,
-                            focusNode: _customerFocus,
-                            enabled: !busy,
-                            customerLinked: _customerId != null,
-                            onSelected: (c) =>
-                                unawaited(_applyCustomerSelection(c)),
-                            validator: (v) =>
-                                (v == null || v.trim().isEmpty)
-                                    ? 'اسم العميل مطلوب'
-                                    : null,
+                          child: GuideAnchor(
+                            id: OilGuideAnchors.formCustomerPhone,
+                            child: TextFormField(
+                              controller: _customerPhone,
+                              onTap: oilPhoneKeepPrefixOnTap(_customerPhone),
+                              decoration: InputDecoration(
+                                labelText: 'رقم الهاتف',
+                                border: const OutlineInputBorder(),
+                                isDense: true,
+                                prefixIcon:
+                                    const Icon(Icons.phone_rounded, size: 20),
+                                hintText: '07xxxxxxxxx',
+                                helperText: widget.amendInvoicedOrder
+                                    ? 'عند تصحيح الرقم تُعاد إرسال بطاقة واتساب '
+                                        'لنفس البطاقة (قالب ميتا) دون إنشاء بطاقة جديدة'
+                                    : '11 رقماً تبدأ بـ 07',
+                                helperMaxLines: widget.amendInvoicedOrder ? 3 : 1,
+                              ),
+                              keyboardType: TextInputType.phone,
+                              textDirection: TextDirection.ltr,
+                              textAlign: TextAlign.start,
+                              inputFormatters: _iraqiMobilePhoneFormatters,
+                              validator: _oilCustomerPhoneRequiredError,
+                            ),
                           ),
                         ),
                         const SizedBox(width: 8),
-                        Expanded(
-                          flex: 2,
-                          child: TextFormField(
-                            controller: _customerPhone,
-                            decoration: const InputDecoration(
-                              labelText: 'رقم الهاتف',
-                              border: OutlineInputBorder(),
-                              isDense: true,
-                              prefixIcon: Icon(Icons.phone_rounded, size: 20),
-                            ),
-                            keyboardType: TextInputType.phone,
-                            textDirection: TextDirection.ltr,
-                            textAlign: TextAlign.start,
-                          ),
-                        ),
-                        const SizedBox(width: 4),
                         IconButton.filledTonal(
                           tooltip: 'عميل جديد',
                           onPressed: busy ? null : _openNewCustomer,
                           icon: const Icon(Icons.person_add_alt_rounded),
                         ),
                       ],
-                    )
-                  else ...[
+                    ),
+                  ] else ...[
                     _responsivePair(
                       context,
-                      first: OilChangeCustomerNameField(
+                      first: GuideAnchor(
+                        id: OilGuideAnchors.formCustomerName,
+                        child: OilChangeCustomerNameField(
                         controller: _customerName,
                         focusNode: _customerFocus,
                         enabled: !busy,
                         customerLinked: _customerId != null,
-                        hintText: 'ابدأ الكتابة للبحث في العملاء',
+                              hintText: 'اكتب الاسم الأول كاملاً للبحث',
                         onSelected: (c) =>
                             unawaited(_applyCustomerSelection(c)),
-                        validator: (v) => (v == null || v.trim().isEmpty)
-                            ? 'اسم العميل مطلوب'
-                            : null,
+                            validator: _oilCustomerNameRequiredError,
+                      ),
                       ),
                       second: Align(
                         alignment: AlignmentDirectional.centerStart,
@@ -5865,21 +7297,28 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
                       ),
                     ),
                     const SizedBox(height: 12),
-                    TextFormField(
+                    GuideAnchor(
+                      id: OilGuideAnchors.formCustomerPhone,
+                      child: TextFormField(
                       controller: _customerPhone,
+                      onTap: oilPhoneKeepPrefixOnTap(_customerPhone),
                       decoration: const InputDecoration(
                         labelText: 'رقم الهاتف',
                         border: OutlineInputBorder(),
                         prefixIcon: Icon(Icons.phone_rounded),
-                        hintText:
-                            'يُملأ تلقائياً عند اختيار العميل أو يُدخل يدوياً',
+                        hintText: '07xxxxxxxxx',
+                        helperText: '11 رقماً تبدأ بـ 07',
                       ),
                       keyboardType: TextInputType.phone,
                       textDirection: TextDirection.ltr,
                       textAlign: TextAlign.start,
+                      inputFormatters: _iraqiMobilePhoneFormatters,
+                      validator: _oilCustomerPhoneRequiredError,
+                    ),
                     ),
                   ],
                 ],
+              ),
               ),
               if (widget.oilChangeMode)
                 CustomerOpenDebtBanner(
@@ -5890,15 +7329,19 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
                 ),
 
               // 2. بيانات السيارة
-              _buildSectionCard(
+              GuideAnchor(
+                id: OilGuideAnchors.formCar,
+                child: _buildSectionCard(
                 context,
                 title: 'بيانات السيارة',
                 icon: Icons.directions_car_outlined,
                 children: [
                   if (widget.oilChangeMode) ...[
                     _compactSideBySide(
+                      context: context,
                       start: TextFormField(
                         controller: _deviceName,
+                        onTap: oilFieldSelectAllOnTap(_deviceName),
                         decoration: const InputDecoration(
                           labelText: 'اسم السيارة',
                           border: OutlineInputBorder(),
@@ -5910,8 +7353,11 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
                             : null,
                         textAlign: TextAlign.start,
                       ),
-                      end: TextFormField(
+                      end: GuideAnchor(
+                        id: OilGuideAnchors.formPlate,
+                        child: TextFormField(
                         controller: _deviceSerial,
+                        onTap: oilFieldSelectAllOnTap(_deviceSerial),
                         decoration: InputDecoration(
                           labelText: 'رقم اللوحة',
                           border: const OutlineInputBorder(),
@@ -5936,16 +7382,20 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
                         validator: (v) => (v == null || v.trim().isEmpty)
                             ? 'رقم اللوحة مطلوب'
                             : null,
+                        keyboardType: TextInputType.number,
                         textDirection: TextDirection.ltr,
                         textAlign: TextAlign.start,
                         onFieldSubmitted: (_) =>
                             FocusScope.of(context).unfocus(),
                       ),
+                      ),
                     ),
                     const SizedBox(height: 8),
                     _compactSideBySide(
+                      context: context,
                       start: TextFormField(
                         controller: _carModel,
+                        onTap: oilFieldSelectAllOnTap(_carModel),
                         decoration: const InputDecoration(
                           labelText: 'موديل السيارة',
                           border: OutlineInputBorder(),
@@ -5960,12 +7410,18 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
                       ),
                       end: TextFormField(
                         controller: _engineSize,
+                        onTap: oilFieldSelectAllOnTap(_engineSize),
                         decoration: const InputDecoration(
                           labelText: 'حجم المحرك',
                           border: OutlineInputBorder(),
                           isDense: true,
-                          hintText: '1.8L',
+                          hintText: '1.8',
                         ),
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        inputFormatters: _engineSizeInputFormatters,
+                        textDirection: TextDirection.ltr,
                         textAlign: TextAlign.start,
                       ),
                     ),
@@ -5986,6 +7442,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
                   ] else ...[
                     TextFormField(
                       controller: _deviceName,
+                      onTap: oilFieldSelectAllOnTap(_deviceName),
                       decoration: const InputDecoration(
                         labelText: 'اسم السيارة',
                         border: OutlineInputBorder(),
@@ -6001,6 +7458,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
                       context,
                       first: TextFormField(
                         controller: _carModel,
+                        onTap: oilFieldSelectAllOnTap(_carModel),
                         decoration: const InputDecoration(
                           labelText: 'موديل السيارة',
                           border: OutlineInputBorder(),
@@ -6014,22 +7472,30 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
                       ),
                       second: TextFormField(
                         controller: _engineSize,
+                        onTap: oilFieldSelectAllOnTap(_engineSize),
                         decoration: const InputDecoration(
                           labelText: 'حجم المحرك',
                           border: OutlineInputBorder(),
-                          hintText: 'مثال: 1.8L',
+                          hintText: 'مثال: 1.8',
                         ),
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        inputFormatters: _engineSizeInputFormatters,
+                        textDirection: TextDirection.ltr,
                         textAlign: TextAlign.start,
                       ),
                     ),
                     const SizedBox(height: 12),
                     TextFormField(
                       controller: _deviceSerial,
+                      onTap: oilFieldSelectAllOnTap(_deviceSerial),
                       decoration: const InputDecoration(
                         labelText: 'رقم اللوحة',
                         border: OutlineInputBorder(),
                         hintText: 'مثال: بغداد - 12345',
                       ),
+                      keyboardType: TextInputType.number,
                       textDirection: TextDirection.ltr,
                       textAlign: TextAlign.start,
                     ),
@@ -6049,9 +7515,12 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
                   ],
                 ],
               ),
+              ),
 
               // 3. تغيير الزيت
-              _buildSectionCard(
+              GuideAnchor(
+                id: OilGuideAnchors.formOil,
+                child: _buildSectionCard(
                 context,
                 title: widget.oilChangeMode
                     ? 'تغيير الزيت'
@@ -6062,8 +7531,11 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
                     context,
                     sideBySideOnPhone: true,
                     gap: 8,
-                    first: TextFormField(
+                    first: GuideAnchor(
+                      id: OilGuideAnchors.formOdoCurrent,
+                      child: TextFormField(
                       controller: _odometerCurrent,
+                      onTap: oilFieldSelectAllOnTap(_odometerCurrent),
                       decoration: const InputDecoration(
                         labelText: 'القراءة الحالية (كم)',
                         border: OutlineInputBorder(),
@@ -6079,8 +7551,10 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
                       textDirection: TextDirection.ltr,
                       textAlign: TextAlign.start,
                     ),
+                    ),
                     second: TextFormField(
                       controller: _odometerNext,
+                      onTap: oilFieldSelectAllOnTap(_odometerNext),
                       decoration: const InputDecoration(
                         labelText: 'القراءة اللاحقة (كم)',
                         border: OutlineInputBorder(),
@@ -6094,12 +7568,11 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
                   ),
                   const SizedBox(height: 12),
                   if (_showCatalogOilFields)
-                    Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        flex: 2,
-                        child: DropdownButtonFormField<String>(
+                    GuideAnchor(
+                      id: OilGuideAnchors.formOilBrand,
+                      child: oilChangeFieldPairWithAction(
+                        context: context,
+                        start: DropdownButtonFormField<String>(
                           value: _oilBrandDropdownValue,
                           decoration: InputDecoration(
                             labelText: 'اسم الزيت',
@@ -6129,10 +7602,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
                               ? null
                               : _onOilBrandDropdownChanged,
                         ),
-                      ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: DropdownButtonFormField<String>(
+                        end: DropdownButtonFormField<String>(
                           value: _oilViscosityDropdownValue,
                           decoration: InputDecoration(
                             labelText: 'اللزوجة',
@@ -6162,33 +7632,36 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
                               ? null
                               : _onOilViscosityDropdownChanged,
                         ),
+                        action: GuideAnchor(
+                          id: OilGuideAnchors.formOilCatalogBtn,
+                          child: IconButton.filledTonal(
+                            onPressed: busy
+                                ? null
+                                : () => unawaited(_openOilCatalogManage()),
+                            tooltip: 'إضافة زيت / لزوجة للكتالوج',
+                            icon: const Icon(Icons.add_rounded),
+                          ),
+                        ),
                       ),
-                      const SizedBox(width: 4),
-                      IconButton.filledTonal(
-                        onPressed: busy
-                            ? null
-                            : () => unawaited(_openOilCatalogManage()),
-                        tooltip: 'إضافة زيت / لزوجة للكتالوج',
-                        icon: const Icon(Icons.add_rounded),
-                      ),
-                    ],
-                  ),
+                    ),
                   _buildOilSourceSegment(cs, busy),
-                  _buildWarehouseOilPickRow(cs, busy),
+                  _buildWarehouseOilPickRow(context, cs, busy),
                   if (_showOilVolumeStepper) ...[
                     const SizedBox(height: 12),
                     MilliliterQuantityStepper(
                       controller: _oilSizeAmount,
                       enabled: !busy,
                       labelText: 'حجم الزيت المستعمل',
+                      unitSuffix: 'لتر',
                       onChanged: () {
-                        if (_usesWarehouseOilPicker || _usesShopOilFromStock) {
-                          _syncStockLitersFromStepper();
-                        }
-                        setState(() {
-                          _agreedTotalManual = false;
-                          _recalculateOilTotal();
-                        });
+                        _onOilOrHydraulicVolumeChanged(
+                          syncStockLiters: () {
+                            if (_usesWarehouseOilPicker ||
+                                _usesShopOilFromStock) {
+                              _syncStockLitersFromStepper();
+                            }
+                          },
+                        );
                       },
                     ),
                     if (_showCatalogOilFields &&
@@ -6222,41 +7695,47 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
                   ],
                 ],
               ),
+              ),
 
               if (widget.oilChangeMode) ...[
+                if (_anyOptionalExtrasEnabled) ...[
                 _buildOilOptionalQuickBar(cs, busy),
+                if (_shouldRenderOptionalSection(
+                    _OilFormOptionalSection.products))
                 _buildOilOptionalSection(
                   context,
                   section: _OilFormOptionalSection.products,
-                  children: [
-                    OilChangeProductsCard(
+                  childrenBuilder: () => [
+                OilChangeProductsCard(
                       bare: true,
-                      lines: _oilProductLines,
-                      busy: busy || _oilBarcodeBusy,
+                  lines: _oilProductLines,
+                  busy: busy || _oilBarcodeBusy,
                       onScanBarcode: () =>
                           unawaited(_openOilProductBarcodeCapture()),
-                      onAddProduct: () => unawaited(_openOilProductPicker()),
-                      onQuantityChanged: _onOilProductQuantityChanged,
-                      onRemoveLine: _onOilProductLineRemoved,
-                    ),
+                  onAddProduct: () => unawaited(_openOilProductPicker()),
+                  onQuantityChanged: _onOilProductQuantityChanged,
+                  onRemoveLine: _onOilProductLineRemoved,
+                ),
                   ],
                 ),
+                if (_shouldRenderOptionalSection(
+                    _OilFormOptionalSection.filters))
                 _buildOilOptionalSection(
                   context,
                   section: _OilFormOptionalSection.filters,
-                  children: [
+                  childrenBuilder: () => [
                     if (_filterProductCatalogLoading)
                       const Padding(
                         padding: EdgeInsets.symmetric(vertical: 8),
                         child: LinearProgressIndicator(minHeight: 2),
                       ),
-                    for (var i = 0; i < OilChangeFilterKind.all.length; i++) ...[
+                    for (var i = 0; i < _filterKinds.length; i++) ...[
                       if (i > 0) const SizedBox(height: 12),
                       _buildFilterKindRow(
                         context: context,
                         cs: cs,
                         busy: busy,
-                        kind: OilChangeFilterKind.all[i],
+                        kind: _filterKinds[i],
                       ),
                     ],
                     if (_filterProductCatalog.isEmpty &&
@@ -6274,10 +7753,12 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
                       ),
                   ],
                 ),
+                if (_shouldRenderOptionalSection(
+                    _OilFormOptionalSection.hydraulicGear))
                 _buildOilOptionalSection(
                   context,
                   section: _OilFormOptionalSection.hydraulicGear,
-                  children: [
+                  childrenBuilder: () => [
                     _buildHydraulicFluidCard(
                       context,
                       title: 'هيدروليك الكير',
@@ -6297,10 +7778,12 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
                     ),
                   ],
                 ),
+                if (_shouldRenderOptionalSection(
+                    _OilFormOptionalSection.hydraulicPower))
                 _buildOilOptionalSection(
                   context,
                   section: _OilFormOptionalSection.hydraulicPower,
-                  children: [
+                  childrenBuilder: () => [
                     _buildHydraulicFluidCard(
                       context,
                       title: 'هيدروليك الباور',
@@ -6320,10 +7803,12 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
                     ),
                   ],
                 ),
+                if (_shouldRenderOptionalSection(
+                    _OilFormOptionalSection.services))
                 _buildOilOptionalSection(
                   context,
                   section: _OilFormOptionalSection.services,
-                  children: [
+                  childrenBuilder: () => [
                     if (_basePriceFils > 0)
                       ListTile(
                         contentPadding: EdgeInsets.zero,
@@ -6365,6 +7850,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
                       ),
                   ],
                 ),
+                ],
                 if (!layout.isWideVariant) ...[
                   _buildOilTechnicianNotesSection(context, busy),
                   _buildOilCheckoutSectionCard(context, busy),
@@ -6455,6 +7941,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
                         Expanded(
                           child: TextFormField(
                             controller: _estimated,
+                            onTap: oilFieldSelectAllOnTap(_estimated),
                             readOnly: true,
                             decoration: const InputDecoration(
                               labelText: 'سعر تقديري (الخدمة)',
@@ -6468,12 +7955,19 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
                         Expanded(
                           child: TextFormField(
                             controller: _agreed,
+                            onTap: oilFieldSelectAllOnTap(_agreed),
                             decoration: const InputDecoration(
                               labelText: 'السعر الإجمالي (د.ع)',
                               border: OutlineInputBorder(),
                               helperText: 'السعر النهائي المتفق عليه للعمل',
                             ),
-                            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                            keyboardType: const TextInputType.numberWithOptions(
+                              decimal: false,
+                              signed: false,
+                            ),
+                            inputFormatters: [
+                              IraqiCurrencyFormat.moneyInputFormatter(),
+                            ],
                             validator: (v) {
                               final s = (v ?? '').trim().replaceAll(',', '');
                               if (s.isEmpty) return null;
@@ -6490,13 +7984,22 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
                     const SizedBox(height: 12),
                     TextFormField(
                       controller: _advance,
+                      onTap: oilFieldSelectAllOnTap(_advance),
                       decoration: const InputDecoration(
                         labelText: 'المبلغ المدفوع مسبقاً (العربون)',
                         border: OutlineInputBorder(),
                       ),
-                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: false,
+                        signed: false,
+                      ),
+                      inputFormatters: [
+                        IraqiCurrencyFormat.moneyInputFormatter(),
+                      ],
                       validator: (v) {
-                        final n = double.tryParse((v ?? '').trim().replaceAll(',', ''));
+                        final n = double.tryParse(
+                          (v ?? '').trim().replaceAll(',', ''),
+                        );
                         if (n == null || n < 0) return 'مبلغ غير صحيح';
                         return null;
                       },
@@ -6504,19 +8007,11 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
                       textAlign: TextAlign.start,
                     ),
                     const SizedBox(height: 12),
-                    TextFormField(
-                      controller: _technicianName,
-                      decoration: const InputDecoration(
-                        labelText: 'اسم الفني المسؤول',
-                        border: OutlineInputBorder(),
-                        prefixIcon: Icon(Icons.handyman_rounded),
-                        hintText: 'مثال: أحمد علي',
-                      ),
-                      textAlign: TextAlign.start,
-                    ),
+                    OilChangeTechnicianField(controller: _technicianName),
                     const SizedBox(height: 12),
                     TextFormField(
                       controller: _issue,
+                      onTap: oilFieldSelectAllOnDoubleTap(_issue),
                       decoration: const InputDecoration(
                         labelText: 'ملاحظات وتفاصيل إضافية',
                         border: OutlineInputBorder(),
@@ -6550,9 +8045,11 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
                 ),
               ],
             ],
+                );
+              },
+            ),
           ),
         ),
-      ),
       if (_prefillBootstrapInProgress)
         Positioned.fill(
           child: ColoredBox(
@@ -6608,6 +8105,11 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            GuideAnchor(
+              id: OilGuideAnchors.formTechnician,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
             Row(
               children: [
                 const Icon(
@@ -6633,7 +8135,15 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
               busy,
               compact: false,
             ),
+                ],
+              ),
+            ),
             const SizedBox(height: 16),
+            GuideAnchor(
+              id: OilGuideAnchors.formPayment,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
             Row(
               children: [
                 const Icon(
@@ -6655,6 +8165,9 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
             ),
             const SizedBox(height: 12),
             ..._oilCheckoutFields(context, busy, compact: false),
+                ],
+              ),
+            ),
           ],
         ),
       ),
@@ -6663,11 +8176,9 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
 
   @override
   void dispose() {
+    _guideListenable?.removeListener(_onGuideControllerChanged);
+    _guideListenable = null;
     _customerName.removeListener(_onCustomerNameTyped);
-    if (!widget.isEdit) {
-      _customerName.removeListener(_onCustomerNameChangedForVisitSync);
-      _customerNameVisitSyncDebounce?.cancel();
-    }
     _customerName.dispose();
     _customerFocus.dispose();
     _customerPhone.dispose();
@@ -6677,9 +8188,13 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     _deviceSerial.dispose();
     _engineSize.dispose();
 
-    _odometerCurrent.removeListener(_maybeSuggestNextOdometer);
+    _odometerNext.removeListener(_onOdometerNextTyped);
     _agreed.removeListener(_onAgreedManualEdit);
     _advance.removeListener(_onAdvanceManualEdit);
+    _issue.removeListener(_onIssueNotesChanged);
+    _notesMoneyDebounce?.cancel();
+    _checkoutUiDebounce?.cancel();
+    _notesMoneyAiGeneration++;
     if (!widget.isEdit) {
       _deviceSerial.removeListener(_onPlateFieldChanged);
     }
@@ -6718,43 +8233,69 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     final oilWidePanel = layout.isWideVariant;
     final oilCheckoutRailWidth = layout.isDesktopVariant ? 360.0 : 320.0;
 
-    final scaffold = Scaffold(
-      appBar: OilChangeFormTheme.appBar(
-        context: context,
-        title: _oilAppBarTitle(),
-        actions: [
-          IconButton(
-            tooltip: 'حفظ',
-            onPressed: busy ? null : () => _submit(),
-            icon: const Icon(Icons.save_rounded),
-          ),
-        ],
-      ),
-      body: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Expanded(
-            child: _buildOilFormScrollStack(
-              context,
-              cs: cs,
-              layout: layout,
-              pagePad: pagePad,
-              busy: busy,
-              maxWidth: oilWidePanel ? 9999 : 720,
+    final formBody = !_formBodyReady
+        ? const Center(
+            child: Padding(
+              padding: EdgeInsets.all(24),
+              child: CircularProgressIndicator(strokeWidth: 2),
             ),
-          ),
-          if (oilWidePanel)
-            SizedBox(
-              width: oilCheckoutRailWidth,
-              child: _buildOilCheckoutPanel(context, busy),
-            ),
-        ],
-      ),
-    );
+          )
+        : Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: _buildOilFormScrollStack(
+                  context,
+                  cs: cs,
+                  layout: layout,
+                  pagePad: pagePad,
+                  busy: busy,
+                  maxWidth: oilWidePanel ? 9999 : 720,
+                ),
+              ),
+              if (oilWidePanel)
+                SizedBox(
+                  width: oilCheckoutRailWidth,
+                  child: _buildOilCheckoutPanel(context, busy),
+                ),
+            ],
+          );
 
     return Theme(
-      data: OilChangeFormTheme.wrap(context, Theme.of(context)),
-      child: scaffold,
+      data: _formTheme ?? OilChangeFormTheme.wrap(context, Theme.of(context)),
+      child: PopScope(
+        canPop: !_hasUnsavedOilDraft(),
+        onPopInvokedWithResult: (didPop, _) async {
+          if (didPop) return;
+          if (_saving) return;
+          final leave = await _confirmLeaveOilFormIfDirty();
+          if (!mounted || !leave) return;
+          _leaveGateAllowPop = true;
+          Navigator.of(context).pop();
+        },
+        child: Scaffold(
+          resizeToAvoidBottomInset: false,
+          appBar: OilChangeFormTheme.appBar(
+            context: context,
+            title: _oilAppBarTitle(),
+            actions: [
+              if (widget.isNewCard)
+                IconButton(
+                  tooltip: 'مسح الحقول',
+                  onPressed:
+                      busy ? null : () => unawaited(_confirmAndClearOilFormFields()),
+                  icon: const Icon(Icons.clear_all_rounded),
+                ),
+              IconButton(
+                tooltip: 'حفظ',
+                onPressed: busy ? null : () => _submit(),
+                icon: const Icon(Icons.save_rounded),
+              ),
+            ],
+          ),
+          body: formBody,
+        ),
+      ),
     );
   }
 }

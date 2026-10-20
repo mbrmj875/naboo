@@ -33,6 +33,7 @@ abstract final class OwnerAlertSettingsCatalog {
     OwnerDashboardProfile.supermarket,
     OwnerDashboardProfile.generalRetail,
     OwnerDashboardProfile.pharmacy,
+    OwnerDashboardProfile.restaurantCafe,
   };
   static const _clothing = {OwnerDashboardProfile.clothingStore};
 

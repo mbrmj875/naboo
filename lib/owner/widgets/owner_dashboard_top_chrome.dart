@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../guides/widgets/app_assistant_app_bar_button.dart';
+import '../../navigation/content_navigation.dart';
 import '../../providers/theme_provider.dart';
 import 'owner_account_profile_menu.dart';
 import 'owner_dashboard_layout_sheet.dart';
@@ -60,6 +62,15 @@ class OwnerDashboardTopChrome extends StatelessWidget {
                 chromeAvatarTrigger: true,
                 onDashboardSyncBusy: onDashboardSyncBusy,
                 onAfterCloudSync: onAfterCloudSync,
+              ),
+              AppAssistantAppBarButton(
+                currentRouteId: AppContentRoutes.ownerDashboard,
+                buttonStyle: IconButton.styleFrom(
+                  foregroundColor: fg,
+                  padding: EdgeInsets.zero,
+                  minimumSize: const Size(40, 40),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
               ),
               IconButton(
                 tooltip: 'إعدادات اللوحة',

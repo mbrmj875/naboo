@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
-import '../../../theme/design_tokens.dart';
 import '../../../theme/sale_brand.dart';
+import '../utils/oil_change_layout.dart';
 
 /// إطار ذهبي ملكي موحّد لبطاقات غيار الزيت (النموذج، الكتالوج، السجل، الخدمات).
 abstract final class OilChangeRoyalCard {
@@ -9,8 +9,10 @@ abstract final class OilChangeRoyalCard {
 
   static const Color gold = SaleBrandColors.gold;
 
+  /// [context] يفعّل قانون الظلال ≤400dp؛ بدونه تُستخدم الظلال الكاملة.
   static BoxDecoration decoration(
     ColorScheme cs, {
+    BuildContext? context,
     double radius = 16,
     Color? backgroundColor,
     double borderWidth = 2,
@@ -23,18 +25,9 @@ abstract final class OilChangeRoyalCard {
         color: gold.withValues(alpha: borderAlpha),
         width: borderWidth,
       ),
-      boxShadow: const [
-        BoxShadow(
-          color: AppGlass.goldGlow,
-          blurRadius: 14,
-          offset: Offset(0, 3),
-        ),
-        BoxShadow(
-          color: Color(0x0A000000),
-          blurRadius: 10,
-          offset: Offset(0, 4),
-        ),
-      ],
+      boxShadow: context != null
+          ? oilChangeCardShadowsOf(context)
+          : kOilChangeCardShadowsFull,
     );
   }
 
@@ -62,7 +55,7 @@ abstract final class OilChangeRoyalCard {
     final cs = Theme.of(context).colorScheme;
     return Container(
       margin: margin ?? const EdgeInsets.only(bottom: 14),
-      decoration: decoration(cs),
+      decoration: decoration(cs, context: context),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -121,6 +114,7 @@ abstract final class OilChangeRoyalCard {
       ),
       decoration: decoration(
         cs,
+        context: context,
         backgroundColor: expanded
             ? cs.surface
             : cs.surfaceContainerHighest.withValues(alpha: 0.42),
@@ -213,6 +207,7 @@ abstract final class OilChangeRoyalCard {
 
   /// بطاقة قائمة (صف لزوجة، خدمة، …).
   static Widget listTileCard({
+    required BuildContext context,
     required ColorScheme cs,
     required Widget child,
     EdgeInsetsGeometry? margin,
@@ -225,7 +220,7 @@ abstract final class OilChangeRoyalCard {
     );
     return Container(
       margin: margin ?? const EdgeInsets.only(bottom: 6),
-      decoration: decoration(cs, radius: radius),
+      decoration: decoration(cs, context: context, radius: radius),
       child: onTap == null
           ? tile
           : InkWell(

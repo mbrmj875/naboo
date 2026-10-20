@@ -16,11 +16,19 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="NABOO">
-  <link rel="apple-touch-icon" href="icons/Icon-192.png">
-  <link rel="apple-touch-icon" sizes="180x180" href="icons/Icon-192.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon-180.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon-180.png">
+  <link rel="apple-touch-icon" sizes="192x192" href="icons/Icon-192.png">
 
   <link rel="icon" type="image/png" href="favicon.png">
   <title>NABOO</title>
+  <link rel="canonical" href="https://naboo.fun/app/">
+  <meta property="og:title" content="NABOO">
+  <meta property="og:description" content="NABOO — نظام إدارة الأعمال: فواتير، مخزون، عملاء، ديون، وأقساط.">
+  <meta property="og:image" content="https://naboo.fun/app/icons/Icon-512.png">
+  <meta property="og:url" content="https://naboo.fun/app/">
+  <meta property="og:type" content="website">
+  <meta property="og:locale" content="ar_SA">
   <link rel="manifest" href="manifest.json">
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
@@ -58,12 +66,91 @@
   </script>
 
   <script>
-    // iOS standalone: منع التكبير بالقرص المزدوج داخل التطبيق المثبّت.
+    // جسر تثبيت PWA لـ Flutter (Android/Chrome + كشف iOS/سطح المكتب).
     (function () {
-      var standalone = window.navigator.standalone === true
-        || window.matchMedia("(display-mode: standalone)").matches;
-      if (!standalone) return;
-      document.documentElement.classList.add("pwa-standalone");
+      var deferredPrompt = null;
+      var ua = (navigator.userAgent || "").toLowerCase();
+      var isIos = /iphone|ipad|ipod/.test(ua) ||
+        (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+      var isAndroid = /android/.test(ua);
+
+      function isStandalone() {
+        return window.navigator.standalone === true
+          || window.matchMedia("(display-mode: standalone)").matches
+          || window.matchMedia("(display-mode: minimal-ui)").matches;
+      }
+
+      function platformHint() {
+        if (isIos) return "ios";
+        if (isAndroid) return "android";
+        return "desktop";
+      }
+
+      window.addEventListener("beforeinstallprompt", function (e) {
+        e.preventDefault();
+        deferredPrompt = e;
+        try {
+          window.dispatchEvent(new CustomEvent("naboo-pwa-installable"));
+        } catch (_) {}
+      });
+
+      window.addEventListener("appinstalled", function () {
+        deferredPrompt = null;
+        try {
+          window.dispatchEvent(new CustomEvent("naboo-pwa-installed"));
+        } catch (_) {}
+      });
+
+      window.nabooPwa = {
+        canInstall: function () {
+          return deferredPrompt != null && !isStandalone();
+        },
+        isStandalone: isStandalone,
+        platformHint: platformHint,
+        promptInstall: function () {
+          if (!deferredPrompt) {
+            return Promise.resolve({ ok: false, reason: "unavailable" });
+          }
+          var promptEvent = deferredPrompt;
+          deferredPrompt = null;
+          return promptEvent.prompt().then(function () {
+            return promptEvent.userChoice;
+          }).then(function (choice) {
+            var outcome = choice && choice.outcome ? choice.outcome : "dismissed";
+            return { ok: outcome === "accepted", reason: outcome };
+          }).catch(function () {
+            return { ok: false, reason: "error" };
+          });
+        },
+        dismissDismissedForDays: function (days) {
+          try {
+            var until = Date.now() + (Math.max(1, days || 14) * 24 * 60 * 60 * 1000);
+            localStorage.setItem("naboo_pwa_banner_dismiss_until", String(until));
+          } catch (_) {}
+        },
+        isBannerDismissed: function () {
+          try {
+            var raw = localStorage.getItem("naboo_pwa_banner_dismiss_until");
+            if (!raw) return false;
+            var until = parseInt(raw, 10);
+            if (!until || isNaN(until)) return false;
+            if (Date.now() >= until) {
+              localStorage.removeItem("naboo_pwa_banner_dismiss_until");
+              return false;
+            }
+            return true;
+          } catch (_) {
+            return false;
+          }
+        },
+        clearBannerDismiss: function () {
+          try { localStorage.removeItem("naboo_pwa_banner_dismiss_until"); } catch (_) {}
+        }
+      };
+
+      if (isStandalone()) {
+        document.documentElement.classList.add("pwa-standalone");
+      }
     })();
   </script>
 
@@ -114,6 +201,6 @@
     <img class="center" aria-hidden="true" src="splash/img/light-1x.png" alt="">
   </picture>
 
-  <script src="flutter_bootstrap.js?v=20260617b" async></script>
+  <script src="flutter_bootstrap.js?v=20260825c" async></script>
 </body>
 </html>

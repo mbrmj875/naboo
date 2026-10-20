@@ -20,6 +20,10 @@ Future<void> ensureUserDirectoryGlobalIdSchema(Database db) async {
 
   await addColumn('users', 'global_id', 'TEXT');
   await addColumn('user_profiles', 'global_id', 'TEXT');
+  // بيانات فرع الموظف (اسم/عنوان/هاتف/شعار) — تتزامن مع اللقطة عبر user_profiles.
+  await addColumn('user_profiles', 'branchProfileJson', 'TEXT');
+  // تفضيلات واجهة لكل موظف (مثل زر غسيل السيارات).
+  await addColumn('user_profiles', 'staffUiPrefsJson', 'TEXT');
 
   try {
     await db.execute('''
@@ -222,28 +226,57 @@ Future<void> _syncUserProfileRowForUserId(Transaction txn, int userId) async {
     );
   }
 
+  // REPLACE يمسح الصف بالكامل — نحافظ على بيانات فرع الموظف وتفضيلات الواجهة.
+  String? branchProfileJson;
+  String? staffUiPrefsJson;
+  final existingProfiles = await txn.query(
+    'user_profiles',
+    columns: const ['branchProfileJson', 'staffUiPrefsJson'],
+    where: 'id = ?',
+    whereArgs: [userId],
+    limit: 1,
+  );
+  if (existingProfiles.isNotEmpty) {
+    final raw = (existingProfiles.first['branchProfileJson'] ?? '')
+        .toString()
+        .trim();
+    if (raw.isNotEmpty) branchProfileJson = raw;
+    final uiRaw = (existingProfiles.first['staffUiPrefsJson'] ?? '')
+        .toString()
+        .trim();
+    if (uiRaw.isNotEmpty) staffUiPrefsJson = uiRaw;
+  }
+
+  final profileMap = <String, dynamic>{
+    'id': userId,
+    'global_id': globalId,
+    'username': rawUsername.isNotEmpty ? rawUsername : rawEmail,
+    'role': role.isEmpty ? 'staff' : role,
+    'email': (row['email'] ?? '').toString().trim(),
+    'phone': (row['phone'] ?? '').toString().trim(),
+    'phone2': (row['phone2'] ?? '').toString().trim(),
+    'displayName': (row['displayName'] ?? '').toString().trim(),
+    'jobTitle': (row['jobTitle'] ?? '').toString().trim(),
+    'isActive': ((row['isActive'] as num?)?.toInt() ?? 1) == 1 ? 1 : 0,
+    'pinHash': pinHash,
+    'pinSalt': pinSalt,
+    'createdAt': ((row['createdAt'] ?? '').toString().trim().isEmpty)
+        ? now
+        : (row['createdAt'] ?? '').toString(),
+    'updatedAt': ((row['updatedAt'] ?? '').toString().trim().isEmpty)
+        ? now
+        : (row['updatedAt'] ?? '').toString(),
+  };
+  if (branchProfileJson != null) {
+    profileMap['branchProfileJson'] = branchProfileJson;
+  }
+  if (staffUiPrefsJson != null) {
+    profileMap['staffUiPrefsJson'] = staffUiPrefsJson;
+  }
+
   await txn.insert(
     'user_profiles',
-    {
-      'id': userId,
-      'global_id': globalId,
-      'username': rawUsername.isNotEmpty ? rawUsername : rawEmail,
-      'role': role.isEmpty ? 'staff' : role,
-      'email': (row['email'] ?? '').toString().trim(),
-      'phone': (row['phone'] ?? '').toString().trim(),
-      'phone2': (row['phone2'] ?? '').toString().trim(),
-      'displayName': (row['displayName'] ?? '').toString().trim(),
-      'jobTitle': (row['jobTitle'] ?? '').toString().trim(),
-      'isActive': ((row['isActive'] as num?)?.toInt() ?? 1) == 1 ? 1 : 0,
-      'pinHash': pinHash,
-      'pinSalt': pinSalt,
-      'createdAt': ((row['createdAt'] ?? '').toString().trim().isEmpty)
-          ? now
-          : (row['createdAt'] ?? '').toString(),
-      'updatedAt': ((row['updatedAt'] ?? '').toString().trim().isEmpty)
-          ? now
-          : (row['updatedAt'] ?? '').toString(),
-    },
+    profileMap,
     conflictAlgorithm: ConflictAlgorithm.replace,
   );
 }
@@ -555,6 +588,7 @@ extension DbUsers on DatabaseHelper {
         'passwordSalt',
         'createdAt',
         'updatedAt',
+        'global_id',
       ],
       where: 'id = ?',
       whereArgs: [id],
@@ -583,7 +617,28 @@ extension DbUsers on DatabaseHelper {
         whereArgs: [id],
       );
     }
-    await db.insert('user_profiles', {
+
+    String? branchProfileJson;
+    String? staffUiPrefsJson;
+    final existingProfiles = await db.query(
+      'user_profiles',
+      columns: const ['branchProfileJson', 'staffUiPrefsJson'],
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    if (existingProfiles.isNotEmpty) {
+      final raw = (existingProfiles.first['branchProfileJson'] ?? '')
+          .toString()
+          .trim();
+      if (raw.isNotEmpty) branchProfileJson = raw;
+      final uiRaw = (existingProfiles.first['staffUiPrefsJson'] ?? '')
+          .toString()
+          .trim();
+      if (uiRaw.isNotEmpty) staffUiPrefsJson = uiRaw;
+    }
+
+    final profileMap = <String, dynamic>{
       'id': id,
       'global_id': globalId,
       'username': rawUsername.isNotEmpty ? rawUsername : rawEmail,
@@ -602,7 +657,18 @@ extension DbUsers on DatabaseHelper {
       'updatedAt': ((row['updatedAt'] ?? '').toString().trim().isEmpty)
           ? now
           : (row['updatedAt'] ?? '').toString(),
-    }, conflictAlgorithm: ConflictAlgorithm.replace);
+    };
+    if (branchProfileJson != null) {
+      profileMap['branchProfileJson'] = branchProfileJson;
+    }
+    if (staffUiPrefsJson != null) {
+      profileMap['staffUiPrefsJson'] = staffUiPrefsJson;
+    }
+    await db.insert(
+      'user_profiles',
+      profileMap,
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
   }
 
   /// بحث موظفين/مستخدمين (اسم الدخول / البريد / الهاتف).
@@ -881,6 +947,44 @@ extension DbUsers on DatabaseHelper {
     }).toList();
   }
 
+  /// موظفون نشطون في الدليل بلا PIN محفوظ — للعرض فقط في بوابة الاختيار.
+  Future<List<Map<String, dynamic>>> listStaffProfilesMissingPinForGate() async {
+    final db = await database;
+    final profiles = await db.query(
+      'user_profiles',
+      where: "isActive = 1 AND LOWER(IFNULL(role, 'staff')) = 'staff'",
+      orderBy: 'COALESCE(displayName, username) COLLATE NOCASE ASC',
+    );
+    if (profiles.isEmpty) return const [];
+
+    final gate = await listActiveUsersForEmployeeGate();
+    final shownGids = <String>{};
+    final shownNames = <String>{};
+    for (final u in gate) {
+      final gid = (u['global_id'] ?? '').toString().trim();
+      if (gid.isNotEmpty) shownGids.add(gid);
+      final name =
+          ((u['displayName'] ?? u['username'] ?? '').toString().trim())
+              .toLowerCase();
+      if (name.isNotEmpty) shownNames.add(name);
+    }
+
+    final missing = <Map<String, dynamic>>[];
+    for (final p in profiles) {
+      final hash = (p['pinHash'] ?? '').toString().trim();
+      final salt = (p['pinSalt'] ?? '').toString().trim();
+      if (hash.isNotEmpty && salt.isNotEmpty) continue;
+      final gid = (p['global_id'] ?? '').toString().trim();
+      if (gid.isNotEmpty && shownGids.contains(gid)) continue;
+      final name =
+          ((p['displayName'] ?? p['username'] ?? '').toString().trim())
+              .toLowerCase();
+      if (name.isNotEmpty && shownNames.contains(name)) continue;
+      missing.add(Map<String, dynamic>.from(p));
+    }
+    return missing;
+  }
+
   /// بعد استيراد user_profiles — staff جاهزون للبوابة حتى قبل دمج users.
   Future<int> countActiveStaffProfilesWithPin() async {
     final db = await database;
@@ -906,6 +1010,21 @@ extension DbUsers on DatabaseHelper {
         AND IFNULL(passwordSalt, '') != ''
     ''');
     return ((rows.first['c'] as num?)?.toInt() ?? 0) > 0;
+  }
+
+  Future<bool> userHasStoredPin(int userId) async {
+    final db = await database;
+    final rows = await db.query(
+      'users',
+      columns: ['passwordHash', 'passwordSalt'],
+      where: 'id = ? AND isActive = 1',
+      whereArgs: [userId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return false;
+    final salt = (rows.first['passwordSalt'] as String?)?.trim() ?? '';
+    final hash = (rows.first['passwordHash'] as String?)?.trim() ?? '';
+    return salt.isNotEmpty && hash.isNotEmpty;
   }
 
   Future<bool> verifyPinForUser(int userId, String pin) async {

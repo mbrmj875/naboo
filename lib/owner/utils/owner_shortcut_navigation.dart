@@ -8,6 +8,7 @@ import '../../screens/reports/reports_screen.dart';
 import '../../verticals/oil_change/screens/oil_change_form_screen.dart';
 import '../../screens/invoices/add_invoice_screen.dart';
 import '../../verticals/oil_change/screens/oil_change_hub_screen.dart';
+import '../../verticals/oil_change/screens/oil_change_ratings_screen.dart';
 import '../../screens/users/users_screen.dart';
 import '../specs/owner_kpi_catalog_entry.dart';
 
@@ -72,6 +73,8 @@ abstract final class OwnerShortcutNavigation {
             builder: (_) => const UsersScreen(),
           ),
         );
+      case 'oil_change_ratings':
+        OilChangeRatingsScreen.open(context);
       case 'add_invoice':
         Navigator.of(context).push(
           MaterialPageRoute<void>(

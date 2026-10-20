@@ -4,7 +4,10 @@
     "start_url": "/app/",
     "scope": "/app/",
     "display": "standalone",
-    "display_override": ["standalone", "minimal-ui"],
+    "display_override": [
+        "standalone",
+        "minimal-ui"
+    ],
     "background_color": "#071A36",
     "theme_color": "#071A36",
     "description": "نظام إدارة أعمال: فواتير، مخزون، عملاء، ديون، أقساط، صندوق ووردية وتقارير.",
@@ -12,7 +15,11 @@
     "lang": "ar",
     "dir": "rtl",
     "prefer_related_applications": false,
-    "categories": ["business", "finance", "productivity"],
+    "categories": [
+        "business",
+        "finance",
+        "productivity"
+    ],
     "icons": [
         {
             "src": "icons/Icon-192.png",
