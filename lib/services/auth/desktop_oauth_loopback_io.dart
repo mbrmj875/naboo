@@ -11,11 +11,12 @@ import 'desktop_oauth_loopback_result.dart';
 
 const windowsOAuthLoopbackPort = 47821;
 const windowsOAuthLoopbackRedirect =
-    'http://127.0.0.1:47821/login-callback';
-/// صفحة موجودة فعلياً (Edge Function) — ليست naboo.fun/desktop-oauth.html التي تعطي 404.
-const windowsOAuthBridgeUrl =
-    'https://rkofqwcuvbzrnmelvxhz.supabase.co/functions/v1/desktop-oauth';
+    'http://127.0.0.1:$windowsOAuthLoopbackPort/login-callback';
 
+/// تسجيل Google على ويندوز: المتصفح يرجع إلى التطبيق نفسه على 127.0.0.1.
+///
+/// Supabase يضع الجلسة بعد علامة # في العنوان. الخادم لا يراها، لذلك أول رد
+/// صفحة محلية تقرأ العنوان وتعيد إرساله في الاستعلام، ثم تُحفظ الجلسة.
 Future<DesktopOAuthLoopbackResult> completeGoogleOAuthViaLoopback(
   GoTrueClient auth,
 ) async {
@@ -32,65 +33,103 @@ Future<DesktopOAuthLoopbackResult> completeGoogleOAuthViaLoopback(
     );
   } on Object catch (e) {
     AppLogger.warn('DesktopOAuth', 'loopback bind failed: $e');
-    return DesktopOAuthLoopbackResult.failed();
+    return DesktopOAuthLoopbackResult.failed(
+      'تطبيق نبو مفتوح أكثر من مرة. أغلقه بالكامل ثم أعد فتحه.',
+    );
   }
 
   try {
-    // RFC 8252: the system browser returns the code to this app on loopback.
-    // The HTTPS bridge exists for builds that still redirect through it, and
-    // for Supabase responses that put the session in the URL hash.
     final res = await auth.getOAuthSignInUrl(
       provider: OAuthProvider.google,
-      redirectTo: windowsOAuthBridgeUrl,
+      redirectTo: windowsOAuthLoopbackRedirect,
     );
     final launched = await launchUrl(
       Uri.parse(res.url),
       mode: LaunchMode.externalApplication,
     );
     if (!launched) {
-      AppLogger.warn('DesktopOAuth', 'could not launch Google OAuth URL');
-      return DesktopOAuthLoopbackResult.failed();
+      return DesktopOAuthLoopbackResult.failed(
+        'تعذر فتح صفحة Google.',
+      );
     }
 
-    final request = await _waitForCallback(server).timeout(
+    return await _serveUntilSession(server, auth).timeout(
       const Duration(seconds: 110),
     );
-    if (request == null) {
-      return DesktopOAuthLoopbackResult.cancelled();
+  } on TimeoutException {
+    AppLogger.warn('DesktopOAuth', 'loopback wait timed out');
+    return DesktopOAuthLoopbackResult.failed(
+      'انتهت مهلة تسجيل الدخول. أعد المحاولة.',
+    );
+  } catch (e, st) {
+    AppLogger.error('DesktopOAuth', 'loopback failed', e, st);
+    return DesktopOAuthLoopbackResult.failed(
+      'تعذّر إكمال الدخول عبر Google على ويندوز. أعد المحاولة.',
+    );
+  } finally {
+    try {
+      await server.close(force: true);
+    } catch (_) {}
+  }
+}
+
+Future<DesktopOAuthLoopbackResult> _serveUntilSession(
+  HttpServer server,
+  GoTrueClient auth,
+) async {
+  await for (final request in server) {
+    final params = request.uri.queryParameters;
+    if (!_hasOAuthPayload(params)) {
+      await _writeCollectorPage(request);
+      continue;
     }
 
-    final callback = Uri(
-      scheme: 'http',
-      host: '127.0.0.1',
-      port: windowsOAuthLoopbackPort,
-      path: request.uri.path,
-      query: request.uri.query.isEmpty ? null : request.uri.query,
-    );
-
-    final error = callback.queryParameters['error'];
+    final error = params['error'];
     if (error != null && error.isNotEmpty) {
+      final cancelled = error == 'access_denied';
       await _writeHtml(
         request,
-        error == 'access_denied'
+        cancelled
             ? 'تم إلغاء تسجيل الدخول. يمكنك إغلاق هذه النافذة.'
             : 'تعذّر إكمال الدخول. أعد المحاولة من تطبيق نبو.',
       );
-      return error == 'access_denied'
+      return cancelled
           ? DesktopOAuthLoopbackResult.cancelled()
-          : DesktopOAuthLoopbackResult.failed();
+          : DesktopOAuthLoopbackResult.failed(
+              'تعذّر إكمال الدخول عبر Google على ويندوز. أعد المحاولة.',
+            );
     }
 
     try {
-      await auth.getSessionFromUrl(callback);
+      final access = params['access_token'];
+      final refresh = params['refresh_token'];
+      if (access != null &&
+          access.isNotEmpty &&
+          refresh != null &&
+          refresh.isNotEmpty) {
+        await auth
+            .setSession(refresh, accessToken: access)
+            .timeout(const Duration(seconds: 20));
+      } else {
+        final callback = Uri(
+          scheme: 'http',
+          host: '127.0.0.1',
+          port: windowsOAuthLoopbackPort,
+          path: request.uri.path,
+          queryParameters: params,
+        );
+        await auth
+            .getSessionFromUrl(callback)
+            .timeout(const Duration(seconds: 20));
+      }
     } catch (e, st) {
-      AppLogger.error('DesktopOAuth', 'getSessionFromUrl', e, st);
+      AppLogger.error('DesktopOAuth', 'session exchange failed', e, st);
       await _writeHtml(
         request,
         'تعذّر إكمال الدخول. أعد المحاولة من تطبيق نبو.',
       );
-      final detail = e.toString().replaceAll(RegExp(r'\s+'), ' ').trim();
       return DesktopOAuthLoopbackResult.failed(
-        detail.length > 180 ? detail.substring(0, 180) : detail,
+        'تعذّر إكمال الدخول عبر Google على ويندوز. أعد المحاولة.',
       );
     }
 
@@ -103,35 +142,56 @@ Future<DesktopOAuthLoopbackResult> completeGoogleOAuthViaLoopback(
     );
     return ok
         ? DesktopOAuthLoopbackResult.ok()
-        : DesktopOAuthLoopbackResult.failed();
-  } on TimeoutException {
-    AppLogger.warn('DesktopOAuth', 'loopback wait timed out');
-    return DesktopOAuthLoopbackResult.failed();
-  } catch (e, st) {
-    AppLogger.error('DesktopOAuth', 'loopback failed', e, st);
-    return DesktopOAuthLoopbackResult.failed();
-  } finally {
-    try {
-      await server.close(force: true);
-    } catch (_) {}
+        : DesktopOAuthLoopbackResult.failed(
+            'تعذّر إكمال الدخول عبر Google على ويندوز. أعد المحاولة.',
+          );
   }
+  return DesktopOAuthLoopbackResult.failed(
+    'تعذّر إكمال الدخول عبر Google على ويندوز. أعد المحاولة.',
+  );
 }
 
-Future<HttpRequest?> _waitForCallback(HttpServer server) async {
-  await for (final request in server) {
-    final params = request.uri.queryParameters;
-    final hasPayload = params.containsKey('code') ||
-        params.containsKey('access_token') ||
-        params.containsKey('error') ||
-        params.containsKey('error_description');
-    if (!hasPayload) {
-      request.response.statusCode = HttpStatus.noContent;
-      await request.response.close();
-      continue;
-    }
-    return request;
-  }
-  return null;
+bool _hasOAuthPayload(Map<String, String> params) {
+  return (params['code']?.isNotEmpty ?? false) ||
+      (params['access_token']?.isNotEmpty ?? false) ||
+      (params['error']?.isNotEmpty ?? false) ||
+      (params['error_description']?.isNotEmpty ?? false);
+}
+
+Future<void> _writeCollectorPage(HttpRequest request) async {
+  request.response.statusCode = HttpStatus.ok;
+  request.response.headers.contentType = ContentType.html;
+  request.response.headers.set('Cache-Control', 'no-store');
+  request.response.write('''
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <title>نبو</title>
+  <style>
+    body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#071A36;color:#f5f3ee;font-family:system-ui,sans-serif;padding:24px;text-align:center}
+  </style>
+</head>
+<body>
+  <p id="m">جاري إكمال تسجيل الدخول في نبو…</p>
+  <script>
+    (function () {
+      var q = location.search.length > 1 ? location.search.substring(1) : '';
+      var h = location.hash.length > 1 ? location.hash.substring(1) : '';
+      var p = q;
+      if (h) p = p ? (p + '&' + h) : h;
+      if (!p) {
+        var el = document.getElementById('m');
+        if (el) el.textContent = 'لم تصل جلسة الدخول. أعد المحاولة من تطبيق نبو.';
+        return;
+      }
+      location.replace('/login-callback?' + p);
+    })();
+  </script>
+</body>
+</html>
+''');
+  await request.response.close();
 }
 
 Future<void> _writeHtml(HttpRequest request, String message) async {
