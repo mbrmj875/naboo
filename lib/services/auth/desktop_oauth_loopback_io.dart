@@ -10,7 +10,11 @@ import '../../utils/app_logger.dart';
 import 'desktop_oauth_loopback_result.dart';
 
 const windowsOAuthLoopbackPort = 47821;
-const windowsOAuthBridgeUrl = 'https://naboo.fun/app/desktop-oauth.html';
+const windowsOAuthLoopbackRedirect =
+    'http://127.0.0.1:47821/login-callback';
+/// صفحة موجودة فعلياً (Edge Function) — ليست naboo.fun/desktop-oauth.html التي تعطي 404.
+const windowsOAuthBridgeUrl =
+    'https://rkofqwcuvbzrnmelvxhz.supabase.co/functions/v1/desktop-oauth';
 
 Future<DesktopOAuthLoopbackResult> completeGoogleOAuthViaLoopback(
   GoTrueClient auth,
