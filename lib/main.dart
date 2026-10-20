@@ -92,8 +92,17 @@ void _registerVerticalManifests() {
 }
 
 /// Supabase OAuth returns `io.supabase.naboo://login-callback?code=…`.
+/// ويندوز أحياناً يمرّر المسار بدون host أو بشرطة مائلة زائدة.
 bool _isSupabaseOAuthCallbackUri(Uri uri) {
-  return uri.scheme == 'io.supabase.naboo' && uri.host == 'login-callback';
+  if (uri.scheme != 'io.supabase.naboo') return false;
+  final host = uri.host.toLowerCase();
+  final path = uri.path.toLowerCase();
+  if (host == 'login-callback' || path.contains('login-callback')) {
+    return true;
+  }
+  return uri.queryParameters.containsKey('code') ||
+      uri.fragment.contains('access_token') ||
+      uri.fragment.contains('code=');
 }
 
 /// يُستدعى من onGenerateRoute — يمنع Flutter من التعامل مع deep link كمسار.
@@ -109,6 +118,7 @@ void _registerMobileOAuthDeepLinkHandler() {
   if (kIsWeb) return;
 
   Future<void> handleOAuthUri(Uri uri) async {
+    AppLogger.info('main', 'oauth/app link: $uri');
     if (!_isSupabaseOAuthCallbackUri(uri)) return;
     try {
       await Supabase.instance.client.auth.getSessionFromUrl(uri);

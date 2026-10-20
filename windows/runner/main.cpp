@@ -50,7 +50,10 @@ void RegisterOAuthProtocol() {
 }
 
 bool SendAppLinkToInstance(const std::wstring& title) {
-  HWND hwnd = ::FindWindow(L"FLUTTER_RUNNER_WIN32_WINDOW", title.c_str());
+  HWND hwnd = ::FindWindow(L"NABOO_ERP_WIN32_WINDOW", title.c_str());
+  if (hwnd == nullptr) {
+    hwnd = ::FindWindow(L"NABOO_ERP_WIN32_WINDOW", nullptr);
+  }
   if (hwnd == nullptr) {
     return false;
   }

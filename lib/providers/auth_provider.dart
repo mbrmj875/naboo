@@ -3566,12 +3566,18 @@ class AuthProvider extends ChangeNotifier {
         onTimeout: () => client.auth.currentSession,
       );
       if (session == null || client.auth.currentUser == null) {
-        // لم تصل جلسة — الغالب أن المستخدم أغلق نافذة Google دون إكمال.
         AppLogger.info(
           'AuthProvider',
-          'Google sign-in returned no session (likely cancelled)',
+          'Google sign-in returned no session after browser OAuth',
         );
         await _signOutSupabaseAfterFailedGoogleLink();
+        if (defaultTargetPlatform == TargetPlatform.windows ||
+            defaultTargetPlatform == TargetPlatform.linux) {
+          return GoogleAuthResult.error(
+            'تم اختيار الحساب، لكن ويندوز لم يُرجع الجلسة إلى نبو. '
+            'أغلق نافذة المتصفح ثم اضغط تسجيل الدخول بـ Google مرة أخرى.',
+          );
+        }
         return GoogleAuthResult.cancelled();
       }
 
