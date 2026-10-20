@@ -49,6 +49,8 @@
   - `https://naboo-93580.web.app/app/**`
   - `https://naboo.fun/app/oauth_complete.html`
   - `https://naboo-93580.web.app/app/oauth_complete.html`
+  - `https://naboo.fun/app/desktop-oauth.html`
+  - `http://127.0.0.1:47821/login-callback`
 
 **Authentication → Providers → Google:** Client ID / Secret يطابقان عميل الويب أعلاه.
 

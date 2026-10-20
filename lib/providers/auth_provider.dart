@@ -45,6 +45,7 @@ import '../services/auth/auth_user_messages.dart';
 import '../services/auth/native_google_id_token_sign_in_result.dart';
 import '../services/auth/web_app_origin.dart';
 import '../services/auth/web_oauth_redirect.dart';
+import '../services/auth/desktop_oauth_loopback.dart';
 import '../utils/app_logger.dart';
 import '../utils/auth_validators.dart';
 import '../owner/services/business_audit_log_service.dart';
@@ -3551,7 +3552,26 @@ class AuthProvider extends ChangeNotifier {
         return GoogleAuthResult.error(AuthUserMessages.googleUnavailable);
       }
 
-      // احتياط للديسكتوب فقط: متصفح خارجي + deep link.
+      // ويندوز/لينكس: المتصفح يعود عبر localhost (لا بروتوكول io.supabase.naboo).
+      if (defaultTargetPlatform == TargetPlatform.windows ||
+          defaultTargetPlatform == TargetPlatform.linux) {
+        final loopback = await completeGoogleOAuthViaLoopback(client.auth);
+        if (loopback.cancelled) {
+          return GoogleAuthResult.cancelled();
+        }
+        if (!loopback.success || client.auth.currentUser == null) {
+          await _signOutSupabaseAfterFailedGoogleLink();
+          return GoogleAuthResult.error(
+            'تعذّر إكمال الدخول عبر Google على ويندوز. '
+            'أغلق نافذة المتصفح ثم أعد المحاولة.',
+          );
+        }
+        return _mapFinalizeResult(
+          await _finalizeGoogleOAuthSession(intent: intent),
+        );
+      }
+
+      // احتياط للموبايل: متصفح خارجي + deep link.
       final launched = await client.auth.signInWithOAuth(
         OAuthProvider.google,
         redirectTo: 'io.supabase.naboo://login-callback',
@@ -3571,13 +3591,6 @@ class AuthProvider extends ChangeNotifier {
           'Google sign-in returned no session after browser OAuth',
         );
         await _signOutSupabaseAfterFailedGoogleLink();
-        if (defaultTargetPlatform == TargetPlatform.windows ||
-            defaultTargetPlatform == TargetPlatform.linux) {
-          return GoogleAuthResult.error(
-            'تم اختيار الحساب، لكن ويندوز لم يُرجع الجلسة إلى نبو. '
-            'أغلق نافذة المتصفح ثم اضغط تسجيل الدخول بـ Google مرة أخرى.',
-          );
-        }
         return GoogleAuthResult.cancelled();
       }
 
