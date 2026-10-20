@@ -2,7 +2,6 @@ import 'dart:async' show Timer, unawaited;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -801,7 +800,8 @@ class _SplashScreenState extends State<SplashScreen>
                                         textDirection: TextDirection.ltr,
                                         maxLines: 1,
                                         softWrap: false,
-                                        style: GoogleFonts.playfairDisplay(
+                                        style: TextStyle(
+                                          fontFamily: 'Tajawal',
                                           fontSize: wordSize,
                                           fontWeight: FontWeight.w800,
                                           fontStyle: FontStyle.normal,
@@ -861,8 +861,9 @@ class _SplashScreenState extends State<SplashScreen>
                   SizedBox(height: (progressSize * 0.35).clamp(8.0, 16.0)),
                   Text(
                     statusText,
-                    style: GoogleFonts.tajawal(
-                      color: Colors.white.withOpacity(0.6),
+                    style: TextStyle(
+                      fontFamily: 'Tajawal',
+                      color: Colors.white.withValues(alpha: 0.6),
                       fontSize: (w * 0.03).clamp(12.0, 16.0),
                       fontWeight: FontWeight.w500,
                       letterSpacing: 2.0,

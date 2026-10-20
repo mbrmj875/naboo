@@ -65,6 +65,7 @@ dependencies:
   firebase_messaging: ^15.2.0
   url_launcher: ^6.3.2
   sqflite_common_ffi: ^2.4.0+3
+  sqlite3_flutter_libs: ^0.5.39
   uuid: ^4.5.3
   sqflite_common_ffi_web: ^1.1.1
   google_sign_in: ^6.2.2

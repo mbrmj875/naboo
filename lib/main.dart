@@ -243,23 +243,27 @@ void main() async {
   if (kIsWeb) {
     await migrateWebSecureSessionToSharedPreferences(sessionPersistKey);
   }
-  await Supabase.initialize(
-    url: SupabaseConfig.url,
-    anonKey: SupabaseConfig.anonKey,
-    // Offline-friendly: prevent noisy infinite refresh retries when DNS/Internet is down.
-    // We explicitly trigger sync/bootstrap from our code paths when needed.
-    authOptions: FlutterAuthClientOptions(
-      autoRefreshToken: true,
-      // نعالج deep links يدوياً (ويب + موبايل) مع try/catch — تجنب crash PKCE.
-      detectSessionInUri: false,
-      localStorage: kIsWeb
-          ? WebSharedPreferencesLocalStorage(
-              persistSessionKey: sessionPersistKey,
-            )
-          : SecureLocalStorage(persistSessionKey: sessionPersistKey),
-    ),
-  );
-  _registerMobileOAuthDeepLinkHandler();
+  try {
+    await Supabase.initialize(
+      url: SupabaseConfig.url,
+      anonKey: SupabaseConfig.anonKey,
+      // Offline-friendly: prevent noisy infinite refresh retries when DNS/Internet is down.
+      // We explicitly trigger sync/bootstrap from our code paths when needed.
+      authOptions: FlutterAuthClientOptions(
+        autoRefreshToken: true,
+        // نعالج deep links يدوياً (ويب + موبايل) مع try/catch — تجنب crash PKCE.
+        detectSessionInUri: false,
+        localStorage: kIsWeb
+            ? WebSharedPreferencesLocalStorage(
+                persistSessionKey: sessionPersistKey,
+              )
+            : SecureLocalStorage(persistSessionKey: sessionPersistKey),
+      ),
+    ).timeout(const Duration(seconds: 8));
+    _registerMobileOAuthDeepLinkHandler();
+  } catch (e, st) {
+    AppLogger.error('main', 'Supabase.initialize', e, st);
+  }
   if (!GoogleOAuthConfig.isExplicitDartDefine && kDebugMode) {
     AppLogger.info(
       'main',
@@ -267,12 +271,16 @@ void main() async {
     );
   }
   if (kDebugMode) {
-    final s = Supabase.instance.client.auth.currentSession;
-    debugPrint(
-      '[StartupDiag] supabase session restored=${s != null} '
-      'user=${Supabase.instance.client.auth.currentUser?.id ?? "null"} '
-      'expired=${s?.isExpired}',
-    );
+    try {
+      final s = Supabase.instance.client.auth.currentSession;
+      debugPrint(
+        '[StartupDiag] supabase session restored=${s != null} '
+        'user=${Supabase.instance.client.auth.currentUser?.id ?? "null"} '
+        'expired=${s?.isExpired}',
+      );
+    } catch (e) {
+      debugPrint('[StartupDiag] supabase not ready: $e');
+    }
   }
   if (kIsWeb) {
     final uri = Uri.base;
@@ -290,22 +298,10 @@ void main() async {
     }
     await WebRuntimeBootstrap.initialize();
   }
-  if (kDebugMode) {
-    debugPrint('Before runStartupCriticalMigrations');
-  }
-  await DatabaseHelper().runStartupCriticalMigrations();
-  await BusinessAuditLogService.instance.ensureReady();
-  if (kDebugMode) {
-    debugPrint('After runStartupCriticalMigrations / Before LicenseService');
-  }
-  await LicenseService.instance.initialize();
-  if (kDebugMode) {
-    debugPrint('After LicenseService / Before runApp');
-  }
-  SyncQueueService.instance.initialize();
   _registerVerticalManifests();
-  // عجّل ظهور شاشة التحميل (Flutter) — الإشعارات/FCM ليست شرطًا للإقلاع.
+  // أظهر الواجهة فوراً — لا تُجمَّد نافذة ويندوز ريثما تكتمل القاعدة/الترخيص.
   runApp(const MyApp());
+  unawaited(_startDeferredStorageInit());
   unawaited(_startPostUiServices());
   // إعادة تلقائية آمنة لطابور واتساب عند عودة الشبكة (بعد ظهور الواجهة).
   try {
@@ -313,6 +309,29 @@ void main() async {
   } catch (e, st) {
     AppLogger.warn('main', 'WhatsApp outbox auto-retry start: $e');
     if (kDebugMode) debugPrint('$st');
+  }
+}
+
+Future<void> _startDeferredStorageInit() async {
+  try {
+    await DatabaseHelper()
+        .runStartupCriticalMigrations()
+        .timeout(const Duration(seconds: 15));
+    await BusinessAuditLogService.instance.ensureReady();
+  } catch (e, st) {
+    AppLogger.error('main', 'startup migrations', e, st);
+  }
+  try {
+    await LicenseService.instance
+        .initialize()
+        .timeout(const Duration(seconds: 15));
+  } catch (e, st) {
+    AppLogger.error('main', 'LicenseService init', e, st);
+  }
+  try {
+    SyncQueueService.instance.initialize();
+  } catch (e, st) {
+    AppLogger.error('main', 'SyncQueueService init', e, st);
   }
 }
 

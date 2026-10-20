@@ -67,6 +67,20 @@ class SecureLocalStorage extends LocalStorage {
   @override
   Future<void> initialize() async {
     try {
+      await _initializeSecureOrFallback()
+          .timeout(const Duration(seconds: 2));
+    } on Object catch (e) {
+      _useFallback = true;
+      if (kDebugMode) {
+        debugPrint(
+          '[SecureLocalStorage] init timed out/failed ($e) — SharedPreferences',
+        );
+      }
+    }
+  }
+
+  Future<void> _initializeSecureOrFallback() async {
+    try {
       await _secure.containsKey(persistSessionKey);
       // Some platforms (notably unsigned macOS debug builds without a
       // keychain-access-groups entitlement) fail the secure store SILENTLY:
