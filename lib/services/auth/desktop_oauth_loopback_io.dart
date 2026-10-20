@@ -36,6 +36,9 @@ Future<DesktopOAuthLoopbackResult> completeGoogleOAuthViaLoopback(
   }
 
   try {
+    // RFC 8252: the system browser returns the code to this app on loopback.
+    // The HTTPS bridge exists for builds that still redirect through it, and
+    // for Supabase responses that put the session in the URL hash.
     final res = await auth.getOAuthSignInUrl(
       provider: OAuthProvider.google,
       redirectTo: windowsOAuthBridgeUrl,
@@ -85,7 +88,10 @@ Future<DesktopOAuthLoopbackResult> completeGoogleOAuthViaLoopback(
         request,
         'تعذّر إكمال الدخول. أعد المحاولة من تطبيق نبو.',
       );
-      return DesktopOAuthLoopbackResult.failed();
+      final detail = e.toString().replaceAll(RegExp(r'\s+'), ' ').trim();
+      return DesktopOAuthLoopbackResult.failed(
+        detail.length > 180 ? detail.substring(0, 180) : detail,
+      );
     }
 
     final ok = auth.currentSession != null && auth.currentUser != null;
@@ -113,9 +119,13 @@ Future<DesktopOAuthLoopbackResult> completeGoogleOAuthViaLoopback(
 
 Future<HttpRequest?> _waitForCallback(HttpServer server) async {
   await for (final request in server) {
-    final path = request.uri.path.toLowerCase();
-    if (path == '/favicon.ico') {
-      request.response.statusCode = HttpStatus.notFound;
+    final params = request.uri.queryParameters;
+    final hasPayload = params.containsKey('code') ||
+        params.containsKey('access_token') ||
+        params.containsKey('error') ||
+        params.containsKey('error_description');
+    if (!hasPayload) {
+      request.response.statusCode = HttpStatus.noContent;
       await request.response.close();
       continue;
     }

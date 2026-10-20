@@ -3561,9 +3561,11 @@ class AuthProvider extends ChangeNotifier {
         }
         if (!loopback.success || client.auth.currentUser == null) {
           await _signOutSupabaseAfterFailedGoogleLink();
+          final detail = loopback.message;
           return GoogleAuthResult.error(
-            'تعذّر إكمال الدخول عبر Google على ويندوز. '
-            'أغلق نافذة المتصفح ثم أعد المحاولة.',
+            detail == null || detail.isEmpty
+                ? 'تعذّر إكمال الدخول عبر Google على ويندوز. أعد المحاولة.'
+                : 'تعذّر إكمال الدخول عبر Google على ويندوز. $detail',
           );
         }
         return _mapFinalizeResult(

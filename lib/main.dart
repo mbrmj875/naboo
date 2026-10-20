@@ -1,6 +1,7 @@
 import 'dart:async' show unawaited;
 
-import 'package:flutter/foundation.dart' show kDebugMode, kIsWeb;
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform, kDebugMode, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:ui' show PlatformDispatcher;
@@ -263,7 +264,10 @@ void main() async {
         autoRefreshToken: true,
         // نعالج deep links يدوياً (ويب + موبايل) مع try/catch — تجنب crash PKCE.
         detectSessionInUri: false,
-        localStorage: kIsWeb
+        // ويندوز: SharedPreferences. تخزين DPAPI كان يعلق الإقلاع ويضيع جلسة Google.
+        // أندرويد وiOS وmacOS تبقى على التخزين الآمن كما هي.
+        localStorage: kIsWeb ||
+                defaultTargetPlatform == TargetPlatform.windows
             ? WebSharedPreferencesLocalStorage(
                 persistSessionKey: sessionPersistKey,
               )
