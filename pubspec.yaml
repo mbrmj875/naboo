@@ -1,7 +1,7 @@
 name: naboo
 description: Naboo — multi-vertical store management (pharmacy, retail, oil change, and more)
 publish_to: 'none'
-version: 2.2.35+258
+version: 2.2.35+259
 
 environment:
   sdk: '>=3.11.0 <4.0.0'

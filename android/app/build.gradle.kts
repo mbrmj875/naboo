@@ -42,7 +42,12 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.basra.storemanager"
+        // الموقع / GitHub APK: com.basra.storemanager
+        // Google Play: مرّر -Pnaboo.play=true → com.basra.storemanager.app
+        val playStore =
+            (project.findProperty("naboo.play") as String?)?.equals("true", ignoreCase = true) == true
+        applicationId =
+            if (playStore) "com.basra.storemanager.app" else "com.basra.storemanager"
         minSdk = flutter.minSdkVersion
         targetSdk = 36
         versionCode = flutter.versionCode

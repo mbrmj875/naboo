@@ -96,7 +96,7 @@ export function defaultAppRemoteConfig(): AppRemoteConfigPayload {
     update_download_url:
       "https://github.com/mbrmj875/naboo/releases/download/v2.2.35/naboo.apk",
     update_download_url_windows:
-      "https://github.com/mbrmj875/naboo/releases/download/v2.2.33/naboo-windows-setup.exe",
+      "https://github.com/mbrmj875/naboo/releases/download/v2.2.35/naboo-windows-setup.exe",
     announcement_title_ar: "",
     announcement_body_ar: "",
     announcement_url: "",
