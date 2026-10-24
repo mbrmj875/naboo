@@ -21,7 +21,9 @@ import '../widgets/oil_change_form_theme.dart';
 import '../widgets/oil_change_owner_pin_confirm_dialog.dart';
 import '../widgets/whatsapp_connect_method_picker.dart';
 import '../widgets/whatsapp_official_connect_panel.dart';
+import 'oil_change_whatsapp_followup_screen.dart';
 import 'oil_change_whatsapp_wallet_screen.dart';
+import '../services/wa_oil_followup_service.dart';
 import 'whatsapp_meta_es_web_screen.dart';
 
 /// شاشة ربط واتساب المحل — ثلاث طرق: Meta مباشرة / رقم نابو الرسمي / QR.
@@ -777,6 +779,9 @@ class _OilChangeWhatsappConnectScreenState
                             usesQr: _guideConnectedPreview
                                 ? false
                                 : _record?.usesQr == true,
+                            isOfficialTransport: _guideConnectedPreview
+                                ? true
+                                : _record?.isOfficialTransport == true,
                             onDisconnect: _guideConnectedPreview
                                 ? () {}
                                 : () => unawaited(_disconnectWithPin()),
@@ -992,6 +997,7 @@ class _ConnectedPanel extends StatefulWidget {
     required this.readyLabel,
     required this.methodLabel,
     required this.usesQr,
+    required this.isOfficialTransport,
     required this.onDisconnect,
     required this.onRelink,
   });
@@ -1000,6 +1006,7 @@ class _ConnectedPanel extends StatefulWidget {
   final String readyLabel;
   final String methodLabel;
   final bool usesQr;
+  final bool isOfficialTransport;
   final VoidCallback onDisconnect;
   final VoidCallback onRelink;
 
@@ -1010,11 +1017,33 @@ class _ConnectedPanel extends StatefulWidget {
 class _ConnectedPanelState extends State<_ConnectedPanel> {
   int? _balance;
   bool _walletLoading = true;
+  WaOilFollowupSummary? _followupSummary;
+  bool _followupLoading = true;
 
   @override
   void initState() {
     super.initState();
     unawaited(_loadBalance());
+    unawaited(_loadFollowupSummary());
+  }
+
+  Future<void> _loadFollowupSummary() async {
+    try {
+      final snap = await WaOilFollowupService.instance.loadSummary(
+        isOfficialTransport: widget.isOfficialTransport,
+      );
+      if (!mounted) return;
+      setState(() {
+        _followupSummary = snap;
+        _followupLoading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _followupSummary = null;
+        _followupLoading = false;
+      });
+    }
   }
 
   Future<void> _loadBalance() async {
@@ -1183,7 +1212,150 @@ class _ConnectedPanelState extends State<_ConnectedPanel> {
             await _loadBalance();
           },
         ),
+        const SizedBox(height: 10),
+        _FollowupDetailsTile(
+          summary: _followupSummary,
+          loading: _followupLoading,
+          onTap: () async {
+            await OilChangeWhatsappFollowupScreen.open(
+              context,
+              isOfficialTransport: widget.isOfficialTransport,
+            );
+            if (!mounted) return;
+            await _loadFollowupSummary();
+          },
+        ),
       ],
+    );
+  }
+}
+
+class _FollowupDetailsTile extends StatelessWidget {
+  const _FollowupDetailsTile({
+    required this.summary,
+    required this.loading,
+    required this.onTap,
+  });
+
+  final WaOilFollowupSummary? summary;
+  final bool loading;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final s = summary;
+    final accent = s == null || s.schemaMissing
+        ? OilChangeFormTheme.gold
+        : !s.enabled
+            ? const Color(0xFFEA580C)
+            : s.templateStatus == WaFollowupTemplateUiStatus.approved ||
+                    s.templateStatus == WaFollowupTemplateUiStatus.qrReady
+                ? AppSemanticColors.success
+                : s.templateStatus == WaFollowupTemplateUiStatus.pending
+                    ? AppSemanticColors.info
+                    : s.templateStatus == WaFollowupTemplateUiStatus.rejected
+                        ? cs.error
+                        : OilChangeFormTheme.gold;
+
+    String subtitle;
+    if (loading) {
+      subtitle = 'جاري قراءة التذكير…';
+    } else if (s == null || s.schemaMissing) {
+      subtitle = 'التذكير التلقائي · اضغط للضبط';
+    } else if (!s.enabled) {
+      subtitle = 'متوقف — اضغط للتشغيل والضبط';
+    } else if (s.templateStatus == WaFollowupTemplateUiStatus.pending) {
+      subtitle = 'بعد كل غيار · بانتظار موافقة واتساب';
+    } else if (s.templateStatus == WaFollowupTemplateUiStatus.rejected) {
+      subtitle = 'ميتا رفضت القالب — اضغط للتعديل';
+    } else if (s.templateStatus == WaFollowupTemplateUiStatus.draft) {
+      subtitle = 'مضبوط · أرسل القالب للمراجعة حتى يشتغل';
+    } else {
+      subtitle =
+          'يعمل · بعد كل غيار نرسل بعد ${s.delayUnit.labelAr(s.delayValue)}';
+    }
+
+    final badge = s == null || s.schemaMissing
+        ? null
+        : s.delayUnit.badgeShort(s.delayValue);
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Ink(
+          padding: const EdgeInsetsDirectional.fromSTEB(14, 14, 12, 14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            gradient: LinearGradient(
+              begin: AlignmentDirectional.centerStart,
+              end: AlignmentDirectional.centerEnd,
+              colors: [
+                accent.withValues(alpha: 0.12),
+                cs.surfaceContainerHighest.withValues(alpha: 0.5),
+              ],
+            ),
+            border: Border.all(color: accent.withValues(alpha: 0.35)),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: accent.withValues(alpha: 0.16),
+                ),
+                child: Icon(Icons.schedule_send_rounded, color: accent),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'تذكير الزبون بعد الغيار',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 15,
+                        color: OilChangeFormTheme.emphasisText(context),
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        height: 1.3,
+                        color: cs.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (badge != null && !loading)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: accent.withValues(alpha: 0.14),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    badge,
+                    style: TextStyle(fontWeight: FontWeight.w900, color: accent),
+                  ),
+                ),
+              const SizedBox(width: 4),
+              Icon(Icons.chevron_left_rounded, color: cs.onSurfaceVariant),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

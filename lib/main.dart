@@ -610,7 +610,7 @@ class MyApp extends StatelessWidget {
                   },
                   '/owner-pin-restore-otp': (context) {
                     final auth = context.read<AuthProvider>();
-                    if (!auth.deviceOwnerBound) {
+                    if (Supabase.instance.client.auth.currentUser == null) {
                       return const LoginScreen();
                     }
                     if (auth.deviceAccessRevokedPending) {
@@ -619,8 +619,14 @@ class MyApp extends StatelessWidget {
                     final args = ModalRoute.of(context)?.settings.arguments;
                     final otpAlreadySent =
                         args is Map && args['otpAlreadySent'] == true;
+                    final localOwnerUserId = args is Map
+                        ? (args['localOwnerUserId'] as num?)?.toInt()
+                        : null;
+                    final setNewPin = args is Map && args['setNewPin'] == true;
                     return OwnerPinRestoreOtpScreen(
                       otpAlreadySent: otpAlreadySent,
+                      initialLocalOwnerUserId: localOwnerUserId,
+                      setNewPin: setNewPin,
                     );
                   },
                   '/home': (context) => const _HomeRouteResolver(),

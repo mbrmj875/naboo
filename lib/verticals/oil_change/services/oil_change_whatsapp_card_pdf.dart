@@ -1,5 +1,6 @@
 import 'dart:isolate';
 
+import 'package:barcode/barcode.dart' as bc;
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
@@ -17,6 +18,7 @@ class _OilCardPdfInput {
     required this.shop,
     required this.address,
     required this.phones,
+    required this.mapsUrl,
     required this.generatedAtIso,
     required this.rows,
     this.logo,
@@ -28,6 +30,7 @@ class _OilCardPdfInput {
   final String shop;
   final String address;
   final List<String> phones;
+  final String mapsUrl;
   final String generatedAtIso;
   final List<List<String>> rows;
 }
@@ -40,6 +43,7 @@ Map<String, Object?> _pdfJobMap(_OilCardPdfInput input) {
     'shop': input.shop,
     'address': input.address,
     'phones': input.phones,
+    'mapsUrl': input.mapsUrl,
     'generatedAtIso': input.generatedAtIso,
     'rows': input.rows,
   };
@@ -53,6 +57,7 @@ Future<Uint8List> _renderOilChangeCardPdf(Map<String, Object?> raw) async {
   final address = raw['address'] as String? ?? '';
   final phones = (raw['phones'] as List?)?.map((e) => e.toString()).toList() ??
       const <String>[];
+  final mapsUrl = (raw['mapsUrl'] as String? ?? '').trim();
   final generatedAtIso = raw['generatedAtIso'] as String? ?? '';
   final rows = ((raw['rows'] as List?) ?? const [])
       .map((e) => (e as List).map((c) => c.toString()).toList())
@@ -63,88 +68,166 @@ Future<Uint8List> _renderOilChangeCardPdf(Map<String, Object?> raw) async {
   final generatedAt = DateTime.tryParse(generatedAtIso) ?? DateTime.now();
   // بدون locale: يعمل داخل Isolate بدون initializeDateFormatting.
   final dateLabel = DateFormat('d/M/y HH:mm').format(generatedAt);
+  final storePhones = phones.map((p) => p.trim()).where((p) => p.isNotEmpty);
+  final pageWidth = 86 * PdfPageFormat.mm;
+  var pageHeight = 28.0;
+  if (logo != null && logo.isNotEmpty) pageHeight += 62;
+  if (shop.trim().isNotEmpty) pageHeight += 26;
+  pageHeight += 18 + 16 + 14;
+  pageHeight += 26 + rows.length * 22;
+  pageHeight += storePhones.length * 16;
+  if (address.trim().isNotEmpty) pageHeight += 18;
+  if (mapsUrl.isNotEmpty) pageHeight += 132;
+  pageHeight += 24;
+
+  const navy = PdfColor.fromInt(0xFF0B1F4A);
+  const gold = PdfColor.fromInt(0xFFC9A227);
+  const muted = PdfColor.fromInt(0xFF5C6B7A);
 
   final pdf = pw.Document();
   pdf.addPage(
-    pw.MultiPage(
-      pageFormat: PdfPageFormat.a4,
+    pw.Page(
+      pageFormat: PdfPageFormat(pageWidth, pageHeight.clamp(320, 1400)),
       textDirection: pw.TextDirection.rtl,
-      margin: const pw.EdgeInsets.symmetric(horizontal: 32, vertical: 36),
+      margin: const pw.EdgeInsets.fromLTRB(14, 16, 14, 16),
       build: (ctx) {
-        final header = <pw.Widget>[];
+        final children = <pw.Widget>[];
         if (logo != null && logo.isNotEmpty) {
           try {
-            header.add(
-              pw.Center(child: pw.Image(pw.MemoryImage(logo), height: 56)),
+            children.add(
+              pw.Center(child: pw.Image(pw.MemoryImage(logo), height: 52)),
             );
-            header.add(pw.SizedBox(height: 8));
+            children.add(pw.SizedBox(height: 8));
           } catch (_) {
             /* شعار تالف لا يمنع الملف */
           }
         }
         if (shop.trim().isNotEmpty) {
-          header.add(
+          children.add(
             pw.Center(
               child: pw.Text(
                 shop.trim(),
-                style: pw.TextStyle(font: bold, fontSize: 18),
+                style: pw.TextStyle(font: bold, fontSize: 16, color: navy),
               ),
             ),
           );
-          header.add(pw.SizedBox(height: 4));
+          children.add(pw.SizedBox(height: 6));
         }
-        if (address.trim().isNotEmpty) {
-          header.add(
-            pw.Center(
-              child: pw.Text(
-                address.trim(),
-                style: pw.TextStyle(font: regular, fontSize: 10),
-              ),
-            ),
-          );
-        }
-        for (final phone in phones) {
-          if (phone.trim().isEmpty) continue;
-          header.add(
-            pw.Center(
-              child: pw.Text(
-                phone.trim(),
-                style: pw.TextStyle(font: regular, fontSize: 10),
-              ),
-            ),
-          );
-        }
-        header.add(pw.SizedBox(height: 10));
-        header.add(
+        children.add(
+          pw.Center(
+            child: pw.Container(width: 72, height: 1.2, color: gold),
+          ),
+        );
+        children.add(pw.SizedBox(height: 8));
+        children.add(
           pw.Center(
             child: pw.Text(
               'بطاقة غيار الزيت',
-              style: pw.TextStyle(font: bold, fontSize: 14),
+              style: pw.TextStyle(font: bold, fontSize: 12, color: navy),
             ),
           ),
         );
-        header.add(
+        children.add(
           pw.Center(
             child: pw.Text(
-              dateLabel,
-              style: pw.TextStyle(font: regular, fontSize: 10),
+              'تاريخ الفاتورة: $dateLabel',
+              style: pw.TextStyle(font: regular, fontSize: 9, color: muted),
             ),
           ),
         );
-        header.add(pw.SizedBox(height: 16));
-        header.add(
-          pw.TableHelper.fromTextArray(
-            headers: const ['البيان', 'التفاصيل'],
-            data: rows,
-            headerStyle: pw.TextStyle(font: bold, fontSize: 11),
-            cellStyle: pw.TextStyle(font: regular, fontSize: 10),
-            headerDecoration: const pw.BoxDecoration(color: PdfColors.grey200),
-            cellAlignment: pw.Alignment.centerRight,
-            oddRowDecoration: const pw.BoxDecoration(color: PdfColors.grey100),
-            border: pw.TableBorder.all(color: PdfColors.grey400, width: 0.4),
-          ),
+        children.add(pw.SizedBox(height: 10));
+        if (rows.isNotEmpty) {
+          pw.Widget cell(String text, pw.Font font, {bool header = false}) {
+            return pw.Container(
+              color: header ? const PdfColor.fromInt(0xFFEEF2F6) : null,
+              padding: const pw.EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+              alignment: pw.Alignment.centerRight,
+              child: pw.Text(
+                text,
+                style: pw.TextStyle(font: font, fontSize: 9, color: navy),
+              ),
+            );
+          }
+
+          children.add(
+            pw.Table(
+              border: pw.TableBorder.all(
+                color: const PdfColor.fromInt(0xFFD5DBE3),
+                width: 0.6,
+              ),
+              columnWidths: const {
+                0: pw.FlexColumnWidth(42),
+                1: pw.FlexColumnWidth(58),
+              },
+              children: [
+                pw.TableRow(
+                  children: [
+                    cell('البيان', bold, header: true),
+                    cell('التفاصيل', bold, header: true),
+                  ],
+                ),
+                for (var i = 0; i < rows.length; i++)
+                  pw.TableRow(
+                    decoration: pw.BoxDecoration(
+                      color: i.isOdd
+                          ? const PdfColor.fromInt(0xFFF7F8FA)
+                          : PdfColors.white,
+                    ),
+                    children: [
+                      cell(rows[i][0], bold),
+                      cell(rows[i][1], regular),
+                    ],
+                  ),
+              ],
+            ),
+          );
+          children.add(pw.SizedBox(height: 10));
+        }
+        for (final phone in storePhones) {
+          children.add(
+            pw.Center(
+              child: pw.Text(
+                'رقم التواصل: $phone',
+                style: pw.TextStyle(font: regular, fontSize: 10, color: navy),
+              ),
+            ),
+          );
+        }
+        if (address.trim().isNotEmpty) {
+          children.add(
+            pw.Center(
+              child: pw.Text(
+                'الموقع: ${address.trim()}',
+                style: pw.TextStyle(font: regular, fontSize: 10, color: navy),
+              ),
+            ),
+          );
+        }
+        if (mapsUrl.isNotEmpty) {
+          children.add(pw.SizedBox(height: 6));
+          children.add(
+            pw.Center(
+              child: pw.BarcodeWidget(
+                barcode: bc.Barcode.qrCode(),
+                data: mapsUrl,
+                width: 100,
+                height: 100,
+              ),
+            ),
+          );
+          children.add(
+            pw.Center(
+              child: pw.Text(
+                'امسح لفتح الموقع',
+                style: pw.TextStyle(font: regular, fontSize: 8, color: muted),
+              ),
+            ),
+          );
+        }
+        return pw.Column(
+          crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+          children: children,
         );
-        return header;
       },
     ),
   );
@@ -193,7 +276,7 @@ class OilChangeWhatsappCardPdfService {
         orderRef: '$orderId',
         customerPhone: customerPhone,
         objectPath: objectPath,
-        cardPayload: templateParams,
+        cardPayload: _cardPayloadWithStore(templateParams, printSettings),
       );
     } catch (e, st) {
       AppLogger.error('oil_change_wa_pdf', 'prepare after card', e, st);
@@ -214,6 +297,7 @@ class OilChangeWhatsappCardPdfService {
       shop: printSettings.storeTitleLine.trim(),
       address: printSettings.storeAddress.trim(),
       phones: printSettings.storePhones,
+      mapsUrl: printSettings.storeMapsUrl ?? '',
       generatedAtIso: DateTime.now().toIso8601String(),
       rows: _cardRows(order),
     );
@@ -261,6 +345,25 @@ class OilChangeWhatsappCardPdfService {
     add(out, 'العداد', oilFormatOdo(order['odometerCurrent']?.toString()));
     add(out, 'الغيار القادم', oilFormatOdo(order['odometerNext']?.toString()));
     add(out, 'الإجمالي', oilFormatPrice(order));
+    return out;
+  }
+
+  Map<String, String> _cardPayloadWithStore(
+    Map<String, String> templateParams,
+    PrintSettingsData printSettings,
+  ) {
+    final out = Map<String, String>.from(templateParams);
+    final name = printSettings.storeTitleLine.trim();
+    final address = printSettings.storeAddress.trim();
+    final phones = printSettings.storePhones
+        .map((p) => p.trim())
+        .where((p) => p.isNotEmpty)
+        .join(' · ');
+    final maps = (printSettings.storeMapsUrl ?? '').trim();
+    if (name.isNotEmpty) out['store_name'] = name;
+    if (address.isNotEmpty) out['store_address'] = address;
+    if (phones.isNotEmpty) out['store_phone'] = phones;
+    if (maps.isNotEmpty) out['store_maps'] = maps;
     return out;
   }
 

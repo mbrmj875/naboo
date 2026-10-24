@@ -20,8 +20,11 @@ Future<void> showGuideChatSheet({
     isScrollControlled: true,
     showDragHandle: true,
     builder: (ctx) {
-      return Padding(
-        padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(ctx).bottom),
+      final keyboard = MediaQuery.viewInsetsOf(ctx).bottom;
+      return AnimatedPadding(
+        duration: const Duration(milliseconds: 120),
+        curve: Curves.easeOut,
+        padding: EdgeInsets.only(bottom: keyboard),
         child: GuideChatSheet(currentRouteId: currentRouteId),
       );
     },
@@ -406,10 +409,18 @@ class _GuideChatSheetState extends State<GuideChatSheet> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final height = MediaQuery.sizeOf(context).height * 0.72;
+    final media = MediaQuery.of(context);
+    final keyboard = media.viewInsets.bottom;
+    // المساحة فوق الكيبورد (الـ Padding الخارجي يرفع الورقة أيضاً).
+    final usable = (media.size.height - keyboard).clamp(240.0, media.size.height);
+    // مع الكيبورد نوسّع النسبة حتى يبقى حقل الإدخال ظاهراً فوقه.
+    final fraction = keyboard > 0 ? 0.92 : 0.72;
+    final height = (usable * fraction).clamp(240.0, usable);
     final chips = _scope.suggestedChips();
 
     return SafeArea(
+      // شريط التنقل السفلي يُعالَج بالكيبورد عند الفتح؛ تجنّب هامش مزدوج.
+      bottom: keyboard == 0,
       child: SizedBox(
         height: height,
         child: Column(

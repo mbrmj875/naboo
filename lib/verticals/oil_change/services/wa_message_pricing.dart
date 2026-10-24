@@ -1,4 +1,4 @@
-/// تسعير محفظة رسائل واتساب — وحدة 22.50 د.ع/رسالة من تثبيط الألف=22,500.
+/// تسعير محفظة رسائل واتساب — وحدة 25 د.ع/رسالة (الألف الشهري = 25,000).
 library;
 
 enum WaBillingCycle { monthly, annual }
@@ -6,9 +6,12 @@ enum WaBillingCycle { monthly, annual }
 abstract final class WaMessagePricing {
   WaMessagePricing._();
 
-  /// 22.50 د.ع للرسالة مخزَّنة ×100.
-  static const int defaultUnitPriceIqdX100 = 2250;
-  static const int defaultAnnualDiscountPct = 30;
+  /// 25.00 د.ع للرسالة مخزَّنة ×100.
+  static const int defaultUnitPriceIqdX100 = 2500;
+
+  /// شهران مجاناً في الاشتراك السنوي (يدفع 10 أشهر).
+  static const int defaultAnnualFreeMonths = 2;
+
   static const int defaultMinQty = 250;
   static const int defaultStepQty = 250;
   static const int defaultMaxQty = 5000;
@@ -26,7 +29,7 @@ abstract final class WaMessagePricing {
     return minQty + (steps * stepQty).clamp(0, maxQty - minQty);
   }
 
-  /// شهري بالدينار الصحيح (مضاعفات 250 × 22.5 دائماً صحيحة).
+  /// شهري بالدينار الصحيح (مضاعفات 250 × 25 دائماً صحيحة).
   static int monthlyIqd(
     int qty, {
     int unitPriceIqdX100 = defaultUnitPriceIqdX100,
@@ -44,22 +47,24 @@ abstract final class WaMessagePricing {
   static int yearlyPayIqd(
     int qty, {
     int unitPriceIqdX100 = defaultUnitPriceIqdX100,
-    int annualDiscountPct = defaultAnnualDiscountPct,
+    int annualFreeMonths = defaultAnnualFreeMonths,
   }) {
-    final full = yearlyFullIqd(qty, unitPriceIqdX100: unitPriceIqdX100);
-    return (full * (100 - annualDiscountPct)) ~/ 100;
+    final monthly =
+        monthlyIqd(qty, unitPriceIqdX100: unitPriceIqdX100);
+    final free = annualFreeMonths.clamp(0, 11);
+    return monthly * (12 - free);
   }
 
   static int yearlySavingsIqd(
     int qty, {
     int unitPriceIqdX100 = defaultUnitPriceIqdX100,
-    int annualDiscountPct = defaultAnnualDiscountPct,
+    int annualFreeMonths = defaultAnnualFreeMonths,
   }) {
     return yearlyFullIqd(qty, unitPriceIqdX100: unitPriceIqdX100) -
         yearlyPayIqd(
           qty,
           unitPriceIqdX100: unitPriceIqdX100,
-          annualDiscountPct: annualDiscountPct,
+          annualFreeMonths: annualFreeMonths,
         );
   }
 
@@ -67,13 +72,13 @@ abstract final class WaMessagePricing {
     int qty,
     WaBillingCycle cycle, {
     int unitPriceIqdX100 = defaultUnitPriceIqdX100,
-    int annualDiscountPct = defaultAnnualDiscountPct,
+    int annualFreeMonths = defaultAnnualFreeMonths,
   }) {
     return cycle == WaBillingCycle.annual
         ? yearlyPayIqd(
             qty,
             unitPriceIqdX100: unitPriceIqdX100,
-            annualDiscountPct: annualDiscountPct,
+            annualFreeMonths: annualFreeMonths,
           )
         : monthlyIqd(qty, unitPriceIqdX100: unitPriceIqdX100);
   }

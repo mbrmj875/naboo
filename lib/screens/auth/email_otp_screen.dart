@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../config/otp_config.dart';
@@ -10,6 +9,7 @@ import '../../providers/business_features_provider.dart';
 import '../../theme/design_tokens.dart';
 import '../../widgets/glass/glass_background.dart';
 import '../../widgets/glass/glass_surface.dart';
+import '../../widgets/inputs/email_otp_boxes.dart';
 import '../../widgets/secure_screen.dart';
 
 class EmailOtpScreen extends StatefulWidget {
@@ -34,8 +34,7 @@ class _EmailOtpScreenState extends State<EmailOtpScreen> {
   /// يطابق إعداد Supabase لقوالب البريد (قابل للضبط عبر EMAIL_OTP_LENGTH).
   static const int _digits = OtpConfig.emailOtpLength;
 
-  final _controllers = List.generate(_digits, (_) => TextEditingController());
-  final _focusNodes = List.generate(_digits, (_) => FocusNode());
+  final _otpBoxesKey = GlobalKey<EmailOtpBoxesState>();
 
   bool _busy = false;
   String? _error;
@@ -49,18 +48,12 @@ class _EmailOtpScreenState extends State<EmailOtpScreen> {
     super.initState();
     _startCountdown();
     WidgetsBinding.instance.addPostFrameCallback(
-      (_) => _focusNodes.first.requestFocus(),
+      (_) => _otpBoxesKey.currentState?.focusFirst(),
     );
   }
 
   @override
   void dispose() {
-    for (final c in _controllers) {
-      c.dispose();
-    }
-    for (final f in _focusNodes) {
-      f.dispose();
-    }
     _countdownTimer?.cancel();
     super.dispose();
   }
@@ -83,21 +76,8 @@ class _EmailOtpScreenState extends State<EmailOtpScreen> {
     });
   }
 
-  String get _otp => _controllers.map((c) => c.text).join();
-
-  void _onDigitChanged(int index, String value) {
-    if (value.isNotEmpty) {
-      if (index < _digits - 1) {
-        _focusNodes[index + 1].requestFocus();
-      } else {
-        _focusNodes[index].unfocus();
-      }
-    }
-    setState(() => _error = null);
-  }
-
   Future<void> _verify() async {
-    final otp = _otp.trim();
+    final otp = (_otpBoxesKey.currentState?.value ?? '').trim();
     if (otp.length < _digits) {
       setState(
         () => _error = 'أدخل الرمز كاملاً ($_digits أرقام كما في البريد)',
@@ -244,10 +224,7 @@ class _EmailOtpScreenState extends State<EmailOtpScreen> {
       setState(() => _error = err);
       return;
     }
-    for (final c in _controllers) {
-      c.clear();
-    }
-    _focusNodes.first.requestFocus();
+    _otpBoxesKey.currentState?.clear();
     _startCountdown();
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
@@ -449,63 +426,14 @@ class _EmailOtpScreenState extends State<EmailOtpScreen> {
                   ),
                   const SizedBox(height: 20),
                 ],
-                Directionality(
-                  textDirection: TextDirection.ltr,
-                  child: LayoutBuilder(
-                    builder: (context, constraints) {
-                      const spacing = 8.0;
-                      const height = 54.0;
-
-                      // Try single-row first.
-                      final maxW = constraints.maxWidth;
-                      final cellW1 = (maxW - spacing * (_digits - 1)) / _digits;
-                      final canFitOneRow = cellW1 >= 34;
-
-                      if (canFitOneRow) {
-                        final cellW = cellW1.clamp(34.0, 46.0);
-                        return Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: List.generate(_digits, (i) {
-                            return Padding(
-                              padding: EdgeInsetsDirectional.only(
-                                start: i == 0 ? 0 : spacing,
-                              ),
-                              child: _otpBox(i, width: cellW, height: height),
-                            );
-                          }),
-                        );
-                      }
-
-                      // Fallback: 2 rows (4 + 4) — always balanced.
-                      const perRow = 4;
-                      final cellW2 = (maxW - spacing * (perRow - 1)) / perRow;
-                      final cellW = cellW2.clamp(34.0, 54.0);
-
-                      Widget rowOf(int start) {
-                        return Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: List.generate(perRow, (j) {
-                            final i = start + j;
-                            return Padding(
-                              padding: EdgeInsetsDirectional.only(
-                                start: j == 0 ? 0 : spacing,
-                              ),
-                              child: _otpBox(i, width: cellW, height: height),
-                            );
-                          }),
-                        );
-                      }
-
-                      return Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          rowOf(0),
-                          const SizedBox(height: 12),
-                          rowOf(perRow),
-                        ],
-                      );
-                    },
-                  ),
+                EmailOtpBoxes(
+                  key: _otpBoxesKey,
+                  boxHeight: 54,
+                  enabled: !_busy,
+                  onChanged: (_) => setState(() => _error = null),
+                  onCompleted: (_) {
+                    if (!_busy) unawaited(_verify());
+                  },
                 ),
                 if (_error != null) ...[
                   const SizedBox(height: 14),
@@ -632,72 +560,4 @@ class _EmailOtpScreenState extends State<EmailOtpScreen> {
     );
   }
 
-  Widget _otpBox(int index, {required double width, required double height}) {
-    final isActive = _focusNodes[index].hasFocus;
-    final hasFill = _controllers[index].text.isNotEmpty;
-    return SizedBox(
-      width: width,
-      height: height,
-      child: Focus(
-        canRequestFocus: false,
-        onKeyEvent: (node, event) {
-          if (event is KeyDownEvent &&
-              event.logicalKey == LogicalKeyboardKey.backspace) {
-            if (_controllers[index].text.isEmpty && index > 0) {
-              _controllers[index - 1].clear();
-              _focusNodes[index - 1].requestFocus();
-            }
-          }
-          return KeyEventResult.ignored;
-        },
-        child: TextField(
-          controller: _controllers[index],
-          focusNode: _focusNodes[index],
-          textAlign: TextAlign.center,
-          keyboardType: TextInputType.number,
-          inputFormatters: [
-            FilteringTextInputFormatter.digitsOnly,
-            LengthLimitingTextInputFormatter(1),
-          ],
-          style: const TextStyle(
-            fontSize: 24,
-            fontWeight: FontWeight.bold,
-            color: Colors.white,
-          ),
-          decoration: InputDecoration(
-            filled: true,
-            fillColor: hasFill
-                ? Colors.white.withValues(alpha: 0.10)
-                : Colors.white.withValues(alpha: 0.06),
-            contentPadding: EdgeInsets.zero,
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(
-                color: isActive
-                    ? AppColors.accentGold
-                    : Colors.white.withValues(alpha: 0.18),
-                width: isActive ? 2 : 1,
-              ),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(
-                color: hasFill
-                    ? Colors.white.withValues(alpha: 0.35)
-                    : Colors.white.withValues(alpha: 0.18),
-              ),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: const BorderSide(
-                color: AppColors.accentGold,
-                width: 2,
-              ),
-            ),
-          ),
-          onChanged: (v) => _onDigitChanged(index, v),
-        ),
-      ),
-    );
-  }
 }

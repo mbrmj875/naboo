@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../config/otp_config.dart';
@@ -9,6 +8,7 @@ import '../../providers/auth_provider.dart';
 import '../../theme/design_tokens.dart';
 import '../../widgets/glass/glass_background.dart';
 import '../../widgets/glass/glass_surface.dart';
+import '../../widgets/inputs/email_otp_boxes.dart';
 import '../../widgets/secure_screen.dart';
 import 'reset_password_screen.dart';
 
@@ -25,8 +25,7 @@ class ForgotPasswordOtpScreen extends StatefulWidget {
 class _ForgotPasswordOtpScreenState extends State<ForgotPasswordOtpScreen> {
   static const int _digits = OtpConfig.emailOtpLength;
 
-  final _controllers = List.generate(_digits, (_) => TextEditingController());
-  final _focusNodes = List.generate(_digits, (_) => FocusNode());
+  final _otpBoxesKey = GlobalKey<EmailOtpBoxesState>();
 
   bool _busy = false;
   String? _error;
@@ -39,18 +38,12 @@ class _ForgotPasswordOtpScreenState extends State<ForgotPasswordOtpScreen> {
     super.initState();
     _startCountdown();
     WidgetsBinding.instance.addPostFrameCallback(
-      (_) => _focusNodes.first.requestFocus(),
+      (_) => _otpBoxesKey.currentState?.focusFirst(),
     );
   }
 
   @override
   void dispose() {
-    for (final c in _controllers) {
-      c.dispose();
-    }
-    for (final f in _focusNodes) {
-      f.dispose();
-    }
     _countdownTimer?.cancel();
     super.dispose();
   }
@@ -73,21 +66,8 @@ class _ForgotPasswordOtpScreenState extends State<ForgotPasswordOtpScreen> {
     });
   }
 
-  String get _otp => _controllers.map((c) => c.text).join();
-
-  void _onDigitChanged(int index, String value) {
-    if (value.isNotEmpty) {
-      if (index < _digits - 1) {
-        _focusNodes[index + 1].requestFocus();
-      } else {
-        _focusNodes[index].unfocus();
-      }
-    }
-    setState(() => _error = null);
-  }
-
   Future<void> _verify() async {
-    final otp = _otp.trim();
+    final otp = (_otpBoxesKey.currentState?.value ?? '').trim();
     if (otp.length < _digits) {
       setState(
         () => _error = 'أدخل الرمز كاملاً ($_digits أرقام كما في البريد)',
@@ -131,10 +111,7 @@ class _ForgotPasswordOtpScreenState extends State<ForgotPasswordOtpScreen> {
       setState(() => _error = err);
       return;
     }
-    for (final c in _controllers) {
-      c.clear();
-    }
-    _focusNodes.first.requestFocus();
+    _otpBoxesKey.currentState?.clear();
     _startCountdown();
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
@@ -181,12 +158,7 @@ class _ForgotPasswordOtpScreenState extends State<ForgotPasswordOtpScreen> {
                   Align(
                     alignment: AlignmentDirectional.center,
                     child: SingleChildScrollView(
-                      padding: EdgeInsetsDirectional.fromSTEB(
-                        20,
-                        18,
-                        20,
-                        24 + kb,
-                      ),
+                      padding: emailOtpScrollPadding(context),
                       child: ConstrainedBox(
                         constraints: const BoxConstraints(maxWidth: 520),
                         child: GlassSurface(
@@ -242,26 +214,13 @@ class _ForgotPasswordOtpScreenState extends State<ForgotPasswordOtpScreen> {
                                         ],
                                       ),
                               ),
-                              Directionality(
-                                textDirection: TextDirection.ltr,
-                                child: LayoutBuilder(
-                                  builder: (context, constraints) {
-                                    const gap = 6.0;
-                                    final cellW = ((constraints.maxWidth -
-                                                (gap * (_digits - 1))) /
-                                            _digits)
-                                        .clamp(28.0, 44.0);
-                                    return Wrap(
-                                      alignment: WrapAlignment.center,
-                                      spacing: gap,
-                                      runSpacing: 8,
-                                      children: List.generate(
-                                        _digits,
-                                        (i) => _otpBox(i, width: cellW),
-                                      ),
-                                    );
-                                  },
-                                ),
+                              EmailOtpBoxes(
+                                key: _otpBoxesKey,
+                                enabled: !_busy,
+                                onChanged: (_) => setState(() => _error = null),
+                                onCompleted: (_) {
+                                  if (!_busy) _verify();
+                                },
                               ),
                               if (_error != null) ...[
                                 const SizedBox(height: 14),
@@ -376,72 +335,4 @@ class _ForgotPasswordOtpScreenState extends State<ForgotPasswordOtpScreen> {
     );
   }
 
-  Widget _otpBox(int index, {required double width}) {
-    final isActive = _focusNodes[index].hasFocus;
-    final hasFill = _controllers[index].text.isNotEmpty;
-    return SizedBox(
-      width: width,
-      height: 52,
-      child: KeyboardListener(
-        focusNode: FocusNode(skipTraversal: true, canRequestFocus: false),
-        onKeyEvent: (event) {
-          if (event is KeyDownEvent &&
-              event.logicalKey == LogicalKeyboardKey.backspace) {
-            if (_controllers[index].text.isEmpty && index > 0) {
-              _controllers[index - 1].clear();
-              _focusNodes[index - 1].requestFocus();
-            }
-          }
-        },
-        child: TextField(
-          controller: _controllers[index],
-          focusNode: _focusNodes[index],
-          textAlign: TextAlign.center,
-          keyboardType: TextInputType.number,
-          inputFormatters: [
-            FilteringTextInputFormatter.digitsOnly,
-            LengthLimitingTextInputFormatter(1),
-          ],
-          style: const TextStyle(
-            fontSize: 20,
-            fontWeight: FontWeight.bold,
-            color: Colors.white,
-          ),
-          cursorColor: AppColors.accentGold,
-          decoration: InputDecoration(
-            filled: true,
-            fillColor: hasFill
-                ? Colors.white.withValues(alpha: 0.12)
-                : Colors.white.withValues(alpha: 0.06),
-            contentPadding: EdgeInsets.zero,
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(
-                color: isActive
-                    ? AppColors.accentGold
-                    : Colors.white.withValues(alpha: 0.22),
-                width: isActive ? 2 : 1,
-              ),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(
-                color: hasFill
-                    ? Colors.white.withValues(alpha: 0.35)
-                    : Colors.white.withValues(alpha: 0.18),
-              ),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: const BorderSide(
-                color: AppColors.accentGold,
-                width: 2,
-              ),
-            ),
-          ),
-          onChanged: (v) => _onDigitChanged(index, v),
-        ),
-      ),
-    );
-  }
 }

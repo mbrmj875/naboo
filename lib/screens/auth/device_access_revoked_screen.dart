@@ -5,7 +5,9 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../config/otp_config.dart';
 import '../../providers/auth_provider.dart';
+import '../../widgets/inputs/email_otp_boxes.dart';
 import '../../services/cloud_sync_service.dart';
 
 const _kBg = Color(0xFF0F172A);
@@ -27,7 +29,9 @@ class DeviceAccessRevokedScreen extends StatefulWidget {
 }
 
 class _DeviceAccessRevokedScreenState extends State<DeviceAccessRevokedScreen> {
-  static const int _otpDigits = 8;
+  static const int _otpDigits = OtpConfig.emailOtpLength;
+
+  final _otpBoxesKey = GlobalKey<EmailOtpBoxesState>();
 
   bool _retryBusy = false;
   bool _otpSent = false;
@@ -37,33 +41,22 @@ class _DeviceAccessRevokedScreenState extends State<DeviceAccessRevokedScreen> {
   Timer? _countdownTimer;
 
   late final TextEditingController _emailController;
-  late final List<TextEditingController> _otpControllers;
-  late final List<FocusNode> _otpFocusNodes;
-
   @override
   void initState() {
     super.initState();
     final cloudEmail =
         Supabase.instance.client.auth.currentUser?.email?.trim() ?? '';
     _emailController = TextEditingController(text: cloudEmail);
-    _otpControllers = List.generate(_otpDigits, (_) => TextEditingController());
-    _otpFocusNodes = List.generate(_otpDigits, (_) => FocusNode());
   }
 
   @override
   void dispose() {
     _countdownTimer?.cancel();
     _emailController.dispose();
-    for (final c in _otpControllers) {
-      c.dispose();
-    }
-    for (final f in _otpFocusNodes) {
-      f.dispose();
-    }
     super.dispose();
   }
 
-  String get _otp => _otpControllers.map((c) => c.text).join();
+  String get _otp => _otpBoxesKey.currentState?.value ?? '';
 
   void _startResendCountdown() {
     _resendCountdown = 60;
@@ -84,10 +77,7 @@ class _DeviceAccessRevokedScreenState extends State<DeviceAccessRevokedScreen> {
   }
 
   void _clearOtpFields() {
-    for (final c in _otpControllers) {
-      c.clear();
-    }
-    _otpFocusNodes.first.requestFocus();
+    _otpBoxesKey.currentState?.clear();
   }
 
   Future<void> _navigateAfterRecovery() async {
@@ -152,7 +142,7 @@ class _DeviceAccessRevokedScreenState extends State<DeviceAccessRevokedScreen> {
       }
     });
     if (err == null && mounted) {
-      _otpFocusNodes.first.requestFocus();
+      _otpBoxesKey.currentState?.focusFirst();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -236,118 +226,12 @@ class _DeviceAccessRevokedScreenState extends State<DeviceAccessRevokedScreen> {
     );
   }
 
-  void _onOtpDigitChanged(int index, String value) {
-    final digits = value.replaceAll(RegExp(r'\D'), '');
-    if (digits.length > 1) {
-      _applyPastedOtp(digits, startIndex: index);
-      return;
-    }
-    if (digits.isNotEmpty && index < _otpDigits - 1) {
-      _otpFocusNodes[index + 1].requestFocus();
-    }
-    setState(() => _otpError = null);
-  }
-
-  void _applyPastedOtp(String raw, {required int startIndex}) {
-    final digits = raw.replaceAll(RegExp(r'\D'), '');
-    if (digits.isEmpty) return;
-    var i = startIndex;
-    for (final ch in digits.split('')) {
-      if (i >= _otpDigits) break;
-      _otpControllers[i].text = ch;
-      i++;
-    }
-    if (i < _otpDigits) {
-      _otpFocusNodes[i].requestFocus();
-    } else {
-      _otpFocusNodes.last.unfocus();
-    }
-    setState(() => _otpError = null);
-  }
-
-  Widget _otpBox(int index, {required double width, required double height}) {
-    final focused = _otpFocusNodes[index].hasFocus;
-    final filled = _otpControllers[index].text.isNotEmpty;
-    return SizedBox(
-      width: width,
-      height: height,
-      child: TextField(
-        controller: _otpControllers[index],
-        focusNode: _otpFocusNodes[index],
-        textAlign: TextAlign.center,
-        keyboardType: TextInputType.number,
-        style: const TextStyle(
-          color: _kTextPrimary,
-          fontSize: 22,
-          fontWeight: FontWeight.w800,
-        ),
-        inputFormatters: [
-          FilteringTextInputFormatter.digitsOnly,
-          LengthLimitingTextInputFormatter(1),
-        ],
-        decoration: InputDecoration(
-          filled: true,
-          fillColor: filled
-              ? _kGold.withValues(alpha: 0.12)
-              : const Color(0xFF334155),
-          contentPadding: EdgeInsets.zero,
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-            borderSide: BorderSide(
-              color: focused ? _kGold : _kCardBorder,
-              width: focused ? 2 : 1,
-            ),
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-            borderSide: BorderSide(
-              color: filled ? _kGold.withValues(alpha: 0.5) : _kCardBorder,
-            ),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-            borderSide: const BorderSide(color: _kGold, width: 2),
-          ),
-        ),
-        onChanged: (v) => _onOtpDigitChanged(index, v),
-      ),
-    );
-  }
-
   Widget _otpGrid() {
-    return Directionality(
-      textDirection: TextDirection.ltr,
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          const spacing = 8.0;
-          const height = 52.0;
-          const perRow = 4;
-          final maxW = constraints.maxWidth;
-          final cellW = ((maxW - spacing * (perRow - 1)) / perRow).clamp(36.0, 52.0);
-
-          Widget rowOf(int start) {
-            return Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: List.generate(perRow, (j) {
-                final i = start + j;
-                return Padding(
-                  padding: EdgeInsetsDirectional.only(start: j == 0 ? 0 : spacing),
-                  child: _otpBox(i, width: cellW, height: height),
-                );
-              }),
-            );
-          }
-
-          return Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              rowOf(0),
-              const SizedBox(height: 10),
-              rowOf(4),
-            ],
-          );
-        },
-      ),
+    return EmailOtpBoxes(
+      key: _otpBoxesKey,
+      style: EmailOtpBoxesStyle.deviceRevoked,
+      enabled: !_otpBusy && !_retryBusy,
+      onChanged: (_) => setState(() => _otpError = null),
     );
   }
 
@@ -531,7 +415,7 @@ class _DeviceAccessRevokedScreenState extends State<DeviceAccessRevokedScreen> {
         body: SafeArea(
           child: Center(
             child: SingleChildScrollView(
-              padding: const EdgeInsetsDirectional.fromSTEB(20, 8, 20, 24),
+              padding: emailOtpScrollPadding(context, top: 8),
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 520),
                 child: Column(

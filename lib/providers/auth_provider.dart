@@ -17,6 +17,7 @@ import '../services/cloud_sync_service.dart'
         DeviceAccessResult,
         kDeviceAccessRevokedCode;
 import '../services/cloud_sync_run_result.dart';
+import '../services/auth/owner_welcome_email.dart';
 import '../services/license_service.dart';
 import '../services/password_hashing.dart';
 import '../services/tenant_context.dart';
@@ -2205,7 +2206,7 @@ class AuthProvider extends ChangeNotifier {
     return 'تعذر إرسال رمز التحقق. تحقق من الاتصال بالإنترنت.';
   }
 
-  /// يُرسل رمز OTP إلى [email] عبر Supabase (طول الرمز حسب إعداد المشروع، غالباً 8 أرقام).
+  /// يُرسل رمز OTP إلى [email] عبر Supabase (طول الرمز = إعداد OTP length في لوحة Supabase).
   /// يُعيد null عند النجاح أو رسالة خطأ عربية.
   ///
   /// لمسار **إنشاء حساب** استخدم [sendRegistrationOtp] حتى يطابق قالب
@@ -2589,6 +2590,7 @@ class AuthProvider extends ChangeNotifier {
       if (bootstrapErr != null) {
         return bootstrapErr;
       }
+      await OwnerWelcomeEmail.send(channel: 'email');
       notifyListeners();
       return null;
     } catch (e, st) {
@@ -2647,7 +2649,7 @@ class AuthProvider extends ChangeNotifier {
     final token = otp.replaceAll(RegExp(r'\D'), '');
     if (mail.isEmpty) return 'أدخل البريد الإلكتروني';
     if (token.isEmpty) return 'أدخل رمز التحقق';
-    if (token.length < 6) {
+    if (token.length < OtpConfig.emailOtpLength) {
       return 'رمز التحقق قصير. أدخل $_otpDigitsExpected أرقاماً كما في البريد.';
     }
 
@@ -2710,6 +2712,7 @@ class AuthProvider extends ChangeNotifier {
   Future<String?> resetLocalAndServerPassword({
     required String email,
     required String newPassword,
+    bool signOutAfterReset = true,
   }) async {
     final mail = email.trim().toLowerCase();
     final pin = newPassword.trim();
@@ -2725,13 +2728,29 @@ class AuthProvider extends ChangeNotifier {
         return 'انتهت جلسة التحقق. أعد طلب رمز التحقق ثم حاول مجدداً.';
       }
 
-      // احتفظ بالجوال من السحابة إن وُجد — مطلوب لرفع owner_auth_secrets.
+      final scopeKey = 'cloud:${user.id}';
+      final prefsEarly = await SharedPreferences.getInstance();
+      final previousScope = prefsEarly.getString(_prefActiveDataOwner);
+      final scopeWillSwitch = previousScope != scopeKey;
+
+      // احتفظ بالجوال من السحابة أو من الصف المحلي — قبل أي مسح SQLite.
       var phone = '';
       try {
         final secret = await OwnerAuthCloudService.instance.fetch();
         phone = secret?.phone.trim() ?? '';
       } catch (e) {
         AppLogger.warn('AuthProvider', 'reset PIN fetch cloud secret: $e');
+      }
+      if (!AuthValidators.isValidIraqiPhone(phone)) {
+        final existing = await _db.getUserBySupabaseUid(user.id);
+        phone = (existing?['phone'] as String?)?.trim() ?? '';
+      }
+
+      if (scopeWillSwitch) {
+        await _bindAccountDataScope(
+          scopeKey,
+          allowUnsyncedDataLoss: true,
+        );
       }
 
       // 1) دوّر كلمة Supabase الداخلية القوية — لا ترسل PIN إلى Auth.
@@ -2756,11 +2775,19 @@ class AuthProvider extends ChangeNotifier {
       // 2) حدّث PIN محلياً.
       final salt = PasswordHashing.generateSalt();
       final hash = await PasswordHashing.hashPin(pin, salt);
-      final ok = await _db.updateUserPasswordByLogin(
+      var ok = await _db.updateUserPasswordByLogin(
         login: mail,
         passwordHash: hash,
         passwordSalt: salt,
       );
+      if (!ok && AuthValidators.isValidIraqiPhone(phone)) {
+        await _db.updateOwnerGoogleProfileCredentials(
+          id: localId,
+          phone: phone,
+          pin: pin,
+        );
+        ok = true;
+      }
       if (!ok) return 'تعذر تحديث رمز الدخول محلياً على هذا الجهاز.';
 
       if (AuthValidators.isValidIraqiPhone(phone)) {
@@ -2794,15 +2821,31 @@ class AuthProvider extends ChangeNotifier {
       }
 
       final localRow = await _db.getUserById(localId);
-      if (localRow != null) {
-        await _bindAccountDataScope(
-          'cloud:${user.id}',
-          allowUnsyncedDataLoss: true,
-        );
-        _setFromRow(localRow);
-        await _bindDeviceToOwner(localRow);
+      if (localRow == null) {
+        return 'تعذر قراءة حساب المالك بعد تحديث الرمز.';
+      }
+
+      if (!scopeWillSwitch) {
+        await prefsEarly.setString(_prefActiveDataOwner, scopeKey);
+        await TenantContextService.instance.load();
+      }
+
+      _setFromRow(localRow);
+      await _bindDeviceToOwner(localRow);
+      if (signOutAfterReset) {
         final prefs = await SharedPreferences.getInstance();
         await prefs.setInt(_prefUserId, localId);
+      }
+
+      if (scopeWillSwitch) {
+        final bootstrapErr =
+            await _completeCloudBootstrapAfterRestore(localId);
+        if (bootstrapErr != null) {
+          AppLogger.warn(
+            'AuthProvider',
+            'reset PIN bootstrap after scope switch: $bootstrapErr',
+          );
+        }
       }
     } on AuthException catch (e) {
       AppLogger.warn(
@@ -2815,11 +2858,27 @@ class AuthProvider extends ChangeNotifier {
       return 'تعذر تحديث رمز الدخول. تحقق من الاتصال بالإنترنت.';
     }
 
-    // لا نُبقي جلسة OTP مفتوحة — الدخول اللاحق عبر البريد+PIN + الكلمة الداخلية.
-    try {
-      await Supabase.instance.client.auth.signOut();
-    } catch (e) {
-      AppLogger.warn('AuthProvider', 'post-reset Supabase signOut failed: $e');
+    if (signOutAfterReset) {
+      // لا نُبقي جلسة OTP مفتوحة — الدخول اللاحق عبر البريد+PIN + الكلمة الداخلية.
+      try {
+        await Supabase.instance.client.auth.signOut();
+      } catch (e) {
+        AppLogger.warn('AuthProvider', 'post-reset Supabase signOut failed: $e');
+      }
+    } else {
+      try {
+        await hydrateCloudAccountData(
+          forcePull: false,
+          timeout: const Duration(seconds: 20),
+        );
+        await _db.reconcileUserDirectoryAfterCloudImport(
+          preferSupabaseUid: Supabase.instance.client.auth.currentUser?.id,
+        );
+      } catch (e) {
+        AppLogger.warn('AuthProvider', 'post-reset gate hydrate: $e');
+      }
+      await lockSession();
+      notifyListeners();
     }
     return null;
   }
@@ -3295,6 +3354,7 @@ class AuthProvider extends ChangeNotifier {
       requireMandatoryRestore: false,
     );
     if (bootstrapErr != null) return bootstrapErr;
+    await OwnerWelcomeEmail.send(channel: 'google');
     notifyListeners();
     return null;
   }
@@ -3670,20 +3730,23 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
-  /// يرسل OTP على بريد المالك قبل استعادة PIN من السحابة.
+  /// يرسل OTP على بريد المالك قبل تعيين رمز PIN جديد (لا نسخ hash قديم).
   Future<String?> beginOwnerPinRestoreOtpFlow() async {
     _ownerPinRestoreOtpVerified = false;
     final email = Supabase.instance.client.auth.currentUser?.email?.trim() ?? '';
     if (email.isEmpty) {
       return 'لا يوجد بريد مرتبط بالحساب. أعد تسجيل الدخول.';
     }
-    return sendEmailOtp(email);
+    return sendPasswordResetOtp(email);
   }
 
-  /// بعد OTP ناجح: استعادة PIN من السحابة + bootstrap.
+  /// بعد OTP:
+  /// [setNewPin] = false (تسجيل دخول لحساب موجود): استعادة الرمز الحالي والدخول.
+  /// [setNewPin] = true (نسيت الرمز): التحقق فقط، والشاشة التالية تعيّن PIN جديداً.
   Future<String?> verifyOwnerPinRestoreOtpAndApply({
     required int localUserId,
     required String otp,
+    bool setNewPin = false,
   }) async {
     final email = Supabase.instance.client.auth.currentUser?.email?.trim() ?? '';
     if (email.isEmpty) {
@@ -3693,16 +3756,21 @@ class AuthProvider extends ChangeNotifier {
     final verifyErr = await verifyPasswordResetOtp(email: email, otp: otp);
     if (verifyErr != null) return verifyErr;
 
+    if (kIsWeb) _webForceOwnerPinRestoreOtp = false;
+    if (setNewPin) return null;
+
     _ownerPinRestoreOtpVerified = true;
     try {
       final restored = await tryRestoreOwnerAuthFromCloud(localUserId);
       if (!restored) {
-        return 'تعذر استعادة بيانات الحساب من السحابة.';
+        AppLogger.warn(
+          'AuthProvider',
+          'owner PIN cloud restore skipped after login OTP',
+        );
       }
       final bootstrapErr =
           await _completeCloudBootstrapAfterRestore(localUserId);
       if (bootstrapErr != null) return bootstrapErr;
-      if (kIsWeb) _webForceOwnerPinRestoreOtp = false;
       notifyListeners();
       return null;
     } finally {
@@ -3926,7 +3994,7 @@ class AuthProvider extends ChangeNotifier {
     await logout(allowUnsyncedDataLoss: true);
   }
 
-  /// يرسل رمز 8 أرقام إلى بريد صاحب الحساب (Supabase OTP).
+  /// يرسل رمز البريد إلى صاحب الحساب (Supabase OTP — طوله من إعداد المشروع).
   Future<String?> sendDeviceAccessRecoveryOtp({String? email}) async {
     final mail = (email ?? Supabase.instance.client.auth.currentUser?.email)
         ?.trim()

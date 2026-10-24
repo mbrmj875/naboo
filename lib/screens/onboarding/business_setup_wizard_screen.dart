@@ -14,7 +14,8 @@ import '../../services/password_hashing.dart';
 import '../../theme/design_tokens.dart';
 import '../../widgets/glass/glass_background.dart';
 import '../../widgets/glass/glass_surface.dart';
-import '../../utils/auth_validators.dart';
+import '../../widgets/inputs/pin_four_boxes_field.dart';
+import '../../widgets/raw_keyboard_inset.dart';
 import '../../utils/pin_input_constraints.dart';
 
 class BusinessSetupWizardScreen extends StatefulWidget {
@@ -66,6 +67,8 @@ class _BusinessSetupWizardScreenState extends State<BusinessSetupWizardScreen> {
   // First Cashier fields
   final _cashierNameCtrl = TextEditingController();
   final _cashierPinCtrl = TextEditingController();
+  final _cashierNameFocus = FocusNode();
+  final _cashierPinFocus = FocusNode();
 
   static const List<_VerticalOption> _verticalOptions = [
     _VerticalOption(
@@ -122,6 +125,8 @@ class _BusinessSetupWizardScreenState extends State<BusinessSetupWizardScreen> {
   void dispose() {
     _cashierNameCtrl.dispose();
     _cashierPinCtrl.dispose();
+    _cashierNameFocus.dispose();
+    _cashierPinFocus.dispose();
     super.dispose();
   }
 
@@ -286,9 +291,10 @@ class _BusinessSetupWizardScreenState extends State<BusinessSetupWizardScreen> {
         );
         return;
       }
-      if (!AuthValidators.isValidPin(pin)) {
+      final pinErr = PinInputConstraints.validateRequired(pin);
+      if (pinErr != null) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(PinInputConstraints.invalidMessage)),
+          SnackBar(content: Text(pinErr)),
         );
         return;
       }
@@ -380,24 +386,38 @@ class _BusinessSetupWizardScreenState extends State<BusinessSetupWizardScreen> {
           body: _loading
               ? const Center(child: CircularProgressIndicator(color: AppColors.accentGold))
               : SafeArea(
-                  child: Center(
-                    child: ConstrainedBox(
-                      constraints: BoxConstraints(maxWidth: widget.openedFromSettings ? 600 : 520),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          _buildHeader(),
-                          const SizedBox(height: 16),
-                          Expanded(
-                            child: widget.openedFromSettings
-                                ? _buildSettingsList()
-                                : _buildWizardSteps(),
+                  child: RawKeyboardInsetBuilder(
+                    builder: (context, keyboardBottom) {
+                      final keyboardUp = keyboardBottom > 8;
+                      return Center(
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxWidth: widget.openedFromSettings ? 600 : 520,
                           ),
-                          const SizedBox(height: 16),
-                          _buildFooter(),
-                        ],
-                      ),
-                    ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              _buildHeader(),
+                              const SizedBox(height: 16),
+                              Expanded(
+                                child: widget.openedFromSettings
+                                    ? _buildSettingsList()
+                                    : (_step == 0
+                                        ? _buildActivityStep()
+                                        : _buildCashierStep(
+                                            keyboardBottom: keyboardBottom,
+                                            keyboardUp: keyboardUp,
+                                          )),
+                              ),
+                              if (!widget.openedFromSettings && _step == 0) ...[
+                                const SizedBox(height: 16),
+                                _buildFooter(),
+                              ],
+                            ],
+                          ),
+                        ),
+                      );
+                    },
                   ),
                 ),
         ),
@@ -438,17 +458,6 @@ class _BusinessSetupWizardScreenState extends State<BusinessSetupWizardScreen> {
           const SizedBox(width: 48),
         ],
       ),
-    );
-  }
-
-  Widget _buildWizardSteps() {
-    return IndexedStack(
-      index: _step.clamp(0, 1),
-      sizing: StackFit.expand,
-      children: [
-        _buildActivityStep(),
-        _buildCashierStep(),
-      ],
     );
   }
 
@@ -549,75 +558,102 @@ class _BusinessSetupWizardScreenState extends State<BusinessSetupWizardScreen> {
     );
   }
 
-  Widget _buildCashierStep() {
+  Widget _buildCashierStep({
+    required double keyboardBottom,
+    required bool keyboardUp,
+  }) {
     return GlassSurface(
       borderRadius: BorderRadius.circular(20),
       blurSigma: 15,
       padding: const EdgeInsets.all(20),
       child: LayoutBuilder(
         builder: (context, constraints) {
-          final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
           return SingleChildScrollView(
-            padding: EdgeInsets.only(bottom: bottomInset + 8),
+            padding: EdgeInsets.only(bottom: keyboardBottom + 16),
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
             child: ConstrainedBox(
-              constraints: BoxConstraints(minHeight: constraints.maxHeight),
+              constraints: BoxConstraints(
+                minHeight: keyboardUp
+                    ? 0
+                    : constraints.maxHeight,
+              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
-                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisAlignment: keyboardUp
+                    ? MainAxisAlignment.start
+                    : MainAxisAlignment.center,
                 children: [
-                  const Icon(Icons.person_add_alt_1, size: 48, color: AppColors.accentGold),
+                  if (keyboardUp) const SizedBox(height: 8),
+                  const Icon(
+                    Icons.person_add_alt_1,
+                    size: 48,
+                    color: AppColors.accentGold,
+                  ),
                   const SizedBox(height: 16),
                   const Text(
                     'إنشاء الكاشير الأول',
-                    style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                    ),
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 8),
                   Text(
                     'قم بإنشاء حساب للموظف لتتمكن من استخدام التطبيق وبدء الورديات',
-                    style: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 14),
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.82),
+                      fontSize: 14,
+                      height: 1.35,
+                    ),
                     textAlign: TextAlign.center,
                   ),
-                  const SizedBox(height: 32),
+                  SizedBox(height: keyboardUp ? 20 : 32),
                   TextFormField(
                     controller: _cashierNameCtrl,
+                    focusNode: _cashierNameFocus,
                     style: const TextStyle(color: Colors.white),
                     textInputAction: TextInputAction.next,
+                    onFieldSubmitted: (_) => _cashierPinFocus.requestFocus(),
                     decoration: InputDecoration(
                       labelText: 'اسم الموظف',
-                      labelStyle: TextStyle(color: Colors.white.withValues(alpha: 0.7)),
+                      labelStyle: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.78),
+                      ),
                       filled: true,
                       fillColor: Colors.white.withValues(alpha: 0.05),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
                         borderSide: BorderSide.none,
                       ),
-                      prefixIcon: const Icon(Icons.person_outline, color: Colors.white70),
+                      prefixIcon: const Icon(
+                        Icons.person_outline,
+                        color: Colors.white70,
+                      ),
                     ),
                   ),
-                  const SizedBox(height: 16),
-                  TextFormField(
+                  const SizedBox(height: 20),
+                  PinFourBoxesField(
                     controller: _cashierPinCtrl,
-                    style: const TextStyle(color: Colors.white),
-                    obscureText: true,
-                    keyboardType: TextInputType.number,
-                    textDirection: TextDirection.ltr,
-                    inputFormatters: PinInputConstraints.formatters,
-                    decoration: InputDecoration(
-                      labelText: 'رمز الدخول (PIN)',
-                      hintText: PinInputConstraints.hint,
-                      helperText: PinInputConstraints.staffSubtitle,
-                      helperMaxLines: 2,
-                      labelStyle: TextStyle(color: Colors.white.withValues(alpha: 0.7)),
-                      filled: true,
-                      fillColor: Colors.white.withValues(alpha: 0.05),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide.none,
-                      ),
-                      prefixIcon: const Icon(Icons.lock_outline, color: Colors.white70),
+                    focusNode: _cashierPinFocus,
+                    label: 'رمز الدخول (PIN)',
+                    useGlass: true,
+                    textInputAction: TextInputAction.done,
+                    onEditingComplete: () => _cashierPinFocus.unfocus(),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    PinInputConstraints.staffSubtitle,
+                    textAlign: TextAlign.start,
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.82),
+                      fontSize: 13,
+                      height: 1.35,
                     ),
                   ),
+                  const SizedBox(height: 24),
+                  _buildFooter(),
                 ],
               ),
             ),

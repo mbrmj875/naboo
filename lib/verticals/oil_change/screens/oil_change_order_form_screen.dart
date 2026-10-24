@@ -63,7 +63,7 @@ import '../services/oil_notes_money_ai_client.dart';
 import '../utils/oil_notes_money_parser.dart';
 import '../widgets/oil_notes_money_preview_bar.dart';
 import '../../../utils/shift_actor_conflict_guard.dart';
-import '../../../services/print_settings_repository.dart';
+import '../../../services/effective_store_branding.dart';
 import '../../../providers/auth_provider.dart';
 import '../../../providers/customers_provider.dart';
 import '../../../providers/global_barcode_route_bridge.dart';
@@ -71,6 +71,7 @@ import '../../../providers/shift_provider.dart';
 import '../services/oil_change_checkout_service.dart';
 import '../services/oil_change_post_sale_service.dart';
 import '../services/oil_change_whatsapp_notify_service.dart';
+import '../services/wa_oil_followup_scheduler.dart';
 import '../utils/oil_change_whatsapp_user_messages.dart';
 import '../services/oil_change_product_scan.dart';
 import '../../../utils/customer_phone_launch.dart';
@@ -500,6 +501,16 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     });
   }
 
+  Future<PrintSettingsData> _loadStoreBrandingForCustomer() {
+    final auth = context.read<AuthProvider>();
+    return EffectiveStoreBranding.resolve(
+      isOwner: auth.isOwner,
+      userGlobalId: auth.userGlobalId,
+      userId: auth.userId,
+      fallbackToWorkspace: true,
+    );
+  }
+
   Future<void> _warmPostSaveSettings() async {
     if (_cachedPrintSettings != null &&
         _waAutoAfterSave != null &&
@@ -508,7 +519,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       return;
     }
     final results = await Future.wait([
-      PrintSettingsRepository.instance.load(),
+      _loadStoreBrandingForCustomer(),
       OilChangeSettings.whatsappAutoAfterSaveEnabled(),
       OilChangeSettings.whatsappManualAfterSaveEnabled(),
       OilChangeSettings.whatsappAskRatingAfterSaveEnabled(),
@@ -1906,19 +1917,26 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       }
     }
 
+    // الزيارة تحفظ +964، والحقل يقبل 07 فقط. نحوّل قبل العرض حتى ينجح الحفظ.
+    void assignStoredPhone() {
+      final stored = (r['customerPhone'] ?? '').toString();
+      if (!replaceAll && !_customerPhoneIsBlank) return;
+      _setCustomerPhoneField(stored);
+    }
+
     _applyingVehicleRecord = true;
     try {
     if (replaceAll) {
       _customerId = (r['customerId'] as num?)?.toInt();
       textCtrl(_customerName, 'customerNameSnapshot');
-      textCtrl(_customerPhone, 'customerPhone');
+      assignStoredPhone();
     } else {
       if (_customerId == null) {
         final cid = (r['customerId'] as num?)?.toInt();
         if (cid != null && cid > 0) _customerId = cid;
       }
       textCtrl(_customerName, 'customerNameSnapshot');
-      textCtrl(_customerPhone, 'customerPhone');
+      assignStoredPhone();
     }
 
     textCtrl(_deviceName, 'deviceName');
@@ -3648,7 +3666,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
 
     final printData = amending && !phoneChangedOnAmend
         ? (_cachedPrintSettings ?? PrintSettingsData.defaults())
-        : (_cachedPrintSettings ?? await PrintSettingsRepository.instance.load());
+        : (_cachedPrintSettings ?? await _loadStoreBrandingForCustomer());
     _cachedPrintSettings = printData;
 
     return _OilPostSaveJob(
@@ -3785,6 +3803,14 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       } catch (e) {
         _showRootSnackBar('تعذّر إرسال واتساب: $e');
       }
+      try {
+        await WaOilFollowupScheduler.instance.enqueueAfterSave(
+          orderId: job.orderId,
+          customerPhone: phone,
+          order: job.order,
+          storeTitle: job.printSettings.storeTitleLine,
+        );
+      } catch (_) {}
       return;
     }
 

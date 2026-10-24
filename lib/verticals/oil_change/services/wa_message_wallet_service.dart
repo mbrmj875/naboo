@@ -14,7 +14,7 @@ class WaWalletSnapshot {
     this.monthsCredited,
     this.subscriptionEndsAt,
     this.unitPriceIqdX100 = WaMessagePricing.defaultUnitPriceIqdX100,
-    this.annualDiscountPct = WaMessagePricing.defaultAnnualDiscountPct,
+    this.annualFreeMonths = WaMessagePricing.defaultAnnualFreeMonths,
     this.minQty = WaMessagePricing.defaultMinQty,
     this.stepQty = WaMessagePricing.defaultStepQty,
     this.maxQty = WaMessagePricing.defaultMaxQty,
@@ -33,7 +33,7 @@ class WaWalletSnapshot {
   final int? monthsCredited;
   final DateTime? subscriptionEndsAt;
   final int unitPriceIqdX100;
-  final int annualDiscountPct;
+  final int annualFreeMonths;
   final int minQty;
   final int stepQty;
   final int maxQty;
@@ -204,9 +204,9 @@ class WaMessageWalletService {
           settings['unit_price_iqd_x100'],
           WaMessagePricing.defaultUnitPriceIqdX100,
         ),
-        annualDiscountPct: _asInt(
-          settings['annual_discount_pct'],
-          WaMessagePricing.defaultAnnualDiscountPct,
+        annualFreeMonths: _asInt(
+          settings['annual_free_months'],
+          WaMessagePricing.defaultAnnualFreeMonths,
         ),
         minQty: _asInt(settings['min_qty'], WaMessagePricing.defaultMinQty),
         stepQty: _asInt(settings['step_qty'], WaMessagePricing.defaultStepQty),
@@ -252,7 +252,7 @@ class WaMessageWalletService {
       q,
       cycle,
       unitPriceIqdX100: snap.unitPriceIqdX100,
-      annualDiscountPct: snap.annualDiscountPct,
+      annualFreeMonths: snap.annualFreeMonths,
     );
 
     final row = await _client

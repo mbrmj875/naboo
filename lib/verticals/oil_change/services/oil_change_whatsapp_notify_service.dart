@@ -45,6 +45,9 @@ class OilChangeWhatsappNotifyService {
       order: order,
       storeTitle: storeTitle,
       productsSummary: productsSummary,
+      storeAddress: printSettings?.storeAddress ?? '',
+      storePhones: printSettings?.storePhones ?? const [],
+      storeMapsUrl: printSettings?.storeMapsUrl,
     );
     final details = buildOilChangeCardDetailsBlock(
       order: order,

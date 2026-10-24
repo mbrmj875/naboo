@@ -1,3 +1,5 @@
+import 'dart:async' show unawaited;
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -11,9 +13,16 @@ import '../../widgets/inputs/pin_four_boxes_field.dart';
 import '../../widgets/secure_screen.dart';
 
 class ResetPasswordScreen extends StatefulWidget {
-  const ResetPasswordScreen({super.key, required this.email});
+  const ResetPasswordScreen({
+    super.key,
+    required this.email,
+    this.returnToEmployeeGate = false,
+  });
 
   final String email;
+
+  /// بعد الحفظ: العودة إلى «من سيبدأ العمل؟» مع الإبقاء على جلسة Google.
+  final bool returnToEmployeeGate;
 
   @override
   State<ResetPasswordScreen> createState() => _ResetPasswordScreenState();
@@ -61,6 +70,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
     final err = await auth.resetLocalAndServerPassword(
       email: widget.email,
       newPassword: _passController.text,
+      signOutAfterReset: !widget.returnToEmployeeGate,
     );
     if (!mounted) return;
     setState(() => _busy = false);
@@ -76,10 +86,14 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
     }
     messenger.showSnackBar(
       const SnackBar(
-        content: Text('تم تحديث رمز الدخول بنجاح'),
+        content: Text('تم تحديث رمز PIN بنجاح'),
         behavior: SnackBarBehavior.floating,
       ),
     );
+    if (widget.returnToEmployeeGate) {
+      unawaited(nav.pushReplacementNamed('/employee-gate'));
+      return;
+    }
     nav.popUntil((r) => r.isFirst);
   }
 
@@ -164,7 +178,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                                             ),
                                             const SizedBox(height: 12),
                                             const Text(
-                                              'تعيين رمز دخول جديد',
+                                              'تعيين رمز PIN جديد',
                                               textAlign: TextAlign.center,
                                               style: TextStyle(
                                                 fontSize: 18,
@@ -190,7 +204,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                                   useGlass: true,
                                   controller: _passController,
                                   focusNode: _focusPin,
-                                  label: 'رمز الدخول الجديد *',
+                                  label: 'رمز PIN *',
                                   obscureText: _obscure1,
                                   onToggleObscure: () => setState(
                                     () => _obscure1 = !_obscure1,
@@ -212,7 +226,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                                   useGlass: true,
                                   controller: _confirmController,
                                   focusNode: _focusConfirm,
-                                  label: 'تأكيد رمز الدخول *',
+                                  label: 'تأكيد رمز PIN *',
                                   obscureText: _obscure2,
                                   onToggleObscure: () => setState(
                                     () => _obscure2 = !_obscure2,

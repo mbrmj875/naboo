@@ -168,7 +168,7 @@ class _OilChangeWhatsappWalletScreenState
     final yearlyPay = WaMessagePricing.yearlyPayIqd(
       _qty,
       unitPriceIqdX100: snap.unitPriceIqdX100,
-      annualDiscountPct: snap.annualDiscountPct,
+      annualFreeMonths: snap.annualFreeMonths,
     );
     final yearlyFull = WaMessagePricing.yearlyFullIqd(
       _qty,
@@ -177,7 +177,7 @@ class _OilChangeWhatsappWalletScreenState
     final savings = WaMessagePricing.yearlySavingsIqd(
       _qty,
       unitPriceIqdX100: snap.unitPriceIqdX100,
-      annualDiscountPct: snap.annualDiscountPct,
+      annualFreeMonths: snap.annualFreeMonths,
     );
     final price = _cycle == WaBillingCycle.annual ? yearlyPay : monthly;
     final equivMonth = yearlyPay ~/ 12;
@@ -218,7 +218,7 @@ class _OilChangeWhatsappWalletScreenState
         const SizedBox(height: 16),
         _BillingToggle(
           cycle: _cycle,
-          discountPct: snap.annualDiscountPct,
+          annualFreeMonths: snap.annualFreeMonths,
           onChanged: (c) {
             HapticFeedback.selectionClick();
             setState(() => _cycle = c);
@@ -238,7 +238,7 @@ class _OilChangeWhatsappWalletScreenState
             savings: savings,
             monthly: monthly,
             equivMonth: equivMonth,
-            discountPct: snap.annualDiscountPct,
+            annualFreeMonths: snap.annualFreeMonths,
           ),
         ),
         const SizedBox(height: 18),
@@ -540,12 +540,12 @@ class _RoundIconBtnState extends State<_RoundIconBtn> {
 class _BillingToggle extends StatelessWidget {
   const _BillingToggle({
     required this.cycle,
-    required this.discountPct,
+    required this.annualFreeMonths,
     required this.onChanged,
   });
 
   final WaBillingCycle cycle;
-  final int discountPct;
+  final int annualFreeMonths;
   final ValueChanged<WaBillingCycle> onChanged;
 
   @override
@@ -571,7 +571,9 @@ class _BillingToggle extends StatelessWidget {
           Expanded(
             child: _ToggleChip(
               label: 'سنوي',
-              badge: 'وفّر $discountPct٪',
+              badge: annualFreeMonths == 2
+                  ? 'شهران مجاناً'
+                  : '$annualFreeMonths أشهر مجاناً',
               selected: cycle == WaBillingCycle.annual,
               onTap: () => onChanged(WaBillingCycle.annual),
             ),
@@ -647,7 +649,7 @@ class _PriceCard extends StatelessWidget {
     required this.savings,
     required this.monthly,
     required this.equivMonth,
-    required this.discountPct,
+    required this.annualFreeMonths,
   });
 
   final WaBillingCycle cycle;
@@ -657,7 +659,7 @@ class _PriceCard extends StatelessWidget {
   final int savings;
   final int monthly;
   final int equivMonth;
-  final int discountPct;
+  final int annualFreeMonths;
 
   @override
   Widget build(BuildContext context) {
@@ -748,7 +750,9 @@ class _PriceCard extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              'اشترك سنوياً ووفّر تكلفة أكثر من ${(discountPct / 100 * 12).floor()} أشهر',
+              annualFreeMonths == 2
+                  ? 'اشترك سنوياً — شهران مجاناً (تدفع 10 أشهر فقط)'
+                  : 'اشترك سنوياً — $annualFreeMonths أشهر مجاناً',
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontSize: 12,

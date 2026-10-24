@@ -110,6 +110,20 @@ class OilChangeWhatsappGatewayService {
     );
   }
 
+  Future<({bool ok, String? messageAr, String? skipped})> submitFollowupTemplate(
+    String bodyTemplateAr,
+  ) async {
+    final data = await _invoke({
+      'action': 'submit_followup_template',
+      'body_template': bodyTemplateAr,
+    });
+    return (
+      ok: data?['ok'] == true,
+      messageAr: data?['message_ar']?.toString(),
+      skipped: data?['skipped']?.toString(),
+    );
+  }
+
   Future<({bool ok, String? messageAr})> completeOfficialConnect({
     String? wabaId,
     String? phoneNumberId,

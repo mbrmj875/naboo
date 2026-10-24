@@ -27,21 +27,40 @@ abstract final class GuidePageKnowledge {
       matched.add(t);
     }
 
-    // الأسئلة الفنية عن الزيت لها أولوية على معرفة واجهة التطبيق فقط
-    add(OilTechnicianKnowledge.matchSnippet(q));
+    // نتائج المطابقة تُحفظ صراحةً لتوجيه إضافات المسار (بدون فحص عبارة عربية).
+    final techHit = OilTechnicianKnowledge.matchSnippet(q);
+    final inventoryHit = InventoryProductKnowledge.matchSnippet(q);
+    final oilSettingsHit = OilSettingsKnowledge.matchSnippet(q);
+
+    // إعدادات صريحة تتقدّم على حزمة الفني (تجنّب قصّ الإعدادات واصطدام مفاتيح مثل «عداد»⊂«اعدادات»).
+    if (oilSettingsHit != null) {
+      add(oilSettingsHit);
+    } else {
+      add(techHit);
+    }
     add(UsersStaffKnowledge.matchSnippet(q));
-    add(InventoryProductKnowledge.matchSnippet(q));
+    add(inventoryHit);
     add(CarWashKnowledge.matchSnippet(q));
     add(HomeKnowledge.matchSnippet(q));
-    add(OilSettingsKnowledge.matchSnippet(q));
     add(OilCatalogKnowledge.matchSnippet(q));
     add(OilServicesKnowledge.matchSnippet(q));
     add(OilGlobalSettingsKnowledge.matchSnippet(q));
 
     if (matched.isEmpty) {
-      add(_routeDefault(routeId));
+      if (routeId == AppContentRoutes.addProduct) {
+        // مقاطع مستقلة حتى يعمل إسقاط الذيل بدل حذف السلسلة المدمجة (~2344).
+        add(InventoryProductKnowledge.identityPack);
+        add(InventoryProductKnowledge.stockKindsPack);
+        add(InventoryProductKnowledge.pricingPack);
+        add(InventoryProductKnowledge.inventoryPack);
+      } else {
+        add(_routeDefault(routeId));
+      }
     } else if (_isOilHubRoute(routeId)) {
-      add(OilSettingsKnowledge.packSnippet());
+      // مطابقة فني (بدون المرور بفرع الإعدادات أعلاه) → لا تكديس إعدادات المسار.
+      if (techHit == null) {
+        add(OilSettingsKnowledge.packSnippet());
+      }
     } else if (routeId == AppContentRoutes.oilChangeServices) {
       add(OilServicesKnowledge.packSnippet);
     } else if (routeId == AppContentRoutes.home) {
@@ -66,26 +85,31 @@ abstract final class GuidePageKnowledge {
         routeId == AppContentRoutes.inventoryProducts) {
       add(InventoryProductKnowledge.overviewPack);
       if (routeId == AppContentRoutes.addProduct) {
-        add(InventoryProductKnowledge.identityPack);
-        add(InventoryProductKnowledge.stockKindsPack);
-      }
-    } else if (routeId == AppContentRoutes.oilChangeCreate ||
-        _isOilHubRoute(routeId)) {
-      // على شاشات الزيت: أضف معرفة فنية خفيفة إن لم تُطابق صراحة
-      if (!matched.any((m) => m.contains('فني غيار زيت'))) {
-        add(OilTechnicianKnowledge.packSnippet);
+        // إن أعاد matchSnippet الـ overview وحدها (سؤال عام): لا تكديس التفاصيل.
+        // إن أعاد حزماً تفصيلية (عائلة زيت / نوع مخزون / …): هي أصلاً في matched.
+        // إن لم يطابق المخزون وبقيت مطابقة أخرى على الشاشة: أضف تفصيلاً للمسار.
+        final inv = inventoryHit?.trim();
+        if (inv == null) {
+          add(InventoryProductKnowledge.identityPack);
+          add(InventoryProductKnowledge.stockKindsPack);
+        }
       }
     }
+    // oilChangeCreate: معرفة الفني عبر techHit = matchSnippet فقط (أقسام مميّزة ≤2200).
+    // لا تُلحق packSnippet الكامل عند غياب المطابقة — عند matched فارغ يُستخدم _routeDefault.
 
     if (matched.isEmpty) {
       return _routeDefault(routeId) ?? '';
     }
 
-    var out = matched.join('\n---\n');
-    if (out.length > maxChars) {
-      out = '${out.substring(0, maxChars - 1)}…';
+    final packs = List<String>.from(matched);
+    while (true) {
+      if (packs.isEmpty) return '';
+      final out = packs.join('\n---\n');
+      if (out.length <= maxChars) return out;
+      // أسقط من الذيل؛ المقطع المفرد الأطول من الحد يُحذف كاملاً (لا substring).
+      packs.removeLast();
     }
-    return out;
   }
 
   static bool _isOilHubRoute(String routeId) =>

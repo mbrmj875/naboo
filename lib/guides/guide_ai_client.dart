@@ -35,6 +35,41 @@ class GuideAiClient {
   /// أقصى عدد رسائل سابقة تُرسل للسيرفر (غير رسالة الترحيب).
   static const maxHistoryTurns = 20;
 
+  /// يصفّي `tour_id` القادم من AI وفق القائمة والصلاحيات ووضع الفني/واتساب.
+  static String resolveAiTourId({
+    required String rawTourId,
+    required AppAssistantScope scope,
+    required bool forceTechnician,
+    required bool forceWhatsappOps,
+  }) {
+    var tourId = rawTourId.trim();
+    if (!GuideTourIds.allowlist.contains(tourId)) {
+      tourId = GuideTourIds.none;
+    }
+    if (tourId != GuideTourIds.none && !scope.canStartTour(tourId)) {
+      tourId = GuideTourIds.none;
+    }
+    if (forceTechnician) {
+      tourId = GuideTourIds.none;
+    } else if (forceWhatsappOps &&
+        tourId != GuideTourIds.none &&
+        tourId != GuideTourIds.oilWhatsapp) {
+      tourId = GuideTourIds.none;
+    }
+    return tourId;
+  }
+
+  /// يضيف `page_knowledge` إلى الحمولة فقط إن كان `pageKnowledge.isNotEmpty`
+  /// (لا يُستدعى `trim`؛ المسافات وحدها تُعدّ غير فارغة).
+  static void putPageKnowledgeIfPresent(
+    Map<String, dynamic> body,
+    String pageKnowledge,
+  ) {
+    if (pageKnowledge.isNotEmpty) {
+      body['page_knowledge'] = pageKnowledge;
+    }
+  }
+
   Future<GuideAssistResult> assist({
     required String question,
     required String currentRouteId,
@@ -168,18 +203,19 @@ class GuideAiClient {
       final mode = forceWhatsappOps
           ? 'whatsapp_ops'
           : (forceTechnician ? 'oil_technician' : null);
+      final body = <String, dynamic>{
+        'question': question,
+        'route_id': currentRouteId,
+        'scope': scope.toAiPayload(),
+        'history': trimmedHistory.map((t) => t.toJson()).toList(),
+        if (opsContext != null && opsContext.isNotEmpty)
+          'ops_context': opsContext,
+        if (mode != null) 'mode': mode,
+      };
+      putPageKnowledgeIfPresent(body, pageKnowledge);
       final response = await Supabase.instance.client.functions.invoke(
         'guide-assistant',
-        body: {
-          'question': question,
-          'route_id': currentRouteId,
-          'scope': scope.toAiPayload(),
-          'history': trimmedHistory.map((t) => t.toJson()).toList(),
-          if (pageKnowledge.isNotEmpty) 'page_knowledge': pageKnowledge,
-          if (opsContext != null && opsContext.isNotEmpty)
-            'ops_context': opsContext,
-          if (mode != null) 'mode': mode,
-        },
+        body: body,
       );
       final raw = response.data;
       final map = raw is Map<String, dynamic>
@@ -189,25 +225,16 @@ class GuideAiClient {
               : null;
       if (map == null) return null;
 
-      var tourId = (map['tour_id'] ?? GuideTourIds.none).toString().trim();
+      final tourId = resolveAiTourId(
+        rawTourId: (map['tour_id'] ?? GuideTourIds.none).toString(),
+        scope: scope,
+        forceTechnician: forceTechnician,
+        forceWhatsappOps: forceWhatsappOps,
+      );
       final reply = (map['reply'] ?? '').toString().trim();
       final confidence = (map['confidence'] is num)
           ? (map['confidence'] as num).toDouble()
           : 0.5;
-
-      if (!GuideTourIds.allowlist.contains(tourId)) {
-        tourId = GuideTourIds.none;
-      }
-      if (tourId != GuideTourIds.none && !scope.canStartTour(tourId)) {
-        tourId = GuideTourIds.none;
-      }
-      if (forceTechnician) {
-        tourId = GuideTourIds.none;
-      } else if (forceWhatsappOps &&
-          tourId != GuideTourIds.none &&
-          tourId != GuideTourIds.oilWhatsapp) {
-        tourId = GuideTourIds.none;
-      }
 
       if (reply.isEmpty) return null;
 

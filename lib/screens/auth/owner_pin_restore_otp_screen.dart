@@ -1,18 +1,15 @@
-import 'dart:async' show Timer, TimeoutException, unawaited;
-
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'dart:async' show Timer, unawaited;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../config/otp_config.dart';
 import '../../providers/auth_provider.dart';
-import '../../providers/business_features_provider.dart';
-import '../../services/auth/web_auth_history_guard.dart';
+import 'reset_password_screen.dart';
 import '../../theme/design_tokens.dart';
 import '../../widgets/glass/glass_background.dart';
 import '../../widgets/glass/glass_surface.dart';
+import '../../widgets/inputs/email_otp_boxes.dart';
 import '../../widgets/secure_screen.dart';
 
 /// OTP قبل استعادة PIN المالك من السحابة على جهاز جديد (القرار 1).
@@ -21,6 +18,7 @@ class OwnerPinRestoreOtpScreen extends StatefulWidget {
     super.key,
     this.otpAlreadySent = false,
     this.initialLocalOwnerUserId,
+    this.setNewPin = false,
   });
 
   /// `true` إذا أُرسل OTP مسبقاً من [AuthProvider.handleGoogleAuth].
@@ -28,6 +26,9 @@ class OwnerPinRestoreOtpScreen extends StatefulWidget {
 
   /// يُمرَّر من الإقلاع عند توفر صف المالك قبل ضبط [AuthProvider.userId].
   final int? initialLocalOwnerUserId;
+
+  /// فقط زر «نسيت رمز PIN». تسجيل الدخول بحساب موجود يبقى false.
+  final bool setNewPin;
 
   @override
   State<OwnerPinRestoreOtpScreen> createState() =>
@@ -37,8 +38,7 @@ class OwnerPinRestoreOtpScreen extends StatefulWidget {
 class _OwnerPinRestoreOtpScreenState extends State<OwnerPinRestoreOtpScreen> {
   static const int _digits = OtpConfig.emailOtpLength;
 
-  final _controllers = List.generate(_digits, (_) => TextEditingController());
-  final _focusNodes = List.generate(_digits, (_) => FocusNode());
+  final _otpBoxesKey = GlobalKey<EmailOtpBoxesState>();
 
   bool _busy = false;
   bool _sending = false;
@@ -52,8 +52,6 @@ class _OwnerPinRestoreOtpScreenState extends State<OwnerPinRestoreOtpScreen> {
   String get _email =>
       Supabase.instance.client.auth.currentUser?.email?.trim() ?? '';
 
-  String get _otp => _controllers.map((c) => c.text).join();
-
   @override
   void initState() {
     super.initState();
@@ -64,7 +62,7 @@ class _OwnerPinRestoreOtpScreenState extends State<OwnerPinRestoreOtpScreen> {
       unawaited(_sendOtp());
     }
     WidgetsBinding.instance.addPostFrameCallback(
-      (_) => _focusNodes.first.requestFocus(),
+      (_) => _otpBoxesKey.currentState?.focusFirst(),
     );
   }
 
@@ -108,12 +106,6 @@ class _OwnerPinRestoreOtpScreenState extends State<OwnerPinRestoreOtpScreen> {
   @override
   void dispose() {
     _countdownTimer?.cancel();
-    for (final c in _controllers) {
-      c.dispose();
-    }
-    for (final f in _focusNodes) {
-      f.dispose();
-    }
     super.dispose();
   }
 
@@ -152,19 +144,8 @@ class _OwnerPinRestoreOtpScreenState extends State<OwnerPinRestoreOtpScreen> {
     _startCountdown();
   }
 
-  void _onDigitChanged(int index, String value) {
-    if (value.isNotEmpty) {
-      if (index < _digits - 1) {
-        _focusNodes[index + 1].requestFocus();
-      } else {
-        _focusNodes[index].unfocus();
-      }
-    }
-    setState(() => _error = null);
-  }
-
   Future<void> _verify() async {
-    final otp = _otp.trim();
+    final otp = (_otpBoxesKey.currentState?.value ?? '').trim();
     if (otp.length < _digits) {
       setState(
         () => _error = 'أدخل الرمز كاملاً ($_digits أرقام كما في البريد)',
@@ -190,82 +171,38 @@ class _OwnerPinRestoreOtpScreenState extends State<OwnerPinRestoreOtpScreen> {
     final err = await auth.verifyOwnerPinRestoreOtpAndApply(
       localUserId: localUserId,
       otp: otp,
+      setNewPin: widget.setNewPin,
     );
     if (!mounted) return;
+    setState(() => _busy = false);
     if (err != null) {
-      setState(() {
-        _busy = false;
-        _error = err;
-      });
+      setState(() => _error = err);
       return;
     }
 
-    try {
-      final target = await _withWorkspaceBootstrapOverlay(
-        () => auth.resolveRouteAfterAuthenticatedSession(),
-      );
-      if (!mounted) return;
-      try {
-        await context.read<BusinessFeaturesProvider>().refresh();
-      } catch (_) {}
-      if (!mounted) return;
-      if (kIsWeb) stabilizeWebAuthHistory();
-      unawaited(Navigator.of(context).pushReplacementNamed(target));
-    } on TimeoutException {
-      if (!mounted) return;
-      setState(() =>
-          _error = 'استغرقت تهيئة مساحة العمل وقتاً طويلاً. تحقق من الإنترنت وأعد المحاولة.');
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  Future<T> _withWorkspaceBootstrapOverlay<T>(
-    Future<T> Function() task, {
-    Duration timeout = const Duration(seconds: 30),
-  }) async {
-    if (!mounted) return task();
-    unawaited(
-      showDialog<void>(
-        context: context,
-        barrierDismissible: false,
-        builder: (ctx) => PopScope(
-          canPop: false,
-          child: AlertDialog(
-            content: const Row(
-              children: [
-                SizedBox(
-                  width: 28,
-                  height: 28,
-                  child: CircularProgressIndicator(strokeWidth: 2.5),
-                ),
-                SizedBox(width: 16),
-                Expanded(
-                  child: Text('جاري تهيئة مساحة العمل…'),
-                ),
-              ],
-            ),
+    if (widget.setNewPin) {
+      final returnToEmployeeGate = auth.deviceOwnerBound;
+      await Navigator.of(context).pushReplacement<void, void>(
+        MaterialPageRoute<void>(
+          builder: (_) => ResetPasswordScreen(
+            email: _email,
+            returnToEmployeeGate: returnToEmployeeGate,
           ),
         ),
-      ),
-    );
-    try {
-      return await task().timeout(timeout);
-    } finally {
-      if (mounted) {
-        Navigator.of(context, rootNavigator: true).pop();
-      }
+      );
+      return;
     }
+
+    final target = await auth.resolveRouteAfterAuthenticatedSession();
+    if (!mounted) return;
+    unawaited(Navigator.of(context).pushReplacementNamed(target));
   }
 
   Future<void> _resend() async {
     if (_resendCountdown > 0 || _busy || _sending) return;
     await _sendOtp();
     if (!mounted || _error != null) return;
-    for (final c in _controllers) {
-      c.clear();
-    }
-    _focusNodes.first.requestFocus();
+    _otpBoxesKey.currentState?.clear();
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text('تم إعادة إرسال رمز التحقق'),
@@ -337,7 +274,7 @@ class _OwnerPinRestoreOtpScreenState extends State<OwnerPinRestoreOtpScreen> {
                         ),
                       )
                     : SingleChildScrollView(
-                  padding: const EdgeInsetsDirectional.all(24),
+                  padding: emailOtpScrollPadding(context),
                   child: ConstrainedBox(
                     constraints: const BoxConstraints(maxWidth: 420),
                     child: GlassSurface(
@@ -353,10 +290,12 @@ class _OwnerPinRestoreOtpScreenState extends State<OwnerPinRestoreOtpScreen> {
                             color: AppColors.accentGold,
                           ),
                           const SizedBox(height: 16),
-                          const Text(
-                            'أدخل الرمز المرسل إلى بريدك للتحقق من هويتك',
+                          Text(
+                            widget.setNewPin
+                                ? 'تحقق من بريدك لتعيين رمز PIN جديد'
+                                : 'أدخل الرمز المرسل لتأكيد دخولك',
                             textAlign: TextAlign.center,
-                            style: TextStyle(
+                            style: const TextStyle(
                               color: Colors.white,
                               fontSize: 18,
                               fontWeight: FontWeight.bold,
@@ -366,8 +305,14 @@ class _OwnerPinRestoreOtpScreenState extends State<OwnerPinRestoreOtpScreen> {
                           const SizedBox(height: 8),
                           Text(
                             _email.isEmpty
-                                ? 'تحقق من بريدك الإلكتروني'
-                                : 'أرسلنا رمزاً من $_digits أرقام إلى\n$_email',
+                                ? (widget.setNewPin
+                                    ? 'بعد التأكيد ستُنشئ رمزاً من 4 أرقام'
+                                    : 'بعد التأكيد يُفتح الحساب مباشرة')
+                                : widget.setNewPin
+                                    ? 'أرسلنا رمزاً من $_digits أرقام إلى\n$_email\n'
+                                        'بعد التأكيد ستُنشئ رمز PIN جديداً (4 أرقام).'
+                                    : 'أرسلنا رمزاً من $_digits أرقام إلى\n$_email\n'
+                                        'بعد التأكيد يُفتح الحساب مباشرة.',
                             textAlign: TextAlign.center,
                             style: TextStyle(
                               color: Colors.white.withValues(alpha: 0.7),
@@ -376,74 +321,15 @@ class _OwnerPinRestoreOtpScreenState extends State<OwnerPinRestoreOtpScreen> {
                             ),
                           ),
                           const SizedBox(height: 24),
-                          Directionality(
-                            textDirection: TextDirection.ltr,
-                            child: LayoutBuilder(
-                              builder: (context, constraints) {
-                                const spacing = 8.0;
-                                const perRow = 4;
-                                final cellW =
-                                    ((constraints.maxWidth -
-                                                spacing * (perRow - 1)) /
-                                            perRow)
-                                        .clamp(36.0, 48.0);
-
-                                Widget rowOf(int start) {
-                                  return Row(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: List.generate(perRow, (j) {
-                                      final index = start + j;
-                                      return Padding(
-                                        padding: EdgeInsetsDirectional.only(
-                                          start: j == 0 ? 0 : spacing,
-                                        ),
-                                        child: SizedBox(
-                                          width: cellW,
-                                          child: TextField(
-                                            controller: _controllers[index],
-                                            focusNode: _focusNodes[index],
-                                            enabled: !_busy && !_sending,
-                                            textAlign: TextAlign.center,
-                                            keyboardType: TextInputType.number,
-                                            maxLength: 1,
-                                            style: const TextStyle(
-                                              color: Colors.white,
-                                              fontSize: 22,
-                                              fontWeight: FontWeight.bold,
-                                            ),
-                                            inputFormatters: [
-                                              FilteringTextInputFormatter
-                                                  .digitsOnly,
-                                            ],
-                                            decoration: InputDecoration(
-                                              counterText: '',
-                                              filled: true,
-                                              fillColor: Colors.black26,
-                                              border: OutlineInputBorder(
-                                                borderRadius:
-                                                    BorderRadius.circular(12),
-                                                borderSide: BorderSide.none,
-                                              ),
-                                            ),
-                                            onChanged: (v) =>
-                                                _onDigitChanged(index, v),
-                                          ),
-                                        ),
-                                      );
-                                    }),
-                                  );
-                                }
-
-                                return Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    rowOf(0),
-                                    const SizedBox(height: 12),
-                                    rowOf(perRow),
-                                  ],
-                                );
-                              },
-                            ),
+                          EmailOtpBoxes(
+                            key: _otpBoxesKey,
+                            enabled: !_busy && !_sending,
+                            onChanged: (_) => setState(() => _error = null),
+                            onCompleted: (_) {
+                              if (!_busy && !_sending) {
+                                unawaited(_verify());
+                              }
+                            },
                           ),
                           if (_error != null) ...[
                             const SizedBox(height: 12),

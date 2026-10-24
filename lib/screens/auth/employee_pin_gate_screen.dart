@@ -208,7 +208,10 @@ class _EmployeePinGateScreenState extends State<EmployeePinGateScreen> {
       return;
     }
     unawaited(
-      Navigator.of(context).pushNamed('/owner-pin-restore-otp'),
+      Navigator.of(context).pushNamed(
+        '/owner-pin-restore-otp',
+        arguments: const {'setNewPin': true},
+      ),
     );
   }
 
@@ -1293,7 +1296,7 @@ class _EmployeePinGateScreenState extends State<EmployeePinGateScreen> {
           TextButton(
             onPressed: _verifying ? null : _openOwnerPinRestore,
             child: const Text(
-              'نسيت رمز PIN؟ استعادة من السحابة',
+              'نسيت رمز PIN؟ إعادة التعيين عبر البريد',
               style: TextStyle(color: AppColors.accentGold),
             ),
           ),
@@ -1505,7 +1508,10 @@ class _PermanentSignOutConfirmDialogState
   Future<void> _openPinRestore() async {
     Navigator.of(context).pop(false);
     unawaited(
-      Navigator.of(context).pushNamed('/owner-pin-restore-otp'),
+      Navigator.of(context).pushNamed(
+        '/owner-pin-restore-otp',
+        arguments: const {'setNewPin': true},
+      ),
     );
   }
 
@@ -1671,7 +1677,7 @@ class _PermanentSignOutConfirmDialogState
               TextButton(
                 onPressed: _verifying ? null : _openPinRestore,
                 child: const Text(
-                  'نسيت رمز PIN؟ استعادة من السحابة',
+                  'نسيت رمز PIN؟ إعادة التعيين عبر البريد',
                   style: TextStyle(color: AppColors.accentGold),
                 ),
               ),

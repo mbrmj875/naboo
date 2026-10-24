@@ -39,6 +39,9 @@ Map<String, String> buildOilChangeCardTemplateParams({
   required Map<String, dynamic> order,
   required String storeTitle,
   String productsSummary = '',
+  String storeAddress = '',
+  List<String> storePhones = const [],
+  String? storeMapsUrl,
 }) {
   String text(Object? raw, {String fallback = oilChangeCardEmptyField}) {
     final v = (raw ?? '').toString().trim();
@@ -72,7 +75,7 @@ Map<String, String> buildOilChangeCardTemplateParams({
   final services = _splitCsv((order['requestedServices'] ?? '').toString())
       .join(oilChangeCardListSeparator);
 
-  return {
+  final params = {
     'customer': text(order['customerNameSnapshot'], fallback: 'عميلنا الكريم'),
     'shop': text(storeTitle, fallback: 'المحل'),
     'car': text(order['deviceName']),
@@ -111,6 +114,21 @@ Map<String, String> buildOilChangeCardTemplateParams({
     'employee': text(order['technicianName']),
     'notes': text(order['issueDescription']),
   };
+
+  final address = storeAddress.trim();
+  final phoneLine = storePhones
+      .map((p) => p.trim())
+      .where((p) => p.isNotEmpty)
+      .join(' · ');
+  final maps = (storeMapsUrl ?? '').trim();
+  if (address.isNotEmpty) {
+    params['store_address'] = sanitizeWhatsappTemplateParam(address);
+  }
+  if (phoneLine.isNotEmpty) {
+    params['store_phone'] = sanitizeWhatsappTemplateParam(phoneLine);
+  }
+  if (maps.isNotEmpty) params['store_maps'] = maps;
+  return params;
 }
 
 /// يجهّز نصاً لمعامل قالب واتساب الرسمي (سطر واحد بدون أسطر جديدة).
