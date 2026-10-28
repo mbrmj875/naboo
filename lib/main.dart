@@ -119,6 +119,7 @@ void _registerMobileOAuthDeepLinkHandler() {
   if (kIsWeb) return;
 
   Future<void> handleOAuthUri(Uri uri) async {
+    if (uri.host == 'whatsapp-es-complete') return;
     AppLogger.info('main', 'oauth/app link: $uri');
     if (!_isSupabaseOAuthCallbackUri(uri)) return;
     try {

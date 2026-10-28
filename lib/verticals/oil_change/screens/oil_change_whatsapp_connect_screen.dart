@@ -8,7 +8,6 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../../guides/guide_anchor.dart';
 import '../../../guides/guide_controller.dart';
-import '../../../navigation/content_navigation.dart';
 import '../../../theme/design_tokens.dart';
 import '../../../utils/screen_layout.dart';
 import '../models/tenant_whatsapp_gateway_record.dart';
@@ -24,7 +23,6 @@ import '../widgets/whatsapp_official_connect_panel.dart';
 import 'oil_change_whatsapp_followup_screen.dart';
 import 'oil_change_whatsapp_wallet_screen.dart';
 import '../services/wa_oil_followup_service.dart';
-import 'whatsapp_meta_es_web_screen.dart';
 
 /// شاشة ربط واتساب المحل — ثلاث طرق: Meta مباشرة / رقم نابو الرسمي / QR.
 class OilChangeWhatsappConnectScreen extends StatefulWidget {
@@ -36,7 +34,7 @@ class OilChangeWhatsappConnectScreen extends StatefulWidget {
 }
 
 class _OilChangeWhatsappConnectScreenState
-    extends State<OilChangeWhatsappConnectScreen> {
+    extends State<OilChangeWhatsappConnectScreen> with WidgetsBindingObserver {
   bool _loading = true;
   bool _busy = false;
   /// عند true تُعرض لوحة QR؛ وإلا شاشة اختيار الطريقة / حالة رسمية.
@@ -69,11 +67,20 @@ class _OilChangeWhatsappConnectScreenState
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     unawaited(_bootstrap());
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && mounted && _showOfficialFlow) {
+      unawaited(_pollReadyStatus());
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _pollTimer?.cancel();
     _qrRefreshTimer?.cancel();
     _readyPollTimer?.cancel();
@@ -234,54 +241,30 @@ class _OilChangeWhatsappConnectScreenState
     }
   }
 
-  Future<void> _openOnboardingUrl(
-    String raw, {
-    bool autoStart = false,
-    bool coexistence = false,
-    String shopPhone = '',
-  }) async {
+  Future<void> _openOnboardingUrl(String raw) async {
     final parsed = Uri.tryParse(raw.trim());
     if (parsed == null) return;
 
     final q = Map<String, String>.from(parsed.queryParameters);
-    if (autoStart) q['auto'] = '1';
-    if (coexistence) {
-      q['feature_type'] = 'whatsapp_business_app_onboarding';
-    } else {
-      q.remove('feature_type');
-    }
-    final phone = shopPhone.replaceAll(RegExp(r'\D'), '');
-    if (phone.isNotEmpty) q['business_phone'] = phone;
+    q['es_rev'] = '9';
+    q.remove('feature_type');
+    q.remove('auto');
     final uri = parsed.replace(queryParameters: q);
 
-    final isMetaEs = uri.path.contains('whatsapp-meta-es');
-    if (isMetaEs && mounted) {
-      await Navigator.of(context).push<void>(
-        FastContentPageRoute<void>(
-          builder: (_) => WhatsappMetaEsWebScreen(pageUrl: uri.toString()),
-        ),
-      );
-      if (!mounted) return;
-      setState(() {
-        _officialMessage = 'جاري التحقق من إكمال الربط…';
-      });
-      await OilChangeWhatsappGatewayService.instance.fetchReadyStatus();
-      _record = await OilChangeWhatsappGatewayRepository.instance
-          .refreshStatusFromServer();
-      if (!mounted) return;
-      setState(() {
-        _officialMessage = _record?.readyStateLabelAr ??
-            'إن أكملت Meta، ستظهر حالة التجهيز خلال لحظات.';
-      });
-      return;
-    }
-
     try {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
+      final opened = await launchUrl(
+        uri,
+        mode: LaunchMode.externalApplication,
+      );
+      if (!opened && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('تعذّر فتح صفحة Meta.')),
+        );
+      }
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('تعذّر فتح رابط إكمال الربط.')),
+        const SnackBar(content: Text('تعذّر فتح صفحة Meta.')),
       );
     }
   }
@@ -860,22 +843,8 @@ class _OilChangeWhatsappConnectScreenState
                             onboardingUrl: _onboardingUrl,
                             onOpenOnboarding: _onboardingUrl == null
                                 ? null
-                                : (phone) => unawaited(
-                                      _openOnboardingUrl(
-                                        _onboardingUrl!,
-                                        autoStart: true,
-                                        shopPhone: phone,
-                                      ),
-                                    ),
-                            onOpenCoexistence: _onboardingUrl == null
-                                ? null
-                                : (phone) => unawaited(
-                                      _openOnboardingUrl(
-                                        _onboardingUrl!,
-                                        autoStart: true,
-                                        coexistence: true,
-                                        shopPhone: phone,
-                                      ),
+                                : (_) => unawaited(
+                                      _openOnboardingUrl(_onboardingUrl!),
                                     ),
                             onRefresh: () => unawaited(_pollReadyStatus()),
                             onBack: _backToMethodPicker,

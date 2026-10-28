@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../../theme/design_tokens.dart';
 import '../models/whatsapp_connect_method.dart';
@@ -14,7 +13,6 @@ class WhatsappOfficialConnectPanel extends StatefulWidget {
     required this.messageAr,
     this.onboardingUrl,
     this.onOpenOnboarding,
-    this.onOpenCoexistence,
     this.onRefresh,
     this.onBack,
     this.onContinue,
@@ -25,7 +23,6 @@ class WhatsappOfficialConnectPanel extends StatefulWidget {
   final String messageAr;
   final String? onboardingUrl;
   final void Function(String phoneDigits)? onOpenOnboarding;
-  final void Function(String phoneDigits)? onOpenCoexistence;
   final VoidCallback? onRefresh;
   final VoidCallback? onBack;
   final VoidCallback? onContinue;
@@ -37,38 +34,6 @@ class WhatsappOfficialConnectPanel extends StatefulWidget {
 
 class _WhatsappOfficialConnectPanelState
     extends State<WhatsappOfficialConnectPanel> {
-  final _phoneCtrl = TextEditingController();
-  String? _phoneError;
-
-  @override
-  void dispose() {
-    _phoneCtrl.dispose();
-    super.dispose();
-  }
-
-  String? _normalizeShopWhatsapp(String raw) {
-    var digits = raw.replaceAll(RegExp(r'\D'), '');
-    if (digits.startsWith('00964')) digits = digits.substring(5);
-    if (digits.startsWith('964')) digits = digits.substring(3);
-    if (digits.startsWith('0')) digits = digits.substring(1);
-    if (digits.length == 10 && digits.startsWith('7')) {
-      return '964$digits';
-    }
-    return null;
-  }
-
-  String? _requirePhone() {
-    final e164 = _normalizeShopWhatsapp(_phoneCtrl.text);
-    if (e164 == null) {
-      setState(() {
-        _phoneError = 'أدخل رقم واتساب المحل (مثال: 07701234567).';
-      });
-      return null;
-    }
-    setState(() => _phoneError = null);
-    return e164;
-  }
-
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -143,7 +108,7 @@ class _WhatsappOfficialConnectPanelState
               ),
               const SizedBox(height: 14),
               _StepDots(
-                labels: const ['الرقم', 'التأكيد', 'الجاهزية'],
+                labels: const ['الربط', 'التأكيد', 'الجاهزية'],
                 activeIndex: preparing ? 1 : 0,
               ),
             ],
@@ -152,128 +117,28 @@ class _WhatsappOfficialConnectPanelState
         if (isMetaDirect) ...[
           const SizedBox(height: 16),
           Text(
-            'رقم واتساب المحل',
-            style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                  fontWeight: FontWeight.w800,
-                ),
-          ),
-          const SizedBox(height: 8),
-          Directionality(
-            textDirection: TextDirection.ltr,
-            child: TextField(
-              controller: _phoneCtrl,
-              keyboardType: TextInputType.phone,
-              textAlign: TextAlign.left,
-              onChanged: (_) {
-                if (_phoneError != null) setState(() => _phoneError = null);
-              },
-              decoration: InputDecoration(
-                hintText: '07701234567',
-                prefixIcon: const Icon(Icons.phone_outlined),
-                errorText: _phoneError,
-              ),
-            ),
-          ),
-          const SizedBox(height: 8),
-          Material(
-            color: OilChangeFormTheme.gold.withValues(alpha: 0.14),
-            borderRadius: BorderRadius.circular(14),
-            child: Padding(
-              padding: const EdgeInsets.all(14),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(
-                    'إن ظهرت في فيسبوك: «الحافظة لا تحتوي حسابات واتساب»',
-                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                          fontWeight: FontWeight.w800,
-                        ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'الحافظة وحدها لا تكفي. تحتاج حساب واتساب للأعمال (WABA) داخلها ثم الرقم.\n'
-                    '1) اضغط «عودة» في فيسبوك.\n'
-                    '2) إن لم يظهر «إنشاء حساب واتساب»: افتح Business Suite وأنشئ حساب واتساب داخل حافظة محلك.\n'
-                    '3) أعد الربط من هنا واختر نفس الحافظة — لا تختر حافظة نابو.',
-                    style: TextStyle(
-                      fontSize: 12.5,
-                      height: 1.5,
-                      color: cs.onSurfaceVariant,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Align(
-                    alignment: AlignmentDirectional.centerStart,
-                    child: TextButton.icon(
-                      onPressed: () async {
-                        final uri = Uri.parse('https://business.facebook.com/');
-                        try {
-                          await launchUrl(
-                            uri,
-                            mode: LaunchMode.externalApplication,
-                          );
-                        } catch (_) {
-                          if (!context.mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text(
-                                'تعذّر فتح Business Suite. افتح business.facebook.com يدوياً.',
-                              ),
-                            ),
-                          );
-                        }
-                      },
-                      icon: const Icon(Icons.open_in_new_rounded, size: 18),
-                      label: const Text('فتح Business Suite'),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'ترتيب ميتا: حافظة → حساب واتساب (WABA) → رقم + رمز في فيسبوك. '
-            'رمز التأكيد يُدخل في فيسبوك فقط، ليس داخل نابو.',
+            'إذا كان الرقم على واتساب الأعمال: اضغط الزر، ثم في Meta اختر ربط الحساب الموجود وامسح رمز QR من التطبيق. لا تكتب الرقم كرقم جديد.',
             style: TextStyle(
-              fontSize: 12.5,
-              height: 1.45,
+              fontSize: 13,
+              height: 1.5,
               color: cs.onSurfaceVariant,
             ),
+            textAlign: TextAlign.start,
           ),
         ],
         const SizedBox(height: 16),
         if (hasUrl && widget.onOpenOnboarding != null) ...[
           if (isMetaDirect) ...[
             FilledButton.icon(
-              onPressed: () {
-                final phone = _requirePhone();
-                if (phone == null) return;
-                widget.onOpenOnboarding!(phone);
-              },
-              icon: const Icon(Icons.add_link_rounded),
-              label: const Text('ربط هذا الرقم (رقم جديد)'),
+              onPressed: () => widget.onOpenOnboarding!(''),
+              icon: const Icon(Icons.verified_rounded),
+              label: const Text('ربط واتساب الرسمي'),
               style: FilledButton.styleFrom(
                 minimumSize: const Size.fromHeight(50),
                 backgroundColor: AppColors.primary,
               ),
             ),
             const SizedBox(height: 10),
-            if (widget.onOpenCoexistence != null)
-              FilledButton.icon(
-                onPressed: () {
-                  final phone = _requirePhone();
-                  if (phone == null) return;
-                  widget.onOpenCoexistence!(phone);
-                },
-                icon: const Icon(Icons.phone_android_rounded),
-                label: const Text('هذا الرقم على واتساب الأعمال (تعايش)'),
-                style: FilledButton.styleFrom(
-                  minimumSize: const Size.fromHeight(50),
-                  backgroundColor: AppColors.primary.withValues(alpha: 0.92),
-                ),
-              ),
-            if (widget.onOpenCoexistence != null) const SizedBox(height: 10),
           ] else ...[
             FilledButton.icon(
               onPressed: () => widget.onOpenOnboarding!(''),
@@ -320,7 +185,7 @@ class _WhatsappOfficialConnectPanelState
           preparing
               ? 'نابو يجهّز القوالب والرقم تلقائياً — لا تحتاج إنشاء قالب يدوياً.'
               : isMetaDirect
-                  ? 'أدخل رقم المحل أولاً ثم اربط. إن علقت عند حافظة فارغة: أنشئ WABA من Business Suite ثم أعد الربط.'
+                  ? 'بعد العودة من المتصفح اضغط «تحديث حالة التجهيز». النجاح يظهر من الخادم فقط.'
                   : 'بعد الإكمال ستظهر حالة «جاهز» عند اكتمال الإعداد على السحابة.',
           style: TextStyle(
             fontSize: 12,

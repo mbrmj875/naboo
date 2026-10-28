@@ -232,7 +232,12 @@ class _SplashScreenState extends State<SplashScreen>
         !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
     final isAndroidPhone =
         !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
-    final updateUrl = cfg.downloadUrlForPlatform(isWindows: isWindowsDesktop);
+    // أندرويد يحدّث من المتجر فقط. ويندوز يبقى ملف التثبيت.
+    const playStoreUrl =
+        'https://play.google.com/store/apps/details?id=com.basra.storemanager.app';
+    final updateUrl = isAndroidPhone
+        ? playStoreUrl
+        : cfg.downloadUrlForPlatform(isWindows: isWindowsDesktop);
     final platformLabel = isWindowsDesktop
         ? 'حاسوب ويندوز'
         : (isAndroidPhone ? 'هاتف أندرويد' : 'أخرى');
@@ -247,9 +252,11 @@ class _SplashScreenState extends State<SplashScreen>
 
     if (offersNativeUpdate && cfg.forceUpdate && belowMin) {
       if (!_bootStillActive()) return;
-      final msg = cfg.updateMessageAr.isNotEmpty
-          ? cfg.updateMessageAr
-          : 'يجب تحديث التطبيق للمتابعة.\n\nنسختك: $installed\nأحدث نسخة: $latest';
+      final msg = isAndroidPhone
+          ? 'يجب تحديث التطبيق من Google Play للمتابعة.\n\nنسختك: $installed\nأحدث نسخة: $latest'
+          : (cfg.updateMessageAr.isNotEmpty
+              ? cfg.updateMessageAr
+              : 'يجب تحديث التطبيق للمتابعة.\n\nنسختك: $installed\nأحدث نسخة: $latest');
       await showDialog<void>(
         context: context,
         barrierDismissible: false,
@@ -276,9 +283,11 @@ class _SplashScreenState extends State<SplashScreen>
     // أندرويد أو ويندوز: اطلب التحديث فقط إذا نسخة الجهاز أقل، وبرابط منصته.
     if (offersNativeUpdate && updateAvailable) {
       if (!_bootStillActive()) return;
-      final body = cfg.updateMessageAr.isNotEmpty
-          ? '${cfg.updateMessageAr}\n\nنسختك: $installed\nأحدث نسخة: $latest'
-          : 'يتوفر تحديث جديد للتطبيق.\n\nنسختك: $installed\nأحدث نسخة: $latest';
+      final body = isAndroidPhone
+          ? 'يتوفر تحديث جديد. اضغط «تحديث الآن» لفتح Google Play وتحديث التطبيق من المتجر.\n\nنسختك: $installed\nأحدث نسخة: $latest'
+          : (cfg.updateMessageAr.isNotEmpty
+              ? '${cfg.updateMessageAr}\n\nنسختك: $installed\nأحدث نسخة: $latest'
+              : 'يتوفر تحديث جديد للتطبيق.\n\nنسختك: $installed\nأحدث نسخة: $latest');
       await showDialog<void>(
         context: context,
         barrierDismissible: true,
