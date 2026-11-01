@@ -8,6 +8,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../home/home_kpi_repository.dart';
 import '../home/specs/home_dashboard_spec.dart';
 import '../verticals/oil_change/home/oil_change_home_dashboard.dart';
 import '../verticals/restaurant/screens/restaurant_pos_home.dart';
@@ -370,6 +371,9 @@ class _ChartsRow extends StatefulWidget {
 class _ChartsRowState extends State<_ChartsRow> {
   int _days = 7;
   late Future<Map<String, dynamic>> _seriesFuture;
+
+  /// آخر بيانات ظهرت — تبقى معروضة أثناء تحديث الخلفية فلا يومض مؤشر التحميل.
+  Map<String, dynamic>? _lastSeries;
   final List<String> _panelOrder = ['sales', 'expenseIncome', 'recent'];
   final Map<String, Size> _panelSize = {
     'sales': const Size(560, 360),
@@ -392,6 +396,22 @@ class _ChartsRowState extends State<_ChartsRow> {
       days: _days,
     );
     _restoreDockLayout();
+    HomeKpiRepository.instance.refreshSignal.addListener(_reloadSeries);
+  }
+
+  void _reloadSeries() {
+    if (!mounted) return;
+    setState(() {
+      _seriesFuture = DatabaseHelper().getDashboardSalesExpenseSeries(
+        days: _days,
+      );
+    });
+  }
+
+  @override
+  void dispose() {
+    HomeKpiRepository.instance.refreshSignal.removeListener(_reloadSeries);
+    super.dispose();
   }
 
   Future<void> _restoreDockLayout() async {
@@ -468,7 +488,13 @@ class _ChartsRowState extends State<_ChartsRow> {
       key: ValueKey<int>(_days),
       future: _seriesFuture,
       builder: (context, snap) {
-        if (snap.connectionState != ConnectionState.done) {
+        if (snap.connectionState == ConnectionState.done && snap.hasData) {
+          _lastSeries = snap.data;
+        }
+        final series = snap.connectionState == ConnectionState.done
+            ? snap.data
+            : _lastSeries;
+        if (snap.connectionState != ConnectionState.done && series == null) {
           return Container(
             height: 220,
             decoration: _cardDecor(context, widget.isDark),
@@ -476,7 +502,7 @@ class _ChartsRowState extends State<_ChartsRow> {
             child: const CircularProgressIndicator(),
           );
         }
-        if (snap.hasError || !snap.hasData) {
+        if (snap.hasError || series == null) {
           return Container(
             decoration: _cardDecor(context, widget.isDark),
             padding: const EdgeInsets.all(16),
@@ -486,7 +512,7 @@ class _ChartsRowState extends State<_ChartsRow> {
             ),
           );
         }
-        final data = _DashboardChartData.fromMap(snap.data!);
+        final data = _DashboardChartData.fromMap(series);
         final periodLabel = _days == 7 ? 'آخر أسبوع' : 'آخر شهر';
         return LayoutBuilder(
           builder: (context, c) {

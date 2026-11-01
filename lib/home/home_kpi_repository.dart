@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../services/database_helper.dart';
@@ -43,6 +44,14 @@ class HomeKpiRepository {
   DateTime? _cachedAt;
 
   HomeKpiSnapshot get cached => _cache;
+
+  /// يزداد عندما تتغير بيانات الرئيسية، فتعيد اللوحات قراءتها دون مؤشر تحميل.
+  final ValueNotifier<int> refreshSignal = ValueNotifier<int>(0);
+
+  void requestRefresh() {
+    invalidate();
+    refreshSignal.value++;
+  }
 
   Future<HomeKpiSnapshot> load({
     int? openShiftId,

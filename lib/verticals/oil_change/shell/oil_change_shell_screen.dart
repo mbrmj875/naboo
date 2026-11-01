@@ -26,6 +26,7 @@ import '../../../guides/widgets/app_assistant_app_bar_button.dart';
 import '../../../home/employee_access_policy.dart';
 import '../../../home/employee_shift_gate.dart';
 import '../../../home/home_dashboard_resolver.dart';
+import '../../../home/home_kpi_repository.dart';
 import '../../../home/session_lock_dialog.dart';
 import '../../../home/specs/home_dashboard_spec.dart';
 import '../../../models/recent_activity_entry.dart';
@@ -111,6 +112,7 @@ class _OilChangeShellScreenState extends State<OilChangeShellScreen>
   GlobalBarcodeRouteBridge? _barcodeBridge;
   List<String> _savedNavOrder = const [];
   bool _barcodeAttached = false;
+  String _lastRouteId = AppContentRoutes.home;
 
   EmployeeAccessPolicy _policy() {
     final features = context.read<BusinessFeaturesProvider>().data;
@@ -199,6 +201,12 @@ class _OilChangeShellScreenState extends State<OilChangeShellScreen>
 
   void _onRouteChanged(String routeId) {
     if (!mounted) return;
+    // الرجوع إلى الرئيسية يعرض ما حُفظ في الصفحات فوراً، دون انتظار دورة التحديث.
+    if (routeId == AppContentRoutes.home &&
+        _lastRouteId != AppContentRoutes.home) {
+      HomeKpiRepository.instance.requestRefresh();
+    }
+    _lastRouteId = routeId;
     unawaited(context.read<GuideController>().onRouteChanged(routeId));
     final auth = context.read<AuthProvider>();
     final uid = auth.userId;

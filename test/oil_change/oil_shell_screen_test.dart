@@ -164,6 +164,28 @@ void main() {
     await _finish(tester);
   });
 
+  testWidgets('الرجوع إلى الرئيسية يحدّث الرقم فوراً', (tester) async {
+    final builder = ServiceOrderBuilder(OilChangeTestHarness.instance);
+    await builder.createSuspended(plate: 'SUSP-1');
+    HomeKpiRepository.instance.invalidate();
+
+    await _pumpShell(tester, size: _phone);
+    expect(find.textContaining('السيارات الحالية: 1'), findsOneWidget);
+
+    await _tapDashboard(tester, 'صندوق اليوم');
+    await builder.createSuspended(plate: 'SUSP-2');
+    await tester.tap(
+      find.descendant(
+        of: find.byType(ShellBottomNavBar),
+        matching: find.text('الرئيسية'),
+      ),
+    );
+    await _wait(tester);
+
+    expect(find.textContaining('السيارات الحالية: 2'), findsOneWidget);
+    await _finish(tester);
+  });
+
   testWidgets('الأزرار الأساسية لا تُخفى حتى لو أُخفي قسمها', (tester) async {
     await _pumpShell(tester);
     final element = tester.element(find.byType(OilChangeShellScreen));

@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../home/home_kpi_repository.dart';
 import '../models/recent_activity_entry.dart';
 import '../services/database_helper.dart';
 
@@ -60,10 +61,23 @@ class _DashboardRecentActivityState extends State<DashboardRecentActivity> {
   @override
   void initState() {
     super.initState();
+    HomeKpiRepository.instance.refreshSignal.addListener(_onRefreshRequested);
     // يؤجّل القراءة + SQLite إلى ما بعد أول إطار رسم لتقليل التجمّد مع [HomeScreen].
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) unawaited(_restoreLayoutAndLoad());
     });
+  }
+
+  void _onRefreshRequested() {
+    if (mounted) unawaited(_load());
+  }
+
+  @override
+  void dispose() {
+    HomeKpiRepository.instance.refreshSignal.removeListener(
+      _onRefreshRequested,
+    );
+    super.dispose();
   }
 
   Future<void> _restoreLayoutAndLoad() async {

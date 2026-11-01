@@ -40,6 +40,7 @@ class _OilChangeHomeDashboardState extends State<OilChangeHomeDashboard> {
   @override
   void initState() {
     super.initState();
+    HomeKpiRepository.instance.refreshSignal.addListener(_onRefreshRequested);
     CloudSyncService.instance.remoteImportGeneration.addListener(
       _onRemoteImport,
     );
@@ -49,8 +50,15 @@ class _OilChangeHomeDashboardState extends State<OilChangeHomeDashboard> {
     });
   }
 
+  void _onRefreshRequested() {
+    if (mounted) unawaited(_loadKpi(force: true));
+  }
+
   @override
   void dispose() {
+    HomeKpiRepository.instance.refreshSignal.removeListener(
+      _onRefreshRequested,
+    );
     CloudSyncService.instance.remoteImportGeneration.removeListener(
       _onRemoteImport,
     );
