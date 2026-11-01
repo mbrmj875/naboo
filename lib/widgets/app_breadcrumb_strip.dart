@@ -400,17 +400,22 @@ class _CollapsibleDropdownChip extends StatelessWidget {
 
   void _showDropdown(BuildContext context) {
     final RenderBox renderBox = context.findRenderObject() as RenderBox;
-    final size = renderBox.size;
-    final offset = renderBox.localToGlobal(Offset.zero);
+    final RenderBox overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox;
+    final anchor = Rect.fromPoints(
+      renderBox.localToGlobal(
+        Offset(0, renderBox.size.height + 4),
+        ancestor: overlay,
+      ),
+      renderBox.localToGlobal(
+        renderBox.size.bottomRight(const Offset(0, 4)),
+        ancestor: overlay,
+      ),
+    );
 
     showMenu<BreadcrumbSegment>(
       context: context,
-      position: RelativeRect.fromLTRB(
-        offset.dx,
-        offset.dy + size.height + 4,
-        offset.dx + size.width,
-        0,
-      ),
+      position: RelativeRect.fromRect(anchor, Offset.zero & overlay.size),
       items: segments.map((segment) {
         final isBlocked = isContentRouteBlocked(segment.id, features.data);
         return PopupMenuItem<BreadcrumbSegment>(

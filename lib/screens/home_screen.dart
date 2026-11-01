@@ -155,7 +155,7 @@ class _HomeScreenState extends State<HomeScreen>
   final RouteObserver<PageRoute<dynamic>> _homeRouteObserverLarge =
       RouteObserver<PageRoute<dynamic>>();
 
-  late final NavigatorObserver _innerNavObserverLarge =
+  late final _HomeInnerNavObserver _innerNavObserverLarge =
       _HomeInnerNavObserver(this);
 
   /// DeviceVariant السابق — لاكتشاف تبديل الهاتف ↔ تابلت عند الدوران.
@@ -653,6 +653,8 @@ class _HomeScreenState extends State<HomeScreen>
   /// الأقدم في البداية · الأحدث (MRU) في النهاية.
   final List<String> _keptModuleOrder = [];
   final Map<String, GlobalKey<NavigatorState>> _keptModuleNavKeys = {};
+  /// مراقب ثابت لكل وحدة — يحفظ مكدسها عبر إعادة البناء.
+  final Map<String, _KeptModuleNavObserver> _keptModuleObservers = {};
   String? _keptModuleId;
 
   /// يطابق مسار المحتوى الحالي مع فهرس وحدة في [_orderedModules] لتمييز الشريط السفلي/الجانبي.
@@ -2153,6 +2155,7 @@ class _HomeScreenState extends State<HomeScreen>
     _keptModuleBuilders.remove(routeId);
     _keptModuleTitles.remove(routeId);
     _keptModuleNavKeys.remove(routeId);
+    _keptModuleObservers.remove(routeId);
   }
 
   /// يُبقي على الأكثر [_kKeptModuleLruCap] وحدات حيّة؛ يزيل الأقدم غير المحمي.
@@ -2199,26 +2202,40 @@ class _HomeScreenState extends State<HomeScreen>
     });
     _persistResumeContext(routeId);
     unawaited(context.read<GuideController>().onRouteChanged(routeId));
+    // وحدة أُعيد إظهارها قد تكون على شاشة فرعية — الشريط يتبع ما يظهر فعلاً.
+    // الوحدة الجديدة لا ملاح لها بعد، ويزامنها مراقبها عند أول بناء.
+    if (_keptModuleObservers.containsKey(routeId)) {
+      _syncBreadcrumbToVisibleStack();
+    }
+  }
+
+  /// مكدس ما يراه المستخدم الآن: الوحدة المحفوظة الظاهرة، وإلا المحتوى الداخلي.
+  ContentRouteStackObserver get _visibleStackObserver =>
+      _keptModuleObservers[_keptModuleId] ?? _innerNavObserverLarge;
+
+  void _syncBreadcrumbToVisibleStack() {
+    final route = _visibleStackObserver.topNamedRoute;
+    if (route == null) return;
+    _syncBreadcrumbForRoute(route);
+    _syncActiveModuleIndexFromRoute(route.settings.name);
   }
 
   void _closeKeptModuleToHome() {
-    if (_keptModuleId == null) return;
-    setState(() {
-      _keptModuleId = null;
-      _currentRouteId = AppContentRoutes.home;
-      _currentTitle = 'الرئيسية';
-      _currentParentOverride = null;
-      _activeBottomIndex = 0;
-      _bottomSubMenu.value = null;
-    });
-    final nav = _contentNavigator;
-    if (nav != null) {
-      popUntilContentRoute(nav, AppContentRoutes.home);
+    if (_keptModuleId != null) {
+      setState(() {
+        _keptModuleId = null;
+        _activeBottomIndex = 0;
+        _bottomSubMenu.value = null;
+      });
     }
-    _persistResumeContext(AppContentRoutes.home);
-    unawaited(
-      context.read<GuideController>().onRouteChanged(AppContentRoutes.home),
-    );
+    unawaited(_popInnerToHomeAndSync());
+  }
+
+  /// الرجوع عبر [ContentRouteStackObserver.popBackTo] يحترم مسودات الشاشات؛
+  /// إن منعت شاشة الخروج يبقى الشريط مطابقاً لها.
+  Future<void> _popInnerToHomeAndSync() async {
+    await _innerNavObserverLarge.popBackTo(AppContentRoutes.home);
+    if (mounted) _syncBreadcrumbToVisibleStack();
   }
 
   Widget _buildKeptModulesLayer() {
@@ -2262,7 +2279,12 @@ class _HomeScreenState extends State<HomeScreen>
       },
       child: Navigator(
         key: navKey,
-        observers: [_KeptModuleNavObserver(this)],
+        observers: [
+          _keptModuleObservers.putIfAbsent(
+            routeId,
+            () => _KeptModuleNavObserver(this),
+          ),
+        ],
         onGenerateInitialRoutes: (_, _) {
           return [
             FastContentPageRoute<void>(
@@ -2342,28 +2364,73 @@ class _HomeScreenState extends State<HomeScreen>
     }
   }
 
-  void _onBreadcrumbSegmentTap(BreadcrumbSegment segment) {
-    if (segment.id == AppContentRoutes.home) {
+  /// وجهة خطوة ليست مفتوحة — من القائمة المفلترة فقط، فلا يتجاوز الشريط الصلاحيات.
+  WidgetBuilder? _breadcrumbDestination(String routeId) {
+    for (final m in _navForUi) {
+      if (m.routeId == routeId) return m.destination;
+      for (final s in m.subItems ?? const <SubMenuItem>[]) {
+        if (s.routeId == routeId) return s.destination;
+      }
+    }
+    return null;
+  }
+
+  Future<void> _onBreadcrumbSegmentTap(BreadcrumbSegment segment) async {
+    final id = segment.id;
+    if (id == AppContentRoutes.home) {
       _closeKeptModuleToHome();
       return;
     }
-    if (_isPrimaryModuleRoute(segment.id) &&
-        _keptModuleBuilders.containsKey(segment.id)) {
-      setState(() {
-        _keptModuleId = segment.id;
-        _currentRouteId = segment.id;
-        _currentTitle = _keptModuleTitles[segment.id] ?? segment.title;
-        _currentParentOverride = null;
-      });
-      _syncActiveModuleIndexFromRoute(segment.id);
+
+    final visible = _visibleStackObserver;
+    if (visible.containsRouteId(id)) {
+      await visible.popBackTo(id);
+      if (mounted) _syncBreadcrumbToVisibleStack();
       return;
     }
-    if (_keptModuleId != null) {
-      setState(() => _keptModuleId = null);
+
+    final keptObserver = _keptModuleObservers[id];
+    if (keptObserver != null) {
+      setState(() {
+        _keptModuleId = id;
+        _bottomSubMenu.value = null;
+      });
+      await keptObserver.popBackTo(id);
+      if (mounted) _syncBreadcrumbToVisibleStack();
+      return;
     }
-    final nav = _contentNavigator;
-    if (nav == null) return;
-    nav.popUntil((route) => route.settings.name == segment.id || route.isFirst);
+
+    if (_innerNavObserverLarge.containsRouteId(id)) {
+      setState(() => _keptModuleId = null);
+      await _innerNavObserverLarge.popBackTo(id);
+      if (mounted) _syncBreadcrumbToVisibleStack();
+      return;
+    }
+
+    // الخطوة أب منطقي لم يُفتح في المكدس: تُفتح، وإلا نصعد لأقرب أب متاح.
+    final destination = _breadcrumbDestination(id);
+    if (destination != null) {
+      if (_keptModuleId == null) {
+        final atHome = await _innerNavObserverLarge.popBackTo(
+          AppContentRoutes.home,
+        );
+        if (!mounted) return;
+        if (!atHome) {
+          _syncBreadcrumbToVisibleStack();
+          return;
+        }
+      }
+      _pushInContentTagged(id, segment.title, destination);
+      return;
+    }
+
+    final parent = getParentRouteId(id) ?? AppContentRoutes.home;
+    await _onBreadcrumbSegmentTap(
+      BreadcrumbSegment(
+        id: parent,
+        title: breadcrumbFallbackTitleForRouteId(parent),
+      ),
+    );
   }
 
   Widget _buildBreadcrumbStrip() {
@@ -4773,18 +4840,20 @@ class _HomeMobileSearchPageState extends State<_HomeMobileSearchPage> {
 // ── Data models ────────────────────────────────────────────────────────────────
 // كانت هنا فئة QuickAction سابقاً — حُذفت بكاملها في 2026-05.
 
-class _HomeInnerNavObserver extends NavigatorObserver {
+class _HomeInnerNavObserver extends ContentRouteStackObserver {
   _HomeInnerNavObserver(this._state);
   final _HomeScreenState _state;
 
   @override
   void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    super.didPush(route, previousRoute);
     _state._syncBreadcrumbForRoute(route);
     _state._syncActiveModuleIndexFromRoute(route.settings.name);
   }
 
   @override
   void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    super.didPop(route, previousRoute);
     if (previousRoute != null) {
       _state._syncBreadcrumbForRoute(previousRoute);
       _state._syncActiveModuleIndexFromRoute(previousRoute.settings.name);
@@ -4793,6 +4862,7 @@ class _HomeInnerNavObserver extends NavigatorObserver {
 
   @override
   void didRemove(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    super.didRemove(route, previousRoute);
     if (previousRoute != null) {
       _state._syncBreadcrumbForRoute(previousRoute);
       _state._syncActiveModuleIndexFromRoute(previousRoute.settings.name);
@@ -4801,6 +4871,7 @@ class _HomeInnerNavObserver extends NavigatorObserver {
 
   @override
   void didReplace({Route<dynamic>? newRoute, Route<dynamic>? oldRoute}) {
+    super.didReplace(newRoute: newRoute, oldRoute: oldRoute);
     if (newRoute != null) {
       _state._syncBreadcrumbForRoute(newRoute);
       _state._syncActiveModuleIndexFromRoute(newRoute.settings.name);
@@ -4808,18 +4879,29 @@ class _HomeInnerNavObserver extends NavigatorObserver {
   }
 }
 
-class _KeptModuleNavObserver extends NavigatorObserver {
+class _KeptModuleNavObserver extends ContentRouteStackObserver {
   _KeptModuleNavObserver(this._state);
   final _HomeScreenState _state;
 
   @override
   void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    super.didPush(route, previousRoute);
     _state._syncBreadcrumbForRoute(route);
     _state._syncActiveModuleIndexFromRoute(route.settings.name);
   }
 
   @override
   void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    super.didPop(route, previousRoute);
+    if (previousRoute != null) {
+      _state._syncBreadcrumbForRoute(previousRoute);
+      _state._syncActiveModuleIndexFromRoute(previousRoute.settings.name);
+    }
+  }
+
+  @override
+  void didRemove(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    super.didRemove(route, previousRoute);
     if (previousRoute != null) {
       _state._syncBreadcrumbForRoute(previousRoute);
       _state._syncActiveModuleIndexFromRoute(previousRoute.settings.name);
@@ -4828,6 +4910,7 @@ class _KeptModuleNavObserver extends NavigatorObserver {
 
   @override
   void didReplace({Route<dynamic>? newRoute, Route<dynamic>? oldRoute}) {
+    super.didReplace(newRoute: newRoute, oldRoute: oldRoute);
     if (newRoute != null) {
       _state._syncBreadcrumbForRoute(newRoute);
       _state._syncActiveModuleIndexFromRoute(newRoute.settings.name);

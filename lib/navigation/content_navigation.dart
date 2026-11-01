@@ -572,6 +572,65 @@ String? peekTopContentRouteId(NavigatorState nav) {
   return top;
 }
 
+/// يتتبّع مكدس [Navigator] فعلياً — [Navigator.popUntil] لا يستطيع فحص ما تحت
+/// الأعلى دون إزالته، وشريط فتات الخبز يحتاج معرفة هل الخطوة مفتوحة أصلاً.
+class ContentRouteStackObserver extends NavigatorObserver {
+  final List<Route<dynamic>> _stack = <Route<dynamic>>[];
+
+  bool containsRouteId(String routeId) =>
+      _stack.any((route) => route.settings.name == routeId);
+
+  /// أعلى مسار له اسم — المسارات بلا اسم (حوارات، صفحات قديمة) لا تملك خطوة.
+  Route<dynamic>? get topNamedRoute {
+    for (final route in _stack.reversed) {
+      if (route.settings.name is String) return route;
+    }
+    return null;
+  }
+
+  /// يرجع خطوة خطوة حتى [routeId]، ويتوقف إن منعت شاشة الخروج (مسودة غير محفوظة).
+  Future<bool> popBackTo(String routeId) async {
+    final nav = navigator;
+    if (nav == null || !containsRouteId(routeId)) return false;
+    while (_stack.isNotEmpty) {
+      final top = _stack.last;
+      if (top.settings.name == routeId) return true;
+      await nav.maybePop();
+      if (_stack.isEmpty || identical(_stack.last, top)) return false;
+    }
+    return false;
+  }
+
+  @override
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    _stack.add(route);
+  }
+
+  @override
+  void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    _stack.remove(route);
+  }
+
+  @override
+  void didRemove(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    _stack.remove(route);
+  }
+
+  @override
+  void didReplace({Route<dynamic>? newRoute, Route<dynamic>? oldRoute}) {
+    final index = oldRoute == null ? -1 : _stack.indexOf(oldRoute);
+    if (newRoute == null) {
+      if (index >= 0) _stack.removeAt(index);
+      return;
+    }
+    if (index >= 0) {
+      _stack[index] = newRoute;
+    } else {
+      _stack.add(newRoute);
+    }
+  }
+}
+
 // ── عناوين فتات الخبز الاحتياطية (عند غياب [BreadcrumbMeta]) ─────────────────
 
 /// عنوان واجهة لفتات الخبز: يفضّل [BreadcrumbMeta] ثم التسمية حسب [RouteSettings.name].
@@ -603,6 +662,8 @@ String breadcrumbFallbackTitleForRouteId(String id) {
       return 'طلبات Market';
     case AppContentRoutes.customers:
       return 'العملاء';
+    case AppContentRoutes.customersAdd:
+      return 'إضافة عميل جديد';
     case AppContentRoutes.customerContacts:
       return 'جهات اتصال العملاء';
     case AppContentRoutes.loyaltySettings:
@@ -673,6 +734,10 @@ String breadcrumbFallbackTitleForRouteId(String id) {
       return 'إعدادات الطباعة';
     case AppContentRoutes.settingsDashboardLayout:
       return 'تخصيص الشاشة الرئيسية';
+    case AppContentRoutes.settingsRestore:
+      return 'استيراد مواد وأسعار';
+    case AppContentRoutes.settingsSyncQueueHealth:
+      return 'حالة المزامنة والعمليات العالقة';
     case AppContentRoutes.settingsSubscriptionAccount:
       return 'خطة الاشتراك والحساب';
     case AppContentRoutes.settingsBusinessFeatures:
@@ -771,6 +836,7 @@ IconData breadcrumbIconForRouteId(String id) {
     case AppContentRoutes.onlineOrders:
       return Icons.shopping_bag_outlined;
     case AppContentRoutes.customers:
+    case AppContentRoutes.customersAdd:
     case AppContentRoutes.customerContacts:
       return Icons.people_alt_rounded;
     case AppContentRoutes.loyaltySettings:
@@ -821,6 +887,10 @@ IconData breadcrumbIconForRouteId(String id) {
       return Icons.print_rounded;
     case AppContentRoutes.settingsDashboardLayout:
       return Icons.dashboard_customize_rounded;
+    case AppContentRoutes.settingsRestore:
+      return Icons.restore_rounded;
+    case AppContentRoutes.settingsSyncQueueHealth:
+      return Icons.sync_problem_rounded;
     case AppContentRoutes.settingsSubscriptionAccount:
       return Icons.star_rounded;
     case AppContentRoutes.settingsBusinessFeatures:
@@ -933,6 +1003,8 @@ const Map<String, String> routeParentMapping = {
   AppContentRoutes.settingsNotifications: AppContentRoutes.settings,
   AppContentRoutes.settingsPrintingInline: AppContentRoutes.settings,
   AppContentRoutes.settingsDashboardLayout: AppContentRoutes.settings,
+  AppContentRoutes.settingsRestore: AppContentRoutes.settings,
+  AppContentRoutes.settingsSyncQueueHealth: AppContentRoutes.settings,
   AppContentRoutes.settingsSubscriptionAccount: AppContentRoutes.settings,
   AppContentRoutes.settingsBusinessFeatures: AppContentRoutes.settings,
   AppContentRoutes.subscriptionPlans: AppContentRoutes.settingsSubscriptionAccount,
@@ -944,15 +1016,15 @@ const Map<String, String> routeParentMapping = {
   AppContentRoutes.serviceOrdersHub: AppContentRoutes.servicesHub,
   AppContentRoutes.serviceOrdersCreate: AppContentRoutes.serviceOrdersHub,
 
-  // Oil Change
+  // Oil Change — المسار المفتوح فعلياً هو oilServicesLog؛ oilChangeHub اسم بديل له.
   AppContentRoutes.oilChangeHub: AppContentRoutes.home,
-  AppContentRoutes.oilServicesLog: AppContentRoutes.oilChangeHub,
-  AppContentRoutes.oilChangeServices: AppContentRoutes.oilChangeHub,
+  AppContentRoutes.oilServicesLog: AppContentRoutes.home,
+  AppContentRoutes.oilChangeServices: AppContentRoutes.oilServicesLog,
   AppContentRoutes.oilChangeServiceCreate: AppContentRoutes.oilChangeServices,
-  AppContentRoutes.oilChangeCreate: AppContentRoutes.oilChangeHub,
+  AppContentRoutes.oilChangeCreate: AppContentRoutes.oilServicesLog,
   AppContentRoutes.oilWhatsappConnect: AppContentRoutes.oilServicesLog,
-  AppContentRoutes.oilInvoices: AppContentRoutes.oilChangeHub,
-  AppContentRoutes.oilDirectSale: AppContentRoutes.oilChangeHub,
+  AppContentRoutes.oilInvoices: AppContentRoutes.oilServicesLog,
+  AppContentRoutes.oilDirectSale: AppContentRoutes.oilServicesLog,
   AppContentRoutes.carWashCreate: AppContentRoutes.home,
   AppContentRoutes.carWashServices: AppContentRoutes.carWashCreate,
   AppContentRoutes.pharmacyInvoices: AppContentRoutes.invoices,
@@ -975,13 +1047,16 @@ String? getParentRouteId(String routeId) {
     return AppContentRoutes.pharmacyInvoices;
   }
   if (routeId.startsWith(AppContentRoutes.oilChangeEditPrefix)) {
-    return AppContentRoutes.oilChangeHub;
+    return AppContentRoutes.oilServicesLog;
   }
   if (routeId.startsWith(AppContentRoutes.oilChangeServiceEditPrefix)) {
     return AppContentRoutes.oilChangeServices;
   }
   if (routeId.startsWith(AppContentRoutes.reportsPrefix)) {
     return AppContentRoutes.home;
+  }
+  if (routeId.startsWith('${AppContentRoutes.debts}_customer_')) {
+    return AppContentRoutes.debts;
   }
   if (routeId.startsWith('app_process_return_')) {
     return AppContentRoutes.invoices;
@@ -1001,10 +1076,12 @@ List<BreadcrumbSegment> buildBreadcrumbTrail(
   final trail = <BreadcrumbSegment>[];
   trail.add(BreadcrumbSegment(id: currentRouteId, title: currentTitle));
 
+  final seen = <String>{currentRouteId};
   String? nextId = parentOverride ?? getParentRouteId(currentRouteId);
+  if (nextId == currentRouteId) nextId = getParentRouteId(currentRouteId);
 
   // صعود شجري متين يتفادى التكرار والدوائر
-  while (nextId != null && nextId != AppContentRoutes.home) {
+  while (nextId != null && nextId != AppContentRoutes.home && seen.add(nextId)) {
     trail.add(BreadcrumbSegment(
       id: nextId,
       title: breadcrumbFallbackTitleForRouteId(nextId),
