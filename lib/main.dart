@@ -74,6 +74,7 @@ import 'screens/login_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/owner/owner_dashboard_screen.dart';
 import 'screens/shift/open_shift_screen.dart';
+import 'home/home_root_selection.dart';
 import 'theme/app_theme_resolver.dart';
 import 'widgets/invoice_deep_link_listener.dart';
 import 'widgets/cloud_session_resume_bridge.dart';
@@ -81,6 +82,7 @@ import 'screens/dev/stress_tools_screen.dart';
 import 'verticals/_contract/vertical_registry.dart';
 import 'verticals/general_retail/manifest.dart';
 import 'verticals/oil_change/manifest.dart';
+import 'verticals/oil_change/home/oil_change_standalone_home_screen.dart';
 import 'verticals/oil_change/services/oil_change_whatsapp_outbox_auto_retry.dart';
 import 'verticals/pharmacy/manifest.dart';
 import 'verticals/restaurant/manifest.dart';
@@ -810,7 +812,20 @@ class _HomeRouteResolver extends StatelessWidget {
     if (auth.isOwner) {
       return const OwnerDashboardScreen();
     }
-    return const HomeScreen();
+    final features = context.watch<BusinessFeaturesProvider>();
+    switch (resolveEmployeeHomeRoot(
+      featuresLoaded: features.isLoaded,
+      features: features.data,
+    )) {
+      case EmployeeHomeRoot.loading:
+        return const Scaffold(
+          body: Center(child: CircularProgressIndicator()),
+        );
+      case EmployeeHomeRoot.oilChangeStandalone:
+        return const OilChangeStandaloneHomeScreen();
+      case EmployeeHomeRoot.shared:
+        return const HomeScreen();
+    }
   }
 }
 

@@ -4,9 +4,13 @@ import '../services/database_helper.dart';
 
 /// حالة الوردية المفتوحة (جلسة عمل الصندوق).
 class ShiftProvider extends ChangeNotifier {
-  ShiftProvider() {
+  ShiftProvider() : _active = null {
     refresh();
   }
+
+  @visibleForTesting
+  ShiftProvider.testing({Map<String, dynamic>? activeShift})
+    : _active = activeShift;
 
   final DatabaseHelper _db = DatabaseHelper();
   Map<String, dynamic>? _active;

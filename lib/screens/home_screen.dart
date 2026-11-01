@@ -23,11 +23,9 @@ import '../guides/guide_controller.dart';
 import '../guides/widgets/app_assistant_app_bar_button.dart';
 import '../services/tenant_context_service.dart';
 import '../services/business_setup_settings.dart';
-import '../services/app_settings_repository.dart';
 import '../services/license_service.dart';
 import '../services/license/restricted_mode_policy.dart';
 import '../providers/notification_provider.dart';
-import '../providers/invoice_provider.dart';
 import '../providers/permissions_provider.dart';
 import '../providers/shift_provider.dart';
 import '../providers/product_provider.dart';
@@ -51,7 +49,6 @@ import '../utils/app_logger.dart';
 import 'invoices/invoices_screen.dart';
 import 'installments/installment_settings_screen.dart';
 import 'installments/installments_screen.dart';
-import 'debts/customer_debt_detail_screen.dart';
 import 'debts/debts_screen.dart';
 import 'debts/debt_settings_screen.dart';
 import 'inventory/inventory_hub_screen.dart';
@@ -100,6 +97,7 @@ import '../widgets/app_breadcrumb_strip.dart';
 import '../widgets/sidebar_nav_highlight.dart';
 import '../navigation/app_route_observer.dart';
 import '../navigation/app_root_navigator_key.dart';
+import '../navigation/home_barcode_route_coordinator.dart';
 import '../services/marketplace/marketplace_merchant_bootstrap_service.dart';
 import '../services/marketplace/marketplace_pending_orders_notifier.dart';
 import '../navigation/content_navigation.dart';
@@ -115,7 +113,6 @@ import '../services/cloud_sync_service.dart';
 import '../services/permission_service.dart';
 import '../providers/global_barcode_route_bridge.dart';
 import '../utils/invoice_barcode.dart';
-import '../utils/invoice_deep_link.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -2067,123 +2064,21 @@ class _HomeScreenState extends State<HomeScreen>
     }
   }
 
-  /// يفتح إضافة منتج **فوق** الشاشة الحالية دون [popUntilContentRoute] —
-  /// وإلا عند التبديل إلى `app_add_product` يُفرَّغ المكدس فيُزال «بيع جديد» ومعه مسودة السلة.
-  Future<void> _pushAddProductOverlay(String raw) async {
-    await WidgetsBinding.instance.endOfFrame;
-    if (!mounted) return;
-    final route = contentMaterialRoute(
-      routeId: AppContentRoutes.addProduct,
-      breadcrumbTitle: 'إضافة منتج',
-      builder: (_) =>
-          AddProductScreen(initialBarcode: raw, autoFillFromScan: true),
-    );
-    final nav = _contentNavigator;
-    if (nav != null) {
-      await nav.push<void>(route);
-    } else {
-      await Navigator.of(context).push<void>(route);
-    }
-  }
-
   /// قارئ HID (عالمي)، كاميرا البحث، وغيرهما: بيع سريع أو إضافة منتج.
   Future<void> _applyScannedCode(String scanned) async {
-    final raw = scanned.trim();
-    if (raw.isEmpty || !mounted) return;
-
-    final features = context.read<BusinessFeaturesProvider>();
-
-    final invFromReceipt = tryParseInvoiceIdFromBarcode(raw);
-    if (invFromReceipt != null) {
-      if (!features.data.enablePos) return;
-      await _offerReturnForScannedInvoiceId(invFromReceipt);
-      return;
-    }
-    final debtCustomerId = tryParseCustomerDebtIdFromScannedText(raw);
-    if (debtCustomerId != null) {
-      if (!features.data.enableDebts) return;
-      if (!mounted) return;
-      final nav = Navigator.of(context);
-      await nav.push<void>(
-        FastContentPageRoute(
-          builder: (_) => CustomerDebtDetailScreen.fromCustomerId(
-            registeredCustomerId: debtCustomerId,
-          ),
-        ),
-      );
-      return;
-    }
-    final deepInvUri = Uri.tryParse(raw);
-    if (deepInvUri != null && deepInvUri.hasScheme) {
-      final linkInvId = InvoiceDeepLink.parseInvoiceId(deepInvUri);
-      if (linkInvId != null && linkInvId > 0) {
-        if (!features.data.enablePos) return;
+    await HomeBarcodeRouteCoordinator.handle(
+      context,
+      scanned,
+      oilCreateBuilder: _oilRouteBuilder(AppContentRoutes.oilChangeCreate),
+      openRoute: (route) async {
         if (!mounted) return;
-        if (!context.read<AuthProvider>().isLoggedIn) return;
-        await showInvoiceDetailSheet(context, _dbHelper, linkInvId);
-        return;
-      }
-    }
-
-    final productProvider = context.read<ProductProvider>();
-    final product = await productProvider.findProductByBarcode(raw);
-    if (!mounted) return;
-    // بعد async: يجب جدولة إطار وإلا قد يتأخر الرسم حتى حدث إدخال (ماوس/لوحة).
-    SchedulerBinding.instance.scheduleFrame();
-    if (product != null) {
-      if (features.data.enableOilChange && !features.data.enablePos) {
-        final oilCreateBuilder =
-            _oilRouteBuilder(AppContentRoutes.oilChangeCreate);
-        if (oilCreateBuilder != null) {
-          final route = contentMaterialRoute(
-            routeId: AppContentRoutes.oilChangeCreate,
-            breadcrumbTitle: 'بطاقة غيار زيت جديدة',
-            builder: oilCreateBuilder,
-          );
-          final nav = _contentNavigator;
-          if (nav != null) {
-            unawaited(nav.push<void>(route));
-          } else {
-            unawaited(Navigator.of(context).push<void>(route));
-          }
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (!mounted) return;
-              unawaited(_barcodeBridge?.dispatch(raw));
-            });
-          });
+        final nav = _contentNavigator;
+        if (nav != null) {
+          await nav.push<void>(route);
+        } else {
+          await Navigator.of(context).push<void>(route);
         }
-        return;
-      }
-      final draft = context.read<SaleDraftProvider>();
-      draft.enqueueProductLine({'barcode': raw});
-      if (!draft.isSaleScreenOpen) {
-        _pushInContentTagged(
-          AppContentRoutes.addInvoice,
-          'بيع جديد',
-          (_) => const AddInvoiceScreen(),
-        );
-      }
-      return;
-    }
-
-    final draft = context.read<SaleDraftProvider>();
-    if (draft.isSaleScreenOpen) {
-      await _pushAddProductOverlay(raw);
-      if (!mounted) return;
-      SchedulerBinding.instance.scheduleFrame();
-      final afterAdd = await productProvider.findProductByBarcode(raw);
-      if (!mounted) return;
-      if (afterAdd != null) {
-        draft.enqueueProductLine({'barcode': raw});
-      }
-      return;
-    }
-
-    _pushInContentTagged(
-      AppContentRoutes.addProduct,
-      'إضافة منتج',
-      (_) => AddProductScreen(initialBarcode: raw, autoFillFromScan: true),
+      },
     );
   }
 

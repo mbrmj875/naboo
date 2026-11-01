@@ -13,7 +13,9 @@ import '../verticals/_contract/vertical_registry.dart';
 
 /// مصدر الحقيقة الواحد لبوابة ميزات المتجر (Feature Gate — المرحلة 1).
 class BusinessFeaturesProvider extends ChangeNotifier {
-  BusinessFeaturesProvider() {
+  BusinessFeaturesProvider()
+    : _data = BusinessSetupSettingsData.defaults(),
+      _loaded = false {
     BusinessFeaturesRevision.instance.addListener(_onExternalRevision);
     CloudSyncService.instance.remoteImportGeneration.addListener(
       _onCloudImport,
@@ -21,10 +23,15 @@ class BusinessFeaturesProvider extends ChangeNotifier {
     unawaited(refresh());
   }
 
-  BusinessSetupSettingsData _data = BusinessSetupSettingsData.defaults();
+  @visibleForTesting
+  BusinessFeaturesProvider.testing(BusinessSetupSettingsData data)
+    : _data = data,
+      _loaded = true;
+
+  BusinessSetupSettingsData _data;
   BusinessSetupSettingsData get data => _data;
 
-  bool _loaded = false;
+  bool _loaded;
   bool get isLoaded => _loaded;
 
   void _onExternalRevision() {
@@ -46,7 +53,9 @@ class BusinessFeaturesProvider extends ChangeNotifier {
 
   Future<void> refresh() async {
     try {
-      _data = await BusinessSetupSettingsData.load(AppSettingsRepository.instance);
+      _data = await BusinessSetupSettingsData.load(
+        AppSettingsRepository.instance,
+      );
       VerticalRegistry.instance.syncActiveVertical(_data);
     } catch (e, st) {
       AppLogger.error(
@@ -98,7 +107,8 @@ class BusinessFeaturesProvider extends ChangeNotifier {
     if (!guarded.enableInstallments) {
       pos = pos.copyWith(allowInstallment: false);
     } else if (guarded.enableInstallments && !previous.enableInstallments) {
-      final canInstallment = guarded.enablePos &&
+      final canInstallment =
+          guarded.enablePos &&
           guarded.businessVertical != BusinessVertical.oilChange;
       if (canInstallment) {
         pos = pos.copyWith(allowInstallment: true);
