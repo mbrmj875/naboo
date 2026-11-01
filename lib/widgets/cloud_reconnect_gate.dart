@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../navigation/app_root_navigator_key.dart';
 import '../providers/auth_provider.dart';
 import '../services/auth/cloud_session_link_state.dart';
 import '../theme/design_tokens.dart';
@@ -8,7 +9,7 @@ import 'glass/glass_background.dart';
 import 'glass/glass_surface.dart';
 
 /// حاجز إعادة ربط السحابة — نفس لغة شاشات الدخول (كحلي + ذهب + زجاج).
-/// لا يمسح البيانات ولا ينقل إلى شاشة تسجيل الدخول.
+/// لا يمسح البيانات. ينقل إلى شاشة الدخول فقط حيث لا توجد استعادة Google صامتة.
 class CloudReconnectGate extends StatefulWidget {
   const CloudReconnectGate({super.key});
 
@@ -96,6 +97,18 @@ class _CloudReconnectGateState extends State<CloudReconnectGate> {
                               )
                             : const Text('إعادة الربط'),
                       ),
+                      if (!AuthProvider.hasSilentGoogleRestore) ...[
+                        const SizedBox(height: 10),
+                        OutlinedButton(
+                          onPressed: link.reconnecting
+                              ? null
+                              : _signInAgainWithEmail,
+                          child: const Text(
+                            'الدخول بالبريد ورمز PIN',
+                            style: TextStyle(color: Color(0xFFE2E8F0)),
+                          ),
+                        ),
+                      ],
                       const SizedBox(height: 10),
                       TextButton(
                         onPressed: link.reconnecting
@@ -115,6 +128,11 @@ class _CloudReconnectGateState extends State<CloudReconnectGate> {
         ),
       ),
     );
+  }
+
+  void _signInAgainWithEmail() {
+    CloudSessionLinkController.instance.continueLocally();
+    appRootNavigatorKey.currentState?.pushNamed('/login');
   }
 
   Future<void> _reconnect(BuildContext context) async {

@@ -61,6 +61,7 @@ import 'navigation/app_root_navigator_key.dart';
 import 'services/marketplace/marketplace_session_service.dart';
 import 'services/tenant_context_service.dart';
 import 'services/supabase_config.dart';
+import 'services/auth/auth_session_diagnostics.dart';
 import 'services/auth/secure_session_storage.dart';
 import 'screens/auth/device_access_revoked_screen.dart';
 import 'screens/auth/device_kicked_out_screen.dart';
@@ -354,6 +355,7 @@ Future<void> _startDeferredStorageInit() async {
 }
 
 Future<void> _startPostUiServices() async {
+  AuthSessionDiagnostics.instance.start();
   try {
     await SystemNotificationService.instance.initialize();
   } catch (e, st) {
