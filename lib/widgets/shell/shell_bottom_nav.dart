@@ -81,8 +81,8 @@ class ShellBottomNavBar extends StatelessWidget {
 
     if (isPhoneDock) {
       final dockBg = isDark
-          ? cs.surfaceContainerHigh.withValues(alpha: 0.58)
-          : cs.surface.withValues(alpha: 0.72);
+          ? cs.surfaceContainerHigh.withValues(alpha: 0.96)
+          : cs.surface.withValues(alpha: 0.96);
       final borderColor = isDark
           ? Colors.white.withValues(alpha: 0.12)
           : Colors.black.withValues(alpha: 0.07);
@@ -107,26 +107,25 @@ class ShellBottomNavBar extends StatelessWidget {
         ),
         child: ClipRRect(
           borderRadius: BorderRadius.circular(26),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-            child: Container(
-              height: height,
-              decoration: BoxDecoration(
-                color: dockBg,
-                borderRadius: BorderRadius.circular(26),
-                border: Border.all(color: borderColor, width: 1.1),
-              ),
-              foregroundDecoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(26),
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [topHighlight, topHighlight.withValues(alpha: 0)],
-                  stops: const [0, 0.18],
-                ),
-              ),
-              child: reorderableBar(effectiveBarColor: dockBg),
+          // بلا ضبابية: على Realme RMX5313 أخّرت 163 إطاراً من 293 أثناء التمرير
+          // مقابل 44 بدونها، فاللون أكثف ليبقى الشريط مقروءاً فوق المحتوى.
+          child: Container(
+            height: height,
+            decoration: BoxDecoration(
+              color: dockBg,
+              borderRadius: BorderRadius.circular(26),
+              border: Border.all(color: borderColor, width: 1.1),
             ),
+            foregroundDecoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(26),
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [topHighlight, topHighlight.withValues(alpha: 0)],
+                stops: const [0, 0.18],
+              ),
+            ),
+            child: reorderableBar(effectiveBarColor: dockBg),
           ),
         ),
       );
@@ -195,32 +194,32 @@ class ShellSubMenuPopover extends StatelessWidget {
           maxWidth: 420,
           maxHeight: MediaQuery.sizeOf(context).height * 0.52,
         ),
-      child: DecoratedBox(
-        decoration: BoxDecoration(
+        child: DecoratedBox(
+          decoration: BoxDecoration(
             color: cardBg,
             borderRadius: BorderRadius.circular(22),
-          border: Border.all(
+            border: Border.all(
               color: module.iconColor.withValues(alpha: isDark ? 0.45 : 0.35),
               width: 1.2,
-          ),
-          boxShadow: [
-            BoxShadow(
-                color: Colors.black.withValues(alpha: isDark ? 0.45 : 0.18),
-              blurRadius: 28,
-                offset: const Offset(0, 12),
             ),
-            BoxShadow(
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: isDark ? 0.45 : 0.18),
+                blurRadius: 28,
+                offset: const Offset(0, 12),
+              ),
+              BoxShadow(
                 color: module.iconColor.withValues(alpha: 0.14),
                 blurRadius: 18,
                 offset: const Offset(0, 4),
-            ),
-          ],
-        ),
+              ),
+            ],
+          ),
           child: ClipRRect(
             borderRadius: BorderRadius.circular(22),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
                 const SizedBox(height: 6),
                 Semantics(
                   label: 'اسحب للأسفل للإغلاق',
@@ -230,7 +229,7 @@ class ShellSubMenuPopover extends StatelessWidget {
                       child: Container(
                         width: 44,
                         height: 5,
-                decoration: BoxDecoration(
+                        decoration: BoxDecoration(
                           color: muted.withValues(alpha: 0.55),
                           borderRadius: BorderRadius.circular(99),
                         ),
@@ -300,69 +299,69 @@ class ShellSubMenuPopover extends StatelessWidget {
                   height: 1,
                   thickness: 1,
                   color: cs.outline.withValues(alpha: 0.25),
-              ),
-              Flexible(
-                child: ListView.separated(
-                  shrinkWrap: true,
+                ),
+                Flexible(
+                  child: ListView.separated(
+                    shrinkWrap: true,
                     padding: const EdgeInsets.fromLTRB(8, 6, 8, 10),
-                  itemCount: subs.length,
+                    itemCount: subs.length,
                     separatorBuilder: (_, __) => const SizedBox(height: 2),
-                  itemBuilder: (context, index) {
-                    final sub = subs[index];
-                    return Material(
+                    itemBuilder: (context, index) {
+                      final sub = subs[index];
+                      return Material(
                         color: Colors.transparent,
-                      child: InkWell(
-                        onTap: () => onSubTap(sub),
+                        child: InkWell(
+                          onTap: () => onSubTap(sub),
                           borderRadius: BorderRadius.circular(14),
-                        child: Padding(
-                          padding: const EdgeInsetsDirectional.fromSTEB(
+                          child: Padding(
+                            padding: const EdgeInsetsDirectional.fromSTEB(
                               10,
                               11,
                               10,
                               11,
-                          ),
-                          child: Row(
-                            children: [
-                              Container(
+                            ),
+                            child: Row(
+                              children: [
+                                Container(
                                   width: 34,
                                   height: 34,
-                                decoration: BoxDecoration(
-                                  color: module.iconColor.withValues(
+                                  decoration: BoxDecoration(
+                                    color: module.iconColor.withValues(
                                       alpha: 0.12,
-                                  ),
+                                    ),
                                     borderRadius: BorderRadius.circular(11),
-                                ),
-                                child: Icon(
+                                  ),
+                                  child: Icon(
                                     sub.icon ?? Icons.arrow_outward_rounded,
-                                  size: 17,
+                                    size: 17,
                                     color: module.iconColor,
+                                  ),
                                 ),
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Text(
-                                  sub.title,
-                                  style: TextStyle(
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Text(
+                                    sub.title,
+                                    style: TextStyle(
                                       color: cs.onSurface,
                                       fontSize: 14,
-                                    fontWeight: FontWeight.w600,
+                                      fontWeight: FontWeight.w600,
+                                    ),
                                   ),
                                 ),
-                              ),
-                              Icon(
+                                Icon(
                                   Icons.chevron_left_rounded,
                                   size: 20,
                                   color: muted,
-                              ),
-                            ],
+                                ),
+                              ],
+                            ),
                           ),
                         ),
-                      ),
-                    );
-                  },
+                      );
+                    },
+                  ),
                 ),
-              ),
-            ],
+              ],
             ),
           ),
         ),
@@ -479,7 +478,9 @@ class _ShellBottomNavTileState extends State<_ShellBottomNavTile> {
                 curve: Curves.easeOutCubic,
                 decoration: BoxDecoration(
                   color: selected
-                      ? cs.onSurface.withValues(alpha: useGlassDock ? 0.05 : 0.04)
+                      ? cs.onSurface.withValues(
+                          alpha: useGlassDock ? 0.05 : 0.04,
+                        )
                       : Colors.transparent,
                   border: Border(
                     bottom: BorderSide(
@@ -514,8 +515,9 @@ class _ShellBottomNavTileState extends State<_ShellBottomNavTile> {
                             style: TextStyle(
                               fontSize: tiny ? 9.5 : 10,
                               height: 1.1,
-                              fontWeight:
-                                  selected ? FontWeight.w700 : FontWeight.w500,
+                              fontWeight: selected
+                                  ? FontWeight.w700
+                                  : FontWeight.w500,
                               color: fg,
                             ),
                           ),
@@ -558,8 +560,7 @@ class ShellHideWhenKeyboardOpen extends StatefulWidget {
       ShellHideWhenKeyboardOpenState();
 }
 
-class ShellHideWhenKeyboardOpenState
-    extends State<ShellHideWhenKeyboardOpen>
+class ShellHideWhenKeyboardOpenState extends State<ShellHideWhenKeyboardOpen>
     with WidgetsBindingObserver {
   bool _keyboardOpen = false;
   double _lastImeLogical = 0;
@@ -663,8 +664,7 @@ class ShellSubMenuHost extends StatefulWidget {
   final VoidCallback onDismiss;
 
   @override
-  State<ShellSubMenuHost> createState() =>
-      ShellSubMenuHostState();
+  State<ShellSubMenuHost> createState() => ShellSubMenuHostState();
 }
 
 class ShellSubMenuHostState extends State<ShellSubMenuHost>
@@ -794,18 +794,12 @@ class ShellSubMenuHostState extends State<ShellSubMenuHost>
   Widget build(BuildContext context) {
     final module = _visibleModule;
     if (module == null) {
-      return const IgnorePointer(
-        ignoring: true,
-        child: SizedBox.expand(),
-      );
+      return const IgnorePointer(ignoring: true, child: SizedBox.expand());
     }
 
     final variant = ScreenLayout.of(context).layoutVariant;
     if (variant.index >= DeviceVariant.tabletLG.index) {
-      return const IgnorePointer(
-        ignoring: true,
-        child: SizedBox.expand(),
-      );
+      return const IgnorePointer(ignoring: true, child: SizedBox.expand());
     }
 
     final metrics = _bottomNavLayoutMetricsOf(context);
@@ -853,8 +847,10 @@ class ShellSubMenuHostState extends State<ShellSubMenuHost>
                       ? const Duration(milliseconds: 180)
                       : Duration.zero,
                   curve: Curves.easeOutCubic,
-                  offset:
-                      Offset(0, _dragDy / MediaQuery.sizeOf(context).height),
+                  offset: Offset(
+                    0,
+                    _dragDy / MediaQuery.sizeOf(context).height,
+                  ),
                   child: GestureDetector(
                     onVerticalDragUpdate: _onDragUpdate,
                     onVerticalDragEnd: _onDragEnd,

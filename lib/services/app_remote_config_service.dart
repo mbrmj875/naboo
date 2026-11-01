@@ -23,6 +23,7 @@ class AppRemoteConfigData {
     required this.announcementTitleAr,
     required this.announcementBodyAr,
     required this.announcementUrl,
+    this.oilShellDisabled = false,
   });
 
   final bool maintenanceMode;
@@ -41,6 +42,9 @@ class AppRemoteConfigData {
   final String announcementTitleAr;
   final String announcementBodyAr;
   final String announcementUrl;
+
+  /// مفتاح رجوع: يعيد موظف الزيت إلى الرئيسية المشتركة عند أول تشغيل متصل.
+  final bool oilShellDisabled;
 
   static const AppRemoteConfigData fallback = AppRemoteConfigData(
     maintenanceMode: false,
@@ -95,6 +99,7 @@ class AppRemoteConfigData {
       announcementTitleAr: s('announcement_title_ar'),
       announcementBodyAr: s('announcement_body_ar'),
       announcementUrl: s('announcement_url'),
+      oilShellDisabled: b('oil_shell_disabled'),
     );
   }
 }

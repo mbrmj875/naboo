@@ -75,6 +75,7 @@ import 'screens/home_screen.dart';
 import 'screens/owner/owner_dashboard_screen.dart';
 import 'screens/shift/open_shift_screen.dart';
 import 'home/home_root_selection.dart';
+import 'services/app_remote_config_service.dart';
 import 'theme/app_theme_resolver.dart';
 import 'widgets/invoice_deep_link_listener.dart';
 import 'widgets/cloud_session_resume_bridge.dart';
@@ -820,6 +821,9 @@ class _HomeRouteResolver extends StatelessWidget {
     switch (resolveEmployeeHomeRoot(
       featuresLoaded: features.isLoaded,
       features: features.data,
+      standaloneEnabled:
+          kOilChangeStandaloneHomeEnabled &&
+          !AppRemoteConfigService.instance.current.oilShellDisabled,
     )) {
       case EmployeeHomeRoot.loading:
         return const Scaffold(

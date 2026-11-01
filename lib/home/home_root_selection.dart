@@ -2,8 +2,7 @@ import '../services/business_setup_settings.dart';
 
 enum EmployeeHomeRoot { loading, oilChangeStandalone, shared }
 
-/// الصفحة المستقلة مغلقة مؤقتاً: تنقصها الوردية وقفل الجلسة والصلاحيات وأزرارها
-/// لا تفتح صفحاتها. تُفتح بعد اكتمال الغلاف الزيتي.
+/// الغلاف الزيتي مغلق حتى يُجرَّب على جهاز حقيقي بحساب موظف.
 const bool kOilChangeStandaloneHomeEnabled = false;
 
 /// قرار جذر الرئيسية للموظف فقط؛ يبقى قرار المالك خارج هذا العقد.

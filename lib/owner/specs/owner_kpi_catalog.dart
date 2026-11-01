@@ -78,6 +78,7 @@ abstract final class OwnerKpiCatalog {
       titleKey: OwnerDashboardL10nKeys.debtsSummaryTitle,
       sectionId: OwnerSectionIds.debts,
       verticalAllowList: _oilVerticals,
+      requiredFeatures: [OwnerFeatureRequirement.debts],
       requiredPermissionKey: PermissionKeys.ownerKpiDebts,
     ),
     OwnerKpiCatalogEntry(

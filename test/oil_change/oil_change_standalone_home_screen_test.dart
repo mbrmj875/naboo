@@ -9,6 +9,7 @@ import 'package:naboo/providers/dashboard_layout_provider.dart';
 import 'package:naboo/providers/global_barcode_route_bridge.dart';
 import 'package:naboo/providers/shift_provider.dart';
 import 'package:naboo/screens/home_screen.dart';
+import 'package:naboo/services/app_remote_config_service.dart';
 import 'package:naboo/services/business_setup_settings.dart';
 import 'package:naboo/services/tenant_context_service.dart';
 import 'package:naboo/verticals/_contract/vertical_registry.dart';
@@ -55,6 +56,26 @@ void main() {
           standaloneEnabled: true,
         ),
         EmployeeHomeRoot.oilChangeStandalone,
+      );
+    });
+
+    test('مفتاح الرجوع يقرأ من الإعدادات عن بُعد وافتراضه الغلاف يعمل', () {
+      expect(AppRemoteConfigData.fallback.oilShellDisabled, isFalse);
+      expect(
+        AppRemoteConfigData.fromJson(const {
+          'oil_shell_disabled': true,
+        }).oilShellDisabled,
+        isTrue,
+      );
+      expect(
+        resolveEmployeeHomeRoot(
+          featuresLoaded: true,
+          features: BusinessSetupSettingsData.createForVertical(
+            BusinessVertical.oilChange,
+          ),
+          standaloneEnabled: false,
+        ),
+        EmployeeHomeRoot.shared,
       );
     });
 
