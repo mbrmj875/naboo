@@ -8,8 +8,10 @@ import '../../navigation/app_root_navigator_key.dart';
 import '../../providers/notification_provider.dart';
 import '../../providers/shift_provider.dart';
 import '../../screens/shift/close_shift_dialog.dart';
+import '../../services/auth/auth_network_guard.dart';
 import '../../services/cloud_sync_service.dart';
 import '../../services/marketplace/marketplace_merchant_bootstrap_service.dart';
+import '../../services/sync_queue_service.dart';
 import '../../theme/app_corner_style.dart';
 import '../../theme/design_tokens.dart';
 import '../../theme/sale_brand.dart';
@@ -74,7 +76,42 @@ class ShellShiftButton extends StatelessWidget {
 
 /// زر التزامن السحابي — شارة حمراء عند فشل آخر محاولة، والضغط يزامن فوراً.
 class ShellSyncButton extends StatelessWidget {
-  const ShellSyncButton({super.key});
+  const ShellSyncButton({
+    super.key,
+    this.syncMarketplace = true,
+    this.hasNetwork = AuthNetworkGuard.hasNetworkLink,
+    this.pendingChanges = _countPendingChanges,
+  });
+
+  /// متجر Market جزء من المزامنة لمن يستخدمه فقط؛ الورشة بلا طلبات Market.
+  final bool syncMarketplace;
+  final Future<bool> Function() hasNetwork;
+  final Future<int> Function() pendingChanges;
+
+  static Future<int> _countPendingChanges() async {
+    final stats = await SyncQueueService.instance.getQueueStats();
+    return (stats['pending'] ?? 0) + (stats['failed'] ?? 0);
+  }
+
+  /// بلا اتصال لا شيء ضاع: العمل محفوظ محلياً ويُرفع وحده عند عودة الإنترنت.
+  Future<void> _showSavedLocally(ScaffoldMessengerState messenger) async {
+    var pending = 0;
+    try {
+      pending = await pendingChanges();
+    } catch (_) {}
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          pending > 0
+              ? 'لا يوجد اتصال الآن. عملك محفوظ على الجهاز، و$pending عملية '
+                    'ستُرفع تلقائياً عند عودة الإنترنت.'
+              : 'لا يوجد اتصال الآن. عملك محفوظ على الجهاز.',
+        ),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 4),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -96,6 +133,10 @@ class ShellSyncButton extends StatelessWidget {
               onPressed: () async {
                 final messenger = ScaffoldMessenger.of(context);
                 final cs = Theme.of(context).colorScheme;
+                if (!await hasNetwork()) {
+                  await _showSavedLocally(messenger);
+                  return;
+                }
                 messenger.showSnackBar(
                   const SnackBar(
                     content: Text('جارٍ التزامن مع السحابة…'),
@@ -111,6 +152,10 @@ class ShellSyncButton extends StatelessWidget {
                 );
                 if (!context.mounted) return;
                 final err = CloudSyncService.instance.lastError.value;
+                if (isCloudSyncNetworkErrorMessage(err)) {
+                  await _showSavedLocally(messenger);
+                  return;
+                }
                 if (err != null && err.trim().isNotEmpty) {
                   final short = err.length > 120
                       ? '${err.substring(0, 120)}…'
@@ -139,6 +184,7 @@ class ShellSyncButton extends StatelessWidget {
                     duration: const Duration(seconds: 4),
                   ),
                 );
+                if (!syncMarketplace) return;
                 try {
                   await MarketplaceMerchantBootstrapService.instance
                       .ensureStoreAndSyncCatalog();

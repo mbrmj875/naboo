@@ -50,6 +50,7 @@ import '../../../screens/invoices/add_invoice_screen.dart';
 import '../../../screens/invoices/invoices_screen.dart';
 import '../../../screens/invoices/parked_sales_screen.dart';
 import '../../../screens/reports/reports_screen.dart';
+import '../../../services/auth/auth_network_guard.dart';
 import '../../../services/business_setup_settings.dart';
 import '../../../services/cloud_sync_service.dart';
 import '../../../services/database_helper.dart';
@@ -77,11 +78,19 @@ import 'oil_shell_nav.dart';
 ///
 /// لا يبني [HomeScreen]. الشريطان والمتحكم مشتركان، والقائمة والرئيسية للزيت.
 class OilChangeShellScreen extends StatefulWidget {
-  const OilChangeShellScreen({super.key, this.canOverride});
+  const OilChangeShellScreen({
+    super.key,
+    this.canOverride,
+    this.hasNetworkOverride,
+  });
 
   /// يفصل اختبارات التنقل عن جلسة موظف حقيقية.
   @visibleForTesting
   final bool Function(String key)? canOverride;
+
+  /// يحاكي انقطاع الاتصال في الاختبارات.
+  @visibleForTesting
+  final Future<bool> Function()? hasNetworkOverride;
 
   @override
   State<OilChangeShellScreen> createState() => _OilChangeShellScreenState();
@@ -817,7 +826,10 @@ class _OilChangeShellScreenState extends State<OilChangeShellScreen>
       ),
       actions: [
         const ShellShiftButton(),
-        const ShellSyncButton(),
+        ShellSyncButton(
+          syncMarketplace: false,
+          hasNetwork: widget.hasNetworkOverride ?? AuthNetworkGuard.hasNetworkLink,
+        ),
         AppAssistantAppBarButton(
           currentRouteId: AppContentRoutes.home,
           buttonStyle: shellBarActionStyle(context),

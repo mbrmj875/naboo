@@ -41,10 +41,15 @@ class _SilentNetwork extends HttpOverrides {
   HttpClient createHttpClient(SecurityContext? context) => _SilentHttpClient();
 }
 
+/// كل ما حاولت الشاشات طلبه من الشبكة أثناء الاختبار.
+final List<Uri> attemptedNetworkRequests = [];
+
 class _SilentHttpClient implements HttpClient {
   @override
-  Future<HttpClientRequest> openUrl(String method, Uri url) =>
-      Completer<HttpClientRequest>().future;
+  Future<HttpClientRequest> openUrl(String method, Uri url) {
+    attemptedNetworkRequests.add(url);
+    return Completer<HttpClientRequest>().future;
+  }
 
   @override
   dynamic noSuchMethod(Invocation invocation) => null;

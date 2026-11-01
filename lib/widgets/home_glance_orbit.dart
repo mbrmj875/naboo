@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -301,8 +300,7 @@ class _HomeGlanceOrbitState extends State<HomeGlanceOrbit> {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final titleColor =
-        isDark ? cs.onSurface : AppColors.primaryDark;
+    final titleColor = isDark ? cs.onSurface : AppColors.primaryDark;
     final mutedColor = isDark
         ? cs.onSurfaceVariant
         : AppColors.primaryDark.withValues(alpha: 0.75);
@@ -313,10 +311,9 @@ class _HomeGlanceOrbitState extends State<HomeGlanceOrbit> {
         // بدل breakpoints رقمية. صف واحد في tabletLG+ (≥840dp)، عمودان في
         // phoneSM/tabletSM (360-839dp)، وعمود واحد في phoneXS (<360dp).
         final variant = context.screenLayout.layoutVariant;
-        final useSingleRow =
-            variant.index >= DeviceVariant.tabletLG.index;
-        final useTwoColumnWrap = !useSingleRow &&
-            variant != DeviceVariant.phoneXS;
+        final useSingleRow = variant.index >= DeviceVariant.tabletLG.index;
+        final useTwoColumnWrap =
+            !useSingleRow && variant != DeviceVariant.phoneXS;
         final cellGap = w < 400 ? 8.0 : 10.0;
         // ارتفاع موحّد للبطاقات حتى لا تختلف بطاقة عن أخرى بسبب طول النص/الشارة.
         // (خصوصاً "الطلبات المنجزة" التي قد تضيف شارة + سطر نص أطول).
@@ -396,10 +393,7 @@ class _HomeGlanceOrbitState extends State<HomeGlanceOrbit> {
                 children: [
                   for (var i = 0; i < _order.length; i++) ...[
                     if (i > 0) SizedBox(height: cellGap),
-                    SizedBox(
-                      height: cardH,
-                      child: _cardFor(_order[i], cs),
-                    ),
+                    SizedBox(height: cardH, child: _cardFor(_order[i], cs)),
                   ],
                 ],
               ),
@@ -564,7 +558,9 @@ class _GlanceCard extends StatelessWidget {
             borderRadius: BorderRadius.circular(12),
             color: cs.surface,
             border: Border.all(
-              color: AppColors.accentGold.withValues(alpha: isDark ? 0.4 : 0.28),
+              color: AppColors.accentGold.withValues(
+                alpha: isDark ? 0.4 : 0.28,
+              ),
               width: 1,
             ),
             boxShadow: [
@@ -642,7 +638,8 @@ class _GlanceCard extends StatelessWidget {
                                           textAlign: TextAlign.right,
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
-                                          style: GoogleFonts.tajawal(
+                                          style: TextStyle(
+                                            fontFamily: 'Tajawal',
                                             fontWeight: FontWeight.w700,
                                             fontSize: 13,
                                             color: isDark
@@ -688,8 +685,9 @@ class _GlanceCard extends StatelessWidget {
                                 height: 1.25,
                                 color: isDark
                                     ? cs.onSurfaceVariant
-                                    : AppColors.primaryDark
-                                        .withValues(alpha: 0.75),
+                                    : AppColors.primaryDark.withValues(
+                                        alpha: 0.75,
+                                      ),
                               ),
                             ),
                           ),

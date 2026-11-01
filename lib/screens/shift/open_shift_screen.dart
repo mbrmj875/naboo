@@ -4,7 +4,6 @@ import 'dart:ui' show ImageFilter;
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 import '../../providers/auth_provider.dart';
@@ -1463,7 +1462,8 @@ class _ShiftStaffResumeLockDialogState
                             Text(
                               'متابعة الوردية',
                               textAlign: TextAlign.center,
-                              style: GoogleFonts.tajawal(
+                              style: TextStyle(
+                                fontFamily: 'Tajawal',
                                 fontSize: 22,
                                 fontWeight: FontWeight.w800,
                                 color: Colors.white,
@@ -1474,7 +1474,8 @@ class _ShiftStaffResumeLockDialogState
                               'توجد وردية مفتوحة باسم "${widget.staffName}". '
                               'أدخل رمز PIN للموظف للمتابعة.',
                               textAlign: TextAlign.center,
-                              style: GoogleFonts.tajawal(
+                              style: TextStyle(
+                                fontFamily: 'Tajawal',
                                 fontSize: 14,
                                 color: Colors.white.withValues(alpha: 0.72),
                                 height: 1.5,
@@ -1563,7 +1564,8 @@ class _ShiftStaffResumeLockDialogState
                                   ),
                                   child: Text(
                                     'متابعة',
-                                    style: GoogleFonts.tajawal(
+                                    style: TextStyle(
+                                      fontFamily: 'Tajawal',
                                       fontSize: 16,
                                       fontWeight: FontWeight.w800,
                                     ),
@@ -1583,7 +1585,8 @@ class _ShiftStaffResumeLockDialogState
                               ),
                               child: Text(
                                 'اختيار مستخدم آخر',
-                                style: GoogleFonts.tajawal(
+                                style: TextStyle(
+                                  fontFamily: 'Tajawal',
                                   fontWeight: FontWeight.w800,
                                   fontSize: 14,
                                 ),

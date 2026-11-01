@@ -4,7 +4,6 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, listEquals;
-import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -302,7 +301,8 @@ class _DashHeader extends StatelessWidget {
                         children: [
                           Text(
                             'مرحبًا بعودتك، $who',
-                            style: GoogleFonts.tajawal(
+                            style: TextStyle(
+                              fontFamily: 'Tajawal',
                               fontSize: titleSize,
                               fontWeight: FontWeight.w700,
                               color: text1,
@@ -318,7 +318,8 @@ class _DashHeader extends StatelessWidget {
                       const SizedBox(height: 8),
                       Text(
                         subtitle ?? 'إليك ملخص أعمال اليوم',
-                        style: GoogleFonts.tajawal(
+                        style: TextStyle(
+                          fontFamily: 'Tajawal',
                           fontSize: stackActions ? 13.0 : 14.0,
                           color: text2,
                           fontWeight: FontWeight.w400,
