@@ -4,6 +4,23 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../../providers/sale_draft_provider.dart';
+import '../../../providers/theme_provider.dart';
+import '../../../screens/inventory/inventory_products_screen.dart';
+import '../../../screens/settings/settings_screen.dart';
+import '../../../screens/users/users_screen.dart';
+import '../../../services/global_search/global_search_controller.dart';
+import '../../../services/global_search/global_search_matcher.dart';
+import '../../../services/global_search/global_search_tool_hit.dart';
+import '../../../services/global_search/global_search_tools_index.dart';
+import '../../../theme/app_corner_style.dart';
+import '../../../theme/sale_brand.dart';
+import '../../../widgets/adaptive/home_user_menu.dart';
+import '../../../widgets/barcode_input_launcher.dart';
+import '../../../widgets/floating_calculator_overlay.dart';
+import '../../../widgets/shell/global_search_page.dart';
+import '../../../widgets/shell/shell_top_bar.dart';
+import '../../../widgets/user_info_dialog.dart';
 import '../../../guides/guide_controller.dart';
 import '../../../guides/widgets/app_assistant_app_bar_button.dart';
 import '../../../home/employee_access_policy.dart';
@@ -76,7 +93,19 @@ class _OilChangeShellScreenState extends State<OilChangeShellScreen>
     onRouteChanged: _onRouteChanged,
   );
   final ValueNotifier<ShellNavItem?> _subMenu = ValueNotifier(null);
-  final TextEditingController _searchController = TextEditingController();
+  late final GlobalSearchController _search = GlobalSearchController(
+    navEntries: _searchNavEntries,
+    extraTools: _searchExtras,
+    canSearchProducts: () {
+      final policy = _policy();
+      return policy.canOpen(AppContentRoutes.inventory) ||
+          policy.canOpen(AppContentRoutes.addInvoice);
+    },
+    canSearchCustomers: () => _policy().canOpen(AppContentRoutes.customers),
+    canSearchUsers: () => _policy().canOpen(AppContentRoutes.users),
+    onInvoiceBarcode: (raw) => unawaited(_handleScannedCode(raw)),
+    onError: (error) => _showNotice('تعذر إكمال البحث: $error'),
+  );
 
   GlobalBarcodeRouteBridge? _barcodeBridge;
   List<String> _savedNavOrder = const [];
@@ -155,7 +184,7 @@ class _OilChangeShellScreenState extends State<OilChangeShellScreen>
     } catch (_) {}
     _shell.dispose();
     _subMenu.dispose();
-    _searchController.dispose();
+    _search.dispose();
     super.dispose();
   }
 
@@ -241,7 +270,11 @@ class _OilChangeShellScreenState extends State<OilChangeShellScreen>
       }
       for (final sub in item.subItems ?? const <ShellNavSubItem>[]) {
         if (sub.routeId == routeId && !sub.disabled) {
-          _shell.open(routeId, sub.breadcrumbTitle ?? sub.title, sub.destination);
+          _shell.open(
+            routeId,
+            sub.breadcrumbTitle ?? sub.title,
+            sub.destination,
+          );
           return;
         }
       }
@@ -251,9 +284,9 @@ class _OilChangeShellScreenState extends State<OilChangeShellScreen>
   String _titleOf(ShellNavItem item) => item.breadcrumbTitle ?? item.title;
 
   void _showNotice(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   /// كل فتح من الرئيسية يمر هنا، فلا تتجاوز الأيقونات صلاحيات الموظف.
@@ -296,22 +329,134 @@ class _OilChangeShellScreenState extends State<OilChangeShellScreen>
     _shell.open(sub.routeId, sub.breadcrumbTitle ?? sub.title, sub.destination);
   }
 
-  void _openHub({String? query}) {
-    final normalized = query?.trim();
+  void _openHub() {
     _openGuarded(
       AppContentRoutes.oilServicesLog,
       'سجل غيارات الزيت',
-      (_) => OilChangeHubScreen(
-        initialSearchQuery: normalized == null || normalized.isEmpty
-            ? null
-            : normalized,
+      (_) => const OilChangeHubScreen(),
+    );
+  }
+
+  List<GlobalSearchNavEntry> _searchNavEntries() {
+    return [
+      for (final item in _shell.items)
+        if (!item.disabled && item.routeId != AppContentRoutes.home)
+          GlobalSearchNavEntry(
+            title: item.title,
+            routeId: item.routeId,
+            breadcrumbTitle: _titleOf(item),
+            destination: item.destination,
+            icon: item.icon,
+            iconColor: item.iconColor,
+            subItems: [
+              for (final sub in item.subItems ?? const <ShellNavSubItem>[])
+                if (!sub.disabled)
+                  GlobalSearchNavEntry(
+                    title: sub.title,
+                    routeId: sub.routeId,
+                    breadcrumbTitle: sub.breadcrumbTitle ?? sub.title,
+                    destination: sub.destination,
+                    icon: sub.icon ?? item.icon,
+                    iconColor: item.iconColor,
+                  ),
+            ],
+          ),
+    ];
+  }
+
+  /// البحث في السجل أول نتيجة دائماً: لوحة، هاتف، أو اسم عميل.
+  List<GlobalSearchToolHit> _searchExtras(String raw) {
+    final query = raw.trim();
+    if (query.isEmpty) return const [];
+    final score = GlobalSearchMatcher.scoreFields(query, const [
+      'سجل',
+      'غيار',
+      'زيت',
+      'لوحة',
+      'سجل غيارات',
+      'بطاقة غيار',
+    ]);
+    return [
+      GlobalSearchToolHit(
+        title: 'البحث في سجل غيارات الزيت',
+        routeId: AppContentRoutes.oilServicesLog,
+        breadcrumbTitle: 'سجل غيارات الزيت',
+        destination: (_) => OilChangeHubScreen(initialSearchQuery: query),
+        icon: Icons.history_rounded,
+        iconColor: SaleBrandColors.gold,
+        score: score > 0 ? score + 20 : 40,
+        subtitle: '«$query» — لوحة، هاتف، أو اسم عميل',
+      ),
+    ];
+  }
+
+  Future<void> _openSearch() {
+    return Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        fullscreenDialog: context.screenLayout.isHandsetForLayout,
+        builder: (_) => GlobalSearchPage(
+          search: _search,
+          searchConfig: _dashboardSpec().searchConfig,
+          onOpen: _openGuarded,
+          onProductPick: _onSearchProduct,
+          onScanBarcode: () => unawaited(_scanBarcode()),
+          customersDestination: (_) => const CustomersScreen(),
+          usersDestination: (_) => const UsersScreen(),
+        ),
       ),
     );
   }
 
-  void _submitSearch() {
-    FocusManager.instance.primaryFocus?.unfocus();
-    _openHub(query: _searchController.text);
+  HomeDashboardSpec _dashboardSpec() => HomeDashboardResolver.resolve(
+    context.read<BusinessFeaturesProvider>().data,
+  );
+
+  Future<void> _scanBarcode() async {
+    final code = await BarcodeInputLauncher.captureBarcode(
+      context,
+      title: 'مسح QR / Barcode',
+    );
+    if (!mounted || code == null || code.trim().isEmpty) return;
+    await _handleScannedCode(code.trim());
+  }
+
+  /// بلا نقطة بيع تكون شاشة البيع محظورة، فتفتح النتيجة قائمة المنتجات.
+  void _onSearchProduct(Map<String, dynamic> product) {
+    final features = context.read<BusinessFeaturesProvider>().data;
+    if (!features.enablePos) {
+      _openGuarded(
+        AppContentRoutes.inventoryProducts,
+        'قائمة المنتجات',
+        (_) => const InventoryProductsScreen(),
+      );
+      return;
+    }
+    final draft = context.read<SaleDraftProvider>();
+    final line = <String, dynamic>{
+      'name': product['name'],
+      'sell': product['sell'],
+      'minSell': product['minSell'],
+      'productId': product['id'],
+      'trackInventory': product['trackInventory'],
+      'allowNegativeStock': product['allowNegativeStock'],
+      'qty': product['qty'],
+      'stockBaseKind': product['stockBaseKind'],
+      'defaultVariantId': product['defaultVariantId'],
+      'defaultUnitFactor': product['defaultUnitFactor'],
+      'defaultUnitLabel': product['defaultUnitLabel'],
+      'isService': product['isService'],
+      'serviceKind': product['serviceKind'],
+    };
+    if (!draft.isSaleScreenOpen) {
+      _openGuarded(
+        AppContentRoutes.addInvoice,
+        'بيع جديد',
+        (_) => const AddInvoiceScreen(),
+      );
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) draft.enqueueProductLine(line);
+    });
   }
 
   /// معرّفات أزرار الـ manifest تختلف عن معرّفات مسارات المحتوى.
@@ -471,11 +616,7 @@ class _OilChangeShellScreenState extends State<OilChangeShellScreen>
     } else {
       final builder = _oilRouteBuilder(routeId);
       if (builder == null) return;
-      _shell.open(
-        routeId,
-        breadcrumbFallbackTitleForRouteId(routeId),
-        builder,
-      );
+      _shell.open(routeId, breadcrumbFallbackTitleForRouteId(routeId), builder);
     }
     await WidgetsBinding.instance.endOfFrame;
   }
@@ -516,7 +657,6 @@ class _OilChangeShellScreenState extends State<OilChangeShellScreen>
     return Builder(
       builder: (context) {
         final features = context.watch<BusinessFeaturesProvider>();
-        final layout = context.screenLayout;
         final isDark = Theme.of(context).brightness == Brightness.dark;
         final activeShift = context.watch<ShiftProvider>().activeShift;
         final shiftName =
@@ -528,34 +668,6 @@ class _OilChangeShellScreenState extends State<OilChangeShellScreen>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Padding(
-                  padding: EdgeInsetsDirectional.fromSTEB(
-                    layout.pageHorizontalGap,
-                    10,
-                    layout.pageHorizontalGap,
-                    0,
-                  ),
-                  child: Material(
-                    color: Colors.transparent,
-                    child: TextField(
-                      key: const ValueKey('oil-home-search-field'),
-                      controller: _searchController,
-                      textInputAction: TextInputAction.search,
-                      onSubmitted: (_) => _submitSearch(),
-                      decoration: OilChangeFormTheme.field(
-                        context: context,
-                        labelText: 'البحث في سجل الغيارات',
-                        hintText: 'رقم السيارة، الهاتف، أو اسم العميل',
-                        prefixIcon: const Icon(Icons.search_rounded),
-                        suffixIcon: IconButton(
-                          tooltip: 'بحث',
-                          onPressed: _submitSearch,
-                          icon: const Icon(Icons.arrow_forward_rounded),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
                 if (activeShift?['shiftStaffUserId'] != null)
                   ShiftPermissionBanner(
                     userName: shiftName.isEmpty ? 'موظف الوردية' : shiftName,
@@ -583,6 +695,80 @@ class _OilChangeShellScreenState extends State<OilChangeShellScreen>
           ),
         );
       },
+    );
+  }
+
+  void _showWelcome() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text(
+          'Welcome to NaBoo',
+          style: TextStyle(
+            fontSize: 18,
+            height: 1.2,
+            fontStyle: FontStyle.italic,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.5,
+          ),
+        ),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: context.appCorners.md),
+        margin: const EdgeInsets.all(16),
+      ),
+    );
+  }
+
+  PreferredSizeWidget _buildTopBar(AuthProvider auth) {
+    final cs = Theme.of(context).colorScheme;
+    final theme = context.read<ThemeProvider>();
+    final searchConfig = _dashboardSpec().searchConfig;
+    final short =
+        context.screenLayout.isHandsetForLayout &&
+        MediaQuery.sizeOf(context).width < 400;
+    return AppBar(
+      backgroundColor: cs.surfaceContainerHighest,
+      foregroundColor: cs.onSurface,
+      iconTheme: IconThemeData(color: cs.onSurface),
+      elevation: 0,
+      surfaceTintColor: Colors.transparent,
+      shadowColor: Colors.transparent,
+      titleSpacing: 0,
+      automaticallyImplyLeading: false,
+      title: ShellBrandSearchTitle(
+        hint: short
+            ? (searchConfig?.shortPlaceholder ?? 'بحث')
+            : (searchConfig?.placeholder ?? 'بحث'),
+        royal: searchConfig?.routeToOilHub == true,
+        onLogoTap: _showWelcome,
+        onSearchTap: () => unawaited(_openSearch()),
+      ),
+      actions: [
+        const ShellShiftButton(),
+        const ShellSyncButton(),
+        AppAssistantAppBarButton(
+          currentRouteId: AppContentRoutes.home,
+          buttonStyle: shellBarActionStyle(context),
+        ),
+        ShellNotificationsButton(
+          contentNavigator: () => _shell.visibleNavigator,
+        ),
+        HomeUserMenu(
+          userName: auth.displayName,
+          userRole: auth.role,
+          isDarkMode: Theme.of(context).brightness == Brightness.dark,
+          isEditMode: false,
+          onShowUserInfo: () => unawaited(UserInfoDialog.show(context, auth)),
+          onToggleTheme: theme.toggleDarkMode,
+          onOpenSettings: () => _shell.open(
+            AppContentRoutes.settings,
+            'الإعدادات',
+            (_) => const SettingsScreen(),
+          ),
+          onShowCalculator: () => showFloatingCalculator(context),
+          onToggleEditMode: () {},
+          onLogout: () => unawaited(confirmAndLockSession(context, auth)),
+        ),
+      ],
     );
   }
 
@@ -697,17 +883,7 @@ class _OilChangeShellScreenState extends State<OilChangeShellScreen>
             key: const ValueKey('oil-shell-scaffold'),
             // الشاشات الداخلية تعالج الكيبورد بنفسها — كما في الرئيسية العامة.
             resizeToAvoidBottomInset: false,
-            appBar: atHome
-                ? OilChangeFormTheme.appBar(
-                    context: context,
-                    title: 'الرئيسية — قطاع غيار الزيت',
-                    actions: const [
-                      AppAssistantAppBarButton(
-                        currentRouteId: AppContentRoutes.home,
-                      ),
-                    ],
-                  )
-                : null,
+            appBar: atHome ? _buildTopBar(auth) : null,
             body: _buildBody(isLarge: isLarge, auth: auth),
             bottomNavigationBar: _buildBottomBar(isLarge: isLarge),
           ),

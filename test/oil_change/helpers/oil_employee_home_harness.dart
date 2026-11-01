@@ -16,10 +16,14 @@ import 'package:naboo/providers/invoice_provider.dart';
 import 'package:naboo/providers/notification_provider.dart';
 import 'package:naboo/providers/parked_sales_provider.dart';
 import 'package:naboo/providers/permissions_provider.dart';
+import 'package:naboo/providers/loyalty_settings_provider.dart';
+import 'package:naboo/providers/print_settings_provider.dart';
 import 'package:naboo/providers/product_provider.dart';
+import 'package:naboo/providers/sale_pos_settings_provider.dart';
 import 'package:naboo/providers/sale_draft_provider.dart';
 import 'package:naboo/providers/shift_provider.dart';
 import 'package:naboo/providers/theme_provider.dart';
+import 'package:naboo/providers/ui_feedback_settings_provider.dart';
 import 'package:naboo/services/license_service.dart';
 import 'package:naboo/services/tenant_context.dart';
 import 'package:naboo/services/tenant_context_service.dart';
@@ -122,6 +126,10 @@ Future<void> pumpEmployeeHome(
               previous ?? PermissionsProvider(auth, shift),
         ),
         ChangeNotifierProvider(create: (_) => NotificationProvider()),
+        ChangeNotifierProvider(create: (_) => PrintSettingsProvider()),
+        ChangeNotifierProvider(create: (_) => LoyaltySettingsProvider()),
+        ChangeNotifierProvider(create: (_) => SalePosSettingsProvider()),
+        ChangeNotifierProvider(create: (_) => UiFeedbackSettingsProvider()),
         ChangeNotifierProvider(create: (_) => DashboardLayoutProvider()),
         ChangeNotifierProvider(create: (_) => GuideController()),
         Provider(create: (_) => GlobalBarcodeRouteBridge()),
