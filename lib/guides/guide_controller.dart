@@ -47,6 +47,9 @@ class GuideHostBridge {
 /// يتحكم بعرض الجولة والخطوة الحالية.
 class GuideController extends ChangeNotifier {
   GuideHostBridge? _host;
+
+  @visibleForTesting
+  GuideHostBridge? get hostForTesting => _host;
   GuideTour? _activeTour;
   int _stepIndex = 0;
   bool _busyNavigating = false;

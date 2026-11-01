@@ -69,6 +69,7 @@ import '../../../widgets/shell/shell_sidebar.dart';
 import '../../_contract/vertical_registry.dart';
 import '../screens/oil_change_hub_screen.dart';
 import '../widgets/oil_change_form_theme.dart';
+import 'oil_shell_guide_routes.dart';
 import 'oil_shell_nav.dart';
 
 /// غلاف قطاع الزيت: إطار ثابت للموظف، والصفحات تتبدل داخله.
@@ -634,7 +635,8 @@ class _OilChangeShellScreenState extends State<OilChangeShellScreen>
         currentRouteId: () => _shell.currentRouteId,
         ensureRoute: _ensureGuideRoute,
         runAction: (action) async {
-          if (!mounted) return;
+          if (!mounted || !_isScreenGuideAction(action)) return;
+          // تلتقطها الشاشات عبر currentStep.action
           guide.bump();
           await Future<void>.delayed(const Duration(milliseconds: 220));
         },
@@ -642,18 +644,45 @@ class _OilChangeShellScreenState extends State<OilChangeShellScreen>
     );
   }
 
-  Future<void> _ensureGuideRoute(String routeId) async {
+  static bool _isScreenGuideAction(String action) {
+    return action.startsWith('oil.') ||
+        action.startsWith('wa.') ||
+        action.startsWith('product.set_stock_type_');
+  }
+
+  /// يفتح مسار خطوة الجولة وينتظر ظهوره، ولا يتجاوز صلاحيات الموظف.
+  Future<void> _ensureGuideRoute(String requested) async {
+    final routeId = requested == AppContentRoutes.oilChangeHub
+        ? AppContentRoutes.oilServicesLog
+        : requested;
     if (!mounted || routeId == _shell.currentRouteId) return;
     if (routeId == AppContentRoutes.home) {
       _shell.closeToHome();
-    } else if (routeId == AppContentRoutes.oilChangeHub) {
-      _openHub();
-    } else {
-      final builder = _oilRouteBuilder(routeId);
-      if (builder == null) return;
-      _shell.open(routeId, breadcrumbFallbackTitleForRouteId(routeId), builder);
+      await _waitForRoute(routeId);
+      return;
     }
-    await WidgetsBinding.instance.endOfFrame;
+    final target = oilGuideRoutes[routeId];
+    if (target == null || !_policy().canOpen(routeId)) return;
+
+    final parent = target.parentRouteId;
+    final title = breadcrumbFallbackTitleForRouteId(routeId);
+    if (parent == null) {
+      _shell.open(routeId, title, target.builder);
+    } else {
+      await _ensureGuideRoute(parent);
+      // الوحدة المفتوحة للتو لا يوجد ملاحها قبل بناء الإطار.
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted || _shell.currentRouteId != parent) return;
+      _shell.pushOnVisible(routeId, title, target.builder);
+    }
+    await _waitForRoute(routeId);
+  }
+
+  Future<void> _waitForRoute(String routeId) async {
+    for (var i = 0; i < 24 && mounted; i++) {
+      if (_shell.currentRouteId == routeId) return;
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
   }
 
   bool get _isCardForm =>

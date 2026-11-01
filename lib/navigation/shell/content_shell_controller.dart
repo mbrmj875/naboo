@@ -138,6 +138,24 @@ class ContentShellController extends ChangeNotifier {
     });
   }
 
+  /// يدفع صفحة فوق ما يظهر الآن، فيعود الرجوع إلى الوحدة التي فُتحت منها.
+  void pushOnVisible(String routeId, String title, WidgetBuilder builder) {
+    if (_disposed) return;
+    if (_visibleObserver.containsRouteId(routeId)) {
+      unawaited(_visibleObserver.popBackTo(routeId));
+      return;
+    }
+    unawaited(
+      visibleNavigator?.push<void>(
+        contentMaterialRoute<void>(
+          routeId: routeId,
+          breadcrumbTitle: title,
+          builder: (context) => wrapRouteScope(builder(context)),
+        ),
+      ),
+    );
+  }
+
   Future<void> _popContentTo(String routeId) async {
     await contentObserver.popBackTo(routeId);
     _syncToVisibleStack();
