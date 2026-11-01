@@ -1,0 +1,41 @@
+# بناء ويندوز تجريبي لفرع إصلاح الجلسات فقط.
+# ينتج artifact مؤقتاً — لا Release ولا tag ولا رفع إلى الموقع.
+name: Session fix Windows test build
+
+on:
+  push:
+    branches:
+      - fix/session-diagnostics-phase0
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Enable Windows desktop
+        run: flutter config --enable-windows-desktop
+
+      - run: flutter pub get
+
+      # CMAKE_POLICY_VERSION_MINIMUM: firebase_cpp_sdk القديم يطلب CMake قديم على runners الحديثة
+      - name: Build Windows release
+        env:
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+        run: flutter build windows --release --dart-define=SUPABASE_URL="${{ secrets.SUPABASE_URL }}" --dart-define=SUPABASE_ANON_KEY="${{ secrets.SUPABASE_ANON_KEY }}"
+
+      - name: Upload test build
+        uses: actions/upload-artifact@v4
+        with:
+          name: naboo-windows-session-fix-test
+          path: build/windows/x64/runner/Release
+          if-no-files-found: error
+          retention-days: 3
