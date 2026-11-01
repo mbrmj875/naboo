@@ -8,6 +8,8 @@ import 'package:flutter/services.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../home/employee_access_policy.dart';
+import '../home/employee_shift_gate.dart';
 import '../home/home_dashboard_resolver.dart';
 import '../home/specs/home_dashboard_spec.dart';
 import '../providers/auth_provider.dart';
@@ -187,32 +189,17 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
 
-  String? _navPermissionKeyForMainRoute(String routeId) {
-    if (routeId.startsWith(AppContentRoutes.reportsPrefix)) {
-      return PermissionKeys.reportsAccess;
-    }
-    switch (routeId) {
-      case AppContentRoutes.invoices:
-        return PermissionKeys.salesPos;
-      case AppContentRoutes.customers:
-        return PermissionKeys.customersView;
-      case AppContentRoutes.loyaltySettings:
-        return PermissionKeys.loyaltyAccess;
-      case AppContentRoutes.installments:
-        return PermissionKeys.installmentsPlans;
-      case AppContentRoutes.debts:
-        return PermissionKeys.debtsPanel;
-      case AppContentRoutes.inventory:
-        return PermissionKeys.inventoryView;
-      case AppContentRoutes.cash:
-        return PermissionKeys.cashView;
-      case AppContentRoutes.users:
-        return null;
-      case AppContentRoutes.printing:
-        return PermissionKeys.printingAccess;
-      default:
-        return null;
-    }
+  /// الوضع المقيّد يسري على كل قائمة تنقل، لا على الشريط الجانبي وحده.
+  bool _blockedInRestrictedMode(String routeId) {
+    final restricted =
+        context.read<LicenseService>().state.status == LicenseStatus.restricted;
+    return restricted && !RestrictedModePolicy.isRouteAllowed(routeId);
+  }
+
+  void _showRestrictedModeNotice() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('غير متاح في الوضع المقيّد')),
+    );
   }
 
   /// إخفاء عناصر القائمة الفرعية المعطّلة بوابة الميزات (الطبقة أ).
@@ -552,7 +539,7 @@ class _HomeScreenState extends State<HomeScreen>
         }
       }
 
-      final key = _navPermissionKeyForMainRoute(filtered.routeId);
+      final key = EmployeeAccessPolicy.permissionKeyForRoute(filtered.routeId);
       if (key == null) {
         out.add(filtered);
         continue;
@@ -570,20 +557,7 @@ class _HomeScreenState extends State<HomeScreen>
   Future<void> _ensureActiveShiftGate() async {
     if (!mounted) return;
     if (context.read<AuthProvider>().isOwner) return;
-    final auth = context.read<AuthProvider>();
-    try {
-      final uid = auth.userId;
-      await context.read<ShiftProvider>().refresh(
-            forStaffUserId: uid != null && uid > 0 ? uid : null,
-          );
-    } catch (e, st) {
-      AppLogger.error('Home', 'فشل refresh الوردية', e, st);
-    }
-    if (!mounted) return;
-    if (context.read<ShiftProvider>().hasOpenShift) return;
-    final root = appRootNavigatorKey.currentState;
-    if (root == null || !mounted) return;
-    unawaited(root.pushReplacementNamed('/open-shift'));
+    await EmployeeShiftGate.enforce(context);
   }
 
   /// مزامنة فتات الخبز مع مكدس [Navigator] الداخلي.
@@ -4419,6 +4393,10 @@ class _HomeScreenState extends State<HomeScreen>
         return;
       }
       _bottomSubMenu.value = null;
+      if (_blockedInRestrictedMode(m.routeId)) {
+        _showRestrictedModeNotice();
+        return;
+      }
       if (_activeBottomIndex != i) {
         setState(() => _activeBottomIndex = i);
       }
@@ -4549,12 +4527,20 @@ class _HomeScreenState extends State<HomeScreen>
     void onSubTap(SubMenuItem sub) {
       HapticFeedback.selectionClick();
       _bottomSubMenu.value = null;
+      if (_blockedInRestrictedMode(sub.routeId)) {
+        _showRestrictedModeNotice();
+        return;
+      }
       _pushInContentTagged(sub.routeId, sub.breadcrumbTitle, sub.destination);
     }
 
     void onViewAll() {
       HapticFeedback.selectionClick();
       _bottomSubMenu.value = null;
+      if (_blockedInRestrictedMode(module.routeId)) {
+        _showRestrictedModeNotice();
+        return;
+      }
       _pushInContentTagged(
         module.routeId,
         module.breadcrumbTitle,

@@ -422,7 +422,11 @@ class MyApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => SuppliersApProvider()),
         ChangeNotifierProvider(create: (_) => SaleDraftProvider()),
         ChangeNotifierProvider(create: (_) => ParkedSalesProvider()),
-        ChangeNotifierProvider(create: (_) => ShiftProvider()),
+        ChangeNotifierProxyProvider<AuthProvider, ShiftProvider>(
+          create: (_) => ShiftProvider(),
+          update: (_, auth, shift) =>
+              shift!..syncSessionStaff(auth.isOwner ? null : auth.userId),
+        ),
         ChangeNotifierProxyProvider2<AuthProvider, ShiftProvider, PermissionsProvider>(
           create: (context) => PermissionsProvider(
             context.read<AuthProvider>(),

@@ -19,12 +19,30 @@ class ShiftProvider extends ChangeNotifier {
 
   bool get hasOpenShift => _active != null;
 
+  /// موظف الجلسة — المتجر قد يضم ورديات نشطة لعدة موظفين، فالقراءة بلا نطاق
+  /// تعيد أحدثها وقد تكون لزميل. `null` للمالك.
+  int? _sessionStaffUserId;
+  int _refreshGeneration = 0;
+
+  void syncSessionStaff(int? staffUserId) {
+    final scoped = staffUserId != null && staffUserId > 0 ? staffUserId : null;
+    if (scoped == _sessionStaffUserId) return;
+    _sessionStaffUserId = scoped;
+    refresh();
+  }
+
   Future<void> refresh({int? forStaffUserId}) async {
-    if (forStaffUserId != null && forStaffUserId > 0) {
-      _active = await _db.getOpenWorkShiftForStaff(forStaffUserId);
+    final generation = ++_refreshGeneration;
+    final staffId = forStaffUserId ?? _sessionStaffUserId;
+    final Map<String, dynamic>? active;
+    if (staffId != null && staffId > 0) {
+      active = await _db.getOpenWorkShiftForStaff(staffId);
     } else {
-      _active = await _db.getOpenWorkShift();
+      active = await _db.getOpenWorkShift();
     }
+    // قراءة أقدم انتهت متأخرة لا تكتب فوق قراءة موظف الجلسة الحالي.
+    if (generation != _refreshGeneration) return;
+    _active = active;
     notifyListeners();
   }
 
