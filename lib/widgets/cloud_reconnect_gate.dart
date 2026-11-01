@@ -134,7 +134,8 @@ class _CloudReconnectGateState extends State<CloudReconnectGate> {
       link.markLocked();
       setState(() {
         _error =
-            'تعذّر الربط الآن. تحقق من الإنترنت أو أعد المحاولة بحساب Google.';
+            auth.lastCloudReconnectError ??
+            'لم يكتمل الربط. أعد المحاولة وأكمل الدخول بحساب Google الخاص بالمتجر.';
       });
     } finally {
       if (link.reconnecting) link.setReconnecting(false);

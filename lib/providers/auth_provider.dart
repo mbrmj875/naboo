@@ -4111,7 +4111,54 @@ class AuthProvider extends ChangeNotifier {
       }
     }
 
+    if (allowInteractiveGoogle && _usesDesktopGoogleBrowser) {
+      final reconnected = await _reconnectGoogleViaDesktopBrowser();
+      if (reconnected) {
+        unawaited(_bootstrapCloudBridgeIfNeeded(sessionWasRestored: true));
+        notifyListeners();
+        return true;
+      }
+    }
+
     return Supabase.instance.client.auth.currentUser != null;
+  }
+
+  static bool get _usesDesktopGoogleBrowser =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.windows ||
+          defaultTargetPlatform == TargetPlatform.linux);
+
+  /// سبب فشل آخر إعادة ربط، إن كان أوضح من الرسالة العامة.
+  String? lastCloudReconnectError;
+
+  /// Windows/Linux بلا منتقي أصلي: يفتح Google في المتصفح لحساب مالك الجهاز.
+  Future<bool> _reconnectGoogleViaDesktopBrowser() async {
+    lastCloudReconnectError = null;
+    final client = Supabase.instance.client;
+    try {
+      final loopback = await completeGoogleOAuthViaLoopback(client.auth);
+      final user = client.auth.currentUser;
+      if (!loopback.success || user == null) return false;
+
+      final prefs = await SharedPreferences.getInstance();
+      final ownerUid =
+          (prefs.getString(_prefDeviceOwnerSupabaseUid) ?? '').trim();
+      if (!cloudReconnectAccountMatches(
+        deviceOwnerUid: ownerUid,
+        signedInUid: user.id,
+      )) {
+        lastCloudReconnectError =
+            'هذا الحساب ليس حساب مالك هذا الجهاز. '
+            'أعد المحاولة بحساب Google الخاص بالمتجر.';
+        await _signOutSupabaseAfterFailedGoogleLink();
+        return false;
+      }
+      _publishCloudLinkConnected();
+      return true;
+    } catch (e, st) {
+      AppLogger.error('AuthProvider', 'desktop cloud reconnect failed', e, st);
+      return false;
+    }
   }
 
   Future<void> _bootstrapCloudBridgeIfNeeded({

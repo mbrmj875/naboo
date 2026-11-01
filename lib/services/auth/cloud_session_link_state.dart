@@ -29,6 +29,15 @@ bool shouldShowCloudReconnectGate({
       deviceOwnerBound;
 }
 
+/// إعادة الربط تقبل حساب مالك هذا الجهاز فقط — لا يُربط جهاز متجر بحساب آخر.
+bool cloudReconnectAccountMatches({
+  required String deviceOwnerUid,
+  required String signedInUid,
+}) {
+  final owner = deviceOwnerUid.trim();
+  return owner.isNotEmpty && owner == signedInUid.trim();
+}
+
 bool shouldShowCloudDegradedBanner({
   required CloudSessionLinkPhase phase,
   required bool deviceOwnerBound,
