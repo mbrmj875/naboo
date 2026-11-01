@@ -56,9 +56,14 @@ class DashboardLayoutSettingsScreen extends StatelessWidget {
               onReorder: layout.reorder,
               itemBuilder: (context, index) {
                 final id = layout.order[index];
-                final title = DashboardLayoutProvider.sectionTitleAr(id);
-                final locked = id == 'header' && layout.isHeaderVisibilityLocked;
-                final visible = layout.isVisible(id);
+                final oilPrimary = oilChangeOn && id == 'orbit';
+                final title = oilPrimary
+                    ? 'الأزرار والأيقونات الأساسية'
+                    : DashboardLayoutProvider.sectionTitleAr(id);
+                final locked =
+                    oilPrimary ||
+                    (id == 'header' && layout.isHeaderVisibilityLocked);
+                final visible = oilPrimary || layout.isVisible(id);
 
                 return Card(
                   key: ValueKey<String>(id),
@@ -84,7 +89,9 @@ class DashboardLayoutSettingsScreen extends StatelessWidget {
                     ),
                     subtitle: id == 'header'
                         ? const Text('ثابت في الأعلى — لا يُخفى')
-                        : null,
+                        : (oilPrimary
+                              ? const Text('أساسية لعمل الورشة — لا تُخفى')
+                              : null),
                     trailing: Switch.adaptive(
                       value: visible,
                       onChanged: locked

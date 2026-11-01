@@ -5,18 +5,19 @@ import '../services/service_order_kinds.dart';
 import '../utils/app_logger.dart';
 import '../utils/iqd_money.dart';
 import '../utils/stock_quantity_kind.dart';
+import '../verticals/oil_change/utils/oil_change_order_status.dart';
 
 /// لقطة KPI للوحة الرئيسية (غيار زيت).
 class HomeKpiSnapshot {
   const HomeKpiSnapshot({
-    required this.activeCarsInGarage,
+    required this.suspendedCars,
     required this.stockShortages,
     required this.todayShiftSalesFils,
     required this.todayShiftCashInFils,
     required this.hasOpenShift,
   });
 
-  final int activeCarsInGarage;
+  final int suspendedCars;
   final int stockShortages;
   final int todayShiftSalesFils;
   /// المقبوض نقداً في الوردية الحالية (من cash_ledger).
@@ -24,7 +25,7 @@ class HomeKpiSnapshot {
   final bool hasOpenShift;
 
   static const empty = HomeKpiSnapshot(
-    activeCarsInGarage: 0,
+    suspendedCars: 0,
     stockShortages: 0,
     todayShiftSalesFils: 0,
     todayShiftCashInFils: 0,
@@ -58,7 +59,7 @@ class HomeKpiRepository {
     final db = await _db.database;
     final tid = await _db.resolveLocalBusinessTenantId();
 
-    final activeCars = await _countActiveOilGarage(db, tid);
+    final suspendedCars = await _countSuspendedOilCars(db, tid);
     final shortages = await _countStockShortages(
       tid,
       includeAllProducts: includeAllProductShortages,
@@ -71,7 +72,7 @@ class HomeKpiRepository {
         : 0;
 
     _cache = HomeKpiSnapshot(
-      activeCarsInGarage: activeCars,
+      suspendedCars: suspendedCars,
       stockShortages: shortages,
       todayShiftSalesFils: salesFils,
       todayShiftCashInFils: cashInFils,
@@ -90,7 +91,7 @@ class HomeKpiRepository {
     _cachedAt = null;
   }
 
-  static Future<int> _countActiveOilGarage(Database db, int tenantId) async {
+  static Future<int> _countSuspendedOilCars(Database db, int tenantId) async {
     try {
       final hasOrderKind = await _tableHasColumn(
         db,
@@ -99,7 +100,7 @@ class HomeKpiRepository {
       );
       final where = StringBuffer(
         "tenantId = ? AND (deletedAt IS NULL OR TRIM(COALESCE(deletedAt,'')) = '') "
-        "AND status IN ('pending', 'in_progress')",
+        "AND status = '${OilChangeOrderStatus.suspended}'",
       );
       final args = <Object?>[tenantId];
       if (hasOrderKind) {
@@ -120,7 +121,7 @@ class HomeKpiRepository {
     } catch (e, st) {
       AppLogger.error(
         'HomeKpiRepository',
-        'تعذر حساب السيارات النشطة في الورشة',
+        'تعذر حساب السيارات المعلّقة',
         e,
         st,
       );

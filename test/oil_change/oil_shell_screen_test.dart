@@ -1,11 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:naboo/home/home_kpi_repository.dart';
+import 'package:naboo/providers/dashboard_layout_provider.dart';
 import 'package:naboo/services/permission_service.dart';
 import 'package:naboo/verticals/oil_change/home/oil_change_home_dashboard.dart';
 import 'package:naboo/verticals/oil_change/shell/oil_change_shell_screen.dart';
 import 'package:naboo/widgets/shell/shell_bottom_nav.dart';
 import 'package:naboo/widgets/shell/shell_sidebar.dart';
+import 'package:provider/provider.dart';
 
+import 'helpers/oil_change_test_harness.dart';
 import 'helpers/oil_employee_home_harness.dart';
 
 const _phone = Size(390, 844);
@@ -137,10 +141,53 @@ void main() {
     );
     expect(bar.items.map((item) => item.title), isNot(contains('الصندوق')));
 
-    await _tapDashboard(tester, 'صندوق اليوم');
+    final cashTile = find.descendant(
+      of: find.byType(OilChangeHomeDashboard),
+      matching: find.textContaining('صندوق اليوم'),
+    );
+    expect(cashTile, findsNothing);
+    await _finish(tester);
+  });
 
-    expect(find.textContaining('لا تملك صلاحية'), findsOneWidget);
-    expect(_titles(tester), isNot(contains('الصندوق')));
+  testWidgets('«السيارات الحالية» تفتح المعلّقة ورقمها يطابقها', (tester) async {
+    final builder = ServiceOrderBuilder(OilChangeTestHarness.instance);
+    await builder.createPending(plate: 'PEND-1');
+    await builder.createSuspended(plate: 'SUSP-1');
+    await builder.createSuspended(plate: 'SUSP-2');
+    HomeKpiRepository.instance.invalidate();
+
+    await _pumpShell(tester);
+    expect(find.textContaining('السيارات الحالية: 2'), findsOneWidget);
+
+    await _tapDashboard(tester, 'السيارات الحالية');
+    expect(tester.widget<TabBar>(find.byType(TabBar)).controller!.index, 1);
+    await _finish(tester);
+  });
+
+  testWidgets('الأزرار الأساسية لا تُخفى حتى لو أُخفي قسمها', (tester) async {
+    await _pumpShell(tester);
+    final element = tester.element(find.byType(OilChangeShellScreen));
+    await element.read<DashboardLayoutProvider>().setSectionVisible(
+      'orbit',
+      false,
+    );
+    await _wait(tester, 300);
+
+    expect(find.byType(OilChangeHomeDashboard), findsOneWidget);
+    expect(find.textContaining('غيار زيت جديد'), findsOneWidget);
+    await _finish(tester);
+  });
+
+  testWidgets('غسيل السيارات يبقى اختيارياً', (tester) async {
+    await _pumpShell(tester);
+    final element = tester.element(find.byType(OilChangeShellScreen));
+    expect(find.textContaining('غسيل السيارات'), findsOneWidget);
+
+    await element.read<DashboardLayoutProvider>().setCarWashButtonVisible(false);
+    await _wait(tester, 300);
+
+    expect(find.textContaining('غسيل السيارات'), findsNothing);
+    expect(find.textContaining('بيع مباشر'), findsOneWidget);
     await _finish(tester);
   });
 

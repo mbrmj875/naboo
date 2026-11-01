@@ -41,6 +41,8 @@ void main() {
     await pumpEmployeeHome(tester, const HomeScreen());
     await _openFromDashboard(tester, 'غيار زيت جديد');
     expect(find.byType(OilChangeHomeDashboard), findsNothing);
+    await tester.enterText(find.byType(TextField).first, 'زبون جديد');
+    await _wait(tester, 300);
 
     await tester.tap(_strip('الرئيسية'));
     await _wait(tester);
@@ -57,6 +59,18 @@ void main() {
     await _wait(tester);
     expect(find.byType(OilChangeHomeDashboard), findsOneWidget);
     expect(_strip('بطاقة غيار زيت جديدة'), findsNothing);
+    await _finish(tester);
+  });
+
+  testWidgets('بطاقة فارغة تُغلق بلا تحذير مسودة', (tester) async {
+    await pumpEmployeeHome(tester, const HomeScreen());
+    await _openFromDashboard(tester, 'غيار زيت جديد');
+
+    await tester.tap(_strip('الرئيسية'));
+    await _wait(tester);
+
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.byType(OilChangeHomeDashboard), findsOneWidget);
     await _finish(tester);
   });
 

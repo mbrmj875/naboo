@@ -577,6 +577,8 @@ String? peekTopContentRouteId(NavigatorState nav) {
 class ContentRouteStackObserver extends NavigatorObserver {
   final List<Route<dynamic>> _stack = <Route<dynamic>>[];
 
+  int get depth => _stack.length;
+
   bool containsRouteId(String routeId) =>
       _stack.any((route) => route.settings.name == routeId);
 

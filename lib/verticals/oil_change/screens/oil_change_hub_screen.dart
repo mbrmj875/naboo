@@ -39,10 +39,17 @@ import 'oil_change_whatsapp_messages_screen.dart';
 
 /// سجل غيارات الزيت: بطاقة جديدة + جدول تفصيلي + واتساب.
 class OilChangeHubScreen extends StatefulWidget {
-  const OilChangeHubScreen({super.key, this.initialSearchQuery});
+  const OilChangeHubScreen({
+    super.key,
+    this.initialSearchQuery,
+    this.initialShowSuspended = false,
+  });
 
   /// استعلام أولي من البحث في الرئيسية (لوحة / هاتف / عميل).
   final String? initialSearchQuery;
+
+  /// يفتح تبويب «المعلّقة» مباشرة (أيقونة السيارات الحالية).
+  final bool initialShowSuspended;
 
   @override
   State<OilChangeHubScreen> createState() => _OilChangeHubScreenState();
@@ -110,7 +117,11 @@ class _OilChangeHubScreenState extends State<OilChangeHubScreen>
   @override
   void initState() {
     super.initState();
-    _logTabController = TabController(length: 2, vsync: this);
+    _logTabController = TabController(
+      length: 2,
+      vsync: this,
+      initialIndex: widget.initialShowSuspended ? 1 : 0,
+    );
     _logTabController.addListener(_onLogTabChanged);
     WidgetsBinding.instance.addObserver(this);
     _searchController.addListener(_onSearchChanged);

@@ -1891,7 +1891,11 @@ class _HomeScreenState extends State<HomeScreen>
         }
         break;
       case 'oil_services_log':
-        _openOilChangeHubSearch();
+        if (action.id == 'oil_garage') {
+          _openSuspendedOilCars();
+        } else {
+          _openOilChangeHubSearch();
+        }
         break;
       case 'inventory':
         _pushInContentTagged(
@@ -1925,6 +1929,20 @@ class _HomeScreenState extends State<HomeScreen>
         );
         break;
     }
+  }
+
+  /// الوحدة الحية تتجاهل منشئها، فتُبنى من جديد إلا إن كانت عليها صفحة فرعية.
+  void _openSuspendedOilCars() {
+    const routeId = AppContentRoutes.oilServicesLog;
+    if ((_keptModuleObservers[routeId]?.depth ?? 0) <= 1) {
+      _keptModuleId = null;
+      _evictKeptModule(routeId);
+    }
+    _pushInContentTagged(
+      routeId,
+      'سجل غيارات الزيت',
+      (_) => const OilChangeHubScreen(initialShowSuspended: true),
+    );
   }
 
   bool get _hasActiveSearch => _searchController.text.trim().isNotEmpty;

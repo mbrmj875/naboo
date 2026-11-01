@@ -3177,6 +3177,12 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     );
   }
 
+  /// المبلغ يُملأ تلقائياً بصفر — فليس تعديلاً من الموظف يستدعي تحذير المغادرة.
+  String _agreedForLeaveGate() {
+    final agreed = _agreed.text.trim();
+    return RegExp(r'^[0.,]*$').hasMatch(agreed) ? '' : agreed;
+  }
+
   String _leaveGateFingerprint() {
     final filterSig = _filterSlotsByCode.entries
         .where((e) => e.value.hasSelection)
@@ -3197,7 +3203,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       _oilType.text.trim(),
       _issue.text.trim(),
       _technicianName.text.trim(),
-      _agreed.text.trim(),
+      _agreedForLeaveGate(),
       (_customerId ?? 0).toString(),
       filterSig,
       productsSig,
@@ -8289,16 +8295,36 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
 
     return Theme(
       data: _formTheme ?? OilChangeFormTheme.wrap(context, Theme.of(context)),
-      child: PopScope(
-        canPop: !_hasUnsavedOilDraft(),
-        onPopInvokedWithResult: (didPop, _) async {
-          if (didPop) return;
-          if (_saving) return;
-          final leave = await _confirmLeaveOilFormIfDirty();
-          if (!mounted || !leave) return;
-          _leaveGateAllowPop = true;
-          Navigator.of(context).pop();
-        },
+      child: ListenableBuilder(
+        // بعض الحقول لا تعيد بناء الشاشة عند الكتابة، فتتابعها الحماية مباشرة.
+        listenable: Listenable.merge([
+          _customerName,
+          _customerPhone,
+          _deviceName,
+          _deviceSerial,
+          _carModel,
+          _engineSize,
+          _odometerCurrent,
+          _odometerNext,
+          _oilType,
+          _issue,
+          _technicianName,
+          _agreed,
+          _oilSizeAmount,
+          _oilLitersStock,
+        ]),
+        builder: (context, child) => PopScope(
+          canPop: !_hasUnsavedOilDraft(),
+          onPopInvokedWithResult: (didPop, _) async {
+            if (didPop) return;
+            if (_saving) return;
+            final leave = await _confirmLeaveOilFormIfDirty();
+            if (!mounted || !leave) return;
+            _leaveGateAllowPop = true;
+            Navigator.of(context).pop();
+          },
+          child: child!,
+        ),
         child: Scaffold(
           resizeToAvoidBottomInset: false,
           appBar: OilChangeFormTheme.appBar(

@@ -113,6 +113,51 @@ void main() {
     expect(shell.currentRouteId, AppContentRoutes.inventory);
   });
 
+  testWidgets('rebuildModule يبني الوحدة بمعاملاتها الجديدة', (tester) async {
+    final shell = await _pumpShell(tester);
+    shell.open(AppContentRoutes.cash, 'الصندوق', (_) => const Text('first'));
+    await tester.pumpAndSettle();
+    shell.closeToHome();
+    await tester.pumpAndSettle();
+
+    shell.open(
+      AppContentRoutes.cash,
+      'الصندوق',
+      (_) => const Text('second'),
+      rebuildModule: true,
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('second'), findsOneWidget);
+    expect(find.text('first'), findsNothing);
+  });
+
+  testWidgets('rebuildModule لا يمس وحدة عليها صفحة فرعية', (tester) async {
+    final shell = await _pumpShell(tester);
+    shell.open(AppContentRoutes.cash, 'الصندوق', (_) => const Text('first'));
+    await tester.pumpAndSettle();
+    unawaited(
+      shell.visibleNavigator!.push<void>(
+        contentMaterialRoute<void>(
+          routeId: AppContentRoutes.addProduct,
+          breadcrumbTitle: 'مسودة',
+          builder: (_) => const Text('draft'),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    shell.open(
+      AppContentRoutes.cash,
+      'الصندوق',
+      (_) => const Text('second'),
+      rebuildModule: true,
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('draft'), findsOneWidget);
+  });
+
   testWidgets('فتح الوحدة مرتين لا يكرّرها', (tester) async {
     final shell = await _pumpShell(tester);
     Widget page(BuildContext _) => const Text('inventory');

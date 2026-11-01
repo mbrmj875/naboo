@@ -32,11 +32,11 @@ void main() {
       );
     });
 
-    test('garage KPI reflects workshop cards count', () async {
-      await builder.createPending();
-      await builder.createInProgress();
+    test('suspended KPI counts only suspended cards', () async {
+      await builder.createSuspended();
+      await builder.createSuspended(plate: 'SUS-3333');
       final snap = await HomeKpiRepository.instance.load(force: true);
-      expect(snap.activeCarsInGarage, 2);
+      expect(snap.suspendedCars, 2);
     });
 
     test('stock KPI reflects volumeLiter shortages', () async {
@@ -46,13 +46,13 @@ void main() {
     });
 
     test('cloud import invalidates home KPI cache path', () async {
-      await builder.createPending();
+      await builder.createSuspended();
       await HomeKpiRepository.instance.load(force: true);
-      await builder.createInProgress(plate: 'KD-2');
+      await builder.createSuspended(plate: 'KD-2');
       harness.mockCloudSnapshotImported();
       HomeKpiRepository.instance.invalidate();
       final after = await HomeKpiRepository.instance.load();
-      expect(after.activeCarsInGarage, 2);
+      expect(after.suspendedCars, 2);
     });
   });
 }

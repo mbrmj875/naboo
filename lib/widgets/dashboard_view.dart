@@ -210,7 +210,8 @@ class _ModernDashboard extends StatelessWidget {
     final children = <Widget>[];
     var first = true;
     for (final id in layout.order) {
-      if (!layout.isVisible(id)) continue;
+      // أزرار الزيت الأساسية لا تُخفى، حتى لو أُخفي القسم قبل قفله.
+      if (!layout.isVisible(id) && !(useOilGrid && id == 'orbit')) continue;
       if (id == 'orbit' && onGlanceAction == null) continue;
       if (id == 'pinned' && onPinnedProductQuickSale == null) continue;
       if (!first) children.add(SizedBox(height: sectionGap));

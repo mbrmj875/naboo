@@ -92,13 +92,25 @@ class ContentShellController extends ChangeNotifier {
       contentNavigatorKey.currentState;
 
   /// يفتح مساراً: الوحدة تبقى حية، والصفحة الفرعية تُدفع في المحتوى.
-  void open(String routeId, String title, WidgetBuilder builder) {
+  ///
+  /// [rebuildModule] لوحدة تُفتح بمعاملات جديدة (تبويب أو بحث) — الوحدة الحية
+  /// تتجاهل منشئها، إلا إن كانت عليها صفحة فرعية قد تحمل مسودة فتبقى كما هي.
+  void open(
+    String routeId,
+    String title,
+    WidgetBuilder builder, {
+    bool rebuildModule = false,
+  }) {
     if (_disposed) return;
     if (routeId == AppContentRoutes.home) {
       closeToHome();
       return;
     }
     if (_isModuleRoute(routeId)) {
+      final observer = _keptObservers[routeId];
+      if (rebuildModule && (observer == null || observer.depth <= 1)) {
+        _dropKeptModule(routeId);
+      }
       _openKeptModule(routeId, title, builder);
       return;
     }
@@ -156,13 +168,16 @@ class ContentShellController extends ChangeNotifier {
 
   void _enforceKeptCap({required String protect}) {
     while (_keptOrder.length > keptModuleCap) {
-      final victim = _keptOrder.firstWhere((id) => id != protect);
-      _keptOrder.remove(victim);
-      _keptBuilders.remove(victim);
-      _keptTitles.remove(victim);
-      _keptNavKeys.remove(victim);
-      _keptObservers.remove(victim);
+      _dropKeptModule(_keptOrder.firstWhere((id) => id != protect));
     }
+  }
+
+  void _dropKeptModule(String routeId) {
+    _keptOrder.remove(routeId);
+    _keptBuilders.remove(routeId);
+    _keptTitles.remove(routeId);
+    _keptNavKeys.remove(routeId);
+    _keptObservers.remove(routeId);
   }
 
   /// يخفي الوحدة ويعود بالمحتوى إلى الرئيسية مع احترام المسودات.

@@ -82,14 +82,15 @@ void main() {
       expect(kpi.activeCount, 1);
     });
 
-    test('A3: cars in workshop counter matches home and owner KPI', () async {
+    test('A3: employee counter matches the suspended tab, owner counts active', () async {
       await harness.configureServiceOnly();
       await builder.createPending(plate: 'A3-1');
       await builder.createInProgress(plate: 'A3-2');
+      await builder.createSuspended(plate: 'A3-3');
 
       final home = await HomeKpiRepository.instance.load(force: true);
       final owner = await ownerRepo.loadActiveCars(tenantId: oilTestTenantId);
-      expect(home.activeCarsInGarage, 2);
+      expect(home.suspendedCars, 1);
       expect(owner.activeCount, 2);
     });
 

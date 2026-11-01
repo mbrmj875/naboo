@@ -95,6 +95,26 @@ class HomeDashboardSpec {
   /// بطاقات orbit إضافية في الوضع الهجين (مثل sale).
   final Set<String> extraHybridGlanceIds;
 
+  /// نفس الوصفة بأيقونات مختارة — لإخفاء ما لا يملك الموظف صلاحيته.
+  HomeDashboardSpec withTiles(List<HomeDashboardAction> tiles) {
+    return HomeDashboardSpec(
+      profile: profile,
+      searchConfig: searchConfig,
+      primaryCta: primaryCta,
+      pinnedCta: pinnedCta,
+      secondaryCta: secondaryCta,
+      secondaryTiles: tiles,
+      hideGlanceIds: hideGlanceIds,
+      hideNavRouteIds: hideNavRouteIds,
+      greetingSubtitle: greetingSubtitle,
+      greetingEmoji: greetingEmoji,
+      showPinnedProducts: showPinnedProducts,
+      showOilKpiGrid: showOilKpiGrid,
+      showRestaurantPosHome: showRestaurantPosHome,
+      extraHybridGlanceIds: extraHybridGlanceIds,
+    );
+  }
+
   bool get isOilProfile =>
       profile == HomeDashboardProfile.oilChangeService ||
       profile == HomeDashboardProfile.oilChangeHybrid;

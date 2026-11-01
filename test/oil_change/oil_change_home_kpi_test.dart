@@ -19,41 +19,41 @@ void main() {
     });
 
     test('load caches snapshot for 45 seconds', () async {
-      await builder.createPending();
-      await builder.createInProgress();
+      await builder.createSuspended();
+      await builder.createSuspended(plate: 'SUS-3333');
 
       final first = await HomeKpiRepository.instance.load(force: true);
-      expect(first.activeCarsInGarage, 2);
+      expect(first.suspendedCars, 2);
 
-      await builder.createPending(plate: 'CACHE-NEW');
+      await builder.createSuspended(plate: 'CACHE-NEW');
       final cached = await HomeKpiRepository.instance.load();
-      expect(cached.activeCarsInGarage, 2);
+      expect(cached.suspendedCars, 2);
 
       final fresh = await HomeKpiRepository.instance.load(force: true);
-      expect(fresh.activeCarsInGarage, 3);
+      expect(fresh.suspendedCars, 3);
     });
 
     test('invalidate clears cache so next load reflects DB changes', () async {
-      await builder.createPending();
+      await builder.createSuspended();
       await HomeKpiRepository.instance.load(force: true);
 
-      await builder.createPending(plate: 'INV-PLATE');
+      await builder.createSuspended(plate: 'INV-PLATE');
       HomeKpiRepository.instance.invalidate();
 
       final snap = await HomeKpiRepository.instance.load();
-      expect(snap.activeCarsInGarage, 2);
+      expect(snap.suspendedCars, 2);
     });
 
     test('after cloud import invalidate reloads garage KPI', () async {
-      await builder.createPending();
+      await builder.createSuspended();
       await HomeKpiRepository.instance.load(force: true);
 
-      await builder.createInProgress(plate: 'RT-1');
+      await builder.createSuspended(plate: 'RT-1');
       harness.mockCloudSnapshotImported();
       HomeKpiRepository.instance.invalidate();
 
       final after = await HomeKpiRepository.instance.load();
-      expect(after.activeCarsInGarage, 2);
+      expect(after.suspendedCars, 2);
     });
   });
 }

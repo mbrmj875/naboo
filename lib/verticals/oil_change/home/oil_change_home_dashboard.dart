@@ -86,7 +86,7 @@ class _OilChangeHomeDashboardState extends State<OilChangeHomeDashboard> {
     if (_loadingKpi) return '…';
     switch (action.id) {
       case 'oil_garage':
-        return '${_kpi.activeCarsInGarage}';
+        return '${_kpi.suspendedCars}';
       case 'oil_stock':
         final n = _kpi.stockShortages;
         return n > 0 ? 'نواقص: $n' : 'لا نواقص';
@@ -111,7 +111,7 @@ class _OilChangeHomeDashboardState extends State<OilChangeHomeDashboard> {
   bool _alertFor(HomeDashboardAction action) {
     if (_loadingKpi) return false;
     if (action.id == 'oil_stock') return _kpi.stockShortages > 0;
-    if (action.id == 'oil_garage') return _kpi.activeCarsInGarage > 0;
+    if (action.id == 'oil_garage') return _kpi.suspendedCars > 0;
     return action.showAlert;
   }
 

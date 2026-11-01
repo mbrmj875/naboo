@@ -290,7 +290,12 @@ class _OilChangeShellScreenState extends State<OilChangeShellScreen>
   }
 
   /// كل فتح من الرئيسية يمر هنا، فلا تتجاوز الأيقونات صلاحيات الموظف.
-  void _openGuarded(String routeId, String title, WidgetBuilder builder) {
+  void _openGuarded(
+    String routeId,
+    String title,
+    WidgetBuilder builder, {
+    bool rebuildModule = false,
+  }) {
     final policy = _policy();
     if (policy.blockedByRestrictedMode(routeId)) {
       _showNotice('غير متاح في الوضع المقيّد');
@@ -300,7 +305,7 @@ class _OilChangeShellScreenState extends State<OilChangeShellScreen>
       _showNotice('لا تملك صلاحية فتح «$title»');
       return;
     }
-    _shell.open(routeId, title, builder);
+    _shell.open(routeId, title, builder, rebuildModule: rebuildModule);
   }
 
   void _onNavItem(ShellNavItem item) {
@@ -329,12 +334,37 @@ class _OilChangeShellScreenState extends State<OilChangeShellScreen>
     _shell.open(sub.routeId, sub.breadcrumbTitle ?? sub.title, sub.destination);
   }
 
-  void _openHub() {
+  void _openHub({bool suspended = false}) {
     _openGuarded(
       AppContentRoutes.oilServicesLog,
       'سجل غيارات الزيت',
-      (_) => const OilChangeHubScreen(),
+      (_) => OilChangeHubScreen(initialShowSuspended: suspended),
+      rebuildModule: true,
     );
+  }
+
+  /// مسار أيقونة الرئيسية — لتُخفى إن لم يملك الموظف صلاحيته.
+  static String? _tileRouteId(HomeDashboardAction tile) {
+    switch (tile.routeId) {
+      case 'inventory':
+        return AppContentRoutes.inventory;
+      case 'cash':
+        return AppContentRoutes.cash;
+      case 'add_invoice':
+        return AppContentRoutes.addInvoice;
+      default:
+        return null;
+    }
+  }
+
+  HomeDashboardSpec _visibleDashboardSpec() {
+    final spec = _dashboardSpec();
+    final policy = _policy();
+    return spec.withTiles([
+      for (final tile in spec.secondaryTiles)
+        if (_tileRouteId(tile) == null || policy.isVisible(_tileRouteId(tile)!))
+          tile,
+    ]);
   }
 
   List<GlobalSearchNavEntry> _searchNavEntries() {
@@ -397,7 +427,12 @@ class _OilChangeShellScreenState extends State<OilChangeShellScreen>
         builder: (_) => GlobalSearchPage(
           search: _search,
           searchConfig: _dashboardSpec().searchConfig,
-          onOpen: _openGuarded,
+          onOpen: (routeId, title, builder) => _openGuarded(
+            routeId,
+            title,
+            builder,
+            rebuildModule: routeId == AppContentRoutes.oilServicesLog,
+          ),
           onProductPick: _onSearchProduct,
           onScanBarcode: () => unawaited(_scanBarcode()),
           customersDestination: (_) => const CustomersScreen(),
@@ -472,7 +507,7 @@ class _OilChangeShellScreenState extends State<OilChangeShellScreen>
       case 'car_wash_create':
         _openManifestRoute(AppContentRoutes.carWashCreate, 'بطاقة غسيل سيارة');
       case 'oil_services_log':
-        _openHub();
+        _openHub(suspended: action.id == 'oil_garage');
       case 'inventory':
         _openGuarded(
           AppContentRoutes.inventory,
@@ -656,7 +691,8 @@ class _OilChangeShellScreenState extends State<OilChangeShellScreen>
   Widget _buildHomePage() {
     return Builder(
       builder: (context) {
-        final features = context.watch<BusinessFeaturesProvider>();
+        context.watch<BusinessFeaturesProvider>();
+        context.watch<PermissionsProvider>();
         final isDark = Theme.of(context).brightness == Brightness.dark;
         final activeShift = context.watch<ShiftProvider>().activeShift;
         final shiftName =
@@ -675,7 +711,7 @@ class _OilChangeShellScreenState extends State<OilChangeShellScreen>
                 Expanded(
                   child: DashboardView(
                     isDark: isDark,
-                    dashboardSpec: HomeDashboardResolver.resolve(features.data),
+                    dashboardSpec: _visibleDashboardSpec(),
                     onDashboardAction: _onDashboardAction,
                     onGlanceAction: _onGlanceAction,
                     onPinnedProductQuickSale: (preset) => _openGuarded(
