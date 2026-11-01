@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
 import '../app_route_observer.dart';
-import '../app_system_back.dart';
 import '../content_navigation.dart';
 import 'shell_nav_item.dart';
 
@@ -19,8 +18,10 @@ class ContentShellController extends ChangeNotifier {
   /// يُستدعى بعد تغيّر المسار الظاهر (حفظ الاستئناف، الدليل).
   final void Function(String routeId) onRouteChanged;
 
+  /// مفتاح خاص بالغلاف: مشاركة مفتاح [HomeScreen] تنقل ملاحها القديم بصفحاته
+  /// إلى الغلاف عند التحول بينهما، فتُبنى صفحة شاشة أُزيلت.
   final GlobalKey<NavigatorState> contentNavigatorKey =
-      appHomeContentNavigatorKey;
+      GlobalKey<NavigatorState>();
   final RouteObserver<PageRoute<dynamic>> routeObserver =
       RouteObserver<PageRoute<dynamic>>();
 
@@ -210,7 +211,12 @@ class ContentShellController extends ChangeNotifier {
   /// زر الرجوع: الصفحة الفرعية في الوحدة، ثم الوحدة نفسها، ثم المحتوى.
   bool handleSystemBack() {
     final kept = _keptModuleId;
-    if (kept == null) return false;
+    if (kept == null) {
+      final content = contentNavigatorKey.currentState;
+      if (content == null || !content.canPop()) return false;
+      unawaited(content.maybePop());
+      return true;
+    }
     final nested = _keptNavKeys[kept]?.currentState;
     if (nested != null && nested.canPop()) {
       unawaited(nested.maybePop());

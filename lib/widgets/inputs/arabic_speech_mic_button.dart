@@ -135,14 +135,21 @@ class _ArabicSpeechMicButtonState extends State<ArabicSpeechMicButton> {
     super.initState();
     // لا تهيئة تلقائية على macOS — تمنع قتل التطبيق عند فتح بطاقة الزيت.
     if (!_blockSpeechEngineOnPlatform) {
-      unawaited(
-        _ensureSharedInitialized(
-          onStatus: _onStatus,
-          onError: _onSpeechError,
-        ),
-      );
+      unawaited(_warmUpIfAlreadyPermitted());
       unawaited(_refreshOnlineCache());
     }
+  }
+
+  /// التهيئة تطلب إذن الميكروفون — لا نفعلها قبل أن يضغط المستخدم زر الصوت،
+  /// إلا إن كان الإذن ممنوحاً مسبقاً فيُسرّع ذلك أول إملاء.
+  Future<void> _warmUpIfAlreadyPermitted() async {
+    try {
+      if (!await _speech.hasPermission || !mounted) return;
+      await _ensureSharedInitialized(
+        onStatus: _onStatus,
+        onError: _onSpeechError,
+      );
+    } catch (_) {}
   }
 
   @override
