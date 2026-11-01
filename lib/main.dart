@@ -82,7 +82,7 @@ import 'screens/dev/stress_tools_screen.dart';
 import 'verticals/_contract/vertical_registry.dart';
 import 'verticals/general_retail/manifest.dart';
 import 'verticals/oil_change/manifest.dart';
-import 'verticals/oil_change/home/oil_change_standalone_home_screen.dart';
+import 'verticals/oil_change/shell/oil_change_shell_screen.dart';
 import 'verticals/oil_change/services/oil_change_whatsapp_outbox_auto_retry.dart';
 import 'verticals/pharmacy/manifest.dart';
 import 'verticals/restaurant/manifest.dart';
@@ -826,7 +826,7 @@ class _HomeRouteResolver extends StatelessWidget {
           body: Center(child: CircularProgressIndicator()),
         );
       case EmployeeHomeRoot.oilChangeStandalone:
-        return const OilChangeStandaloneHomeScreen();
+        return const OilChangeShellScreen();
       case EmployeeHomeRoot.shared:
         return const HomeScreen();
     }

@@ -86,9 +86,13 @@ void setUpEmployeeHomeEnvironment() {
 }
 
 /// يبني الشاشة بمزوّدات التطبيق الحقيقية فوق SQLite بلا إنترنت.
-Future<void> pumpEmployeeHome(WidgetTester tester, Widget home) async {
+Future<void> pumpEmployeeHome(
+  WidgetTester tester,
+  Widget home, {
+  Size size = const Size(1366, 900),
+}) async {
   tester.view.devicePixelRatio = 1;
-  tester.view.physicalSize = const Size(1366, 900);
+  tester.view.physicalSize = size;
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MultiProvider(

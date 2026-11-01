@@ -41,6 +41,11 @@ class EmployeeAccessPolicy {
         return PermissionKeys.cashView;
       case AppContentRoutes.printing:
         return PermissionKeys.printingAccess;
+      case AppContentRoutes.users:
+      case AppContentRoutes.employeeIdentity:
+        return PermissionKeys.usersView;
+      case AppContentRoutes.staffShiftsWeek:
+        return PermissionKeys.shiftsAccess;
       default:
         return null;
     }
@@ -49,10 +54,13 @@ class EmployeeAccessPolicy {
   bool blockedByRestrictedMode(String routeId) =>
       restricted && !RestrictedModePolicy.isRouteAllowed(routeId);
 
-  bool canOpen(String routeId) {
+  bool canOpen(String routeId) =>
+      isVisible(routeId) && !blockedByRestrictedMode(routeId);
+
+  /// يظهر في التنقل — الوضع المقيّد يعطّله ولا يخفيه.
+  bool isVisible(String routeId) {
     if (hiddenRouteIds.contains(routeId)) return false;
     if (isContentRouteBlocked(routeId, features)) return false;
-    if (blockedByRestrictedMode(routeId)) return false;
     final key = permissionKeyForRoute(routeId);
     return key == null || can(key);
   }
