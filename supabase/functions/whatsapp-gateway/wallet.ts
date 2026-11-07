@@ -16,6 +16,17 @@ export type WalletDebitResult = {
   message_ar?: string;
 };
 
+/**
+ * المخطط غائب فعلًا فقط عند هذين الرمزين. لا نقرأ نص الخطأ: رسالة «permission
+ * denied for function wa_wallet_debit_one» تحوي اسم الدالة، وقراءتها كانت
+ * ستحوّل منع الصلاحية إلى إرسال مجاني بلا خصم.
+ */
+export function isWalletSchemaMissing(
+  error: { code?: string | null } | null | undefined,
+): boolean {
+  return error?.code === '42883' || error?.code === '42P01';
+}
+
 /** يخصم رسالة واحدة قبل الإرسال — idempotent عبر المفتاح. */
 export async function debitWalletForSend(
   supabase: SupabaseClient,
@@ -37,14 +48,8 @@ export async function debitWalletForSend(
     });
 
     if (error) {
-      const msg = (error.message ?? '').toLowerCase();
       // السكربت غير مُطبَّق بعد — لا نكسر الإرسال.
-      if (
-        msg.includes('does not exist') ||
-        msg.includes('wa_wallet_debit_one') ||
-        error.code === '42883' ||
-        error.code === '42P01'
-      ) {
+      if (isWalletSchemaMissing(error)) {
         console.warn('wa_wallet: schema missing — skip debit');
         return { ok: true, exempt: true };
       }
@@ -104,13 +109,7 @@ export async function creditNabooSharedWelcomeLot(
       p_idempotency_key: idempotencyKey,
     });
     if (error) {
-      const msg = (error.message ?? '').toLowerCase();
-      if (
-        msg.includes('does not exist') ||
-        msg.includes('wa_wallet_credit_lot') ||
-        error.code === '42883' ||
-        error.code === '42P01'
-      ) {
+      if (isWalletSchemaMissing(error)) {
         console.warn('wa_wallet: schema missing — skip naboo welcome credit');
         return;
       }
