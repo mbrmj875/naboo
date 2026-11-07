@@ -19,3 +19,13 @@ export function writeClient(
 ): SupabaseClient {
   return adminClient() ?? userClient;
 }
+
+/**
+ * لكتابات صف الربط: بعد قفل RLS لا تنجح برمز المستخدم، فغياب المفتاح خطأ صريح
+ * بدل السقوط الصامت في عميل المستخدم.
+ */
+export function requireAdmin(): SupabaseClient {
+  const client = adminClient();
+  if (!client) throw new Error('admin_client_unavailable');
+  return client;
+}

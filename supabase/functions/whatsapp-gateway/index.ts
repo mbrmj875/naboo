@@ -48,7 +48,7 @@ import {
 import { syncTemplateStatusesForTenant } from './lifecycle/template_lifecycle_service.ts';
 import { ensureDefaultTemplatesForTenant } from './lifecycle/template_lifecycle_service.ts';
 import { notifyOilChangeCard } from './notifications/notifiers/oil_change_card_notifier.ts';
-import { writeClient } from './admin_client.ts';
+import { requireAdmin, writeClient } from './admin_client.ts';
 import { getWhatsAppProvider } from './providers/registry.ts';
 import {
   claimSendLogRow,
@@ -192,6 +192,17 @@ Deno.serve(async (req) => {
   const user = userData?.user;
   if (userErr || !user) {
     return Response.json({ ok: false, error: 'unauthorized' }, { status: 401 });
+  }
+
+  // كل كتابة في صف الربط بهذا العميل، ومقيدة بـ user.id لأنه يتجاوز RLS.
+  let gatewayWriter: SupabaseClient;
+  try {
+    gatewayWriter = requireAdmin();
+  } catch {
+    console.error('whatsapp-gateway: SUPABASE_SERVICE_ROLE_KEY is missing');
+    return Response.json({ ok: false, error: 'server_misconfigured' }, {
+      status: 500,
+    });
   }
 
   let body: RequestBody;
@@ -535,7 +546,7 @@ Deno.serve(async (req) => {
       // عند تبديل المزود: امسح أصول الربط السابقة حتى لا يظهر «متصل» كاذب
       // (مثل رقم نابو المشترك عند اختيار Meta مباشرة لرقم المحل).
       const providerChanged = prev !== next;
-      const { error } = await supabase.from('tenant_whatsapp_gateways').upsert(
+      const { error } = await gatewayWriter.from('tenant_whatsapp_gateways').upsert(
         {
           user_id: user.id,
           evolution_instance_name: instanceName,
@@ -620,7 +631,7 @@ Deno.serve(async (req) => {
 
     await cleanupOtherEngines({ userId: user.id, next: 'whats360' });
 
-    const { error } = await supabase.from('tenant_whatsapp_gateways').upsert(
+    const { error } = await gatewayWriter.from('tenant_whatsapp_gateways').upsert(
       {
         user_id: user.id,
         evolution_instance_name: instanceName,
@@ -769,7 +780,7 @@ Deno.serve(async (req) => {
       }
     }
 
-    const { error } = await supabase.from('tenant_whatsapp_gateways').upsert(
+    const { error } = await gatewayWriter.from('tenant_whatsapp_gateways').upsert(
       upsertRow,
       { onConflict: 'user_id' },
     );
@@ -873,7 +884,7 @@ Deno.serve(async (req) => {
       // الجلسة محذوفة نهائياً (REMOVED) — حدّث السحابة إلى «منفصل» فوراً
       // بدل «خطأ مؤقت» الذي يُبقي التطبيق يعرض «مرتبط» وهي ميتة.
       if (live.notFound) {
-        await supabase.from('tenant_whatsapp_gateways').upsert(
+        await gatewayWriter.from('tenant_whatsapp_gateways').upsert(
           {
             user_id: user.id,
             evolution_instance_name: instanceName,
@@ -938,7 +949,7 @@ Deno.serve(async (req) => {
     }
     if (mapped.status === 'disconnected') patch.last_disconnected_at = now;
 
-    const { error } = await supabase.from('tenant_whatsapp_gateways').upsert(
+    const { error } = await gatewayWriter.from('tenant_whatsapp_gateways').upsert(
       patch,
       { onConflict: 'user_id' },
     );
@@ -985,7 +996,7 @@ Deno.serve(async (req) => {
           source: 'client_status',
           detail: 'instance_not_found_marked_disconnected',
         });
-        await supabase.from('tenant_whatsapp_gateways').upsert(
+        await gatewayWriter.from('tenant_whatsapp_gateways').upsert(
           {
             user_id: user.id,
             evolution_instance_name: instanceName,
@@ -1037,7 +1048,7 @@ Deno.serve(async (req) => {
             phone: mapped.phone,
           },
         });
-        const { error: healErr } = await supabase
+        const { error: healErr } = await gatewayWriter
           .from('tenant_whatsapp_gateways')
           .upsert(
             {
@@ -1077,7 +1088,7 @@ Deno.serve(async (req) => {
           detail: 'repair_needed_skip_soft_reconnect',
           meta: { raw_state: mapped.rawState, status: cloudStatus },
         });
-        await supabase.from('tenant_whatsapp_gateways').upsert(
+        await gatewayWriter.from('tenant_whatsapp_gateways').upsert(
           {
             user_id: user.id,
             evolution_instance_name: instanceName,
@@ -1126,7 +1137,7 @@ Deno.serve(async (req) => {
             soft_reconnect_ms: soft.elapsedMs,
           },
         });
-        await supabase.from('tenant_whatsapp_gateways').upsert(
+        await gatewayWriter.from('tenant_whatsapp_gateways').upsert(
           {
             user_id: user.id,
             evolution_instance_name: instanceName,
@@ -1169,7 +1180,7 @@ Deno.serve(async (req) => {
           soft_elapsed_ms: soft.elapsedMs,
         },
       });
-      const { error: confErr } = await supabase
+      const { error: confErr } = await gatewayWriter
         .from('tenant_whatsapp_gateways')
         .upsert(
           {
@@ -1256,7 +1267,7 @@ Deno.serve(async (req) => {
           gateBefore?.whatsapp_phone ?? gateBefore?.ycloud_from_phone ?? '',
         ).trim() || null;
         await disconnectOfficial(supabase, user.id);
-        await supabase.from('tenant_whatsapp_gateways').update({
+        await gatewayWriter.from('tenant_whatsapp_gateways').update({
           disconnect_cause: 'user_disconnect',
           updated_at: now,
         }).eq('user_id', user.id);
@@ -1281,7 +1292,7 @@ Deno.serve(async (req) => {
           .select('whatsapp_phone')
           .eq('user_id', user.id)
           .maybeSingle();
-        await supabase.from('tenant_whatsapp_gateways').upsert(
+        await gatewayWriter.from('tenant_whatsapp_gateways').upsert(
           {
             user_id: user.id,
             evolution_instance_name: instanceName,
@@ -1333,7 +1344,7 @@ Deno.serve(async (req) => {
         console.warn('disconnect purge failed', e);
       }
 
-      await markHardReset(supabase, user.id, 'user_disconnect', {
+      await markHardReset(gatewayWriter, user.id, 'user_disconnect', {
         purgeOk: purge?.ok === true,
         purgeDetail: purge?.detail ?? null,
         evolutionError,
@@ -1376,7 +1387,7 @@ Deno.serve(async (req) => {
         .select('whatsapp_phone')
         .eq('user_id', user.id)
         .maybeSingle();
-      const { error } = await supabase.from('tenant_whatsapp_gateways').upsert(
+      const { error } = await gatewayWriter.from('tenant_whatsapp_gateways').upsert(
         {
           user_id: user.id,
           evolution_instance_name: instanceName,
@@ -1426,7 +1437,7 @@ Deno.serve(async (req) => {
       }
       const live = await Evo.readEvolutionLiveState(instanceName);
       if (live.ok && live.mapped.connected) {
-        await supabase.from('tenant_whatsapp_gateways').upsert(
+        await gatewayWriter.from('tenant_whatsapp_gateways').upsert(
           {
             user_id: user.id,
             evolution_instance_name: instanceName,
@@ -1459,7 +1470,7 @@ Deno.serve(async (req) => {
       );
       const base64 = extractedEvo.base64 ?? extracted.base64;
       const pairing = extractedEvo.pairingCode ?? extracted.pairingCode;
-      await supabase.from('tenant_whatsapp_gateways').upsert(
+      await gatewayWriter.from('tenant_whatsapp_gateways').upsert(
         {
           user_id: user.id,
           evolution_instance_name: instanceName,
@@ -1521,7 +1532,7 @@ Deno.serve(async (req) => {
 
     // جلسة مفتوحة: لا logout أبداً عبر qr (حتى force_reset من تطبيق قديم).
     if (live.mapped.connected) {
-      await supabase.from('tenant_whatsapp_gateways').upsert(
+      await gatewayWriter.from('tenant_whatsapp_gateways').upsert(
         {
           user_id: user.id,
           evolution_instance_name: instanceName,
@@ -1560,7 +1571,7 @@ Deno.serve(async (req) => {
       body.force_reset !== true &&
       !needsRepairEarly
     ) {
-      await supabase.from('tenant_whatsapp_gateways').upsert(
+      await gatewayWriter.from('tenant_whatsapp_gateways').upsert(
         {
           user_id: user.id,
           evolution_instance_name: instanceName,
@@ -1625,7 +1636,7 @@ Deno.serve(async (req) => {
         if (soft.ok) {
           const healed = await readEvolutionLiveState(instanceName);
           const phone = healed.mapped.phone ?? null;
-          await supabase.from('tenant_whatsapp_gateways').upsert(
+          await gatewayWriter.from('tenant_whatsapp_gateways').upsert(
             {
               user_id: user.id,
               evolution_instance_name: instanceName,
@@ -1687,7 +1698,7 @@ Deno.serve(async (req) => {
           });
         } else {
           const purge = await purgeAndRecreateEvolutionSession(instanceName);
-          await markHardReset(supabase, user.id, 'user_force_reset', {
+          await markHardReset(gatewayWriter, user.id, 'user_force_reset', {
             purge,
             repair_needed: needsRepair,
           });
@@ -1741,7 +1752,7 @@ Deno.serve(async (req) => {
           .eq('user_id', user.id)
           .maybeSingle();
         const wasConnected = String(prevGate?.status ?? '') === 'connected';
-        await supabase.from('tenant_whatsapp_gateways').upsert(
+        await gatewayWriter.from('tenant_whatsapp_gateways').upsert(
           {
             user_id: user.id,
             evolution_instance_name: instanceName,
@@ -1822,7 +1833,7 @@ Deno.serve(async (req) => {
           });
           if (softFb.ok) {
             const healed = await readEvolutionLiveState(instanceName);
-            await supabase.from('tenant_whatsapp_gateways').upsert(
+            await gatewayWriter.from('tenant_whatsapp_gateways').upsert(
               {
                 user_id: user.id,
                 evolution_instance_name: instanceName,
@@ -1867,7 +1878,7 @@ Deno.serve(async (req) => {
         }
 
         const purgeFb = await purgeAndRecreateEvolutionSession(instanceName);
-        await markHardReset(supabase, user.id, 'server_qr_fallback', {
+        await markHardReset(gatewayWriter, user.id, 'server_qr_fallback', {
           purge: purgeFb,
         });
         await writeAudit(supabase, {
@@ -1894,7 +1905,7 @@ Deno.serve(async (req) => {
         extracted = extractQrPayload(data);
       }
 
-      await supabase.from('tenant_whatsapp_gateways').upsert(
+      await gatewayWriter.from('tenant_whatsapp_gateways').upsert(
         {
           user_id: user.id,
           evolution_instance_name: instanceName,
