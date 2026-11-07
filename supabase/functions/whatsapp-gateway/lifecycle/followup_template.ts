@@ -232,6 +232,58 @@ export async function submitFollowupTemplateForTenant(
   };
 }
 
+/** مطابق للنص الافتراضي في إعدادات التذكير داخل التطبيق. */
+export const DEFAULT_FOLLOWUP_BODY_AR = 'مرحباً {الاسم}،\n' +
+  'تحية طيبة من {المحل}.\n\n' +
+  'سيارتكم {السيارة} صار وقت صيانة غيار الزيت.\n' +
+  'آخر قراءة سجّلناها {آخر_قراءة}، والموعد التقريبي {القراءة_اللاحقة}.\n\n' +
+  'إذا مناسب، نرتّب لكم موعد بالمحل.\n' +
+  'أهلاً وسهلاً.';
+
+/** قالب معتمد أو قيد المراجعة لا يُرسل مرة أخرى. */
+export function followupNeedsSubmit(status: string | null | undefined): boolean {
+  return status !== 'approved' && status !== 'pending';
+}
+
+/**
+ * عند اكتمال ربط رقم المتجر عبر Meta يبدأ التذكير مراجعته مع قالب البطاقة،
+ * حتى لا ينتظر فتح إعدادات التذكير. فشله لا يوقف الربط، ويبقى الإرسال اليدوي من الإعدادات.
+ */
+export async function ensureFollowupTemplateOnConnect(
+  supabase: SupabaseClient,
+  tenantUserId: string,
+): Promise<void> {
+  try {
+    const db = writeClient(supabase);
+    const { data: row } = await db
+      .from('tenant_whatsapp_templates')
+      .select('status')
+      .eq('tenant_user_id', tenantUserId)
+      .eq('provider', 'cloud_api')
+      .eq('template_key', FOLLOWUP_TEMPLATE_KEY)
+      .maybeSingle();
+    if (!followupNeedsSubmit(row?.status ? String(row.status) : null)) return;
+
+    const { data: rule } = await db
+      .from('wa_oil_followup_rules')
+      .select('body_template')
+      .eq('tenant_user_id', tenantUserId)
+      .maybeSingle();
+    const body = String(rule?.body_template ?? '').trim() ||
+      DEFAULT_FOLLOWUP_BODY_AR;
+    const result = await submitFollowupTemplateForTenant(
+      supabase,
+      tenantUserId,
+      body,
+    );
+    if (!result.ok) {
+      console.warn('followup template on connect failed', result.detail);
+    }
+  } catch (e) {
+    console.warn('followup template on connect failed', e);
+  }
+}
+
 export async function loadFollowupTemplateSpec(
   supabase: SupabaseClient,
   tenantUserId: string,

@@ -8,6 +8,7 @@ import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1
 import { getWhatsAppProvider, parseTransportId } from '../providers/registry.ts';
 import { cleanupOtherEngines } from '../provider.ts';
 import { ensureDefaultTemplatesForTenant } from './template_lifecycle_service.ts';
+import { ensureFollowupTemplateOnConnect } from './followup_template.ts';
 import { writeClient } from '../admin_client.ts';
 import { creditNabooSharedWelcomeLot } from '../wallet.ts';
 import {
@@ -150,6 +151,9 @@ export async function startOfficialConnect(
       { onConflict: 'user_id' },
     );
     await ensureDefaultTemplatesForTenant(db, tenantUserId);
+    if (officialProvider === 'cloud_api') {
+      await ensureFollowupTemplateOnConnect(supabase, tenantUserId);
+    }
     await notifyWaBound(db, {
       userId: tenantUserId,
       instanceName: `shop_${tenantUserId.replace(/-/g, '_')}`,
@@ -467,6 +471,9 @@ export async function completeOfficialConnect(
   }
 
   await ensureDefaultTemplatesForTenant(db, input.tenantUserId);
+  if (officialProvider === 'cloud_api') {
+    await ensureFollowupTemplateOnConnect(supabase, input.tenantUserId);
+  }
   await recordOnboardingStep(db, input.tenantUserId, 'completed');
 
   return {
