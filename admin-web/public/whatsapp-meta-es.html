@@ -276,11 +276,17 @@
           (navigator.maxTouchPoints > 1 && /Mac/.test(ua));
       }
 
+      // رقم عليه واتساب الأعمال يبقى على التطبيق، والرقم الجديد يسجله Meta برمز.
+      var numberType = params.get('number_type') || stored.number_type || 'business_app';
+      var isNewNumber = numberType === 'new';
+      function signupExtras() {
+        return isNewNumber
+          ? { version: 'v4' }
+          : { featureType: 'whatsapp_business_app_onboarding', version: 'v4' };
+      }
+
       function launchDialogOauth() {
-        var extras = JSON.stringify({
-          featureType: 'whatsapp_business_app_onboarding',
-          version: 'v4'
-        });
+        var extras = JSON.stringify(signupExtras());
         var oauth = 'https://www.facebook.com/' + GRAPH_VERSION + '/dialog/oauth'
           + '?client_id=' + encodeURIComponent(appId)
           + '&config_id=' + encodeURIComponent(configId)
@@ -305,7 +311,8 @@
           callback: callback,
           business_name: businessName,
           business_phone: businessPhone,
-          feature_type: 'whatsapp_business_app_onboarding',
+          feature_type: isNewNumber ? '' : 'whatsapp_business_app_onboarding',
+          number_type: numberType,
           redirect_uri: redirectUri
         });
         btn.disabled = true;
@@ -330,10 +337,7 @@
               config_id: configId,
               response_type: 'code',
               override_default_response_type: true,
-              extras: {
-                featureType: 'whatsapp_business_app_onboarding',
-                version: 'v4'
-              }
+              extras: signupExtras()
             });
             return;
           } catch (e) {

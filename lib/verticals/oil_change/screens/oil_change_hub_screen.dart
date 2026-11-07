@@ -1740,10 +1740,16 @@ class _OilChangeHubScreenState extends State<OilChangeHubScreen>
               leading: Icon(Icons.link_off_rounded, color: cs.error),
               actions: [
                 TextButton(
+                  style: TextButton.styleFrom(
+                    foregroundColor: cs.onErrorContainer,
+                  ),
                   onPressed: () => unawaited(_openWhatsappConnect()),
                   child: const Text('إعادة الربط'),
                 ),
                 TextButton(
+                  style: TextButton.styleFrom(
+                    foregroundColor: cs.onErrorContainer,
+                  ),
                   onPressed: () => unawaited(_openHubSettings()),
                   child: const Text('الإعدادات'),
                                                         ),

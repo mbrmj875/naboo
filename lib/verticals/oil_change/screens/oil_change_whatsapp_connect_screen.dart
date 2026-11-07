@@ -51,6 +51,7 @@ class _OilChangeWhatsappConnectScreenState
   String? _onboardingUrl;
   String? _officialMessage;
   WhatsappConnectMethod _selectedMethod = WhatsappConnectMethod.metaDirect;
+  bool _stopsCurrentSending = false;
   bool? _reminderReady;
   String? _onboardingStep;
   String? _onboardingError;
@@ -142,7 +143,7 @@ class _OilChangeWhatsappConnectScreenState
         _showOfficialFlow = true;
         _selectedMethod = WhatsappConnectMethod.metaDirect;
         _officialMessage =
-            'أكمل تسجيل Meta من الصفحة التي فُتحت، ثم اضغط تحديث الحالة.';
+            'لم يكتمل الربط مع Meta بعد. اتبع الخطوات لإكماله.';
         _readyPollTimer?.cancel();
       } else {
         _showOfficialFlow = false;
@@ -157,6 +158,14 @@ class _OilChangeWhatsappConnectScreenState
   Future<void> _continueWithSelectedMethod() async {
     switch (_selectedMethod) {
       case WhatsappConnectMethod.metaDirect:
+        // لا تغيير على الخادم هنا: طريقة الإرسال لا تتغير إلا عند فتح Meta.
+        setState(() {
+          _error = null;
+          _showConnectFlow = false;
+          _showOfficialFlow = true;
+          _officialMessage = 'اتبع الخطوات بالترتيب لربط رقمك.';
+          _stopsCurrentSending = _connected;
+        });
       case WhatsappConnectMethod.nabooShared:
         await _startOfficialMethod(_selectedMethod);
       case WhatsappConnectMethod.qrCode:
@@ -172,6 +181,14 @@ class _OilChangeWhatsappConnectScreenState
         existing.provider == TenantWhatsappProvider.cloudApi &&
         existing.isConnected &&
         (existing.whatsappPhone ?? '').trim().isNotEmpty;
+  }
+
+  Future<void> _openMeta(bool numberHasBusinessApp) async {
+    await _startOfficialMethod(WhatsappConnectMethod.metaDirect);
+    final url = _onboardingUrl;
+    if (url != null) {
+      await _openOnboardingUrl(url, numberHasBusinessApp: numberHasBusinessApp);
+    }
   }
 
   Future<void> _startOfficialMethod(WhatsappConnectMethod method) async {
@@ -248,12 +265,16 @@ class _OilChangeWhatsappConnectScreenState
     }
   }
 
-  Future<void> _openOnboardingUrl(String raw) async {
+  Future<void> _openOnboardingUrl(
+    String raw, {
+    bool numberHasBusinessApp = true,
+  }) async {
     final parsed = Uri.tryParse(raw.trim());
     if (parsed == null) return;
 
     final q = Map<String, String>.from(parsed.queryParameters);
-    q['es_rev'] = '9';
+    q['es_rev'] = '10';
+    q['number_type'] = numberHasBusinessApp ? 'business_app' : 'new';
     q.remove('feature_type');
     q.remove('auto');
     final uri = parsed.replace(queryParameters: q);
@@ -876,6 +897,8 @@ class _OilChangeWhatsappConnectScreenState
                                 : (_) => unawaited(
                                       _openOnboardingUrl(_onboardingUrl!),
                                     ),
+                            onOpenMeta: _openMeta,
+                            stopsCurrentSending: _stopsCurrentSending,
                             onRefresh: () => unawaited(_pollReadyStatus()),
                             onBack: _backToMethodPicker,
                             onContinue: _officialPreparing
@@ -1982,9 +2005,7 @@ class _InfoTipsCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final tips = const [
-      'اختر رقم نابو الرسمي أو Meta مباشرة لاستقرار أفضل وإرسال بالقوالب.',
-      'مسح QR سريع لكنه قد ينقطع — مناسب كخيار احتياطي.',
-      'الربط مرة واحدة فقط للحساب على السيرفر — الحاسوب الثاني لا يحتاج QR جديد.',
+      'الربط مرة واحدة للحساب، ولا تحتاج أجهزتك الأخرى إلى ربط جديد.',
       'لا تضغط «إعادة الربط» على جهاز آخر: ذلك قد يفصل واتساب عن كل الأجهزة.',
       'إلغاء الربط أو إعادة الربط يتطلب رمز PIN للمالك.',
     ];

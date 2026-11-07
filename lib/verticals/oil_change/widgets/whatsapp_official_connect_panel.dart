@@ -20,6 +20,8 @@ class WhatsappOfficialConnectPanel extends StatefulWidget {
     this.onRefresh,
     this.onBack,
     this.onContinue,
+    this.onOpenMeta,
+    this.stopsCurrentSending = false,
   });
 
   final WhatsappConnectMethod method;
@@ -31,6 +33,12 @@ class WhatsappOfficialConnectPanel extends StatefulWidget {
   final VoidCallback? onBack;
   final VoidCallback? onContinue;
 
+  /// يبدأ الربط عند Meta. true إذا كان الرقم عليه تطبيق واتساب الأعمال.
+  final Future<void> Function(bool numberHasBusinessApp)? onOpenMeta;
+
+  /// المتجر يرسل الآن بطريقة أخرى، وتتوقف رسائله حتى يكتمل الربط.
+  final bool stopsCurrentSending;
+
   @override
   State<WhatsappOfficialConnectPanel> createState() =>
       _WhatsappOfficialConnectPanelState();
@@ -39,6 +47,12 @@ class WhatsappOfficialConnectPanel extends StatefulWidget {
 class _WhatsappOfficialConnectPanelState
     extends State<WhatsappOfficialConnectPanel> {
   bool _numberHasBusinessApp = true;
+  bool _metaOpened = false;
+
+  Future<void> _openMeta() async {
+    await widget.onOpenMeta!(_numberHasBusinessApp);
+    if (mounted) setState(() => _metaOpened = true);
+  }
 
   Future<void> _openStore() async {
     final url = defaultTargetPlatform == TargetPlatform.iOS
@@ -152,76 +166,126 @@ class _WhatsappOfficialConnectPanelState
         ),
         if (isMetaDirect) ...[
           const SizedBox(height: 16),
-          Text(
-            'قبل أن تبدأ',
-            style: Theme.of(context)
-                .textTheme
-                .titleSmall
-                ?.copyWith(fontWeight: FontWeight.w800),
-          ),
-          const SizedBox(height: 8),
-          SegmentedButton<bool>(
-            segments: const [
-              ButtonSegment(value: true, label: Text('عليه واتساب الأعمال')),
-              ButtonSegment(value: false, label: Text('رقم جديد')),
-            ],
-            selected: {_numberHasBusinessApp},
-            onSelectionChanged: (v) =>
-                setState(() => _numberHasBusinessApp = v.first),
-          ),
-          const SizedBox(height: 10),
-          Text(
-            _numberHasBusinessApp
-                ? 'جهّز الهاتف الذي عليه الرقم، وواتساب الأعمال إصدار 2.24.17 أو أحدث، وصلاحية مدير في حساب Meta. اضغط الزر، ثم في Meta اختر ربط الحساب الموجود وامسح رمز QR من التطبيق. لا تكتب الرقم كرقم جديد.'
-                : 'جهّز هاتفًا يستقبل رسالة أو مكالمة على الرقم، وصلاحية مدير في حساب Meta. تطلب منك Meta الرمز داخل نافذتها. يجب ألا يكون الرقم مسجلًا على تطبيق واتساب.',
-            style: TextStyle(
-              fontSize: 13,
-              height: 1.5,
-              color: cs.onSurfaceVariant,
+          _MetaStep(
+            number: 1,
+            title: 'ما نوع الرقم؟',
+            child: SegmentedButton<bool>(
+              segments: const [
+                ButtonSegment(value: true, label: Text('عليه واتساب الأعمال')),
+                ButtonSegment(value: false, label: Text('رقم جديد')),
+              ],
+              selected: {_numberHasBusinessApp},
+              onSelectionChanged: (v) =>
+                  setState(() => _numberHasBusinessApp = v.first),
             ),
-            textAlign: TextAlign.start,
           ),
-          const SizedBox(height: 6),
-          Wrap(
-            spacing: 8,
-            children: [
-              TextButton(
-                onPressed: () => unawaited(_showPermissionHelp()),
-                child: const Text('كيف أحصل على الصلاحية'),
-              ),
-              if (_numberHasBusinessApp)
-                TextButton(
-                  onPressed: () => unawaited(_openStore()),
-                  child: const Text('تحديث التطبيق'),
+          _MetaStep(
+            number: 2,
+            title: 'جهّز قبل أن تبدأ',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _numberHasBusinessApp
+                      ? '• الهاتف الذي عليه الرقم بين يديك.\n'
+                          '• واتساب الأعمال إصدار 2.24.17 أو أحدث.\n'
+                          '• صلاحية مدير في حساب Meta للأعمال.'
+                      : '• هاتف يستقبل رسالة أو مكالمة على الرقم.\n'
+                          '• الرقم غير مسجل على تطبيق واتساب.\n'
+                          '• صلاحية مدير في حساب Meta للأعمال.',
+                  style: TextStyle(
+                    fontSize: 13,
+                    height: 1.6,
+                    color: cs.onSurfaceVariant,
+                  ),
                 ),
-            ],
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    TextButton(
+                      onPressed: () => unawaited(_showPermissionHelp()),
+                      child: const Text('كيف أحصل على الصلاحية'),
+                    ),
+                    if (_numberHasBusinessApp)
+                      TextButton(
+                        onPressed: () => unawaited(_openStore()),
+                        child: const Text('تحديث التطبيق'),
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          _MetaStep(
+            number: 3,
+            title: 'أكمل الربط في نافذة Meta',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  _numberHasBusinessApp
+                      ? 'اختر ربط الحساب الموجود، ثم امسح رمز QR من واتساب الأعمال. لا تكتب الرقم كرقم جديد.'
+                      : 'اكتب الرقم، ثم أدخل الرمز الذي يصلك داخل نافذة Meta.',
+                  style: TextStyle(
+                    fontSize: 13,
+                    height: 1.5,
+                    color: cs.onSurfaceVariant,
+                  ),
+                ),
+                if (widget.stopsCurrentSending) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    'تتوقف رسائل متجرك الحالية بعد فتح Meta حتى يكتمل الربط.',
+                    style: TextStyle(
+                      fontSize: 13,
+                      height: 1.5,
+                      fontWeight: FontWeight.w700,
+                      color: cs.error,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 10),
+                FilledButton.icon(
+                  onPressed: preparing || widget.onOpenMeta == null
+                      ? null
+                      : () => unawaited(_openMeta()),
+                  icon: const Icon(Icons.open_in_new_rounded),
+                  label: Text(_metaOpened ? 'فتح Meta مرة أخرى' : 'فتح Meta'),
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size.fromHeight(50),
+                    backgroundColor: AppColors.primary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          _MetaStep(
+            number: 4,
+            title: 'ارجع إلى هنا',
+            child: Text(
+              'نتأكد من الربط تلقائيًا بعد رجوعك، ويظهر «جاهز» هنا فقط إذا أكدته Meta.',
+              style: TextStyle(
+                fontSize: 13,
+                height: 1.5,
+                color: cs.onSurfaceVariant,
+              ),
+            ),
           ),
         ],
         const SizedBox(height: 16),
-        if (hasUrl && widget.onOpenOnboarding != null) ...[
-          if (isMetaDirect) ...[
-            FilledButton.icon(
-              onPressed: () => widget.onOpenOnboarding!(''),
-              icon: const Icon(Icons.verified_rounded),
-              label: const Text('ربط واتساب الرسمي'),
-              style: FilledButton.styleFrom(
-                minimumSize: const Size.fromHeight(50),
-                backgroundColor: AppColors.primary,
-              ),
+        if (isMetaDirect) ...[
+          // زر Meta داخل الخطوة 3.
+        ] else if (hasUrl && widget.onOpenOnboarding != null) ...[
+          FilledButton.icon(
+            onPressed: () => widget.onOpenOnboarding!(''),
+            icon: const Icon(Icons.open_in_new_rounded),
+            label: const Text('إكمال الربط في Meta'),
+            style: FilledButton.styleFrom(
+              minimumSize: const Size.fromHeight(50),
+              backgroundColor: AppColors.primary,
             ),
-            const SizedBox(height: 10),
-          ] else ...[
-            FilledButton.icon(
-              onPressed: () => widget.onOpenOnboarding!(''),
-              icon: const Icon(Icons.open_in_new_rounded),
-              label: const Text('إكمال الربط في Meta'),
-              style: FilledButton.styleFrom(
-                minimumSize: const Size.fromHeight(50),
-                backgroundColor: AppColors.primary,
-              ),
-            ),
-            const SizedBox(height: 10),
-          ],
+          ),
+          const SizedBox(height: 10),
         ] else if (!preparing && widget.onContinue != null) ...[
           FilledButton.icon(
             onPressed: widget.onContinue,
@@ -234,11 +298,11 @@ class _WhatsappOfficialConnectPanelState
           ),
           const SizedBox(height: 10),
         ],
-        if (widget.onRefresh != null)
+        if (widget.onRefresh != null && (!isMetaDirect || _metaOpened))
           OutlinedButton.icon(
             onPressed: widget.onRefresh,
             icon: const Icon(Icons.refresh_rounded),
-            label: const Text('تحديث حالة التجهيز'),
+            label: const Text('تحديث الحالة'),
             style: OutlinedButton.styleFrom(
               minimumSize: const Size.fromHeight(48),
               foregroundColor: OilChangeFormTheme.gold,
@@ -251,21 +315,72 @@ class _WhatsappOfficialConnectPanelState
             child: const Text('العودة لاختيار طريقة أخرى'),
           ),
         ],
-        const SizedBox(height: 8),
-        Text(
-          preparing
-              ? 'نابو يجهّز القوالب والرقم تلقائياً — لا تحتاج إنشاء قالب يدوياً.'
-              : isMetaDirect
-                  ? 'بعد العودة من المتصفح اضغط «تحديث حالة التجهيز». النجاح يظهر من الخادم فقط.'
-                  : 'بعد الإكمال ستظهر حالة «جاهز» عند اكتمال الإعداد على السحابة.',
-          style: TextStyle(
-            fontSize: 12,
-            color: cs.onSurfaceVariant,
-            height: 1.4,
+        if (!isMetaDirect) ...[
+          const SizedBox(height: 8),
+          Text(
+            preparing
+                ? 'نابو يجهّز القوالب والرقم تلقائياً — لا تحتاج إنشاء قالب يدوياً.'
+                : 'بعد الإكمال ستظهر حالة «جاهز» عند اكتمال الإعداد على السحابة.',
+            style: TextStyle(
+              fontSize: 12,
+              color: cs.onSurfaceVariant,
+              height: 1.4,
+            ),
+            textAlign: TextAlign.center,
           ),
-          textAlign: TextAlign.center,
-        ),
+        ],
       ],
+    );
+  }
+}
+
+class _MetaStep extends StatelessWidget {
+  const _MetaStep({
+    required this.number,
+    required this.title,
+    required this.child,
+  });
+
+  final int number;
+  final String title;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              CircleAvatar(
+                radius: 12,
+                backgroundColor: AppColors.primary,
+                child: Text(
+                  '$number',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  title,
+                  style: theme.textTheme.titleSmall
+                      ?.copyWith(fontWeight: FontWeight.w800),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          child,
+        ],
+      ),
     );
   }
 }

@@ -19,7 +19,7 @@ abstract class OilChangeWhatsappUserMessages {
       case OilChangeWhatsappNotifyReason.rateLimited:
         return 'تم إرسال رسائل كثيرة — انتظر قليلاً ثم أعد المحاولة';
       case OilChangeWhatsappNotifyReason.whatsappDisconnected:
-        return 'واتساب المحل غير متصل — أعد ربط QR من الإعدادات';
+        return 'واتساب المحل غير متصل — أكمل الربط من صفحة ربط واتساب';
       case OilChangeWhatsappNotifyReason.evolutionError:
         return 'تعذّر الإرسال من رقم المحل — تحقق من اتصال واتساب المحل';
       case OilChangeWhatsappNotifyReason.invalidPhone:
@@ -45,7 +45,7 @@ abstract class OilChangeWhatsappUserMessages {
   /// بانر دائم في سجل غيار الزيت عند انقطاع جلسة واتساب المحل.
   static const gatewayDisconnectedBanner =
       'واتساب المحل غير متصل — الرسائل التلقائية متوقفة. '
-      'أعد ربط QR من الإعدادات.';
+      'أكمل الربط من صفحة ربط واتساب.';
 
   /// تلميح قصير تحت مفتاح الإرسال التلقائي.
   static const settingsWhatsappAutoHintConnected =
