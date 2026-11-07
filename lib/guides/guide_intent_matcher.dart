@@ -42,7 +42,7 @@ class GuideIntentMatcher {
     _IntentEntry(
       tourId: GuideTourIds.oilWhatsapp,
       reply:
-          'سأشرح لك طرق الربط الثلاث (رقم نابو، Meta، QR) وكيف تفصل أو تعيد الربط بأمان.',
+          'سأشرح لك طرق الربط (Meta ورقم نابو) وكيف تفصل أو تعيد الربط بأمان.',
       keywords: [
         'واتساب',
         'واتس',

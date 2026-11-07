@@ -15,7 +15,10 @@ import {
   notifyWaUnbound,
 } from '../../whatsapp-events/owner_email_notify.ts';
 import { westernPhone } from '../../whatsapp-events/owner_email_copy.ts';
-import { sharedSenderConfig } from '../shared_sender.ts';
+import { resolveSharedSenderToken, sharedSenderConfig } from '../shared_sender.ts';
+import { resolveGraphAccessToken } from '../cloud_api.ts';
+import { fetchPhoneDisplay } from '../meta_oauth.ts';
+import { recordOnboardingStep } from './onboarding_state.ts';
 import { deleteProviderSecret } from '../provider_secrets.ts';
 import type { TransportProviderId } from '../providers/types.ts';
 
@@ -98,6 +101,9 @@ export async function startOfficialConnect(
   }
 
   const db = writeClient(supabase);
+  await recordOnboardingStep(db, tenantUserId, 'started', {
+    provider: officialProvider,
+  });
   const { data: existing } = await db
     .from('tenant_whatsapp_gateways')
     .select(
@@ -151,6 +157,7 @@ export async function startOfficialConnect(
       phone,
       once: true,
     });
+    await recordOnboardingStep(db, tenantUserId, 'completed');
     return {
       ok: true,
       onboardingUrl: null,
@@ -166,12 +173,33 @@ export async function startOfficialConnect(
   if (officialProvider === 'dualhook') {
     const shared = sharedSenderConfig();
     if (!shared) {
+      await recordOnboardingStep(db, tenantUserId, 'failed', {
+        errorCode: 'shared_sender_not_configured',
+      });
       return {
         ok: false,
         detail: 'shared_sender_not_configured',
         provider: officialProvider,
         message_ar:
           'رقم نابو الرسمي غير مضبوط على الخادم. أضف SHARED_SENDER_WABA_ID و SHARED_SENDER_PHONE_NUMBER_ID ثم أعد المحاولة.',
+      };
+    }
+
+    // لا نكتب ready قبل أن تؤكد Meta أن رقم نابو يعمل بهذا التوكن.
+    const sharedToken = resolveSharedSenderToken();
+    const sharedPhone = sharedToken
+      ? await fetchPhoneDisplay(shared.phoneNumberId, sharedToken)
+      : null;
+    if (!sharedPhone?.displayE164) {
+      await recordOnboardingStep(db, tenantUserId, 'failed', {
+        errorCode: 'shared_sender_unverified',
+      });
+      return {
+        ok: false,
+        detail: 'shared_sender_unverified',
+        provider: officialProvider,
+        message_ar:
+          'تعذّر التأكد من رقم نابو عند Meta الآن، ولم يتغير شيء في ربطك. أعد المحاولة بعد قليل.',
       };
     }
 
@@ -220,6 +248,7 @@ export async function startOfficialConnect(
     });
     await ensureDefaultTemplatesForTenant(db, tenantUserId);
     await creditNabooSharedWelcomeLot(supabase, tenantUserId);
+    await recordOnboardingStep(db, tenantUserId, 'completed');
     return {
       ok: true,
       onboardingUrl: null,
@@ -248,6 +277,13 @@ export async function startOfficialConnect(
   );
 
   const started = await provider.startConnect(tenantUserId);
+  if (started.ok) {
+    await recordOnboardingStep(db, tenantUserId, 'meta_opened');
+  } else {
+    await recordOnboardingStep(db, tenantUserId, 'failed', {
+      errorCode: started.detail ?? 'connect_start_failed',
+    });
+  }
   if (!started.ok) {
     const metaHint = officialProvider === 'cloud_api' &&
         (started.detail === 'meta_es_not_configured' ||
@@ -309,8 +345,43 @@ export async function completeOfficialConnect(
     accessToken: input.accessToken,
     signupEvent: input.signupEvent,
   };
+  const stateDb = writeClient(supabase);
+  await recordOnboardingStep(stateDb, input.tenantUserId, 'meta_returned', {
+    provider: officialProvider,
+  });
   const done = await provider.completeConnect(completeInput);
+
+  // بلا توكن OAuth لم يتحقق أحد من المعرّفات، فلا نكتب ready دون دليل من Graph.
+  if (done.ok && done.detail === 'bound_without_oauth_token') {
+    const phoneId = String(completeInput.phoneNumberId ?? '').trim();
+    const token = phoneId
+      ? await resolveGraphAccessToken({
+        userId: input.tenantUserId,
+        phoneNumberId: phoneId,
+        wabaId: completeInput.wabaId,
+      })
+      : null;
+    const seen = token ? await fetchPhoneDisplay(phoneId, token) : null;
+    if (!seen?.displayE164) {
+      await recordOnboardingStep(stateDb, input.tenantUserId, 'failed', {
+        errorCode: 'phone_not_verified',
+      });
+      return {
+        ok: false,
+        detail: 'phone_not_verified',
+        message_ar:
+          'لم تؤكد Meta هذا الرقم، فلم نكمل الربط. أعد الربط من التطبيق.',
+      };
+    }
+    if (!String(completeInput.fromPhoneE164 ?? '').trim()) {
+      completeInput.fromPhoneE164 = seen.displayE164;
+    }
+  }
+
   if (!done.ok) {
+    await recordOnboardingStep(stateDb, input.tenantUserId, 'failed', {
+      errorCode: done.detail ?? 'complete_failed',
+    });
     const ar = done.detail === 'meta_app_secret_missing'
       ? 'إعداد Meta غير مكتمل على الخادم. تواصل مع دعم نابو.'
       : done.detail === 'oauth_code_missing' ||
@@ -396,6 +467,7 @@ export async function completeOfficialConnect(
   }
 
   await ensureDefaultTemplatesForTenant(db, input.tenantUserId);
+  await recordOnboardingStep(db, input.tenantUserId, 'completed');
 
   return {
     ok: true,

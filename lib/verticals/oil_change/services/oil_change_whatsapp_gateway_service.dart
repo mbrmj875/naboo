@@ -42,6 +42,9 @@ class WhatsappGatewayStatusResult {
     this.readyState,
     this.messageAr,
     this.sendBlock,
+    this.reminderReady,
+    this.onboardingStep,
+    this.onboardingError,
   });
 
   final bool ok;
@@ -52,6 +55,11 @@ class WhatsappGatewayStatusResult {
   final String? readyState;
   final String? messageAr;
   final WhatsappSendBlock? sendBlock;
+
+  /// null عندما لا يرجع الخادم الحقل بعد.
+  final bool? reminderReady;
+  final String? onboardingStep;
+  final String? onboardingError;
 }
 
 class WhatsappGatewaySendResult {
@@ -154,6 +162,7 @@ class OilChangeWhatsappGatewayService {
     if (data == null) {
       return const WhatsappGatewayStatusResult(ok: false);
     }
+    final onboarding = data['onboarding'];
     return WhatsappGatewayStatusResult(
       ok: data['ok'] == true,
       status: data['status']?.toString(),
@@ -162,6 +171,30 @@ class OilChangeWhatsappGatewayService {
       readyState: data['ready_state']?.toString(),
       messageAr: data['message_ar']?.toString(),
       sendBlock: WhatsappSendBlock.fromJson(data['send_block']),
+      reminderReady: data['reminder_ready'] is bool
+          ? data['reminder_ready'] as bool
+          : null,
+      onboardingStep: onboarding is Map
+          ? onboarding['step']?.toString()
+          : null,
+      onboardingError: onboarding is Map
+          ? onboarding['error_code']?.toString()
+          : null,
+    );
+  }
+
+  /// رسالة التجربة بعد الربط، والمفتاح يتابع به التطبيق تأكيد الوصول.
+  Future<({bool ok, String? key, String? messageAr})> sendConnectTest({
+    required String phone,
+  }) async {
+    final data = await _invoke({
+      'action': 'send_connect_test',
+      'customer_phone': phone,
+    });
+    return (
+      ok: data?['ok'] == true,
+      key: data?['idempotency_key']?.toString(),
+      messageAr: data?['message_ar']?.toString(),
     );
   }
 

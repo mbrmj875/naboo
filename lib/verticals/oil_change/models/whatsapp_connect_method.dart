@@ -57,7 +57,7 @@ extension WhatsappConnectMethodX on WhatsappConnectMethod {
       case WhatsappConnectMethod.metaDirect:
         return 'رقمك';
       case WhatsappConnectMethod.nabooShared:
-        return 'موصى به';
+        return 'بلا رقم';
       case WhatsappConnectMethod.qrCode:
         return 'سريع';
     }
@@ -95,8 +95,32 @@ extension WhatsappConnectMethodX on WhatsappConnectMethod {
     }
   }
 
+  /// الافتراضي للمتجر الجديد رقمه هو. الصف الجديد مزوده waha في القاعدة،
+  /// فلا يُعد ذلك استخدامًا فعليًا لـQR إلا إذا كان متصلًا أو يتصل الآن.
   static WhatsappConnectMethod fromRecord(TenantWhatsappGatewayRecord? record) {
-    if (record == null) return WhatsappConnectMethod.nabooShared;
-    return fromProvider(record.provider) ?? WhatsappConnectMethod.nabooShared;
+    if (record == null) return WhatsappConnectMethod.metaDirect;
+    final method = fromProvider(record.provider);
+    if (method == null) return WhatsappConnectMethod.metaDirect;
+    if (method == WhatsappConnectMethod.qrCode && !_activelyUsesQr(record)) {
+      return WhatsappConnectMethod.metaDirect;
+    }
+    return method;
+  }
+
+  /// QR مخفي عن المتاجر الجديدة، ويبقى لمن يستخدمه الآن.
+  static List<WhatsappConnectMethod> visibleFor(
+    TenantWhatsappGatewayRecord? record,
+  ) {
+    return [
+      WhatsappConnectMethod.metaDirect,
+      WhatsappConnectMethod.nabooShared,
+      if (record != null && _activelyUsesQr(record)) WhatsappConnectMethod.qrCode,
+    ];
+  }
+
+  static bool _activelyUsesQr(TenantWhatsappGatewayRecord record) {
+    return fromProvider(record.provider) == WhatsappConnectMethod.qrCode &&
+        (record.isConnected ||
+            record.status == TenantWhatsappGatewayStatus.connecting);
   }
 }

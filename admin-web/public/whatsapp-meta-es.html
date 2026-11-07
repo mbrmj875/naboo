@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Naboo — WhatsApp Meta Connect</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, sans-serif;
+      background: linear-gradient(160deg, #071A36 0%, #0b2a52 55%, #b8960c33 100%);
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      color: #0f172a;
+    }
+    .card {
+      width: min(440px, 100%);
+      background: #fff;
+      border-radius: 18px;
+      padding: 28px 22px;
+      box-shadow: 0 18px 40px #00000033;
+    }
+    h1 { margin: 0 0 8px; font-size: 1.35rem; color: #071A36; }
+    p { margin: 0 0 14px; line-height: 1.55; color: #475569; font-size: .95rem; }
+    button {
+      width: 100%; border: 0; border-radius: 12px; padding: 14px 16px;
+      font-size: 1rem; font-weight: 800; cursor: pointer;
+      background: #1877f2; color: #fff;
+      margin-top: 8px;
+    }
+    button.secondary { background: #071A36; }
+    button:disabled { opacity: .55; cursor: not-allowed; }
+    .note {
+      margin-top: 14px; padding: 12px; border-radius: 12px;
+      background: #fff8e7; color: #7a5a00; font-size: .88rem; line-height: 1.45;
+    }
+    .note a { color: #7a5a00; font-weight: 800; }
+    .steps {
+      margin-top: 12px; padding: 12px; border-radius: 12px;
+      background: #f1f5f9; color: #334155; font-size: .88rem; line-height: 1.55;
+    }
+    .steps strong { color: #071A36; }
+    .err, .ok {
+      margin-top: 12px; padding: 12px; border-radius: 12px; font-size: .9rem; display: none;
+    }
+    .err { background: #fef2f2; color: #b91c1c; white-space: pre-wrap; }
+    .ok { background: #ecfdf5; color: #047857; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1 id="title">ربط واتساب الرسمي</h1>
+    <p id="desc">اضغط الزر. ستبقى في هذا التبويب حتى تنتهي Meta ثم تعود الرسالة هنا ويُفتح التطبيق. لا تغلق الصفحة بنفسك.</p>
+    <button id="btn" type="button">ربط واتساب الرسمي عبر Meta</button>
+    <button id="backApp" class="secondary" type="button" style="display:none">العودة إلى تطبيق نابو</button>
+    <div id="err" class="err"></div>
+    <div id="ok" class="ok">تم ربط واتساب بنجاح.</div>
+  </div>
+
+  <script>
+    (function () {
+      var STORE_KEY = 'naboo_meta_es_v1';
+      var DEFAULT_CALLBACK =
+        'https://rkofqwcuvbzrnmelvxhz.supabase.co/functions/v1/whatsapp-meta-es-complete';
+      var REDIRECT_PATH = '/whatsapp-meta-es.html';
+      var params = new URLSearchParams(window.location.search);
+      var hashParams = new URLSearchParams((window.location.hash || '').replace(/^#/, ''));
+
+      function readStored() {
+        try {
+          var raw = localStorage.getItem(STORE_KEY) ||
+            sessionStorage.getItem(STORE_KEY) || '{}';
+          return JSON.parse(raw) || {};
+        } catch (e) {
+          return {};
+        }
+      }
+
+      function saveStored(extra) {
+        try {
+          var cur = readStored();
+          for (var k in extra) if (Object.prototype.hasOwnProperty.call(extra, k)) cur[k] = extra[k];
+          var json = JSON.stringify(cur);
+          localStorage.setItem(STORE_KEY, json);
+          sessionStorage.setItem(STORE_KEY, json);
+        } catch (e) {}
+      }
+
+      function clearStored() {
+        try { localStorage.removeItem(STORE_KEY); } catch (e) {}
+        try { sessionStorage.removeItem(STORE_KEY); } catch (e) {}
+      }
+
+      var stored = readStored();
+      var appId = params.get('app_id') || stored.app_id || '';
+      var configId = params.get('config_id') || stored.config_id || '';
+      var state = params.get('state') || stored.state || '';
+      // لا نقبل callback من الاستعلام — دائماً نقطة Naboo الثابتة فقط.
+      var callback = DEFAULT_CALLBACK;
+      var businessName = (params.get('business_name') || stored.business_name || '').trim();
+      var businessPhone = (params.get('business_phone') || stored.business_phone || '').replace(/\D/g, '');
+      var redirectUri = window.location.origin + REDIRECT_PATH;
+      var configured = Boolean(appId && configId && state && callback);
+      var btn = document.getElementById('btn');
+      var backApp = document.getElementById('backApp');
+      var err = document.getElementById('err');
+      var ok = document.getElementById('ok');
+      var finishing = false;
+      var APP_DEEP = 'io.supabase.naboo://whatsapp-es-complete';
+
+      if (appId || configId || state) {
+        saveStored({
+          app_id: appId,
+          config_id: configId,
+          state: state,
+          callback: DEFAULT_CALLBACK,
+          business_name: businessName,
+          business_phone: businessPhone,
+          feature_type: '',
+          auto: '',
+          redirect_uri: redirectUri
+        });
+      }
+
+      // تنظيف العنوان قبل تحميل مكتبة Meta. تنظيفه عند الضغط يقطع قناة الرجوع
+      // فتكتمل الأصول عند Facebook ثم تظهر «إغلاق علامة التبويب» بلا رمز.
+      if (window.history && window.history.replaceState) {
+        window.history.replaceState({}, '', redirectUri);
+      }
+
+      // الرموز المؤكدة فقط، وأي رمز آخر يعرض رقمًا مرجعيًا بدل نص Meta الخام.
+      var META_ERRORS_AR = {
+        '133005': 'الرقم محمي برمز تحقق بخطوتين. أزل الرمز من واتساب للأعمال ثم أعد المحاولة.',
+        '133016': 'أوقفت Meta التسجيل مؤقتًا بسبب كثرة المحاولات. أعد المحاولة لاحقًا.'
+      };
+
+      function metaErrorAr(data) {
+        var code = String(data.error_code || '');
+        if (META_ERRORS_AR[code]) return META_ERRORS_AR[code];
+        var ref = String(data.error_id || data.session_id || Date.now().toString(36)).toUpperCase();
+        console.warn('meta_es_error', ref, code, data.error_message || '');
+        return 'لم يكتمل الربط عند Meta. أرسل هذا الرقم المرجعي إلى دعم نابو: ' + ref;
+      }
+
+      function showErr(msg) {
+        err.style.display = 'block';
+        ok.style.display = 'none';
+        err.textContent = msg;
+        btn.disabled = false;
+        btn.style.display = 'block';
+      }
+
+      function showOk(msg) {
+        ok.style.display = 'block';
+        err.style.display = 'none';
+        if (msg) ok.textContent = msg;
+        backApp.style.display = 'block';
+        btn.style.display = 'none';
+      }
+
+      function openApp() {
+        window.location.href = APP_DEEP + '?ok=1';
+      }
+
+      backApp.addEventListener('click', openApp);
+
+      var GRAPH_VERSION = 'v26.0';
+      var fbReady = false;
+      var waCode = null;
+      var waSession = null;
+      var waEvent = '';
+      var codeFromRedirect = false;
+      var sessionWait = null;
+
+      function isFacebookOrigin(origin) {
+        try {
+          var host = new URL(origin).hostname;
+          return host === 'facebook.com' || host.endsWith('.facebook.com');
+        } catch (e) {
+          return false;
+        }
+      }
+
+      window.fbAsyncInit = function () {
+        FB.init({
+          appId: appId,
+          autoLogAppEvents: true,
+          xfbml: false,
+          version: GRAPH_VERSION
+        });
+        fbReady = true;
+      };
+
+      if (appId) {
+        var sdk = document.createElement('script');
+        sdk.async = true;
+        sdk.defer = true;
+        sdk.crossOrigin = 'anonymous';
+        sdk.src = 'https://connect.facebook.net/en_US/sdk.js';
+        sdk.onerror = function () {
+          showErr('تعذّر تحميل مكتبة Meta. تحقق من الإنترنت ثم أعد فتح الصفحة.');
+        };
+        document.head.appendChild(sdk);
+      }
+
+      window.addEventListener('message', function (event) {
+        if (!isFacebookOrigin(event.origin)) return;
+        var message = event.data;
+        try {
+          if (typeof message === 'string') message = JSON.parse(message);
+        } catch (e) {
+          return;
+        }
+        if (!message || message.type !== 'WA_EMBEDDED_SIGNUP') return;
+        if (message.event === 'CANCEL') {
+          showErr('لم يكتمل الربط، ولم يتغير شيء في رقمك. أعد المحاولة من الزر أدناه.');
+          return;
+        }
+        if (message.event === 'ERROR') {
+          var data = message.data || {};
+          showErr(metaErrorAr(data));
+          return;
+        }
+        if (message.event === 'FINISH' ||
+            message.event === 'FINISH_ONLY_WABA' ||
+            message.event === 'FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING') {
+          waEvent = message.event;
+          waSession = message.data || {};
+          scheduleComplete();
+        }
+      });
+
+      function fbLoginCallback(response) {
+        var auth = response && response.authResponse;
+        if (!auth || !auth.code) {
+          return;
+        }
+        waCode = auth.code;
+        codeFromRedirect = false;
+        scheduleComplete();
+      }
+
+      function scheduleComplete() {
+        if (finishing || !waCode) return;
+        if (waSession) {
+          finishWithPayload();
+          return;
+        }
+        if (sessionWait) return;
+        sessionWait = setTimeout(finishWithPayload, 8000);
+      }
+
+      function finishWithPayload() {
+        if (sessionWait) {
+          clearTimeout(sessionWait);
+          sessionWait = null;
+        }
+        var payload = { code: waCode };
+        if (codeFromRedirect) payload.redirect_uri = redirectUri;
+        if (waSession) {
+          payload.session = {
+            waba_id: waSession.waba_id || '',
+            phone_number_id: waSession.phone_number_id || '',
+            business_id: waSession.business_id || '',
+            event: waEvent || ''
+          };
+        }
+        finishWithCode(payload);
+      }
+
+      function isMobileBrowser() {
+        var ua = navigator.userAgent || '';
+        return /Android|iPhone|iPad|iPod|Mobile|webOS|BlackBerry/i.test(ua) ||
+          (navigator.maxTouchPoints > 1 && /Mac/.test(ua));
+      }
+
+      function launchDialogOauth() {
+        var extras = JSON.stringify({
+          featureType: 'whatsapp_business_app_onboarding',
+          version: 'v4'
+        });
+        var oauth = 'https://www.facebook.com/' + GRAPH_VERSION + '/dialog/oauth'
+          + '?client_id=' + encodeURIComponent(appId)
+          + '&config_id=' + encodeURIComponent(configId)
+          + '&response_type=code'
+          + '&override_default_response_type=true'
+          + '&redirect_uri=' + encodeURIComponent(redirectUri)
+          + '&state=' + encodeURIComponent(state)
+          + '&display=page'
+          + '&extras=' + encodeURIComponent(extras);
+        window.location.assign(oauth);
+      }
+
+      var usedFbLogin = false;
+      var forceSameTab = isMobileBrowser();
+
+      function launchSignup() {
+        if (!configured) return;
+        saveStored({
+          app_id: appId,
+          config_id: configId,
+          state: state,
+          callback: callback,
+          business_name: businessName,
+          business_phone: businessPhone,
+          feature_type: 'whatsapp_business_app_onboarding',
+          redirect_uri: redirectUri
+        });
+        btn.disabled = true;
+        usedFbLogin = false;
+
+        // على الموبايل FB.login يفتح تبويباً منفصلاً ثم «أغلق هذه العلامة»
+        // دون إعادة الكود لصفحة نابو. نفس التبويب (dialog/oauth) يضمن العودة.
+        if (forceSameTab || isMobileBrowser()) {
+          forceSameTab = true;
+          document.getElementById('desc').textContent =
+            'جارٍ فتح Meta في نفس الصفحة. أكمل الخطوات — ستعود تلقائياً هنا ثم للتطبيق.';
+          launchDialogOauth();
+          return;
+        }
+
+        document.getElementById('desc').textContent =
+          'جارٍ فتح Meta. أكمل الخطوات ولا تغلق الصفحة — بعدها يكتمل الربط هنا ثم يفتح التطبيق.';
+        if (fbReady && typeof FB !== 'undefined' && FB.login) {
+          try {
+            usedFbLogin = true;
+            FB.login(fbLoginCallback, {
+              config_id: configId,
+              response_type: 'code',
+              override_default_response_type: true,
+              extras: {
+                featureType: 'whatsapp_business_app_onboarding',
+                version: 'v4'
+              }
+            });
+            return;
+          } catch (e) {
+            console.warn('FB.login failed, fallback dialog', e);
+          }
+        }
+        launchDialogOauth();
+      }
+
+      // إن رجع المستخدم من تبويب Meta بلا كود (شائع على أندرويد مع FB.login)
+      window.addEventListener('visibilitychange', function () {
+        if (document.visibilityState !== 'visible') return;
+        if (finishing || waCode) return;
+        if (!usedFbLogin) return;
+        usedFbLogin = false;
+        forceSameTab = true;
+        btn.disabled = false;
+        btn.style.display = '';
+        showErr(
+          'نافذة Meta أُغلقت دون إعادة البيانات لهذه الصفحة.\n' +
+          'اضغط الزر مرة أخرى — سيتم الفتح في نفس الصفحة هذه المرّة.'
+        );
+      });
+
+      async function finishWithCode(input) {
+        if (finishing) return;
+        finishing = true;
+        var code = typeof input === 'string' ? input : (input && input.code);
+        var sendRedirect = typeof input === 'string' ||
+          Boolean(input && input.redirect_uri);
+        var session = (input && typeof input === 'object') ? input.session : null;
+        btn.disabled = true;
+        btn.style.display = 'none';
+        document.getElementById('desc').textContent = 'جاري إكمال الربط مع نابو…';
+        var cb = DEFAULT_CALLBACK;
+        var st = state || readStored().state || '';
+        if (!cb || !st || !code) {
+          finishing = false;
+          showErr('انتهت جلسة الربط. ارجع لتطبيق نابو وابدأ من جديد.');
+          return;
+        }
+        var body = { state: st, code: code };
+        if (sendRedirect) body.redirect_uri = redirectUri;
+        if (session) body.session = session;
+        var storedPhone = (readStored().business_phone || businessPhone || '').replace(/\D/g, '');
+        if (storedPhone) body.from_phone = storedPhone;
+        try {
+          var res = await fetch(cb, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+          });
+          var data = {};
+          try { data = await res.json(); } catch (e) {}
+          if (res.ok && data.ok) {
+            clearStored();
+            showOk((data.message_ar || 'تم ربط واتساب بنجاح.') +
+              ' اضغط «العودة إلى تطبيق نابو» إن لم يفتح التطبيق تلقائياً.');
+            setTimeout(openApp, 400);
+            return;
+          }
+          finishing = false;
+          showErr(data.message_ar || 'تعذّر إكمال الربط على الخادم. أعد المحاولة.');
+        } catch (e) {
+          finishing = false;
+          showErr('تعذّر الاتصال بخادم نابو. تحقق من الإنترنت وأعد المحاولة.');
+        }
+      }
+
+      var oauthError = params.get('error') || hashParams.get('error') || '';
+      var oauthErrorReason = params.get('error_reason') || hashParams.get('error_reason') || '';
+      var oauthErrorDesc = params.get('error_description') || hashParams.get('error_description') || '';
+      if (oauthError) {
+        var cancelHint =
+          'لم يكتمل التسجيل في فيسبوك. أعد المحاولة من الزر أدناه.\n' +
+          'تذكير: الحافظة الفارغة تحتاج «إنشاء حساب واتساب للأعمال» أولاً. ' +
+          'إن علقت: business.facebook.com ثم أعد الربط.';
+        if (oauthError === 'access_denied' || oauthErrorReason.indexOf('cancel') !== -1) {
+          showErr('ألغيت التفويض في فيسبوك.\n' + cancelHint);
+        } else {
+          if (oauthErrorDesc) console.warn('meta_oauth_error', oauthErrorDesc);
+          showErr(cancelHint);
+        }
+      }
+
+      var codeFromUrl = params.get('code') || hashParams.get('code') || '';
+      if (codeFromUrl && (state || readStored().state)) {
+        waCode = codeFromUrl;
+        codeFromRedirect = true;
+        btn.disabled = true;
+        btn.style.display = 'none';
+        document.getElementById('desc').textContent = 'جاري إكمال الربط مع نابو…';
+        scheduleComplete();
+      } else if (!configured) {
+        btn.disabled = true;
+        if (!state || !callback) {
+          showErr('افتح الربط من تطبيق نابو فقط (رابط الجلسة ناقص).');
+        } else {
+          showErr('إعداد الربط غير مكتمل (App ID / Config ID).');
+        }
+      }
+
+      btn.addEventListener('click', function () { launchSignup(); });
+    })();
+  </script>
+</body>
+</html>

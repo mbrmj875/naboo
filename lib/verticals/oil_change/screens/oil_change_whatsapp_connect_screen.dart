@@ -16,6 +16,9 @@ import '../services/oil_change_whatsapp_gateway_repository.dart';
 import '../services/oil_change_whatsapp_gateway_service.dart';
 import '../services/oil_change_whatsapp_status_store.dart';
 import '../services/wa_message_wallet_service.dart';
+import '../services/oil_change_whatsapp_messages_repository.dart';
+import '../utils/whatsapp_onboarding_copy.dart';
+import '../widgets/whatsapp_connect_test_card.dart';
 import '../widgets/oil_change_form_theme.dart';
 import '../widgets/oil_change_owner_pin_confirm_dialog.dart';
 import '../widgets/whatsapp_connect_method_picker.dart';
@@ -47,7 +50,10 @@ class _OilChangeWhatsappConnectScreenState
   String? _pairingCode;
   String? _onboardingUrl;
   String? _officialMessage;
-  WhatsappConnectMethod _selectedMethod = WhatsappConnectMethod.nabooShared;
+  WhatsappConnectMethod _selectedMethod = WhatsappConnectMethod.metaDirect;
+  bool? _reminderReady;
+  String? _onboardingStep;
+  String? _onboardingError;
   Timer? _pollTimer;
   Timer? _qrRefreshTimer;
   Timer? _readyPollTimer;
@@ -106,6 +112,7 @@ class _OilChangeWhatsappConnectScreenState
     _record = await OilChangeWhatsappGatewayRepository.instance
         .refreshStatusFromServer();
     _selectedMethod = WhatsappConnectMethodX.fromRecord(_record);
+    unawaited(_loadServerStatus());
 
     if (_connected) {
       await OilChangeWhatsappStatusStore.instance.markConnected();
@@ -269,6 +276,17 @@ class _OilChangeWhatsappConnectScreenState
     }
   }
 
+  Future<void> _loadServerStatus() async {
+    final result =
+        await OilChangeWhatsappGatewayService.instance.fetchReadyStatus();
+    if (!mounted || !result.ok) return;
+    setState(() {
+      _reminderReady = result.reminderReady;
+      _onboardingStep = result.onboardingStep;
+      _onboardingError = result.onboardingError;
+    });
+  }
+
   void _startReadyPolling() {
     _readyPollTimer?.cancel();
     _readyPollTimer = Timer.periodic(const Duration(seconds: 5), (_) {
@@ -291,6 +309,9 @@ class _OilChangeWhatsappConnectScreenState
         _record?.readyState == WhatsappReadyState.ready;
 
     setState(() {
+      _reminderReady = result.reminderReady;
+      _onboardingStep = result.onboardingStep;
+      _onboardingError = result.onboardingError;
       _officialMessage = result.messageAr ?? _record?.readyStateLabelAr;
       if (ready) {
         _showOfficialFlow = false;
@@ -755,6 +776,15 @@ class _OilChangeWhatsappConnectScreenState
                             readyLabel: _guideConnectedPreview
                                 ? 'معاينة الشرح'
                                 : (_record?.readyStateLabelAr ?? 'جاهز'),
+                            reminderLabel: _guideConnectedPreview ||
+                                    _record?.isOfficialTransport != true ||
+                                    _reminderReady == null
+                                ? null
+                                : _reminderReady!
+                                    ? 'التذكير جاهز'
+                                    : 'التذكير غير جاهز بعد: ينتظر موافقة Meta على القالب',
+                            showConnectTest: !_guideConnectedPreview &&
+                                _record?.isOfficialTransport == true,
                             methodLabel: _guideConnectedPreview
                                 ? 'عند الاتصال تظهر أزرار الفصل وإعادة الربط هنا'
                                 : WhatsappConnectMethodX.fromRecord(_record)
@@ -862,6 +892,15 @@ class _OilChangeWhatsappConnectScreenState
                         else if (_showMethodsPanel)
                           _MethodSelectPanel(
                             selected: _selectedMethod,
+                            methods: _guideForceMethods
+                                ? WhatsappConnectMethod.values
+                                : WhatsappConnectMethodX.visibleFor(_record),
+                            stopReason: _guideForceMethods
+                                ? null
+                                : WhatsappOnboardingCopy.stopReasonAr(
+                                    step: _onboardingStep,
+                                    errorCode: _onboardingError,
+                                  ),
                             onChanged: (m) =>
                                 setState(() => _selectedMethod = m),
                             onContinue: () =>
@@ -964,6 +1003,8 @@ class _ConnectedPanel extends StatefulWidget {
   const _ConnectedPanel({
     required this.phone,
     required this.readyLabel,
+    this.reminderLabel,
+    this.showConnectTest = false,
     required this.methodLabel,
     required this.usesQr,
     required this.isOfficialTransport,
@@ -973,6 +1014,8 @@ class _ConnectedPanel extends StatefulWidget {
 
   final String? phone;
   final String readyLabel;
+  final String? reminderLabel;
+  final bool showConnectTest;
   final String methodLabel;
   final bool usesQr;
   final bool isOfficialTransport;
@@ -1084,7 +1127,9 @@ class _ConnectedPanelState extends State<_ConnectedPanel> {
               ),
               const SizedBox(height: 6),
               Text(
-                widget.readyLabel,
+                widget.reminderLabel == null
+                    ? widget.readyLabel
+                    : 'الرقم متصل',
                 style: TextStyle(
                   color: cs.primary,
                   fontWeight: FontWeight.w700,
@@ -1092,6 +1137,27 @@ class _ConnectedPanelState extends State<_ConnectedPanel> {
                 ),
                 textAlign: TextAlign.center,
               ),
+              if (widget.reminderLabel != null) ...[
+                const SizedBox(height: 4),
+                Text(
+                  widget.reminderLabel!,
+                  style: TextStyle(
+                    color: cs.onSurfaceVariant,
+                    fontWeight: FontWeight.w700,
+                    height: 1.3,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+              if (widget.showConnectTest) ...[
+                const SizedBox(height: 12),
+                WhatsappConnectTestCard(
+                  send: (phone) => OilChangeWhatsappGatewayService.instance
+                      .sendConnectTest(phone: phone),
+                  fetchStatus: OilChangeWhatsappMessagesRepository.instance
+                      .statusByKey,
+                ),
+              ],
               const SizedBox(height: 6),
               Text(
                 widget.methodLabel,
@@ -1637,8 +1703,12 @@ class _MethodSelectPanel extends StatelessWidget {
     required this.onChanged,
     required this.onContinue,
     this.guideMode = false,
+    this.methods = WhatsappConnectMethod.values,
+    this.stopReason,
   });
 
+  final List<WhatsappConnectMethod> methods;
+  final String? stopReason;
   final WhatsappConnectMethod selected;
   final ValueChanged<WhatsappConnectMethod> onChanged;
   final VoidCallback onContinue;
@@ -1697,7 +1767,7 @@ class _MethodSelectPanel extends StatelessWidget {
               ),
               const SizedBox(height: 8),
               Text(
-                'ثلاث مسارات واضحة — الرسمي أقوى للاستقرار، وQR للربط السريع.',
+                'اختر الطريقة المناسبة لمحلك.',
                 style: TextStyle(
                   color: Colors.white.withValues(alpha: 0.84),
                   height: 1.4,
@@ -1709,10 +1779,15 @@ class _MethodSelectPanel extends StatelessWidget {
         ),
         ),
         const SizedBox(height: 16),
+        if (stopReason != null) ...[
+          _ErrorCard(message: stopReason!, onRetry: onContinue),
+          const SizedBox(height: 12),
+        ],
         WhatsappConnectMethodPicker(
           selected: selected,
           onChanged: onChanged,
           enabled: !guideMode,
+          methods: methods,
         ),
         const SizedBox(height: 18),
         GuideAnchor(
@@ -1876,7 +1951,7 @@ class _ConnectingPanel extends StatelessWidget {
           FilledButton.icon(
             onPressed: onTryOfficial,
             icon: const Icon(Icons.handshake_rounded),
-            label: const Text('جرّب رقم نابو الرسمي (موصى به)'),
+            label: const Text('جرّب رقم نابو الرسمي'),
             style: FilledButton.styleFrom(
               minimumSize: const Size.fromHeight(48),
               backgroundColor: AppColors.primary,

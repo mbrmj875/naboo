@@ -165,6 +165,26 @@ class OilChangeWhatsappMessagesRepository {
     }
   }
 
+  /// حالة رسالة التجربة. null إذا لم يظهر سجلها بعد أو تعذرت القراءة.
+  Future<({String status, String error})?> statusByKey(String key) async {
+    if (!isSignedIn) return null;
+    try {
+      final row = await Supabase.instance.client
+          .from('whatsapp_message_logs')
+          .select('status, error')
+          .eq('idempotency_key', key)
+          .maybeSingle();
+      if (row == null) return null;
+      return (
+        status: (row['status'] ?? '').toString(),
+        error: (row['error'] ?? '').toString(),
+      );
+    } catch (e) {
+      AppLogger.warn('oil_change_wa_logs', 'statusByKey failed :: $e');
+      return null;
+    }
+  }
+
   /// أثر كل رسالة فاشلة على الرصيد. خطأ القراءة لا يوقف القائمة، ويغيب السطر فقط.
   Future<Map<String, WhatsappWalletEffect>> loadWalletEffects(
     List<OilChangeMessageLogEntry> entries,

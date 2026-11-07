@@ -13,11 +13,13 @@ class WhatsappConnectMethodPicker extends StatelessWidget {
     required this.selected,
     required this.onChanged,
     this.enabled = true,
+    this.methods = WhatsappConnectMethod.values,
   });
 
   final WhatsappConnectMethod selected;
   final ValueChanged<WhatsappConnectMethod> onChanged;
   final bool enabled;
+  final List<WhatsappConnectMethod> methods;
 
   static String anchorIdFor(WhatsappConnectMethod method) {
     switch (method) {
@@ -35,7 +37,7 @@ class WhatsappConnectMethodPicker extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        for (final method in WhatsappConnectMethod.values) ...[
+        for (final method in methods) ...[
           GuideAnchor(
             id: anchorIdFor(method),
             child: _MethodCard(
@@ -45,7 +47,7 @@ class WhatsappConnectMethodPicker extends StatelessWidget {
               onTap: () => onChanged(method),
             ),
           ),
-          if (method != WhatsappConnectMethod.values.last)
+          if (method != methods.last)
             const SizedBox(height: 12),
         ],
       ],

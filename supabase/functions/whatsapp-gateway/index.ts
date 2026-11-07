@@ -50,6 +50,16 @@ import { ensureDefaultTemplatesForTenant } from './lifecycle/template_lifecycle_
 import { notifyOilChangeCard } from './notifications/notifiers/oil_change_card_notifier.ts';
 import { requireAdmin, writeClient } from './admin_client.ts';
 import { readSendBlock } from './send_block.ts';
+import { TemplateKey } from './notifications/notification_request.ts';
+import {
+  connectTestAllowed,
+  connectTestKey,
+  connectTestKeyPrefix,
+} from './connect_test.ts';
+import {
+  readOnboardingSummary,
+  recordOnboardingStep,
+} from './lifecycle/onboarding_state.ts';
 import { getWhatsAppProvider } from './providers/registry.ts';
 import {
   claimSendLogRow,
@@ -101,6 +111,7 @@ type GatewayAction =
   | 'sync_templates'
   | 'submit_followup_template'
   | 'send_oil_change_card'
+  | 'send_connect_test'
   | 'dismiss_failed_message';
 
 type ResetSource =
@@ -244,6 +255,10 @@ Deno.serve(async (req) => {
     await ensureDefaultTemplatesForTenant(supabase, user.id);
     await syncTemplateStatusesForTenant(supabase, user.id);
     const ready = await computeReadyState(supabase, user.id);
+    // «الرقم متصل» لا يعني أن قالب التذكير معتمد.
+    const reminder = await computeReadyState(supabase, user.id, [
+      TemplateKey.oilChangeFollowup,
+    ]);
     return Response.json({
       ok: true,
       ready_state: ready.readyState,
@@ -252,6 +267,8 @@ Deno.serve(async (req) => {
       provider: ready.provider,
       message_ar: readyStateMessageAr(ready.readyState),
       send_block: await readSendBlock(gatewayWriter, user.id),
+      reminder_ready: reminder.readyState === 'ready',
+      onboarding: await readOnboardingSummary(gatewayWriter, user.id),
     });
   }
 
@@ -440,6 +457,62 @@ Deno.serve(async (req) => {
         : dispatched.readyState === 'disconnected'
         ? 'واتساب غير متصل. اربط الرقم أولاً.'
         : 'تعذّر إرسال بطاقة الغيار.',
+    });
+  }
+
+  if (action === 'send_connect_test') {
+    const phone = normalizeIraqWhatsappDigits(
+      (body.customer_phone ?? '').toString().trim(),
+    );
+    if (!phone) {
+      return Response.json({
+        ok: false,
+        error: 'invalid_phone',
+        message_ar: 'أدخل رقمًا صالحًا مثل 07XXXXXXXXX.',
+      });
+    }
+    const since = new Date(Date.now() - 24 * 60 * 60_000).toISOString();
+    const { count, error: countErr } = await gatewayWriter
+      .from('whatsapp_message_logs')
+      .select('id', { count: 'exact', head: true })
+      .eq('tenant_user_id', user.id)
+      .like('idempotency_key', `${connectTestKeyPrefix(user.id)}%`)
+      .gte('created_at', since);
+    // خطأ العد يمنع الإرسال، لأن هذه الرسالة لا تخصم من الرصيد.
+    if (countErr || !connectTestAllowed(count ?? 0)) {
+      return Response.json({
+        ok: false,
+        error: countErr ? 'count_failed' : 'daily_limit',
+        message_ar: countErr
+          ? 'تعذّر إرسال رسالة التجربة. أعد المحاولة بعد قليل.'
+          : 'وصلت إلى حد رسائل التجربة اليوم. جرّب غدًا.',
+      });
+    }
+    const idem = connectTestKey(user.id, Date.now());
+    const dispatched = await notifyOilChangeCard(supabase, {
+      tenantUserId: user.id,
+      customerPhone: phone,
+      customerName: 'تجربة',
+      shopName: (body.shop_name ?? '').toString(),
+      detailsBlock: 'هذه رسالة تجربة من نابو للتأكد من ربط واتساب.',
+      employeeName: '',
+      templateParams: {},
+      resend: false,
+      idempotencyKey: idem,
+      originalLogId: null,
+    });
+    if (dispatched.ok) {
+      await recordOnboardingStep(gatewayWriter, user.id, 'test_sent');
+    }
+    return Response.json({
+      ok: dispatched.ok,
+      idempotency_key: idem,
+      ready_state: dispatched.readyState,
+      message_ar: dispatched.ok
+        ? 'أُرسلت رسالة التجربة، وننتظر تأكيد الوصول.'
+        : dispatched.readyState === 'preparing'
+        ? 'القالب لم يعتمد بعد عند Meta. جرّب بعد الموافقة.'
+        : 'تعذّر إرسال رسالة التجربة.',
     });
   }
 
