@@ -231,6 +231,19 @@ class NotificationProvider extends ChangeNotifier {
   Set<String> _readIds = {};
   bool _loading = false;
   String? _lastError;
+  bool _disposed = false;
+
+  /// التحديث يطول، وقد تُغلق الشاشة قبل انتهائه.
+  @override
+  void notifyListeners() {
+    if (!_disposed) super.notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
+  }
 
   /// بعد أول [refresh]: لا نُكرّر نفس [id] في شريط الجهاز.
   /// عند أول تشغيل: نُظهر حتى [_maxPrimeTray] تنبيهات مهمة (مخزون، صلاحية، أقساط، ديون) دون تكرار لاحقاً.

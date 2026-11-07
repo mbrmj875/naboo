@@ -103,8 +103,7 @@ class _OilChangeHomeDashboardState extends State<OilChangeHomeDashboard> {
         final cash = IraqiCurrencyFormat.formatIqd(
           IqdMoney.fromFils(_kpi.todayShiftCashInFils),
         );
-        if (_kpi.todayShiftCashInFils <= 0 &&
-            _kpi.todayShiftSalesFils > 0) {
+        if (_kpi.todayShiftCashInFils <= 0 && _kpi.todayShiftSalesFils > 0) {
           final sales = IraqiCurrencyFormat.formatIqd(
             IqdMoney.fromFils(_kpi.todayShiftSalesFils),
           );
@@ -139,9 +138,7 @@ class _OilChangeHomeDashboardState extends State<OilChangeHomeDashboard> {
           width: double.infinity,
           padding: EdgeInsets.symmetric(
             horizontal: handset ? 16 : 20,
-            vertical: compact
-                ? (handset ? 12 : 14)
-                : (handset ? 16 : 18),
+            vertical: compact ? (handset ? 12 : 14) : (handset ? 16 : 18),
           ),
           decoration: BoxDecoration(
             borderRadius: ac.md,
@@ -149,10 +146,7 @@ class _OilChangeHomeDashboardState extends State<OilChangeHomeDashboard> {
               begin: AlignmentDirectional.topStart,
               end: AlignmentDirectional.bottomEnd,
               colors: compact
-                  ? [
-                      gold.withValues(alpha: 0.80),
-                      gold.withValues(alpha: 0.60),
-                    ]
+                  ? [gold.withValues(alpha: 0.80), gold.withValues(alpha: 0.60)]
                   : [
                       gold.withValues(alpha: 0.92),
                       gold.withValues(alpha: 0.72),
@@ -170,11 +164,7 @@ class _OilChangeHomeDashboardState extends State<OilChangeHomeDashboard> {
           ),
           child: Row(
             children: [
-              Icon(
-                action.icon,
-                color: Colors.white,
-                size: compact ? 26 : 32,
-              ),
+              Icon(action.icon, color: Colors.white, size: compact ? 26 : 32),
               SizedBox(width: compact ? 12 : 14),
               Expanded(
                 child: Column(
@@ -217,7 +207,8 @@ class _OilChangeHomeDashboardState extends State<OilChangeHomeDashboard> {
     final pinned = widget.spec.pinnedCta;
     final tiles = widget.spec.secondaryTiles;
     final secondary = widget.spec.secondaryCta;
-    final showSecondary = secondary != null &&
+    final showSecondary =
+        secondary != null &&
         context.watch<DashboardLayoutProvider>().carWashButtonVisible;
 
     return Column(
@@ -321,8 +312,8 @@ class _OilKpiTile extends StatelessWidget {
     final tileBg = alert
         ? cs.errorContainer.withValues(alpha: isDark ? 0.35 : 0.45)
         : (isDark
-            ? AppGlass.surfaceTintStrong
-            : cs.surface.withValues(alpha: 0.95));
+              ? AppGlass.surfaceTintStrong
+              : cs.surface.withValues(alpha: 0.95));
 
     return Material(
       color: Colors.transparent,
@@ -333,9 +324,13 @@ class _OilKpiTile extends StatelessWidget {
         borderRadius: ac.md,
         child: DecoratedBox(
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: ac.md,
             border: Border.all(
-              color: AppColors.accentGold.withValues(alpha: 0.5),
+              // التنبيه (نواقص أو سيارات تنتظر) يلوّن الإطار بلون البطاقة.
+              color: showAlert
+                  ? accent.withValues(alpha: 0.9)
+                  : AppColors.accentGold.withValues(alpha: 0.5),
+              width: showAlert ? 1.5 : 1,
             ),
             boxShadow: [
               BoxShadow(
@@ -346,73 +341,73 @@ class _OilKpiTile extends StatelessWidget {
             ],
           ),
           child: ClipRRect(
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: ac.md,
             child: IntrinsicHeight(
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   ColoredBox(
-                    color: AppColors.accentGold.withValues(alpha: 0.9),
+                    color: accent.withValues(alpha: 0.9),
                     child: const SizedBox(width: 3.5),
                   ),
-                Expanded(
-                  child: ColoredBox(
-                    color: tileBg,
-                    child: Padding(
-                      padding: const EdgeInsetsDirectional.fromSTEB(
-                        12,
-                        12,
-                        12,
-                        12,
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(action.icon, color: AppColors.accentGold, size: 22),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(
-                                  action.id == 'oil_garage'
-                                      ? '${action.title}: $subtitle'
-                                      : action.title,
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.w800,
-                                    fontSize: 13,
-                                    color: cs.onSurface,
+                  Expanded(
+                    child: ColoredBox(
+                      color: tileBg,
+                      child: Padding(
+                        padding: const EdgeInsetsDirectional.fromSTEB(
+                          12,
+                          12,
+                          12,
+                          12,
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(action.icon, color: accent, size: 22),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    action.id == 'oil_garage'
+                                        ? '${action.title}: $subtitle'
+                                        : action.title,
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w800,
+                                      fontSize: 13,
+                                      color: cs.onSurface,
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
                                   ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                const SizedBox(height: 3),
-                                Text(
-                                  action.id == 'oil_garage'
-                                      ? (action.hint ?? '')
-                                      : subtitle,
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w700,
-                                    color: action.id == 'oil_garage'
-                                        ? cs.onSurfaceVariant
-                                        : (alert
-                                            ? cs.error
-                                            : cs.onSurfaceVariant),
+                                  const SizedBox(height: 3),
+                                  Text(
+                                    action.id == 'oil_garage'
+                                        ? (action.hint ?? '')
+                                        : subtitle,
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w700,
+                                      color: action.id == 'oil_garage'
+                                          ? cs.onSurfaceVariant
+                                          : (alert
+                                                ? cs.error
+                                                : cs.onSurfaceVariant),
+                                    ),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
                                   ),
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ],
+                                ],
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
                   ),
-                ),
-              ],
-            ),
+                ],
+              ),
             ),
           ),
         ),

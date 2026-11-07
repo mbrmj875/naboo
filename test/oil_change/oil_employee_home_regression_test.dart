@@ -4,7 +4,7 @@ import 'package:naboo/home/home_root_selection.dart';
 import 'package:naboo/screens/home_screen.dart';
 import 'package:naboo/services/business_setup_settings.dart';
 import 'package:naboo/verticals/oil_change/home/oil_change_home_dashboard.dart';
-import 'package:naboo/verticals/oil_change/home/oil_change_standalone_home_screen.dart';
+import 'package:naboo/verticals/oil_change/shell/oil_change_shell_screen.dart';
 
 import 'helpers/oil_employee_home_harness.dart';
 
@@ -28,7 +28,7 @@ Widget _employeeHome() {
   );
   return switch (root) {
     EmployeeHomeRoot.oilChangeStandalone =>
-      const OilChangeStandaloneHomeScreen(),
+      const OilChangeShellScreen(),
     _ => const HomeScreen(),
   };
 }

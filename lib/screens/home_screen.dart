@@ -1648,14 +1648,12 @@ class _HomeScreenState extends State<HomeScreen>
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          'Welcome to NaBoo',
+          'أهلاً بك في نابو',
           style: TextStyle(
             color: _textPrimary,
             fontSize: 18,
             height: 1.2,
-            fontStyle: FontStyle.italic,
             fontWeight: FontWeight.w600,
-            letterSpacing: 0.5,
           ),
         ),
         behavior: SnackBarBehavior.floating,

@@ -370,6 +370,8 @@ class _OilChangeShellScreenState extends State<OilChangeShellScreen>
         return AppContentRoutes.cash;
       case 'add_invoice':
         return AppContentRoutes.addInvoice;
+      case 'oil_services_log':
+        return AppContentRoutes.oilServicesLog;
       default:
         return null;
     }
@@ -784,13 +786,11 @@ class _OilChangeShellScreenState extends State<OilChangeShellScreen>
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: const Text(
-          'Welcome to NaBoo',
+          'أهلاً بك في نابو',
           style: TextStyle(
             fontSize: 18,
             height: 1.2,
-            fontStyle: FontStyle.italic,
             fontWeight: FontWeight.w600,
-            letterSpacing: 0.5,
           ),
         ),
         behavior: SnackBarBehavior.floating,
