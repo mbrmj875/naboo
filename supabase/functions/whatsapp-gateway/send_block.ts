@@ -119,13 +119,49 @@ export async function checkSendBlock(
   return block;
 }
 
+/**
+ * قالب أوقفته Meta يتوقف عند هذا المتجر، أو عند كل المتاجر إذا كان على رقم نابو.
+ * التذكيرات تنتظر، وحدث موافقة Meta يعيد الحالة approved.
+ */
+export async function pauseTemplate(
+  db: SupabaseClient,
+  tenantUserId: string,
+  provider: string,
+  templateKey: string,
+): Promise<void> {
+  let query = db
+    .from('tenant_whatsapp_templates')
+    .update({
+      status: 'disabled',
+      last_error: 'template_paused',
+      updated_at: new Date().toISOString(),
+    })
+    .eq('template_key', templateKey)
+    .eq('provider', provider)
+    .eq('status', 'approved');
+  if (provider !== 'dualhook') query = query.eq('tenant_user_id', tenantUserId);
+  await query;
+}
+
 /** لا يكتب فوق إيقاف قائم، حتى يبقى وقت البداية وسببها الأول. */
 export async function applySendBlock(
   db: SupabaseClient,
   tenantUserId: string,
   decision: FailureDecision,
+  template?: { provider: string; templateKey: string | null },
 ): Promise<void> {
   try {
+    if (decision.block === 'template') {
+      if (template?.templateKey) {
+        await pauseTemplate(
+          db,
+          tenantUserId,
+          template.provider,
+          template.templateKey,
+        );
+      }
+      return;
+    }
     const patch = {
       send_block_reason: decision.reasonCode,
       send_block_since: new Date().toISOString(),

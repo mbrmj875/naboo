@@ -140,7 +140,12 @@ async function writeLog(
       httpStatus: result.httpStatus,
       isSharedSender: provider === 'dualhook',
     });
-    if (decision) await applySendBlock(supabase, request.tenantUserId, decision);
+    if (decision) {
+      await applySendBlock(supabase, request.tenantUserId, decision, {
+        provider,
+        templateKey: request.templateKey,
+      });
+    }
     const errorJson = result.ok
       ? null
       : formatWaLogError({

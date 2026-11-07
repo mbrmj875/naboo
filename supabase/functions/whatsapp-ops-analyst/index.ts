@@ -26,6 +26,12 @@ import {
 import { enrichWithDeepSeek } from './enrich.ts';
 import { pingHealthchecks } from './heartbeat.ts';
 import { writeOpsFact } from './facts.ts';
+import { incidentFingerprint } from './fingerprint.ts';
+import {
+  classifyDeliveryAlerts,
+  type DeliveryLogRow,
+  STUCK_QUEUED_LOOKBACK_MS,
+} from './delivery_alerts.ts';
 
 type GateRow = {
   user_id: string;
@@ -320,6 +326,49 @@ async function runAnalystCycle(sb: SupabaseClient): Promise<Record<string, unkno
     });
     escalated += sla.escalated;
     resolved += sla.resolved;
+  }
+
+  // خطأ يتكرر، أو «مُرسلة» بلا معرّف، أو طابور عالق. الفشل هنا لا يوقف الدورة.
+  try {
+    const { data: logs } = await sb
+      .from('whatsapp_message_logs')
+      .select(
+        'tenant_user_id, status, error, provider_message_id, order_ref, created_at',
+      )
+      .in('status', ['failed', 'queued', 'sent', 'delivered', 'read'])
+      .gte('created_at', new Date(now - STUCK_QUEUED_LOOKBACK_MS).toISOString())
+      .limit(5000);
+    const byTenant = new Map<string, DeliveryLogRow[]>();
+    for (const r of (logs ?? []) as DeliveryLogRow[]) {
+      const list = byTenant.get(r.tenant_user_id) ?? [];
+      list.push(r);
+      byTenant.set(r.tenant_user_id, list);
+    }
+    for (const gate of (gates ?? []) as GateRow[]) {
+      const rows = byTenant.get(gate.user_id);
+      if (!rows || !gate.evolution_instance_name) continue;
+      for (const condition of classifyDeliveryAlerts(rows, now)) {
+        const fingerprint = await incidentFingerprint({
+          ruleId: condition.ruleId,
+          sessionName: gate.evolution_instance_name,
+          patternKey: condition.patternKey,
+          severity: condition.severity,
+        });
+        const r = await openOrBumpIncident({
+          sb,
+          userId: gate.user_id,
+          sessionName: gate.evolution_instance_name,
+          fingerprint,
+          condition,
+          nowMs: now,
+          factsDigestAr: condition.summaryAr,
+        });
+        if (r === 'opened') opened += 1;
+        if (r === 'bumped') updated += 1;
+      }
+    }
+  } catch (e) {
+    console.warn('delivery alerts failed', String(e).slice(0, 160));
   }
 
   // safe-fix عبر health-check فقط (استدعاء داخلي إن وُجد السر)

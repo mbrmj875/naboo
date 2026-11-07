@@ -1,6 +1,6 @@
 import { assertEquals } from 'https://deno.land/std@0.224.0/assert/mod.ts';
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
-import { checkSendBlock, readSendBlock } from './send_block.ts';
+import { applySendBlock, checkSendBlock, readSendBlock } from './send_block.ts';
 import { debitWalletForSend } from './wallet.ts';
 
 type Rows = { gateway?: Record<string, unknown>; platform?: Record<string, unknown> };
@@ -106,4 +106,34 @@ Deno.test('an old block stops whoever loses the probe', async () => {
 Deno.test('a read failure does not stop sending', async () => {
   const broken = {} as unknown as SupabaseClient;
   assertEquals((await readSendBlock(broken, 't')).blocked, false);
+});
+
+Deno.test('إيقاف القالب يخص المتجر، وعلى رقم نابو يشمل كل المتاجر', async () => {
+  const seen: Array<[string, unknown]> = [];
+  const chain = {
+    update: () => chain,
+    eq: (col: string, val: unknown) => {
+      seen.push([col, val]);
+      return chain;
+    },
+    then: (r: (v: unknown) => void) => r({}),
+  };
+  const db = { from: () => chain } as never;
+
+  await applySendBlock(db, 't1', {
+    scope: 'template',
+    autoRetry: false,
+    block: 'template',
+    reasonCode: 'template_paused',
+  }, { provider: 'cloud_api', templateKey: 'oil_change_followup' });
+  assertEquals(seen.some(([c]) => c === 'tenant_user_id'), true);
+
+  seen.length = 0;
+  await applySendBlock(db, 't1', {
+    scope: 'template',
+    autoRetry: false,
+    block: 'template',
+    reasonCode: 'template_paused',
+  }, { provider: 'dualhook', templateKey: 'oil_change_followup' });
+  assertEquals(seen.some(([c]) => c === 'tenant_user_id'), false);
 });
