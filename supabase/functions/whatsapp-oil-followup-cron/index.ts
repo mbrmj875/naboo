@@ -15,6 +15,7 @@ import {
   parseTransportId,
 } from '../whatsapp-gateway/providers/registry.ts';
 import { computeReadyState } from '../whatsapp-gateway/lifecycle/ready_state.ts';
+import { checkRecipientConsent } from '../whatsapp-gateway/recipient_consent.ts';
 import { FOLLOWUP_TEMPLATE_KEY } from '../whatsapp-gateway/lifecycle/followup_template.ts';
 
 type JobRow = {
@@ -84,6 +85,9 @@ function variablesFromPayload(
 
 const STALE_SENDING_MS = 15 * 60_000;
 const BLOCKED_RECHECK_MS = 30 * 60_000;
+/** انقطاع الربط أو نفاد الرصيد يؤخر التذكير ولا يسقطه، حتى يتجاوز التأخير المهلة. */
+const HOLD_RECHECK_MS = 60 * 60_000;
+const CONSENT_RECHECK_MS = 5 * 60_000;
 
 Deno.serve(async (req) => {
   if (req.method !== 'POST' && req.method !== 'GET') {
@@ -138,9 +142,35 @@ Deno.serve(async (req) => {
       .eq('tenant_user_id', tenant)
       .maybeSingle();
     if (quietRule?.quiet_hours !== false && inQuietHours()) {
+      // لا يبقى في أول الدفعة فيؤخر تذكيرات متجر آخر بلا ساعات هدوء.
+      await db.from('wa_oil_followup_jobs').update({
+        next_attempt_at: new Date(Date.now() + BLOCKED_RECHECK_MS).toISOString(),
+      }).eq('id', job.id).eq('status', 'queued');
       skipped++;
       continue;
     }
+
+    const consent = await checkRecipientConsent(db, tenant, job.customer_phone);
+    if (consent === 'opted_out') {
+      await db.from('wa_oil_followup_jobs').update({
+        status: 'cancelled',
+        last_error: 'opted_out',
+        updated_at: now,
+      }).eq('id', job.id).eq('status', 'queued');
+      skipped++;
+      continue;
+    }
+    if (consent === 'unknown') {
+      await db.from('wa_oil_followup_jobs').update({
+        next_attempt_at: new Date(Date.now() + CONSENT_RECHECK_MS).toISOString(),
+        updated_at: now,
+      }).eq('id', job.id).eq('status', 'queued');
+      skipped++;
+      continue;
+    }
+
+    const isLate = Date.now() - new Date(job.due_at).getTime() >
+      staleDays * 86400000;
 
     const { data: locked } = await db
       .from('wa_oil_followup_jobs')
@@ -154,8 +184,11 @@ Deno.serve(async (req) => {
     const ready = await computeReadyState(db, tenant);
     if (ready.readyState !== 'ready' || !ready.connected) {
       await db.from('wa_oil_followup_jobs').update({
-        status: 'failed',
+        status: isLate ? 'failed' : 'queued',
         last_error: 'gateway_disconnected',
+        next_attempt_at: isLate
+          ? null
+          : new Date(Date.now() + HOLD_RECHECK_MS).toISOString(),
         updated_at: now,
       }).eq('id', job.id);
       skipped++;
@@ -186,7 +219,10 @@ Deno.serve(async (req) => {
         const late = Date.now() - due > staleDays * 86400000;
         await db.from('wa_oil_followup_jobs').update({
           status: late ? 'skipped_no_template' : 'queued',
-          last_error: late ? 'template_not_approved' : null,
+          last_error: 'template_not_approved',
+          next_attempt_at: late
+            ? null
+            : new Date(Date.now() + BLOCKED_RECHECK_MS).toISOString(),
           updated_at: now,
         }).eq('id', job.id);
         skipped++;
@@ -215,8 +251,11 @@ Deno.serve(async (req) => {
 
     if (!wallet.ok) {
       await db.from('wa_oil_followup_jobs').update({
-        status: 'skipped_no_wallet',
+        status: isLate ? 'skipped_no_wallet' : 'queued',
         last_error: wallet.error ?? 'insufficient_balance',
+        next_attempt_at: isLate
+          ? null
+          : new Date(Date.now() + HOLD_RECHECK_MS).toISOString(),
         updated_at: now,
       }).eq('id', job.id);
       skipped++;
@@ -291,13 +330,16 @@ Deno.serve(async (req) => {
         isSharedSender: providerId === 'dualhook',
       });
       const attempts = Number(job.attempts ?? 0);
+      // خلل مؤقت أو إيقاف على الحساب أو القالب يؤخر التذكير ولا يسقطه قبل المهلة.
       const delay = decision.autoRetry ? nextRetryDelayMs(attempts) : null;
+      const canWait = !isLate && (decision.autoRetry || decision.block !== 'none');
+      const retryIn = delay ?? (canWait ? HOLD_RECHECK_MS : null);
       await db.from('wa_oil_followup_jobs').update({
-        status: delay === null ? 'failed' : 'queued',
+        status: retryIn === null ? 'failed' : 'queued',
         attempts: attempts + 1,
-        next_attempt_at: delay === null
+        next_attempt_at: retryIn === null
           ? null
-          : new Date(Date.now() + delay).toISOString(),
+          : new Date(Date.now() + retryIn).toISOString(),
         last_error: detail || 'send_failed',
         last_error_code: decision.reasonCode,
         updated_at: now,

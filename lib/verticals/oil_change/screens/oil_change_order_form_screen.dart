@@ -72,6 +72,7 @@ import '../services/oil_change_checkout_service.dart';
 import '../services/oil_change_post_sale_service.dart';
 import '../services/oil_change_whatsapp_notify_service.dart';
 import '../services/wa_oil_followup_scheduler.dart';
+import '../widgets/wa_reminder_consent_tile.dart';
 import '../utils/oil_change_whatsapp_user_messages.dart';
 import '../services/oil_change_product_scan.dart';
 import '../../../utils/customer_phone_launch.dart';
@@ -122,6 +123,7 @@ class _OilPostSaveJob {
     required this.waAuto,
     required this.waManual,
     required this.waAskRating,
+    this.waReminderConsent,
     required this.priorOpenDebtFils,
     required this.isEdit,
     this.wasSuspendedSave = false,
@@ -140,6 +142,9 @@ class _OilPostSaveJob {
   final bool waAuto;
   final bool waManual;
   final bool waAskRating;
+
+  /// null عند تصحيح بطاقة صدرت: لا يُعرض الخيار ولا تتغير موافقة الزبون.
+  final bool? waReminderConsent;
   final int priorOpenDebtFils;
   final bool isEdit;
   /// حفظ كتعليق (بطاقة جديدة أو إعادة تعليق).
@@ -352,6 +357,9 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   bool? _waAutoAfterSave;
   bool? _waManualAfterSave;
   bool? _waAskRatingAfterSave;
+  bool _waReminderConsent = true;
+  WaRecipientConsentStatus _waReminderPrior = WaRecipientConsentStatus.none;
+  String _waReminderCheckedPhone = '';
   Timer? _plateVehicleSyncDebounce;
   bool _vehicleSyncInFlight = false;
   bool _vehicleSyncQueued = false;
@@ -394,6 +402,8 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       _status = 'pending';
     }
     _customerName.addListener(_onCustomerNameTyped);
+    _customerPhone.addListener(_onCustomerPhoneForReminder);
+    unawaited(WaOilFollowupScheduler.instance.flushPending());
     // لا مزامنة زيارة تلقائية عند الكتابة في الاسم — التعبئة فقط باختيار من قائمة الاقتراحات.
     _odometerNext.addListener(_onOdometerNextTyped);
     _agreed.addListener(_onAgreedManualEdit);
@@ -509,6 +519,20 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       userId: auth.userId,
       fallbackToWorkspace: true,
     );
+  }
+
+  /// زبون سبق أن رفض لا يعود مشتركًا لأن الخيار مفعّل تلقائيًا.
+  Future<void> _onCustomerPhoneForReminder() async {
+    final phone = _customerPhone.text.trim();
+    if (phone.length != 11 || phone == _waReminderCheckedPhone) return;
+    _waReminderCheckedPhone = phone;
+    final prior =
+        await WaOilFollowupScheduler.instance.recipientConsentStatus(phone);
+    if (!mounted || _customerPhone.text.trim() != phone) return;
+    setState(() {
+      _waReminderPrior = prior;
+      _waReminderConsent = prior == WaRecipientConsentStatus.none;
+    });
   }
 
   Future<void> _warmPostSaveSettings() async {
@@ -3684,6 +3708,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       waAuto: waAuto,
       waManual: waManual,
       waAskRating: _waAskRatingAfterSave ?? true,
+      waReminderConsent: amending ? null : _waReminderConsent,
       priorOpenDebtFils: _priorOpenDebtFilsAtCheckout,
       isEdit: widget.isEdit,
       wasSuspendedSave: wasSuspendedSave,
@@ -3815,6 +3840,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
           customerPhone: phone,
           order: job.order,
           storeTitle: job.printSettings.storeTitleLine,
+          consent: job.waReminderConsent,
         );
       } catch (_) {}
       return;
@@ -7303,6 +7329,15 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
                         ),
                       ],
                     ),
+                    if (!widget.amendInvoicedOrder &&
+                        _waAutoAfterSave != false)
+                      WaReminderConsentTile(
+                        value: _waReminderConsent,
+                        prior: _waReminderPrior,
+                        onChanged: busy
+                            ? null
+                            : (v) => setState(() => _waReminderConsent = v),
+                      ),
                   ] else ...[
                     _responsivePair(
                       context,
@@ -8211,6 +8246,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     _guideListenable?.removeListener(_onGuideControllerChanged);
     _guideListenable = null;
     _customerName.removeListener(_onCustomerNameTyped);
+    _customerPhone.removeListener(_onCustomerPhoneForReminder);
     _customerName.dispose();
     _customerFocus.dispose();
     _customerPhone.dispose();

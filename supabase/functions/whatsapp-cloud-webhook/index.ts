@@ -30,6 +30,17 @@ import { sendRatingReply } from './rating_reply.ts';
 import { handleColdOrUnknownInbound } from './tenant_isolation.ts';
 import { touchOilCardPdfIdleJob } from './pdf_jobs.ts';
 import { looksLikePdfFileRequest } from './inbound_intent.ts';
+import {
+  isOptInRequest,
+  isOptOutRequest,
+  OPT_IN_REPLY,
+  OPT_OUT_REPLY,
+} from './opt_out.ts';
+import {
+  applyCustomerOptIn,
+  applyCustomerOptOut,
+} from '../whatsapp-gateway/recipient_consent.ts';
+import { cloudSendText } from '../whatsapp-gateway/cloud_api.ts';
 import { readMetaHubSignatureHeader } from './meta_hub_signature.ts';
 import {
   authenticateWebhook,
@@ -243,16 +254,19 @@ async function writeMonotonicMessageStatus(
 async function readLogOwner(
   supabase: SupabaseClient,
   providerMessageId: string,
-): Promise<{ tenantUserId: string; provider: string } | null> {
+): Promise<
+  { tenantUserId: string; provider: string; templateKey: string | null } | null
+> {
   const { data } = await supabase
     .from('whatsapp_message_logs')
-    .select('tenant_user_id, provider')
+    .select('tenant_user_id, provider, template_key')
     .eq('provider_message_id', providerMessageId)
     .limit(1)
     .maybeSingle();
   if (!data?.tenant_user_id) return null;
   return {
     tenantUserId: String(data.tenant_user_id),
+    templateKey: data.template_key ? String(data.template_key) : null,
     provider: String(data.provider ?? ''),
   };
 }
@@ -394,7 +408,10 @@ async function handleMetaWebhook(
         reasonCode: decision.reasonCode,
       });
       if (logRow) {
-        await applySendBlock(supabase, logRow.tenantUserId, decision);
+        await applySendBlock(supabase, logRow.tenantUserId, decision, {
+          provider: logRow.provider,
+          templateKey: logRow.templateKey,
+        });
       }
     }
     await writeMonotonicMessageStatus(
@@ -450,6 +467,22 @@ async function handleMetaWebhook(
       const tenantUserId = resolution.tenantUserId;
       const result = await handleInboundMessage(supabase, tenantUserId, msg);
       if (result.stored) stored++;
+      const wantsOut = isOptOutRequest(msg.body);
+      if (wantsOut || isOptInRequest(msg.body)) {
+        if (wantsOut) {
+          await applyCustomerOptOut(supabase, tenantUserId, msg.fromPhone);
+        } else {
+          await applyCustomerOptIn(supabase, tenantUserId, msg.fromPhone);
+        }
+        const confirmed = await cloudSendText({
+          userId: tenantUserId,
+          phoneNumberId: msg.phoneNumberId,
+          toE164Digits: msg.fromPhone,
+          body: wantsOut ? OPT_OUT_REPLY : OPT_IN_REPLY,
+        });
+        if (confirmed.ok) replies++;
+        continue;
+      }
       if (result.ratingSaved) ratings++;
       if (result.orderRef) {
         await touchOilCardPdfIdleJob(supabase, {
