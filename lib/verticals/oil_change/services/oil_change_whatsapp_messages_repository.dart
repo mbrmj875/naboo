@@ -1,6 +1,8 @@
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../utils/app_logger.dart';
+import '../utils/whatsapp_failure_reason_ar.dart';
 
 /// حالة الرسالة كما يعيدها واتساب — الترتيب هنا هو ترتيب التقدّم.
 enum OilChangeMessageStatus { failed, sent, delivered, read, unknown }
@@ -45,6 +47,7 @@ class OilChangeMessageLogEntry {
     this.body = '',
     this.error = '',
     this.cardPayload = const {},
+    this.idempotencyKey = '',
   });
 
   factory OilChangeMessageLogEntry.fromMap(Map<String, dynamic> map) {
@@ -64,6 +67,7 @@ class OilChangeMessageLogEntry {
       cardPayload: payload is Map
           ? payload.map((k, v) => MapEntry(k.toString(), (v ?? '').toString()))
           : const {},
+      idempotencyKey: (map['idempotency_key'] ?? '').toString(),
     );
   }
 
@@ -77,6 +81,7 @@ class OilChangeMessageLogEntry {
   final String body;
   final String error;
   final Map<String, String> cardPayload;
+  final String idempotencyKey;
 
   bool get isOilChangeCard => templateKey == 'oil_change_card';
 
@@ -133,7 +138,7 @@ class OilChangeWhatsappMessagesRepository {
           .from('whatsapp_message_logs')
           .select(
             'id, created_at, status, to_phone, template_key, employee_name, '
-            'order_ref, body, error, card_payload',
+            'order_ref, body, error, card_payload, idempotency_key',
           );
 
       final useFailed = failedOnly || bucket == OilChangeMessagesBucket.notSent;
@@ -158,6 +163,76 @@ class OilChangeWhatsappMessagesRepository {
       AppLogger.warn('oil_change_wa_logs', 'page load failed :: $e');
       rethrow;
     }
+  }
+
+  /// أثر كل رسالة فاشلة على الرصيد. خطأ القراءة لا يوقف القائمة، ويغيب السطر فقط.
+  Future<Map<String, WhatsappWalletEffect>> loadWalletEffects(
+    List<OilChangeMessageLogEntry> entries,
+  ) async {
+    if (!isSignedIn) return const {};
+    final withKey = entries.where((e) => e.idempotencyKey.isNotEmpty).toList();
+    final effects = <String, WhatsappWalletEffect>{};
+    try {
+      // عائلة المفتاح: K وK#2 للخصم، وK#r1 وK#r2 للإعادة.
+      const chunk = 15;
+      for (var i = 0; i < withKey.length; i += chunk) {
+        final part = withKey.skip(i).take(chunk).toList();
+        final keys = <String>[
+          for (final e in part) ...[
+            e.idempotencyKey,
+            '${e.idempotencyKey}#2',
+            '${e.idempotencyKey}#r1',
+            '${e.idempotencyKey}#r2',
+          ],
+        ];
+        final rows = await Supabase.instance.client
+            .from('wa_message_ledger')
+            .select('idempotency_key, reason, created_at')
+            .inFilter('idempotency_key', keys);
+        final grouped = groupWalletEffects(
+          (rows as List).cast<Map<String, dynamic>>(),
+        );
+        for (final e in part) {
+          final effect = grouped[e.idempotencyKey];
+          if (effect != null) effects[e.id] = effect;
+        }
+      }
+    } catch (e) {
+      AppLogger.warn('oil_change_wa_logs', 'wallet effects failed :: $e');
+    }
+    return effects;
+  }
+
+  /// يجمع قيود الدفتر حسب المفتاح الأصلي قبل اللاحقة.
+  @visibleForTesting
+  static Map<String, WhatsappWalletEffect> groupWalletEffects(
+    List<Map<String, dynamic>> rows,
+  ) {
+    final sends = <String, int>{};
+    final refunds = <String, int>{};
+    final last = <String, DateTime>{};
+    final suffix = RegExp(r'#r?[0-9]+$');
+    for (final row in rows) {
+      final base =
+          (row['idempotency_key'] ?? '').toString().replaceFirst(suffix, '');
+      final reason = (row['reason'] ?? '').toString();
+      if (reason == 'send') {
+        sends[base] = (sends[base] ?? 0) + 1;
+        final at = DateTime.tryParse((row['created_at'] ?? '').toString());
+        final seen = last[base];
+        if (at != null && (seen == null || at.isAfter(seen))) last[base] = at;
+      } else if (reason == 'refund_failed_send') {
+        refunds[base] = (refunds[base] ?? 0) + 1;
+      }
+    }
+    return {
+      for (final base in {...sends.keys, ...refunds.keys})
+        base: WhatsappWalletEffect(
+          sends: sends[base] ?? 0,
+          refunds: refunds[base] ?? 0,
+          lastDebitAt: last[base],
+        ),
+    };
   }
 
   /// عدد سجلات السحابة بحالة failed (لم يتم الإرسال).

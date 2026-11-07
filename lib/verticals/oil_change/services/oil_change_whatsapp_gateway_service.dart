@@ -8,6 +8,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../services/auth/ensure_fresh_session.dart';
 import '../../../services/supabase_config.dart';
 import '../../../utils/app_logger.dart';
+import '../utils/whatsapp_failure_reason_ar.dart';
 
 class WhatsappGatewayQrResult {
   const WhatsappGatewayQrResult({
@@ -40,6 +41,7 @@ class WhatsappGatewayStatusResult {
     this.instanceName,
     this.readyState,
     this.messageAr,
+    this.sendBlock,
   });
 
   final bool ok;
@@ -49,6 +51,7 @@ class WhatsappGatewayStatusResult {
   final String? instanceName;
   final String? readyState;
   final String? messageAr;
+  final WhatsappSendBlock? sendBlock;
 }
 
 class WhatsappGatewaySendResult {
@@ -158,6 +161,7 @@ class OilChangeWhatsappGatewayService {
       phone: data['phone']?.toString(),
       readyState: data['ready_state']?.toString(),
       messageAr: data['message_ar']?.toString(),
+      sendBlock: WhatsappSendBlock.fromJson(data['send_block']),
     );
   }
 

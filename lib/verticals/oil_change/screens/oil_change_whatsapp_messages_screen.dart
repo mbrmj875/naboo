@@ -2,16 +2,22 @@ import 'dart:async';
 import 'dart:ui' as ui show TextDirection;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:intl/intl.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:uuid/uuid.dart';
 
 import '../services/oil_change_whatsapp_delivery_reconcile.dart';
 import '../services/oil_change_whatsapp_gateway_service.dart';
 import '../services/oil_change_whatsapp_messages_repository.dart';
 import '../services/oil_change_whatsapp_outbox.dart';
+import '../services/oil_change_whatsapp_phone_correction.dart';
 import '../utils/whatsapp_failure_reason_ar.dart';
 import '../widgets/oil_change_form_theme.dart';
 import '../widgets/oil_change_whatsapp_outbox_view.dart';
+import '../widgets/whatsapp_send_block_banner.dart';
+import 'oil_change_whatsapp_connect_screen.dart';
+import 'oil_change_whatsapp_wallet_screen.dart';
 import '../../../navigation/content_navigation.dart';
 
 /// رسائل واتساب: تم الإرسال / لم يتم الإرسال (قسم جهاز + قسم سحابة).
@@ -48,6 +54,8 @@ class _OilChangeWhatsappMessagesScreenState
 
   final List<OilChangeMessageLogEntry> _sentEntries = [];
   final List<OilChangeMessageLogEntry> _failedEntries = [];
+  final Map<String, WhatsappWalletEffect> _walletEffects = {};
+  WhatsappSendBlock? _sendBlock;
   bool _sentLoading = true;
   bool _failedLoading = true;
   bool _sentLoadingMore = false;
@@ -136,6 +144,93 @@ class _OilChangeWhatsappMessagesScreenState
     }
   }
 
+  Future<void> _loadSendBlock() async {
+    final status =
+        await OilChangeWhatsappGatewayService.instance.fetchReadyStatus();
+    if (!mounted || !status.ok) return;
+    setState(() => _sendBlock = status.sendBlock);
+  }
+
+  Future<void> _loadWalletEffects(
+    List<OilChangeMessageLogEntry> entries,
+  ) async {
+    final effects = await _repo.loadWalletEffects(entries);
+    if (!mounted || effects.isEmpty) return;
+    setState(() => _walletEffects.addAll(effects));
+  }
+
+  Future<void> _runFix(
+    WhatsappFixAction action, {
+    OilChangeMessageLogEntry? entry,
+  }) async {
+    switch (action) {
+      case WhatsappFixAction.correctPhone:
+        if (entry != null) await _correctPhone(entry);
+      case WhatsappFixAction.openMeta:
+        final opened = await launchUrl(
+          Uri.parse('https://business.facebook.com/'),
+          mode: LaunchMode.externalApplication,
+        );
+        if (!opened && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('تعذّر فتح صفحة Meta')),
+          );
+        }
+      case WhatsappFixAction.reconnect:
+        await Navigator.of(context).push<void>(
+          MaterialPageRoute<void>(
+            builder: (_) => const OilChangeWhatsappConnectScreen(),
+          ),
+        );
+        if (mounted) await _loadSendBlock();
+      case WhatsappFixAction.topUp:
+        await OilChangeWhatsappWalletScreen.open(context);
+      case WhatsappFixAction.none:
+        break;
+    }
+  }
+
+  Future<void> _correctPhone(OilChangeMessageLogEntry entry) async {
+    final newPhone = await showDialog<String>(
+      context: context,
+      builder: (_) => _CorrectPhoneDialog(initial: entry.toPhone),
+    );
+    if (newPhone == null || newPhone.trim().isEmpty || !mounted) return;
+
+    setState(() => _resendingId = entry.id);
+    final error = await OilChangeWhatsappPhoneCorrection.instance
+        .correctPhoneAndResend(
+      newPhoneRaw: newPhone,
+      oldPhoneRaw: entry.toPhone,
+      logId: entry.id,
+      orderRef: entry.orderRef,
+      customerName: entry.customerName,
+      shopName: entry.cardPayload['shop'] ?? '',
+      detailsBlock: entry.body.trim().isNotEmpty
+          ? entry.body
+          : (entry.cardPayload['details'] ?? ''),
+      templateParams: entry.cardPayload,
+      employeeName: entry.employeeName,
+    );
+    if (!mounted) return;
+    setState(() => _resendingId = null);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(error ?? 'صُحّح الرقم وأُعيد الإرسال')),
+    );
+    await _reloadAll();
+  }
+
+  /// زر الحل، ويخفى زر الرقم إذا لم يبق محتوى يعاد إرساله.
+  WhatsappFixAction _fixActionFor(
+    OilChangeMessageLogEntry entry,
+    WhatsappFailureReason failure,
+  ) {
+    if (failure.action == WhatsappFixAction.correctPhone && !entry.canResend) {
+      return WhatsappFixAction.none;
+    }
+    return failure.action;
+  }
+
   Future<void> _reloadFailed() async {
     setState(() {
       _failedLoading = true;
@@ -150,6 +245,8 @@ class _OilChangeWhatsappMessagesScreenState
       final visible =
           rows.where((row) => !hidden.contains(row.id)).toList();
       if (!mounted) return;
+      unawaited(_loadSendBlock());
+      unawaited(_loadWalletEffects(visible));
       setState(() {
         _failedEntries
           ..clear()
@@ -208,6 +305,7 @@ class _OilChangeWhatsappMessagesScreenState
       final visible =
           rows.where((row) => !hidden.contains(row.id)).toList();
       if (!mounted) return;
+      unawaited(_loadWalletEffects(visible));
       setState(() {
         _failedEntries.addAll(visible);
         _failedHasMore =
@@ -364,9 +462,9 @@ class _OilChangeWhatsappMessagesScreenState
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('إسقاط الرسالة'),
+        title: const Text('إخفاء الرسالة'),
         content: const Text(
-          'لن تُرسل هذه الرسالة. تُخفى من القائمة فقط — البطاقة في السجل تبقى كما هي.',
+          'لن تُرسل هذه الرسالة وتُخفى من القائمة. يبقى سببها محفوظًا للدعم، والبطاقة في السجل كما هي.',
           textAlign: TextAlign.start,
         ),
         actions: [
@@ -376,7 +474,7 @@ class _OilChangeWhatsappMessagesScreenState
           ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('إسقاط'),
+            child: const Text('إخفاء'),
           ),
         ],
       ),
@@ -398,14 +496,14 @@ class _OilChangeWhatsappMessagesScreenState
       });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(result.messageAr ?? 'تم إسقاط الرسالة من القائمة'),
+          content: Text(result.messageAr ?? 'أُخفيت الرسالة من القائمة'),
         ),
       );
       await _refreshPendingCount();
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(result.messageAr ?? 'تعذّر إسقاط الرسالة'),
+          content: Text(result.messageAr ?? 'تعذّر إخفاء الرسالة'),
         ),
       );
       await _reloadFailed();
@@ -426,6 +524,11 @@ class _OilChangeWhatsappMessagesScreenState
           code: failure.code,
           retryableFromServer: failure.retryable,
         );
+    final fixAction = failure == null
+        ? WhatsappFixAction.none
+        : _fixActionFor(entry, failure);
+    final walletLine = _walletEffects[entry.id]?.textAr(DateTime.now());
+    final reference = WhatsappFailureReasonAr.referenceFor(entry.id);
 
     await showModalBottomSheet<void>(
       context: context,
@@ -508,8 +611,20 @@ class _OilChangeWhatsappMessagesScreenState
                       ),
                       if (failure.fixAr.isNotEmpty)
                         _DetailRow(label: 'الحل', value: failure.fixAr),
+                      if (walletLine != null)
+                        _DetailRow(label: 'الرصيد', value: walletLine),
                       if (failure.code.isNotEmpty && failure.code != 'unknown')
                         _DetailRow(label: 'رمز الخطأ', value: failure.code),
+                      _DetailRow(label: 'الرقم المرجعي', value: reference),
+                      Align(
+                        alignment: AlignmentDirectional.centerStart,
+                        child: TextButton(
+                          onPressed: () => unawaited(
+                            Clipboard.setData(ClipboardData(text: reference)),
+                          ),
+                          child: const Text('نسخ الرقم المرجعي'),
+                        ),
+                      ),
                     ],
                     if (entry.body.trim().isNotEmpty) ...[
                       const SizedBox(height: 12),
@@ -541,6 +656,16 @@ class _OilChangeWhatsappMessagesScreenState
                       ),
                     ],
                     const SizedBox(height: 18),
+                    if (fixAction != WhatsappFixAction.none) ...[
+                      FilledButton(
+                        onPressed: () {
+                          Navigator.pop(ctx);
+                          unawaited(_runFix(fixAction, entry: entry));
+                        },
+                        child: Text(whatsappFixActionLabelAr(fixAction)),
+                      ),
+                      const SizedBox(height: 8),
+                    ],
                     if (canResend)
                       FilledButton.tonalIcon(
                         onPressed: () {
@@ -558,7 +683,7 @@ class _OilChangeWhatsappMessagesScreenState
                           unawaited(_dismissCloud(entry));
                         },
                         icon: const Icon(Icons.cancel_outlined),
-                        label: const Text('إسقاط من القائمة'),
+                        label: const Text('إخفاء من القائمة'),
                       ),
                     const SizedBox(height: 8),
                     TextButton(
@@ -692,6 +817,13 @@ class _OilChangeWhatsappMessagesScreenState
       child: CustomScrollView(
         controller: _failedScroll,
         slivers: [
+          if (_sendBlock != null)
+            SliverToBoxAdapter(
+              child: WhatsappSendBlockBanner(
+                block: _sendBlock!,
+                onAction: (action) => unawaited(_runFix(action)),
+              ),
+            ),
           const SliverToBoxAdapter(
             child: Padding(
               padding: EdgeInsetsDirectional.fromSTEB(16, 14, 16, 6),
@@ -814,6 +946,10 @@ class _OilChangeWhatsappMessagesScreenState
           code: failure.code,
           retryableFromServer: failure.retryable,
         );
+    final fixAction = failure == null
+        ? WhatsappFixAction.none
+        : _fixActionFor(entry, failure);
+    final walletLine = _walletEffects[entry.id]?.textAr(DateTime.now());
     final busy = _resendingId == entry.id || _sendingAllCloud;
 
     return Card(
@@ -895,6 +1031,24 @@ class _OilChangeWhatsappMessagesScreenState
                     textAlign: TextAlign.start,
                   ),
                 ],
+                if (walletLine != null) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    'الرصيد: $walletLine',
+                    style: theme.textTheme.bodySmall,
+                    textAlign: TextAlign.start,
+                  ),
+                ],
+                if (failure != null && failure.isUnknown) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    'الرقم المرجعي: ${WhatsappFailureReasonAr.referenceFor(entry.id)}',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                    textAlign: TextAlign.start,
+                  ),
+                ],
               ],
               if (entry.body.trim().isNotEmpty) ...[
                 const SizedBox(height: 6),
@@ -915,8 +1069,17 @@ class _OilChangeWhatsappMessagesScreenState
                     TextButton(
                       onPressed:
                           busy ? null : () => unawaited(_dismissCloud(entry)),
-                      child: const Text('إسقاط'),
+                      child: const Text('إخفاء'),
                     ),
+                    if (fixAction != WhatsappFixAction.none)
+                      OutlinedButton(
+                        onPressed: busy
+                            ? null
+                            : () => unawaited(
+                                  _runFix(fixAction, entry: entry),
+                                ),
+                        child: Text(whatsappFixActionLabelAr(fixAction)),
+                      ),
                     if (canResend)
                       FilledButton.tonal(
                         onPressed: busy
@@ -1116,6 +1279,48 @@ class _ErrorState extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _CorrectPhoneDialog extends StatefulWidget {
+  const _CorrectPhoneDialog({required this.initial});
+
+  final String initial;
+
+  @override
+  State<_CorrectPhoneDialog> createState() => _CorrectPhoneDialogState();
+}
+
+class _CorrectPhoneDialogState extends State<_CorrectPhoneDialog> {
+  late final TextEditingController _controller =
+      TextEditingController(text: widget.initial);
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('تصحيح رقم الزبون'),
+      content: TextField(
+        controller: _controller,
+        keyboardType: TextInputType.phone,
+        decoration: const InputDecoration(labelText: 'الرقم الصحيح'),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('تراجع'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, _controller.text),
+          child: const Text('حفظ وإعادة الإرسال'),
+        ),
+      ],
     );
   }
 }

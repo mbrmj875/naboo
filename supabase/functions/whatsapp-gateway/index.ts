@@ -449,7 +449,7 @@ Deno.serve(async (req) => {
       return Response.json({
         ok: false,
         error: 'missing_log_id',
-        message_ar: 'تعذّر إسقاط الرسالة.',
+        message_ar: 'تعذّر إخفاء الرسالة.',
       }, { status: 400 });
     }
     // rejected ضمن CHECK ولا يظهر في «تم الإرسال» ولا «لم يتم الإرسال».
@@ -467,19 +467,19 @@ Deno.serve(async (req) => {
       return Response.json({
         ok: false,
         error: 'dismiss_failed',
-        message_ar: 'تعذّر إسقاط الرسالة.',
+        message_ar: 'تعذّر إخفاء الرسالة.',
       }, { status: 500 });
     }
     if (!data?.id) {
       return Response.json({
         ok: false,
         error: 'not_found',
-        message_ar: 'الرسالة غير موجودة أو أُسقطت مسبقاً.',
+        message_ar: 'الرسالة غير موجودة أو أُخفيت مسبقًا.',
       }, { status: 404 });
     }
     return Response.json({
       ok: true,
-      message_ar: 'تم إسقاط الرسالة من القائمة.',
+      message_ar: 'أُخفيت الرسالة من القائمة، وبقي سببها محفوظًا للدعم.',
     });
   }
 

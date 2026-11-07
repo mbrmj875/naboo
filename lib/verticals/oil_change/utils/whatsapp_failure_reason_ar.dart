@@ -1,5 +1,24 @@
 import 'dart:convert';
 
+/// الزر الواحد الذي ينقل صاحب المتجر إلى مكان الحل.
+enum WhatsappFixAction { none, correctPhone, openMeta, reconnect, topUp }
+
+/// نص الزر، أو فارغ إن لم يكن هناك ما يفعله صاحب المتجر.
+String whatsappFixActionLabelAr(WhatsappFixAction action) {
+  switch (action) {
+    case WhatsappFixAction.correctPhone:
+      return 'تصحيح الرقم';
+    case WhatsappFixAction.openMeta:
+      return 'فتح الحساب في Meta';
+    case WhatsappFixAction.reconnect:
+      return 'إعادة الربط';
+    case WhatsappFixAction.topUp:
+      return 'شحن الرصيد';
+    case WhatsappFixAction.none:
+      return '';
+  }
+}
+
 /// نتيجة تحليل سبب فشل رسالة واتساب للعرض في الواجهة.
 class WhatsappFailureReason {
   const WhatsappFailureReason({
@@ -9,6 +28,8 @@ class WhatsappFailureReason {
     this.source = '',
     this.code = '',
     this.sourceBadgeAr = '',
+    this.reasonCode = '',
+    this.action = WhatsappFixAction.none,
   });
 
   /// نص عربي للموظف — بلا رسالة Meta الخام الطويلة.
@@ -25,16 +46,156 @@ class WhatsappFailureReason {
 
   /// شارة المصدر: معلّقة على الجهاز / فشل في خادم نابو / فشل من Meta
   final String sourceBadgeAr;
+
+  /// رمز السبب من سياسة الفشل في الخادم، وفارغ للسجلات القديمة.
+  final String reasonCode;
+
+  final WhatsappFixAction action;
+
+  /// لا يوجد له صف في الجدول، فيحتاج إلى رقم مرجعي ظاهر.
+  bool get isUnknown => messageAr == WhatsappFailureReasonAr.unknownAr;
+}
+
+/// نص سبب ثابت يأتي من جدول سياسة الفشل.
+class WhatsappReasonCopy {
+  const WhatsappReasonCopy(this.messageAr, this.fixAr, this.action);
+
+  final String messageAr;
+  final String fixAr;
+  final WhatsappFixAction action;
+}
+
+/// حالة إيقاف الطابور كما يرجعها ready_status.
+class WhatsappSendBlock {
+  const WhatsappSendBlock({required this.scope, required this.reason});
+
+  final String scope;
+  final String reason;
+
+  /// null إذا لم يكن الطابور متوقفًا أو كان الخادم لا يرجع الحقل بعد.
+  static WhatsappSendBlock? fromJson(Object? raw) {
+    if (raw is! Map || raw['blocked'] != true) return null;
+    return WhatsappSendBlock(
+      scope: (raw['scope'] ?? '').toString(),
+      reason: (raw['reason'] ?? '').toString(),
+    );
+  }
+
+  /// إيقاف المنصة يعني مشكلتنا نحن مهما كان السبب المسجل.
+  WhatsappReasonCopy get copy {
+    final key = scope == 'platform' ? 'platform_issue' : reason;
+    return WhatsappFailureReasonAr.reasonCopy[key] ??
+        const WhatsappReasonCopy(
+          'أوقفنا الإرسال مؤقتًا حتى لا يضيع رصيدك',
+          'أرسل هذه الشاشة إلى دعم نابو.',
+          WhatsappFixAction.none,
+        );
+  }
+}
+
+/// أثر الرسالة الفاشلة على الرصيد، محسوب من قيود عائلة مفتاحها.
+class WhatsappWalletEffect {
+  const WhatsappWalletEffect({
+    required this.sends,
+    required this.refunds,
+    this.lastDebitAt,
+  });
+
+  final int sends;
+  final int refunds;
+  final DateTime? lastDebitAt;
+
+  /// التسوية تعيد بعد 24 ساعة وتعمل كل ساعة، فما تجاوز 48 ساعة لن يعود وحده.
+  static const _settleWindow = Duration(hours: 48);
+
+  /// null عند غياب قيد: قد يكون خصمًا قديمًا بلا مفتاح، فلا نجزم بأنه لم يُخصم.
+  String? textAr(DateTime now) {
+    if (sends <= 0) return null;
+    if (refunds >= sends) return 'عادت الوحدة إلى رصيدك.';
+    final last = lastDebitAt;
+    if (last != null && now.difference(last) < _settleWindow) {
+      return 'خُصمت وحدة، وتعود إلى رصيدك تلقائيًا خلال يوم إن بقيت الرسالة فاشلة.';
+    }
+    return 'خُصمت وحدة ولم تعد بعد. أرسل الرقم المرجعي إلى الدعم لمراجعتها.';
+  }
 }
 
 /// محلل موحّد لأسباب فشل واتساب (JSON منظم أو نص قديم أو رموز outbox).
 abstract class WhatsappFailureReasonAr {
   WhatsappFailureReasonAr._();
 
-  static const unknownAr = 'تعذّر الإرسال — سبب غير معروف من واتساب';
+  static const unknownAr =
+      'تعذّر الإرسال لسبب غير معروف. أرسل الرقم المرجعي إلى الدعم';
 
-  static const paymentAr =
-      'مشكلة دفع واتساب للأعمال عند ميتا — أصلح الدفع في Meta ثم أعد الإرسال';
+  static const paymentAr = 'أوقفت Meta الإرسال بسبب الدفع';
+
+  /// جدول الأسباب الثابت، بنفس رموز failure_policy.ts في الخادم.
+  static const Map<String, WhatsappReasonCopy> reasonCopy = {
+    'recipient_unreachable': WhatsappReasonCopy(
+      'لم تصل إلى هذا الرقم. قد لا يكون على واتساب، أو تطبيق الزبون قديم',
+      'اطلب من الزبون رقمًا عليه واتساب، ثم صحّحه هنا.',
+      WhatsappFixAction.correctPhone,
+    ),
+    'account_locked': WhatsappReasonCopy(
+      'حساب واتساب الأعمال مقفول عند Meta. أوقفنا الإرسال حتى لا يضيع رصيدك',
+      'افتح حسابك في Meta وعالج سبب القفل. بعدها يعود الإرسال خلال نصف ساعة.',
+      WhatsappFixAction.openMeta,
+    ),
+    'payment_issue_store': WhatsappReasonCopy(
+      paymentAr,
+      'أصلح طريقة الدفع في حسابك على Meta. بعدها يعود الإرسال خلال نصف ساعة.',
+      WhatsappFixAction.openMeta,
+    ),
+    'platform_issue': WhatsappReasonCopy(
+      'المشكلة عندنا ونعمل عليها. لن يُخصم منك شيء',
+      'لا تحتاج إلى أي إجراء.',
+      WhatsappFixAction.none,
+    ),
+    'window_closed': WhatsappReasonCopy(
+      'مر أكثر من 24 ساعة على آخر رسالة من الزبون',
+      'لا يمكن إرسال نص حر الآن. انتظر حتى يرد الزبون.',
+      WhatsappFixAction.none,
+    ),
+    'template_paused': WhatsappReasonCopy(
+      'أوقفت Meta قالب الرسالة. نجهز بديلًا',
+      'لا تحتاج إلى أي إجراء، ولا تُعد إرسال الرسالة نفسها.',
+      WhatsappFixAction.none,
+    ),
+    'reconnect_needed': WhatsappReasonCopy(
+      'انتهى إذن نابو على حساب Meta',
+      'أعد ربط واتساب من شاشة الربط. بعدها يعود الإرسال خلال نصف ساعة.',
+      WhatsappFixAction.reconnect,
+    ),
+    'temporary': WhatsappReasonCopy(
+      'تعذّر الإرسال بسبب عطل مؤقت',
+      'انتظر دقائق ثم اضغط «إعادة الإرسال».',
+      WhatsappFixAction.none,
+    ),
+  };
+
+  /// رقم قصير يقرؤه صاحب المتجر للدعم، ويطابق بداية معرّف السجل.
+  static String referenceFor(String logId) {
+    final compact = logId.trim().replaceAll('-', '').toUpperCase();
+    return compact.length <= 8 ? compact : compact.substring(0, 8);
+  }
+
+  /// زر السجلات القديمة التي لا تحمل reason_code.
+  static WhatsappFixAction _actionForLegacyCode(String code) {
+    final c = code.trim().toLowerCase();
+    if (c == 'invalid_phone' || c == 'invalidphone' || c == '131026') {
+      return WhatsappFixAction.correctPhone;
+    }
+    if (c == 'wallet_blocked') return WhatsappFixAction.topUp;
+    if (_isLegacyPermissionCode(c) ||
+        c == 'disconnected' ||
+        c == 'not_connected') {
+      return WhatsappFixAction.reconnect;
+    }
+    return WhatsappFixAction.none;
+  }
+
+  static bool _isLegacyPermissionCode(String c) =>
+      c == '190' || c == '10' || c == '200' || c == 'meta_permission';
 
   static WhatsappFailureReason parse(
     String? raw, {
@@ -111,6 +272,20 @@ abstract class WhatsappFailureReasonAr {
     // JSON صالح: اعتمد retryable من الخادم فقط — لا توسّع بالإعادة لكود مجهول.
     final hasRetryableKey = map.containsKey('retryable');
     final retryableStored = map['retryable'] == true;
+    final reasonCode = (map['reason_code'] ?? '').toString().trim();
+    final copy = reasonCopy[reasonCode];
+    if (copy != null) {
+      return WhatsappFailureReason(
+        messageAr: copy.messageAr,
+        fixAr: copy.fixAr,
+        retryable: hasRetryableKey ? retryableStored : false,
+        source: source,
+        code: code,
+        sourceBadgeAr: _badgeForSource(source),
+        reasonCode: reasonCode,
+        action: copy.action,
+      );
+    }
     return WhatsappFailureReason(
       messageAr: _messageForCode(code, source: source, title: title),
       fixAr: _fixForCode(code, source: source),
@@ -118,6 +293,8 @@ abstract class WhatsappFailureReasonAr {
       source: source,
       code: code,
       sourceBadgeAr: _badgeForSource(source),
+      reasonCode: reasonCode,
+      action: _actionForLegacyCode(code),
     );
   }
 
@@ -144,13 +321,23 @@ abstract class WhatsappFailureReasonAr {
     if (blob.contains('invalid_phone') || blob.contains('invalid phone')) {
       return 'invalid_phone';
     }
-    if (c.isNotEmpty && c != 'unknown') return rawCode.trim();
+    // نص Graph القديم: «(#131031) ...» أو رسالة إنجليزية طويلة بلا رمز.
+    final graphCode = RegExp(r'\(#(\d+)\)').firstMatch(blob)?.group(1);
+    if (graphCode != null) return graphCode;
+    if (blob.contains('access token') ||
+        blob.contains('oauthexception') ||
+        blob.contains('unsupported post request')) {
+      return 'meta_permission';
+    }
+    if (RegExp(r'^[a-z0-9_]{1,32}$').hasMatch(c) && c != 'unknown') {
+      return rawCode.trim();
+    }
     if (blob.contains('timeout')) return 'timeout';
     if (blob.contains('not_ready') || blob.contains('preparing')) {
       return 'preparing';
     }
     if (blob.contains('disconnect')) return 'disconnected';
-    return c.isEmpty ? 'unknown' : rawCode.trim();
+    return 'unknown';
   }
 
   /// أخطاء يمكن إعادة المحاولة بعد إصلاح خارجي (دفع ميتا، مؤقت، …).
@@ -212,6 +399,7 @@ abstract class WhatsappFailureReasonAr {
       sourceBadgeAr: fromLocalOutbox
           ? 'معلّقة على الجهاز'
           : _badgeForSource(source),
+      action: _actionForLegacyCode(code),
     );
   }
 
@@ -249,7 +437,7 @@ abstract class WhatsappFailureReasonAr {
       return 'رقم الزبون غير صالح — صحّح الرقم';
     }
     if (c == '131026' || c.contains('undeliverable')) {
-      return 'الرقم غير موجود على واتساب أو لا يستقبل الرسائل';
+      return reasonCopy['recipient_unreachable']!.messageAr;
     }
     if (isPaymentFailure(c)) {
       return paymentAr;
@@ -282,7 +470,7 @@ abstract class WhatsappFailureReasonAr {
       return 'الزبون أوقف استقبال رسائل التسويق من هذا المحل';
     }
     if (c == '131031') {
-      return 'حساب واتساب الأعمال مقفول عند ميتا';
+      return 'حساب واتساب الأعمال مقفول عند Meta';
     }
     if (c == '131037') {
       return 'اسم العرض على واتساب غير معتمد بعد';
@@ -298,6 +486,12 @@ abstract class WhatsappFailureReasonAr {
     }
     if (c == '132016') {
       return 'ميتا عطّلت قالب الرسالة نهائياً';
+    }
+    if (_isLegacyPermissionCode(c)) {
+      return 'لم يعد لنابو إذن الإرسال من هذا الحساب';
+    }
+    if (c == '100') {
+      return 'بيانات الرسالة المرسلة إلى Meta غير صالحة';
     }
     if (c == '131021') {
       return 'لا يمكن إرسال الرسالة إلى رقم المحل نفسه';
@@ -332,20 +526,20 @@ abstract class WhatsappFailureReasonAr {
     if (c == 'not_ready' || c == 'preparing') {
       return 'انتظر حتى يكتمل ربط واتساب، ثم اضغط «إعادة الإرسال».';
     }
-    if (c == 'disconnected' ||
-        c == 'not_connected' ||
-        c == 'evolutionerror' ||
-        c == 'evolution') {
+    if (c == 'disconnected' || c == 'not_connected') {
+      return 'أعد ربط واتساب المحل من شاشة الربط، ثم اضغط «إعادة الإرسال».';
+    }
+    if (c == 'evolutionerror' || c == 'evolution') {
       return 'من الإعدادات أعد ربط واتساب المحل بمسح رمز QR، ثم اضغط «إعادة الإرسال».';
     }
     if (c == 'invalid_phone' || c == 'invalidphone') {
       return 'افتح بطاقة الزبون وصحّح الرقم ليبدأ بـ 07 ومن 11 رقماً، ثم احفظ البطاقة من جديد.';
     }
     if (c == '131026' || c.contains('undeliverable')) {
-      return 'اطلب من الزبون رقماً فيه واتساب ويستقبل الرسائل، ثم صحّحه في البطاقة.';
+      return reasonCopy['recipient_unreachable']!.fixAr;
     }
     if (isPaymentFailure(c)) {
-      return 'ادخل إلى Meta Business وأصلح طريقة الدفع أو حد الفاتورة، ثم اضغط «إعادة الإرسال».';
+      return 'إن كان الرقم رقم محلك، أصلح طريقة الدفع في Meta ثم اضغط «إعادة الإرسال». وإن كنت على رقم نابو فالمشكلة عندنا، ولا تحتاج إلى أي إجراء.';
     }
     if (c == 'wallet_blocked' || c.contains('wallet')) {
       return 'عدد الرسائل المتبقي قليل أو فاتورة الباقة انتهت. جدّد الباقة من محفظة واتساب، ثم اضغط «إعادة الإرسال».';
@@ -370,7 +564,7 @@ abstract class WhatsappFailureReasonAr {
       return 'لا ترسل لهذا الزبون رسالة تسويق حتى يطلب ذلك بنفسه.';
     }
     if (c == '131031') {
-      return 'راجع حساب Meta Business. الإرسال يبقى متوقفاً حتى يُفتح الحساب.';
+      return 'إن كان الرقم رقم محلك، عالج القفل في حسابك على Meta ثم اضغط «إعادة الإرسال». وإن كنت على رقم نابو فالمشكلة عندنا، ولا تحتاج إلى أي إجراء.';
     }
     if (c == '131037') {
       return 'أكمل اعتماد اسم النشاط في Meta، ثم اضغط «إعادة الإرسال».';
@@ -378,6 +572,12 @@ abstract class WhatsappFailureReasonAr {
     if (c == '132015' || c == '132016' || c == '132000' || c == '132001' ||
         c == '132005' || c == '132012') {
       return 'القالب مرفوض عند ميتا. أبلغ دعم نابو برمز الخطأ، ولا تُعد نفس الرسالة كما هي.';
+    }
+    if (_isLegacyPermissionCode(c)) {
+      return 'إن كان الرقم رقم محلك، أعد ربط واتساب من شاشة الربط. وإن كنت على رقم نابو فالمشكلة عندنا، ولا تحتاج إلى أي إجراء.';
+    }
+    if (c == '100') {
+      return 'أرسل الرقم المرجعي إلى دعم نابو. البيانات المرسلة إلى Meta تحتاج إلى تصحيح.';
     }
     if (c == '131021') {
       return 'ضع رقم الزبون، لا رقم واتساب المحل نفسه.';
@@ -391,7 +591,7 @@ abstract class WhatsappFailureReasonAr {
     if (source == 'meta' || RegExp(r'^\d{5,6}$').hasMatch(c)) {
       return 'هذا رفض من سيرفرات Meta. انتظر دقائق ثم أعد الإرسال، أو أرسل رمز الخطأ لدعم نابو إن تكرر.';
     }
-    return 'اضغط «إعادة الإرسال» مرة واحدة. إن بقيت الرسالة، اخرج من الحساب وادخل من جديد ثم أعد المحاولة.';
+    return 'أرسل الرقم المرجعي إلى دعم نابو حتى نعرف السبب.';
   }
 
   /// زر إعادة الإرسال للسجل السحابي (يدوي فقط — ليس تلقائياً).
