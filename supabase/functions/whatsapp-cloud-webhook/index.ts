@@ -15,7 +15,12 @@ import {
   allowedCurrentStatusesFor,
   formatWaLogError,
   type WaMessageStatus,
-} from './wa_log_error.ts';
+} from '../whatsapp-gateway/wa_log_error.ts';
+import { classifyFailure } from '../whatsapp-gateway/failure_policy.ts';
+import {
+  applySendBlock,
+  clearSendBlockAfterDelivery,
+} from '../whatsapp-gateway/send_block.ts';
 import {
   handleInboundMessage,
   resolveTenantForInbound,
@@ -235,6 +240,23 @@ async function writeMonotonicMessageStatus(
     .in('status', allowedCurrentStatusesFor(next));
 }
 
+async function readLogOwner(
+  supabase: SupabaseClient,
+  providerMessageId: string,
+): Promise<{ tenantUserId: string; provider: string } | null> {
+  const { data } = await supabase
+    .from('whatsapp_message_logs')
+    .select('tenant_user_id, provider')
+    .eq('provider_message_id', providerMessageId)
+    .limit(1)
+    .maybeSingle();
+  if (!data?.tenant_user_id) return null;
+  return {
+    tenantUserId: String(data.tenant_user_id),
+    provider: String(data.provider ?? ''),
+  };
+}
+
 async function backfillUnanswered(
   supabase: SupabaseClient,
 ): Promise<Record<string, unknown>> {
@@ -354,14 +376,26 @@ async function handleMetaWebhook(
     const next = mapMetaStatus(st.status) as WaMessageStatus;
     // تقدّم أحادي ذري: شرط الحالة الحالية داخل نفس UPDATE (لا قراءة ثم كتابة).
     const extra: Record<string, unknown> = {};
+    const logRow = next === 'failed' || next === 'delivered' || next === 'read'
+      ? await readLogOwner(supabase, st.messageId)
+      : null;
     if (next === 'failed') {
       const err = st.error;
+      const decision = classifyFailure({
+        errorCode: err?.code,
+        detail: err?.message,
+        isSharedSender: logRow?.provider === 'dualhook',
+      });
       extra.error = formatWaLogError({
         source: 'meta',
         code: err?.code ?? 'unknown',
         title: err?.title ?? '',
         message: err?.message ?? '',
+        reasonCode: decision.reasonCode,
       });
+      if (logRow) {
+        await applySendBlock(supabase, logRow.tenantUserId, decision);
+      }
     }
     await writeMonotonicMessageStatus(
       supabase,
@@ -369,6 +403,13 @@ async function handleMetaWebhook(
       next,
       extra,
     );
+    if (logRow && next !== 'failed') {
+      await clearSendBlockAfterDelivery(
+        supabase,
+        logRow.tenantUserId,
+        logRow.provider,
+      );
+    }
   }
 
   let stored = 0;

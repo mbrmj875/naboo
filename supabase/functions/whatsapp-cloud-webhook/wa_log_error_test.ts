@@ -3,7 +3,7 @@ import {
   allowedCurrentStatusesFor,
   formatWaLogError,
   isRetryableCode,
-} from './wa_log_error.ts';
+} from '../whatsapp-gateway/wa_log_error.ts';
 
 Deno.test('formatWaLogError ينتج JSON منظم', () => {
   const raw = formatWaLogError({

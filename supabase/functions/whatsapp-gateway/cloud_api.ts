@@ -17,6 +17,8 @@ import {
 } from './shared_sender.ts';
 
 const GRAPH_VER = Deno.env.get('META_GRAPH_API_VERSION')?.trim() || 'v26.0';
+import { graphErrorCodes } from './failure_policy.ts';
+
 const GRAPH = `https://graph.facebook.com/${GRAPH_VER}`;
 
 export type CloudSendResult = {
@@ -24,6 +26,8 @@ export type CloudSendResult = {
   messageId?: string;
   detail?: string;
   httpStatus?: number;
+  errorCode?: number;
+  errorSubcode?: number;
 };
 
 /** توكن رقم المحل الخاص — لا يُستدعى لمسار رقم نابو. */
@@ -101,6 +105,7 @@ export async function cloudMarkReadAndTyping(args: {
       const err = data.error as Record<string, unknown> | undefined;
       return {
         ok: false,
+        ...graphErrorCodes(err),
         httpStatus: res.status,
         detail: String(err?.message ?? raw).slice(0, 300),
       };
@@ -183,6 +188,7 @@ export async function cloudSendText(args: {
       const err = data.error as Record<string, unknown> | undefined;
       return {
         ok: false,
+        ...graphErrorCodes(err),
         httpStatus: res.status,
         detail: String(err?.message ?? raw).slice(0, 300),
       };
@@ -255,6 +261,7 @@ export async function cloudSendTemplate(args: {
       const err = data.error as Record<string, unknown> | undefined;
       return {
         ok: false,
+        ...graphErrorCodes(err),
         httpStatus: res.status,
         detail: String(err?.message ?? raw).slice(0, 300),
       };
@@ -318,6 +325,7 @@ export async function cloudUploadMedia(args: {
       const err = data.error as Record<string, unknown> | undefined;
       return {
         ok: false,
+        ...graphErrorCodes(err),
         httpStatus: res.status,
         detail: String(err?.message ?? raw).slice(0, 300),
       };
@@ -380,6 +388,7 @@ export async function cloudSendDocument(args: {
       const err = data.error as Record<string, unknown> | undefined;
       return {
         ok: false,
+        ...graphErrorCodes(err),
         httpStatus: res.status,
         detail: String(err?.message ?? raw).slice(0, 300),
       };

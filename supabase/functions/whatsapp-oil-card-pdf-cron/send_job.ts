@@ -254,8 +254,10 @@ export async function processOilCardPdfJob(
     sendKind: 'oil_change_card_pdf',
   });
   if (!wallet.ok) {
+    // الإيقاف بخطأ حساب مؤقت: يبقى الملف ينتظر، ولا يسقط نهائيًا.
+    const blocked = String(wallet.error ?? '').startsWith('send_blocked:');
     await mark(db, job.id, {
-      status: 'failed',
+      status: blocked ? 'pending' : 'failed',
       last_error: wallet.error ?? 'insufficient_balance',
     });
     return 'failed';

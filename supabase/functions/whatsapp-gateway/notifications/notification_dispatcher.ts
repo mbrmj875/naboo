@@ -12,6 +12,8 @@ import { dispatchWhatsappChannel } from './channels/whatsapp.ts';
 import { writeClient } from '../admin_client.ts';
 import { classifyExistingSendLog } from '../send_log_state.ts';
 import { codeFromGatewayDetail, formatWaLogError } from '../wa_log_error.ts';
+import { classifyFailure } from '../failure_policy.ts';
+import { applySendBlock } from '../send_block.ts';
 
 const MAX_ATTEMPTS = 3;
 const BACKOFF_MS = [0, 800, 2000];
@@ -132,13 +134,23 @@ async function writeLog(
       .eq('user_id', request.tenantUserId)
       .maybeSingle();
     const provider = String(gate?.whatsapp_provider ?? 'dualhook');
+    const decision = result.ok ? null : classifyFailure({
+      errorCode: result.errorCode,
+      detail: result.detail,
+      httpStatus: result.httpStatus,
+      isSharedSender: provider === 'dualhook',
+    });
+    if (decision) await applySendBlock(supabase, request.tenantUserId, decision);
     const errorJson = result.ok
       ? null
       : formatWaLogError({
         source: 'gateway',
-        code: codeFromGatewayDetail(result.detail),
+        code: result.errorCode != null
+          ? String(result.errorCode)
+          : codeFromGatewayDetail(result.detail),
         title: '',
         message: result.detail ?? '',
+        reasonCode: decision?.reasonCode,
       });
     const row = {
       tenant_user_id: request.tenantUserId,

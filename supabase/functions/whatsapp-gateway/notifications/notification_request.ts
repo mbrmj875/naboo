@@ -30,4 +30,6 @@ export type NotificationDispatchResult = {
   logId?: string;
   detail?: string;
   readyState?: ReadyState;
+  errorCode?: number;
+  httpStatus?: number;
 };

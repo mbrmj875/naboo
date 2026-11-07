@@ -1,5 +1,6 @@
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
 import { writeClient } from './admin_client.ts';
+import { checkSendBlock } from './send_block.ts';
 import {
   classifyExistingSendLog,
   type ExistingSendLogState,
@@ -39,6 +40,14 @@ export async function debitWalletForSend(
 ): Promise<WalletDebitResult> {
   try {
     const db = writeClient(supabase);
+    const block = await checkSendBlock(db, opts.tenantUserId);
+    if (block.blocked) {
+      return {
+        ok: false,
+        error: `send_blocked:${block.reason}`,
+        message_ar: 'الإرسال متوقف مؤقتًا بسبب مشكلة في الحساب، ولم يُخصم من رصيدك.',
+      };
+    }
     const { data, error } = await db.rpc('wa_wallet_debit_one', {
       p_tenant: opts.tenantUserId,
       p_idempotency_key: opts.idempotencyKey,

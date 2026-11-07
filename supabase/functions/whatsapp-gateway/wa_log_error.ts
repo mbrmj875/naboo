@@ -1,6 +1,5 @@
 /**
  * شكل منظم لعمود whatsapp_message_logs.error + تصنيف retryable من الخادم.
- * نسخة gateway — تبقى متزامنة مع whatsapp-cloud-webhook/wa_log_error.ts
  */
 
 export type WaLogErrorSource = 'meta' | 'gateway';
@@ -11,6 +10,7 @@ export type WaLogErrorPayload = {
   title: string;
   message: string;
   retryable: boolean;
+  reason_code?: string;
 };
 
 const RETRYABLE_CODES = new Set([
@@ -61,6 +61,7 @@ export function formatWaLogError(args: {
   title?: string | null;
   message?: string | null;
   retryable?: boolean;
+  reasonCode?: string | null;
 }): string {
   const code = String(args.code ?? '').trim() || 'unknown';
   const title = String(args.title ?? '').trim();
@@ -72,6 +73,7 @@ export function formatWaLogError(args: {
     title,
     message: message.slice(0, 500),
     retryable,
+    ...(args.reasonCode ? { reason_code: args.reasonCode } : {}),
   };
   return JSON.stringify(payload);
 }
@@ -95,4 +97,39 @@ export function codeFromGatewayDetail(detail: string | null | undefined): string
   // أول مقطع قبل : إن وُجد
   const head = raw.split(/[:|]/)[0]?.trim();
   return head || 'unknown';
+}
+
+export type WaMessageStatus = 'sent' | 'delivered' | 'read' | 'failed';
+
+/** رتب التقدم: أعلى = أحدث نجاح. failed خارج سلم النجاح. */
+export function statusRank(status: WaMessageStatus): number {
+  switch (status) {
+    case 'sent':
+      return 1;
+    case 'delivered':
+      return 2;
+    case 'read':
+      return 3;
+    case 'failed':
+      return 0;
+  }
+}
+
+/** الحالات الحالية المسموح الانتقال منها إلى الهدف. */
+export function allowedCurrentStatusesFor(
+  next: WaMessageStatus,
+): WaMessageStatus[] {
+  switch (next) {
+    case 'sent':
+      // لا نخفض ولا نعيد تعيين sent من حالة أعلى عبر هذا المسار.
+      return ['sent'];
+    case 'delivered':
+      // إثبات الوصول يصحّح فشلاً مبكراً لنفس معرّف الرسالة.
+      return ['sent', 'failed'];
+    case 'read':
+      return ['sent', 'delivered', 'failed'];
+    case 'failed':
+      // لا يُمسح وصول مؤكد بإشعار فشل متأخر.
+      return ['sent'];
+  }
 }

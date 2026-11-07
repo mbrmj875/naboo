@@ -129,6 +129,8 @@ export async function dispatchWhatsappChannel(
         detail: sent.detail,
         retryable: sent.retryable,
         readyState: 'ready',
+        errorCode: sent.errorCode,
+        httpStatus: sent.httpStatus,
       };
       if (sent.ok || !templateMismatch(sent.detail)) return last;
       console.warn(`template ${spec.name} unusable: ${sent.detail}`);

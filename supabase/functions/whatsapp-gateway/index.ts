@@ -49,6 +49,7 @@ import { syncTemplateStatusesForTenant } from './lifecycle/template_lifecycle_se
 import { ensureDefaultTemplatesForTenant } from './lifecycle/template_lifecycle_service.ts';
 import { notifyOilChangeCard } from './notifications/notifiers/oil_change_card_notifier.ts';
 import { requireAdmin, writeClient } from './admin_client.ts';
+import { readSendBlock } from './send_block.ts';
 import { getWhatsAppProvider } from './providers/registry.ts';
 import {
   claimSendLogRow,
@@ -250,6 +251,7 @@ Deno.serve(async (req) => {
       phone: ready.phone,
       provider: ready.provider,
       message_ar: readyStateMessageAr(ready.readyState),
+      send_block: await readSendBlock(gatewayWriter, user.id),
     });
   }
 
@@ -453,17 +455,8 @@ Deno.serve(async (req) => {
     // rejected ضمن CHECK ولا يظهر في «تم الإرسال» ولا «لم يتم الإرسال».
     const { data, error } = await writeClient(supabase)
       .from('whatsapp_message_logs')
-      .update({
-        status: 'rejected',
-        error: formatWaLogError({
-          source: 'gateway',
-          code: 'dismissed_by_user',
-          title: 'Dismissed',
-          message: 'user_dismissed',
-          retryable: false,
-        }),
-        provider_message_id: null,
-      })
+      // السبب ومعرّف الرسالة يبقيان، فالإسقاط إخفاء لا مسح.
+      .update({ status: 'rejected', dismissed_at: new Date().toISOString() })
       .eq('id', logId)
       .eq('tenant_user_id', user.id)
       .eq('status', 'failed')

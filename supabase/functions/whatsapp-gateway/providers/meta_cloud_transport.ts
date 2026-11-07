@@ -15,6 +15,7 @@ import type {
   WhatsAppProvider,
 } from './types.ts';
 import { cloudSendText, resolveGraphAccessToken } from '../cloud_api.ts';
+import { graphErrorCodes } from '../failure_policy.ts';
 import { signEsState } from '../es_state.ts';
 import {
   createWabaMessageTemplate,
@@ -310,6 +311,8 @@ export const metaCloudTransport: WhatsAppProvider = {
       providerMessageId: sent.messageId,
       detail: sent.detail,
       httpStatus: sent.httpStatus,
+      errorCode: sent.errorCode,
+      errorSubcode: sent.errorSubcode,
     };
   },
 
@@ -366,6 +369,7 @@ export const metaCloudTransport: WhatsAppProvider = {
           httpStatus: res.status,
           detail: String(err?.message ?? raw).slice(0, 400),
           retryable: res.status >= 500,
+          ...graphErrorCodes(err),
         };
       }
       const messages = Array.isArray(data.messages) ? data.messages : [];

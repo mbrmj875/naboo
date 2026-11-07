@@ -68,6 +68,8 @@ export type SendResult = {
   detail?: string;
   httpStatus?: number;
   retryable?: boolean;
+  errorCode?: number;
+  errorSubcode?: number;
 };
 
 export type EnsureTemplateInput = {

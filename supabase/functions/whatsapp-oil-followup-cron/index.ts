@@ -4,6 +4,10 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
 import { debitWalletForSend } from '../whatsapp-gateway/wallet.ts';
+import {
+  classifyFailure,
+  nextRetryDelayMs,
+} from '../whatsapp-gateway/failure_policy.ts';
 import { notifyOilChangeFollowup } from '../whatsapp-gateway/notifications/notifiers/oil_change_followup_notifier.ts';
 import {
   getWhatsAppProvider,
@@ -22,6 +26,7 @@ type JobRow = {
   status: string;
   payload: Record<string, unknown> | null;
   idempotency_key: string;
+  attempts?: number | null;
 };
 
 function cronAuthorized(req: Request): boolean {
@@ -77,6 +82,9 @@ function variablesFromPayload(
   };
 }
 
+const STALE_SENDING_MS = 15 * 60_000;
+const BLOCKED_RECHECK_MS = 30 * 60_000;
+
 Deno.serve(async (req) => {
   if (req.method !== 'POST' && req.method !== 'GET') {
     return new Response('method not allowed', { status: 405 });
@@ -95,11 +103,19 @@ Deno.serve(async (req) => {
   const now = new Date().toISOString();
   const staleDays = 7;
 
+  // ما علق على sending بعد انقطاع يعود للطابور. مفتاح الخصم ثابت فلا يتكرر الخصم.
+  const staleBefore = new Date(Date.now() - STALE_SENDING_MS).toISOString();
+  await db.from('wa_oil_followup_jobs').update({
+    status: 'queued',
+    updated_at: now,
+  }).eq('status', 'sending').lt('updated_at', staleBefore);
+
   const { data: jobs, error } = await db
     .from('wa_oil_followup_jobs')
     .select('*')
     .eq('status', 'queued')
     .lte('due_at', now)
+    .or(`next_attempt_at.is.null,next_attempt_at.lte.${now}`)
     .order('due_at', { ascending: true })
     .limit(40);
 
@@ -185,6 +201,18 @@ Deno.serve(async (req) => {
       sendKind: 'oil_change_followup',
     });
 
+    if (!wallet.ok && String(wallet.error ?? '').startsWith('send_blocked:')) {
+      // الطابور موقوف بخطأ حساب: تبقى الوظيفة بلا خصم وتُفحص لاحقًا.
+      await db.from('wa_oil_followup_jobs').update({
+        status: 'queued',
+        last_error_code: String(wallet.error).slice('send_blocked:'.length),
+        next_attempt_at: new Date(Date.now() + BLOCKED_RECHECK_MS).toISOString(),
+        updated_at: now,
+      }).eq('id', job.id);
+      skipped++;
+      continue;
+    }
+
     if (!wallet.ok) {
       await db.from('wa_oil_followup_jobs').update({
         status: 'skipped_no_wallet',
@@ -197,6 +225,8 @@ Deno.serve(async (req) => {
 
     let dispatchOk = false;
     let detail = '';
+    let errorCode: number | undefined;
+    let httpStatus: number | undefined;
 
     if (official) {
       const result = await notifyOilChangeFollowup(db, {
@@ -208,6 +238,8 @@ Deno.serve(async (req) => {
       });
       dispatchOk = result.ok;
       detail = result.detail ?? '';
+      errorCode = result.errorCode;
+      httpStatus = result.httpStatus;
     } else {
       const { data: rule } = await db
         .from('wa_oil_followup_rules')
@@ -236,6 +268,8 @@ Deno.serve(async (req) => {
         });
         dispatchOk = sentText.ok;
         detail = sentText.detail ?? '';
+        errorCode = sentText.errorCode;
+        httpStatus = sentText.httpStatus;
       } else {
         dispatchOk = false;
         detail = 'qr_text_unsupported';
@@ -250,9 +284,22 @@ Deno.serve(async (req) => {
       }).eq('id', job.id);
       sent++;
     } else {
+      const decision = classifyFailure({
+        errorCode,
+        detail,
+        httpStatus,
+        isSharedSender: providerId === 'dualhook',
+      });
+      const attempts = Number(job.attempts ?? 0);
+      const delay = decision.autoRetry ? nextRetryDelayMs(attempts) : null;
       await db.from('wa_oil_followup_jobs').update({
-        status: 'failed',
+        status: delay === null ? 'failed' : 'queued',
+        attempts: attempts + 1,
+        next_attempt_at: delay === null
+          ? null
+          : new Date(Date.now() + delay).toISOString(),
         last_error: detail || 'send_failed',
+        last_error_code: decision.reasonCode,
         updated_at: now,
       }).eq('id', job.id);
       skipped++;
