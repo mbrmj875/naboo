@@ -1,0 +1,20 @@
+{
+  "id": "session_flapping_6",
+  "session_name": "shop_flap_demo",
+  "description_ar": "ستة انتقالات WORKING↔FAILED خلال ساعة",
+  "facts": [
+    { "fact_type": "session_working", "code": "WORKING", "created_at": "2026-07-22T01:00:00.000Z" },
+    { "fact_type": "session_down", "code": "FAILED", "created_at": "2026-07-22T01:05:00.000Z" },
+    { "fact_type": "session_working", "code": "WORKING", "created_at": "2026-07-22T01:10:00.000Z" },
+    { "fact_type": "session_down", "code": "STOPPED", "created_at": "2026-07-22T01:15:00.000Z" },
+    { "fact_type": "session_working", "code": "WORKING", "created_at": "2026-07-22T01:20:00.000Z" },
+    { "fact_type": "session_down", "code": "FAILED", "created_at": "2026-07-22T01:25:00.000Z" },
+    { "fact_type": "session_working", "code": "WORKING", "created_at": "2026-07-22T01:30:00.000Z" },
+    { "fact_type": "session_down", "code": "FAILED", "created_at": "2026-07-22T01:35:00.000Z" }
+  ],
+  "expected": {
+    "min_flaps": 6,
+    "pattern_key": "session_flapping",
+    "severity": "P2"
+  }
+}

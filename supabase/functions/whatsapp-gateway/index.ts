@@ -33,11 +33,12 @@ import {
 } from './diagnostics.ts';
 import { writeOpsFact } from '../whatsapp-ops-analyst/facts.ts';
 import {
-  connectedEmailCopy,
-  notifyOwnerEmail,
+  notifyWaBound,
+  notifyWaUnbound,
 } from '../whatsapp-events/owner_email_notify.ts';
 import {
   completeOfficialConnect,
+  disconnectOfficial,
   startOfficialConnect,
 } from './lifecycle/connect_service.ts';
 import {
@@ -97,6 +98,7 @@ type GatewayAction =
   | 'complete_official_connect'
   | 'ready_status'
   | 'sync_templates'
+  | 'submit_followup_template'
   | 'send_oil_change_card'
   | 'dismiss_failed_message';
 
@@ -249,6 +251,19 @@ Deno.serve(async (req) => {
       ready_state: ready.readyState,
       message_ar: readyStateMessageAr(ready.readyState),
     });
+  }
+
+  if (action === 'submit_followup_template') {
+    const { submitFollowupTemplateForTenant } = await import(
+      './lifecycle/followup_template.ts'
+    );
+    const bodyTemplate = (body.body_template ?? '').toString();
+    const result = await submitFollowupTemplateForTenant(
+      supabase,
+      user.id,
+      bodyTemplate,
+    );
+    return Response.json(result, { status: result.ok ? 200 : 400 });
   }
 
   if (action === 'send_oil_change_card') {
@@ -1227,8 +1242,45 @@ Deno.serve(async (req) => {
         }, { status: 429 });
       }
 
+      if (
+        activeProvider === 'cloud_api' ||
+        activeProvider === 'dualhook' ||
+        activeProvider === 'ycloud'
+      ) {
+        const { data: gateBefore } = await supabase
+          .from('tenant_whatsapp_gateways')
+          .select('whatsapp_phone, ycloud_from_phone, whatsapp_provider')
+          .eq('user_id', user.id)
+          .maybeSingle();
+        const phoneBefore = String(
+          gateBefore?.whatsapp_phone ?? gateBefore?.ycloud_from_phone ?? '',
+        ).trim() || null;
+        await disconnectOfficial(supabase, user.id);
+        await supabase.from('tenant_whatsapp_gateways').update({
+          disconnect_cause: 'user_disconnect',
+          updated_at: now,
+        }).eq('user_id', user.id);
+        await notifyWaUnbound(supabase, {
+          userId: user.id,
+          instanceName,
+          provider: String(gateBefore?.whatsapp_provider ?? activeProvider),
+          phone: phoneBefore,
+        });
+        return Response.json({
+          ok: true,
+          status: 'disconnected',
+          provider: activeProvider,
+          message_ar: 'تم إلغاء ربط واتساب.',
+        });
+      }
+
       // واتس360: قطع من نابو = مسح المفاتيح محلياً (الجلسة تبقى في لوحة whats360).
       if (activeProvider === 'whats360') {
+        const { data: phoneRow } = await supabase
+          .from('tenant_whatsapp_gateways')
+          .select('whatsapp_phone')
+          .eq('user_id', user.id)
+          .maybeSingle();
         await supabase.from('tenant_whatsapp_gateways').upsert(
           {
             user_id: user.id,
@@ -1252,6 +1304,12 @@ Deno.serve(async (req) => {
           action: 'disconnect',
           source: 'user_disconnect',
           detail: 'whats360_credentials_cleared',
+        });
+        await notifyWaUnbound(supabase, {
+          userId: user.id,
+          instanceName,
+          provider: 'whats360',
+          phone: phoneRow?.whatsapp_phone ? String(phoneRow.whatsapp_phone) : null,
         });
         return Response.json({
           ok: true,
@@ -1313,12 +1371,18 @@ Deno.serve(async (req) => {
         meta: { mode: 'purge_and_recreate', purge },
       });
 
+      const { data: phoneRow } = await supabase
+        .from('tenant_whatsapp_gateways')
+        .select('whatsapp_phone')
+        .eq('user_id', user.id)
+        .maybeSingle();
       const { error } = await supabase.from('tenant_whatsapp_gateways').upsert(
         {
           user_id: user.id,
           evolution_instance_name: instanceName,
           status: 'disconnected',
           whatsapp_phone: null,
+          disconnect_cause: 'user_disconnect',
           last_disconnected_at: now,
           updated_at: now,
         },
@@ -1327,6 +1391,13 @@ Deno.serve(async (req) => {
       if (error) {
         return Response.json({ ok: false, error: error.message }, { status: 500 });
       }
+
+      await notifyWaUnbound(supabase, {
+        userId: user.id,
+        instanceName,
+        provider: activeProvider,
+        phone: phoneRow?.whatsapp_phone ? String(phoneRow.whatsapp_phone) : null,
+      });
 
       return Response.json({
         ok: purge?.ok === true,
@@ -1686,13 +1757,12 @@ Deno.serve(async (req) => {
         );
         let ownerEmail: { sent: boolean; detail: string } | null = null;
         if (!wasConnected) {
-          const copy = connectedEmailCopy(phone);
-          ownerEmail = await notifyOwnerEmail(supabase, {
+          ownerEmail = await notifyWaBound(supabase, {
             userId: user.id,
             instanceName,
-            kind: 'whatsapp_connected',
-            subject: copy.subject,
-            bodyAr: copy.bodyAr,
+            provider: 'evolution',
+            phone,
+            flapCooldown: true,
           });
         }
         return Response.json({

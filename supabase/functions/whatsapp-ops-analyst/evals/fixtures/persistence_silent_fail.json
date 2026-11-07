@@ -1,0 +1,16 @@
+{
+  "id": "persistence_silent_fail",
+  "description_ar": "فشل تسليم صامت يحتاج استمرار 5 دقائق قبل الفتح",
+  "now": "2026-07-22T02:10:00.000Z",
+  "first_seen_at": "2026-07-22T02:05:00.000Z",
+  "signals": {
+    "sendAccepted1h": 10,
+    "deliveryAck1h": 1
+  },
+  "expected": {
+    "pattern_key": "silent_undelivered_spike",
+    "severity": "P1",
+    "immediate": false,
+    "persistence_promote_after_ms": 300000
+  }
+}
