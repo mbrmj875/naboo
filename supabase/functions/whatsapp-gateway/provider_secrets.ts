@@ -49,3 +49,23 @@ export async function readProviderSecret(
   const v = String(data?.secret_value ?? '').trim();
   return v || null;
 }
+
+/** يحذف سراً واحداً للمستأجر. عدم وجود الصف ليس خطأ. */
+export async function deleteProviderSecret(
+  supabase: SupabaseClient,
+  args: {
+    tenantUserId: string;
+    provider: string;
+    secretKind: string;
+  },
+): Promise<{ ok: boolean; detail?: string }> {
+  const db = writeClient(supabase);
+  const { error } = await db
+    .from('whatsapp_provider_secrets')
+    .delete()
+    .eq('tenant_user_id', args.tenantUserId)
+    .eq('provider', args.provider)
+    .eq('secret_kind', args.secretKind);
+  if (error) return { ok: false, detail: error.message.slice(0, 200) };
+  return { ok: true };
+}

@@ -16,6 +16,7 @@ import {
 } from '../../whatsapp-events/owner_email_notify.ts';
 import { westernPhone } from '../../whatsapp-events/owner_email_copy.ts';
 import { sharedSenderConfig } from '../shared_sender.ts';
+import { deleteProviderSecret } from '../provider_secrets.ts';
 import type { TransportProviderId } from '../providers/types.ts';
 
 async function mailSwitch(
@@ -176,7 +177,7 @@ export async function startOfficialConnect(
 
     await cleanupOtherEngines({ userId: tenantUserId, next: officialProvider });
     const boundAt = new Date().toISOString();
-    await db.from('tenant_whatsapp_gateways').upsert(
+    const { error: boundErr } = await db.from('tenant_whatsapp_gateways').upsert(
       {
         user_id: tenantUserId,
         evolution_instance_name: `shop_${tenantUserId.replace(/-/g, '_')}`,
@@ -194,6 +195,17 @@ export async function startOfficialConnect(
       },
       { onConflict: 'user_id' },
     );
+    // توكن رقم المحل لا يعمل على رقم نابو، والعودة إلى رقم المحل تصدر توكناً جديداً.
+    if (!boundErr) {
+      const removed = await deleteProviderSecret(supabase, {
+        tenantUserId,
+        provider: 'cloud_api',
+        secretKind: 'access_token',
+      });
+      if (!removed.ok) {
+        console.warn('stale store token delete failed', removed.detail);
+      }
+    }
     await mailSwitch(supabase, {
       tenantUserId,
       nextProvider: officialProvider,
