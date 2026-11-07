@@ -50,6 +50,7 @@ import { ensureDefaultTemplatesForTenant } from './lifecycle/template_lifecycle_
 import { notifyOilChangeCard } from './notifications/notifiers/oil_change_card_notifier.ts';
 import { requireAdmin, writeClient } from './admin_client.ts';
 import { readSendBlock } from './send_block.ts';
+import { countHeldReminders } from './recipient_consent.ts';
 import { TemplateKey } from './notifications/notification_request.ts';
 import {
   connectTestAllowed,
@@ -267,6 +268,7 @@ Deno.serve(async (req) => {
       provider: ready.provider,
       message_ar: readyStateMessageAr(ready.readyState),
       send_block: await readSendBlock(gatewayWriter, user.id),
+      held_reminders: await countHeldReminders(gatewayWriter, user.id),
       reminder_ready: reminder.readyState === 'ready',
       onboarding: await readOnboardingSummary(gatewayWriter, user.id),
     });

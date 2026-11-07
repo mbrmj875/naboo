@@ -42,6 +42,7 @@ class WhatsappGatewayStatusResult {
     this.readyState,
     this.messageAr,
     this.sendBlock,
+    this.heldReminders = 0,
     this.reminderReady,
     this.onboardingStep,
     this.onboardingError,
@@ -55,6 +56,9 @@ class WhatsappGatewayStatusResult {
   final String? readyState;
   final String? messageAr;
   final WhatsappSendBlock? sendBlock;
+
+  /// تذكيرات حان موعدها وتنتظر حل مشكلة، وتخرج وحدها بعد حلها.
+  final int heldReminders;
 
   /// null عندما لا يرجع الخادم الحقل بعد.
   final bool? reminderReady;
@@ -171,6 +175,7 @@ class OilChangeWhatsappGatewayService {
       readyState: data['ready_state']?.toString(),
       messageAr: data['message_ar']?.toString(),
       sendBlock: WhatsappSendBlock.fromJson(data['send_block']),
+      heldReminders: (data['held_reminders'] as num?)?.toInt() ?? 0,
       reminderReady: data['reminder_ready'] is bool
           ? data['reminder_ready'] as bool
           : null,

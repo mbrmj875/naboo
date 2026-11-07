@@ -1,4 +1,8 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../../theme/design_tokens.dart';
 import '../models/whatsapp_connect_method.dart';
@@ -34,6 +38,38 @@ class WhatsappOfficialConnectPanel extends StatefulWidget {
 
 class _WhatsappOfficialConnectPanelState
     extends State<WhatsappOfficialConnectPanel> {
+  bool _numberHasBusinessApp = true;
+
+  Future<void> _openStore() async {
+    final url = defaultTargetPlatform == TargetPlatform.iOS
+        ? 'https://apps.apple.com/app/whatsapp-business/id1386412985'
+        : 'https://play.google.com/store/apps/details?id=com.whatsapp.w4b';
+    await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+  }
+
+  Future<void> _showPermissionHelp() {
+    return showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('كيف أحصل على الصلاحية'),
+        content: const Text(
+          'يجب أن تكون مديرًا في حساب Meta للأعمال الخاص بمتجرك.\n\n'
+          '1. اطلب من مدير الحساب فتح business.facebook.com.\n'
+          '2. يذهب إلى الإعدادات ثم الأشخاص.\n'
+          '3. يضيف بريدك ويختار صلاحية المدير الكاملة.\n'
+          '4. اقبل الدعوة من بريدك ثم ارجع إلى هنا.\n\n'
+          'إذا لم يكن لديك حساب أعمال، تنشئه Meta أثناء الربط.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('حسنًا'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -117,13 +153,48 @@ class _WhatsappOfficialConnectPanelState
         if (isMetaDirect) ...[
           const SizedBox(height: 16),
           Text(
-            'إذا كان الرقم على واتساب الأعمال: اضغط الزر، ثم في Meta اختر ربط الحساب الموجود وامسح رمز QR من التطبيق. لا تكتب الرقم كرقم جديد.',
+            'قبل أن تبدأ',
+            style: Theme.of(context)
+                .textTheme
+                .titleSmall
+                ?.copyWith(fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 8),
+          SegmentedButton<bool>(
+            segments: const [
+              ButtonSegment(value: true, label: Text('عليه واتساب الأعمال')),
+              ButtonSegment(value: false, label: Text('رقم جديد')),
+            ],
+            selected: {_numberHasBusinessApp},
+            onSelectionChanged: (v) =>
+                setState(() => _numberHasBusinessApp = v.first),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            _numberHasBusinessApp
+                ? 'جهّز الهاتف الذي عليه الرقم، وواتساب الأعمال إصدار 2.24.17 أو أحدث، وصلاحية مدير في حساب Meta. اضغط الزر، ثم في Meta اختر ربط الحساب الموجود وامسح رمز QR من التطبيق. لا تكتب الرقم كرقم جديد.'
+                : 'جهّز هاتفًا يستقبل رسالة أو مكالمة على الرقم، وصلاحية مدير في حساب Meta. تطلب منك Meta الرمز داخل نافذتها. يجب ألا يكون الرقم مسجلًا على تطبيق واتساب.',
             style: TextStyle(
               fontSize: 13,
               height: 1.5,
               color: cs.onSurfaceVariant,
             ),
             textAlign: TextAlign.start,
+          ),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 8,
+            children: [
+              TextButton(
+                onPressed: () => unawaited(_showPermissionHelp()),
+                child: const Text('كيف أحصل على الصلاحية'),
+              ),
+              if (_numberHasBusinessApp)
+                TextButton(
+                  onPressed: () => unawaited(_openStore()),
+                  child: const Text('تحديث التطبيق'),
+                ),
+            ],
           ),
         ],
         const SizedBox(height: 16),

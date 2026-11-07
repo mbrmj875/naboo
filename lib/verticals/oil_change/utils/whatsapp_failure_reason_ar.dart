@@ -124,6 +124,11 @@ class WhatsappWalletEffect {
 abstract class WhatsappFailureReasonAr {
   WhatsappFailureReasonAr._();
 
+  static String heldRemindersAr(int count) => count == 1
+      ? 'حفظنا تذكيرًا لم يخرج في موعده. يخرج وحده بعد حل المشكلة.'
+      : 'حفظنا $count تذكيرات لم تخرج في موعدها. تخرج وحدها بعد حل المشكلة.';
+
+
   static const unknownAr =
       'تعذّر الإرسال لسبب غير معروف. أرسل الرقم المرجعي إلى الدعم';
 

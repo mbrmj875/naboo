@@ -56,6 +56,7 @@ class _OilChangeWhatsappMessagesScreenState
   final List<OilChangeMessageLogEntry> _failedEntries = [];
   final Map<String, WhatsappWalletEffect> _walletEffects = {};
   WhatsappSendBlock? _sendBlock;
+  int _heldReminders = 0;
   bool _sentLoading = true;
   bool _failedLoading = true;
   bool _sentLoadingMore = false;
@@ -148,7 +149,10 @@ class _OilChangeWhatsappMessagesScreenState
     final status =
         await OilChangeWhatsappGatewayService.instance.fetchReadyStatus();
     if (!mounted || !status.ok) return;
-    setState(() => _sendBlock = status.sendBlock);
+    setState(() {
+      _sendBlock = status.sendBlock;
+      _heldReminders = status.heldReminders;
+    });
   }
 
   Future<void> _loadWalletEffects(
@@ -822,6 +826,17 @@ class _OilChangeWhatsappMessagesScreenState
               child: WhatsappSendBlockBanner(
                 block: _sendBlock!,
                 onAction: (action) => unawaited(_runFix(action)),
+              ),
+            ),
+          if (_heldReminders > 0)
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsetsDirectional.fromSTEB(16, 12, 16, 0),
+                child: Text(
+                  WhatsappFailureReasonAr.heldRemindersAr(_heldReminders),
+                  textAlign: TextAlign.start,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
               ),
             ),
           const SliverToBoxAdapter(

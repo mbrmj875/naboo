@@ -70,6 +70,15 @@ class GuideAiClient {
     }
   }
 
+  /// بلا جلسة أو قبل تهيئة Supabase يعمل المساعد بالمطابقة المحلية.
+  bool get _hasSession {
+    try {
+      return Supabase.instance.client.auth.currentUser != null;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<GuideAssistResult> assist({
     required String question,
     required String currentRouteId,
@@ -97,7 +106,7 @@ class GuideAiClient {
     String? opsContext;
     if (whatsappOps &&
         (scope.canManageWhatsappConnect || scope.isOwner) &&
-        Supabase.instance.client.auth.currentUser != null) {
+        _hasSession) {
       final recentUser = history
           .where((t) => t.fromUser)
           .map((t) => t.text)
@@ -193,7 +202,7 @@ class GuideAiClient {
     bool forceWhatsappOps = false,
     String? opsContext,
   }) async {
-    if (Supabase.instance.client.auth.currentUser == null) return null;
+    if (!_hasSession) return null;
     try {
       final trimmedHistory = _trimHistory(history);
       final pageKnowledge = GuidePageKnowledge.select(
