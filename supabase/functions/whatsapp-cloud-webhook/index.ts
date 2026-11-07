@@ -7,7 +7,6 @@ import {
   createClient,
   type SupabaseClient,
 } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
-import { verifyYcloudWebhookSignature } from '../whatsapp-gateway/providers/ycloud_transport.ts';
 import { syncTemplateStatusesForTenant } from '../whatsapp-gateway/lifecycle/template_lifecycle_service.ts';
 import { applyMetaTemplateStatusUpdates } from '../whatsapp-gateway/lifecycle/template_status_email.ts';
 import { completeOfficialConnect } from '../whatsapp-gateway/lifecycle/connect_service.ts';
@@ -26,11 +25,14 @@ import { sendRatingReply } from './rating_reply.ts';
 import { handleColdOrUnknownInbound } from './tenant_isolation.ts';
 import { touchOilCardPdfIdleJob } from './pdf_jobs.ts';
 import { looksLikePdfFileRequest } from './inbound_intent.ts';
+import { readMetaHubSignatureHeader } from './meta_hub_signature.ts';
 import {
-  isMetaWhatsappBusinessAccountPayload,
-  readMetaHubSignatureHeader,
-  verifyMetaHubSignature,
-} from './meta_hub_signature.ts';
+  authenticateWebhook,
+  canBindFromWebhook,
+  isAuthorizedBackfill,
+  rejectionLogFields,
+  signatureRequired,
+} from './webhook_auth.ts';
 
 Deno.serve(async (req) => {
   // Meta / Dualhook webhook verification: GET must echo hub.challenge as raw text.
@@ -65,37 +67,36 @@ Deno.serve(async (req) => {
   }
 
   const rawBody = await req.text();
-  const ycloudSecret = Deno.env.get('YCLOUD_WEBHOOK_SECRET')?.trim() ||
-    Deno.env.get('WHATSAPP_CLOUD_TRANSPORT_WEBHOOK_SECRET')?.trim() ||
-    '';
-  const ycloudSig = req.headers.get('YCloud-Signature') ??
-    req.headers.get('ycloud-signature');
+  const auth = await authenticateWebhook(
+    rawBody,
+    {
+      ycloudSignature: req.headers.get('YCloud-Signature') ??
+        req.headers.get('ycloud-signature'),
+      metaSignature: readMetaHubSignatureHeader(req),
+    },
+    {
+      ycloudSecret: Deno.env.get('YCLOUD_WEBHOOK_SECRET')?.trim() ||
+        Deno.env.get('WHATSAPP_CLOUD_TRANSPORT_WEBHOOK_SECRET')?.trim() ||
+        '',
+      metaAppSecret: Deno.env.get('META_APP_SECRET')?.trim() || '',
+    },
+  );
 
-  // مسار YCloud: تحقق عند وجود هيدر التوقيع.
-  if (ycloudSecret && ycloudSig) {
-    const ok = await verifyYcloudWebhookSignature(
-      rawBody,
-      ycloudSig,
-      ycloudSecret,
+  if (auth.source === 'none') {
+    const mayPassUnsigned = auth.reason === 'missing_signature' && (
+      !signatureRequired(Deno.env.get('WEBHOOK_REQUIRE_SIGNATURE')) ||
+      isAuthorizedBackfill(
+        rawBody,
+        req.headers.get('x-ops-token'),
+        Deno.env.get('REPLY_BACKFILL_TOKEN'),
+      )
     );
-    if (!ok) {
-      return Response.json({ ok: false, error: 'invalid_signature' }, {
-        status: 401,
-      });
-    }
-  } else {
-    // مسار Meta: X-Hub-Signature-256 قبل أي توجيه للمستأجر.
-    const metaAppSecret = Deno.env.get('META_APP_SECRET')?.trim() || '';
-    const metaSig = readMetaHubSignatureHeader(req);
-    if (metaSig) {
-      const ok = metaAppSecret
-        ? await verifyMetaHubSignature(rawBody, metaSig, metaAppSecret)
-        : false;
-      if (!ok) {
-        return Response.json({ ok: false, error: 'invalid_meta_signature' }, {
-          status: 401,
-        });
-      }
+    if (!mayPassUnsigned) {
+      console.warn(
+        'webhook rejected',
+        rejectionLogFields(auth.reason, rawBody, req.headers.get('user-agent')),
+      );
+      return Response.json({ ok: false, error: auth.reason }, { status: 401 });
     }
   }
 
@@ -104,21 +105,6 @@ Deno.serve(async (req) => {
     event = JSON.parse(rawBody) as Record<string, unknown>;
   } catch {
     return Response.json({ ok: false, error: 'invalid_json' }, { status: 400 });
-  }
-
-  // طلب Meta واضح بلا توقيع + السر مضبوط → رفض (إنتاج صارم).
-  // لا يُطبَّق إن مُرّر تحقق YCloud أعلاه (هيدر YCloud موجود).
-  if (
-    !ycloudSig &&
-    isMetaWhatsappBusinessAccountPayload(event) &&
-    !readMetaHubSignatureHeader(req)
-  ) {
-    const metaAppSecret = Deno.env.get('META_APP_SECRET')?.trim() || '';
-    if (metaAppSecret) {
-      return Response.json({ ok: false, error: 'meta_signature_required' }, {
-        status: 401,
-      });
-    }
   }
 
   const supabase = createClient(
@@ -169,6 +155,7 @@ Deno.serve(async (req) => {
   ).trim();
 
   if (
+    canBindFromWebhook(auth.source) &&
     (type.includes('bind') || type.includes('connect') ||
       type.includes('phone')) &&
     (wabaId || phoneNumberId || fromPhone) &&

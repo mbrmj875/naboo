@@ -72,8 +72,7 @@ function extractBody(msg: Dict, type: string): string | null {
 export function parseMetaWebhook(event: unknown): MetaWebhookParse {
   const root = asDict(event);
   const entries = asArray(root.entry);
-  const isMeta = str(root.object) === 'whatsapp_business_account' ||
-    entries.length > 0;
+  const isMeta = str(root.object) === 'whatsapp_business_account';
 
   const messages: MetaInboundMessage[] = [];
   const statuses: MetaStatusUpdate[] = [];

@@ -56,9 +56,3 @@ export function readMetaHubSignatureHeader(req: Request): string {
     ''
   ).trim();
 }
-
-export function isMetaWhatsappBusinessAccountPayload(
-  event: Record<string, unknown>,
-): boolean {
-  return String(event.object ?? '').trim() === 'whatsapp_business_account';
-}
