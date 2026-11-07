@@ -50,6 +50,8 @@ void main() {
     expect(find.text('تحديث التطبيق'), findsNothing);
     expect(find.textContaining('QR'), findsNothing);
     expect(find.textContaining('داخل نافذة Meta'), findsOneWidget);
+    expect(find.textContaining('العراق +964'), findsOneWidget);
+    expect(find.textContaining('لا تدخل رقمًا يعمل'), findsOneWidget);
   });
 
   testWidgets('فتح Meta يرسل نوع الرقم، ثم يظهر تحديث الحالة', (t) async {
