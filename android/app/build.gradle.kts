@@ -26,6 +26,9 @@ if (localPropertiesFile.exists()) {
 // أضف في android/local.properties: google.maps.api.key=YOUR_GOOGLE_MAPS_API_KEY
 val googleMapsApiKey = localProperties.getProperty("google.maps.api.key") ?: ""
 
+val qaBuild =
+    (project.findProperty("naboo.qa") as String?)?.equals("true", ignoreCase = true) == true
+
 android {
     namespace = "com.basra.storemanager.app"
     compileSdk = 36
@@ -46,8 +49,11 @@ android {
         // Google Play: مرّر -Pnaboo.play=true → com.basra.storemanager.app
         val playStore =
             (project.findProperty("naboo.play") as String?)?.equals("true", ignoreCase = true) == true
+        // نسخة اختبار على هاتف حقيقي: -Pnaboo.qa=true → com.basra.storemanager.qa
+        // حزمة منفصلة لا تلمس نسخة المتجر ولا بياناتها.
         applicationId =
-            if (playStore) "com.basra.storemanager.app" else "com.basra.storemanager"
+            if (qaBuild) "com.basra.storemanager.qa"
+            else if (playStore) "com.basra.storemanager.app" else "com.basra.storemanager"
         minSdk = flutter.minSdkVersion
         targetSdk = 36
         versionCode = flutter.versionCode
@@ -84,4 +90,11 @@ dependencies {
 
 flutter {
     source = "../.."
+}
+
+// google-services.json لا يعرف حزمة الاختبار؛ Firebase اختياري عند الإقلاع.
+if (qaBuild) {
+    tasks.configureEach {
+        if (name.contains("GoogleServices")) enabled = false
+    }
 }
