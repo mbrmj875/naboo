@@ -21,7 +21,13 @@ import '../../services/business_setup_settings.dart';
 import '../../services/reports_repository.dart';
 import '../_contract/vertical_manifest.dart';
 import 'inventory/oil_change_fluid_inventory_editor.dart';
+import 'reports/car_wash/car_wash_report_panel.dart';
+import 'reports/car_wash/car_wash_report_repository.dart';
+import 'reports/direct_sale/direct_sale_report_panel.dart';
+import 'reports/direct_sale/direct_sale_report_repository.dart';
 import 'reports/oil_change_reports_panel.dart';
+import 'reports/products/products_report_panel.dart';
+import 'reports/products/products_report_repository.dart';
 import 'services/oil_change_reports_repository.dart';
 
 /// سياسة باركود stub — يُستبدَل بـ Scan-to-Card في مرحلة لاحقة.
@@ -40,6 +46,9 @@ final class OilChangeVerticalManifest extends VerticalManifest {
 
   static const _oilNavColor = Color(0xFF0EA5E9);
   static const _oilReportsSectionId = 8;
+  static const directSaleReportsSectionId = 10;
+  static const carWashReportsSectionId = 11;
+  static const productsReportsSectionId = 12;
   static const _fluidInventoryEditor = OilChangeFluidInventoryEditor();
   static const _gold = Color(0xFFB8960C);
   static const _blue = Color(0xFF2563EB);
@@ -300,6 +309,21 @@ final class OilChangeVerticalManifest extends VerticalManifest {
           titleAr: 'غيار الزيت',
           requiredFeatureKey: BusinessSetupKeys.enableOilChange,
         ),
+        ReportSectionSpec(
+          sectionId: directSaleReportsSectionId,
+          titleAr: 'البيع المباشر',
+          requiredFeatureKey: BusinessSetupKeys.enableOilChange,
+        ),
+        ReportSectionSpec(
+          sectionId: carWashReportsSectionId,
+          titleAr: 'غسيل السيارات',
+          requiredFeatureKey: BusinessSetupKeys.enableOilChange,
+        ),
+        ReportSectionSpec(
+          sectionId: productsReportsSectionId,
+          titleAr: 'المنتجات',
+          requiredFeatureKey: BusinessSetupKeys.enableOilChange,
+        ),
       ];
 
   static final OwnerOilDashboardRepository _ownerOilRepo =
@@ -374,15 +398,33 @@ final class OilChangeVerticalManifest extends VerticalManifest {
     int sectionId,
     ReportDateRange range,
   ) async {
-    if (sectionId != _oilReportsSectionId) return null;
-    return OilChangeReportsRepository.instance.loadSnapshot(range);
+    return switch (sectionId) {
+      _oilReportsSectionId =>
+        OilChangeReportsRepository.instance.loadSnapshot(range),
+      directSaleReportsSectionId =>
+        DirectSaleReportRepository.instance.loadSnapshot(range),
+      carWashReportsSectionId =>
+        CarWashReportRepository.instance.loadSnapshot(range),
+      productsReportsSectionId =>
+        ProductsReportRepository.instance.loadSnapshot(range),
+      _ => null,
+    };
   }
 
   @override
   Widget? buildReportSectionPanel(int sectionId, Object? snapshot) {
-    if (sectionId != _oilReportsSectionId) return null;
-    if (snapshot is! OilChangeReportsSnapshot) return null;
-    return OilChangeReportsPanel(data: snapshot);
+    return switch (snapshot) {
+      OilChangeReportsSnapshot s when sectionId == _oilReportsSectionId =>
+        OilChangeReportsPanel(data: s),
+      DirectSaleReportSnapshot s
+          when sectionId == directSaleReportsSectionId =>
+        DirectSaleReportPanel(data: s),
+      CarWashReportSnapshot s when sectionId == carWashReportsSectionId =>
+        CarWashReportPanel(data: s),
+      ProductsReportSnapshot s when sectionId == productsReportsSectionId =>
+        ProductsReportPanel(data: s),
+      _ => null,
+    };
   }
 
   @override

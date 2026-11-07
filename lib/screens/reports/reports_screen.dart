@@ -147,6 +147,24 @@ class _ReportsScreenState extends State<ReportsScreen> {
       icon: Icons.medication_liquid_rounded,
       subtitle: 'مخزون، مبيعات، مالي، موردين',
     ),
+    _ReportsSection(
+      id: 10,
+      label: 'البيع المباشر',
+      icon: Icons.point_of_sale_rounded,
+      subtitle: 'منتجات بلا بطاقة غيار',
+    ),
+    _ReportsSection(
+      id: 11,
+      label: 'غسيل السيارات',
+      icon: Icons.local_car_wash_rounded,
+      subtitle: 'غسلات، عمال، وزبائن عائدون',
+    ),
+    _ReportsSection(
+      id: 12,
+      label: 'المنتجات',
+      icon: Icons.inventory_2_rounded,
+      subtitle: 'استهلاك، تغطية، وراكد',
+    ),
   ];
 
   static const int _oilReportsSectionId = 8;
@@ -158,12 +176,15 @@ class _ReportsScreenState extends State<ReportsScreen> {
   VerticalManifest? get _pharmacyReportsManifest =>
       VerticalRegistry.instance.manifestFor(BusinessVertical.pharmacy);
 
+  /// أقسام محل الزيت: الغيار، البيع المباشر، الغسيل، المنتجات.
+  static const Set<int> _oilShopSectionIds = {_oilReportsSectionId, 10, 11, 12};
+
   bool _isVerticalReportSection(int sectionId) =>
-      sectionId == _oilReportsSectionId ||
+      _oilShopSectionIds.contains(sectionId) ||
       sectionId == _pharmacyReportsSectionId;
 
   VerticalManifest? _manifestForVerticalSection(int sectionId) {
-    if (sectionId == _oilReportsSectionId) return _oilReportsManifest;
+    if (_oilShopSectionIds.contains(sectionId)) return _oilReportsManifest;
     if (sectionId == _pharmacyReportsSectionId) return _pharmacyReportsManifest;
     return null;
   }
@@ -304,7 +325,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
     final features = context.watch<BusinessFeaturesProvider>();
     final visibleSections = _sections.where((s) {
       if (s.id == 4 && !features.data.enableInstallments) return false;
-      if (s.id == _oilReportsSectionId && !features.data.enableOilChange) {
+      if (_oilShopSectionIds.contains(s.id) &&
+          !features.data.enableOilChange) {
         return false;
       }
       if (s.id == _pharmacyReportsSectionId &&
@@ -376,7 +398,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
       if (_section == _pharmacyReportsSectionId) {
         return const Center(child: Text('لا توجد بيانات لتقارير الصيدلية'));
       }
-      return const Center(child: Text('لا توجد بيانات لغيار الزيت'));
+      return const Center(child: Text('لا توجد بيانات لهذا التقرير'));
     }
 
     final d = _data;

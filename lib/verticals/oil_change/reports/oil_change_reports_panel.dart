@@ -1,667 +1,310 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart' hide TextDirection;
 
+import '../../../utils/iqd_money.dart';
 import '../services/oil_change_reports_repository.dart';
-import '../../../utils/iraqi_currency_format.dart';
 import '../utils/oil_change_log_format.dart';
-import '../utils/oil_change_layout.dart';
-import '../../../utils/screen_layout.dart';
-import '../../../theme/design_tokens.dart';
+import 'kit/report_kit.dart';
+import 'kit/report_math.dart';
 
-final _numFmt = NumberFormat('#,##0', 'ar');
-
-/// قسم تقارير غيار الزيت (التقارير العامة — القسم 8).
+/// تقرير غيار الزيت (القسم 8).
 class OilChangeReportsPanel extends StatelessWidget {
   const OilChangeReportsPanel({super.key, required this.data});
 
   final OilChangeReportsSnapshot data;
 
+  static const _accent = ReportAccents.oil;
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-  final maxVisits = data.dailyPoints.fold<int>(
-      1,
-      (a, b) => b.visitCount > a ? b.visitCount : a,
-    );
-    final maxRev = data.dailyPoints.fold<double>(
-      1,
-      (a, b) => b.revenueIqd > a ? b.revenueIqd : a,
-    );
+    final cur = data.current;
+    final prev = data.previous;
+    final marginPct = cur.invoicedRevenueFils > 0
+        ? cur.profitFils / cur.invoicedRevenueFils * 100
+        : null;
+    final uninvoiced = data.visitCount - data.invoicedCount;
+    final invoicedCards = data.invoicedCount;
+    int perCard(int fils) => invoicedCards == 0 ? 0 : fils ~/ invoicedCards;
+    final shopLiters = data.totalShopLiters;
+    final partial = data.costCoverage.missing > 0;
+    final materialsPct = cur.invoicedRevenueFils > 0
+        ? cur.costFils / cur.invoicedRevenueFils * 100
+        : null;
 
-    return SingleChildScrollView(
-      padding: EdgeInsetsDirectional.fromSTEB(
-        ScreenLayout.of(context).pageHorizontalGap,
-        8,
-        ScreenLayout.of(context).pageHorizontalGap,
-        28,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            'إيراد الفترة من بطاقات الغيار (فاتورة البيع عند الربط، وإلا سعر البطاقة).',
-            style: TextStyle(fontSize: 11.5, color: cs.onSurfaceVariant),
-            textAlign: TextAlign.start,
+    final notes = <String>[
+      'الإيراد: مبلغ الفاتورة إن رُبطت البطاقة بفاتورة، وإلا السعر المتفق عليه في البطاقة (ويشمل الزيت والفلاتر).',
+      'البطاقات الملغاة والمحذوفة لا تُحسب، والفاتورة المرتجعة تجعل إيراد بطاقتها صفراً.',
+      'الربح من البطاقات المفوترة فقط. التكلفة = مواد البطاقة (الزيت والهيدروليك ومنتجاتها) بسعر الشراء الحالي.',
+      if (uninvoiced > 0) '$uninvoiced بطاقة غير مفوترة محسوبة بسعرها المتفق.',
+      ?reportCostCoverageNote(data.costCoverage),
+      'المقارنة مع ${_rangeLabel(data)} بنفس عدد الأيام.',
+    ];
+
+    return ReportPage(
+      intro:
+          'كل بطاقات غيار الزيت في الفترة: العدد، الإيراد، الربح، ومن أين جاء.',
+      accuracyNotes: notes,
+      children: [
+        ReportKpiGrid(
+          children: [
+            ReportKpi(
+              title: 'عدد الغيارات',
+              value: reportNumber(cur.visits),
+              icon: Icons.oil_barrel_outlined,
+              accent: _accent,
+              metric: ReportMetric(cur.visits, prev.visits),
+            ),
+            ReportKpi(
+              title: 'الإيراد',
+              value: reportMoney(cur.revenueFils),
+              icon: Icons.payments_outlined,
+              accent: _accent,
+              metric: ReportMetric(cur.revenueFils, prev.revenueFils),
+            ),
+            ReportKpi(
+              title: 'متوسط البطاقة',
+              value: reportMoney(cur.avgTicketFils),
+              icon: Icons.receipt_long_outlined,
+              accent: _accent,
+              metric: ReportMetric(cur.avgTicketFils, prev.avgTicketFils),
+            ),
+            ReportKpi(
+              title: 'ربح المفوتر',
+              value: reportMoney(cur.profitFils),
+              icon: Icons.trending_up_rounded,
+              accent: _accent,
+              caption:
+                  reportMarginCaption(marginPct, data.costCoverage) ??
+                  'لا بطاقات مفوترة',
+              metric: ReportMetric(cur.profitFils, prev.profitFils),
+            ),
+          ],
+        ),
+        ReportCard(
+          title: 'الإيراد اليومي',
+          subtitle: 'كل أيام الفترة، والخط المتقطع هو المتوسط',
+          accent: _accent,
+          child: ReportDailyChart(
+            points: data.days,
+            accent: _accent,
+            valueOf: (p) => p.amountFils.toDouble(),
+            format: (v) => reportMoney(v.round()),
           ),
-          const SizedBox(height: 12),
-          _KpiGrid(
-            children: [
-              _Kpi(
-                title: 'عدد الغيارات',
-                value: '${data.visitCount}',
-                icon: Icons.oil_barrel_outlined,
-                color: const Color(0xFFD97706),
-              ),
-              _Kpi(
-                title: 'إيراد الفترة',
-                value: '${_numFmt.format(data.revenueTotalIqd)} د.ع',
-                icon: Icons.payments_outlined,
-                color: const Color(0xFF2563EB),
-              ),
-              _Kpi(
-                title: 'لترات من المخزون',
-                value: data.totalShopLiters.toStringAsFixed(1),
-                icon: Icons.water_drop_outlined,
-                color: const Color(0xFF0F766E),
-              ),
-              _Kpi(
-                title: 'زيت محل / عميل',
-                value: '${data.shopOilCount} / ${data.customerOilCount}',
-                icon: Icons.compare_arrows_rounded,
-                color: const Color(0xFFDC2626),
-              ),
+        ),
+        ReportCard(
+          title: 'الغيارات اليومية',
+          subtitle: 'عدد السيارات في كل يوم',
+          accent: _accent,
+          child: ReportDailyChart(
+            points: data.days,
+            accent: _accent,
+            valueOf: (p) => p.count.toDouble(),
+            format: (v) => reportCount(v, 'سيارة'),
+          ),
+        ),
+        ReportCard(
+          title: 'اقتصاديات البطاقة',
+          subtitle: 'متوسط البطاقة المفوترة الواحدة في الفترة',
+          accent: _accent,
+          child: ReportTable(
+            pageRows: 8,
+            headers: const ['البند', 'القيمة'],
+            rows: [
+              ['البطاقات المفوترة', '$invoicedCards من ${data.visitCount}'],
+              ['إيراد البطاقة', reportMoney(perCard(cur.invoicedRevenueFils))],
+              [
+                partial ? 'تكلفة موادها (ناقصة)' : 'تكلفة موادها',
+                reportMoney(perCard(cur.costFils)),
+              ],
+              [
+                partial ? 'ربحها (تقديري)' : 'ربحها',
+                reportMoney(perCard(cur.profitFils)),
+              ],
+              [
+                'المواد من الإيراد',
+                materialsPct == null
+                    ? '—'
+                    : '${materialsPct.toStringAsFixed(1)}%',
+              ],
+              [
+                'لترات زيت المحل للسيارة',
+                data.shopOilCount == 0
+                    ? '—'
+                    : (shopLiters / data.shopOilCount).toStringAsFixed(1),
+              ],
             ],
           ),
-          const SizedBox(height: 16),
-          _Card(
-            title: 'غيارات يومية',
-            subtitle: 'عدد البطاقات لكل يوم في الفترة',
-            child: _CountBars(
-              points: data.dailyPoints,
-              maxY: maxVisits.toDouble(),
-              valueOf: (p) => p.visitCount.toDouble(),
-              tooltip: (p) => '${p.dayLabel}\n${p.visitCount} بطاقة',
-            ),
-          ),
-          const SizedBox(height: 14),
-          _Card(
-            title: 'إيراد يومي',
-            subtitle: 'من الفاتورة إن وُجدت، وإلا تقدير البطاقة',
-            child: _CountBars(
-              points: data.dailyPoints,
-              maxY: maxRev,
-              valueOf: (p) => p.revenueIqd,
-              tooltip: (p) =>
-                  '${p.dayLabel}\n${_numFmt.format(p.revenueIqd)} د.ع',
-            ),
-          ),
-          const SizedBox(height: 14),
-          LayoutBuilder(
-            builder: (context, c) {
-              final oilSourceCard = _Card(
-                title: 'مصدر الزيت',
-                subtitle: 'نسبة زيت المحل مقابل زيت العميل',
-                child: _Donut(
-                  slices: [
-                    _Slice(
-                      label: 'زيت المحل',
-                      value: data.shopOilCount.toDouble(),
-                      color: AppColors.accentGold,
-                    ),
-                    _Slice(
-                      label: 'زيت العميل',
-                      value: data.customerOilCount.toDouble(),
-                      color: cs.tertiary,
-                    ),
-                  ],
-                ),
-              );
-              final topProductsCard = _Card(
-                title: 'أكثر أصناف الزيت',
-                subtitle: 'حسب اللترات المُصرفة',
-                child: _RankBars(
-                  rows: data.topProducts
-                      .map(
-                        (e) => (
-                          e.name,
-                          double.tryParse(
-                                (e.extra ?? '').replaceAll(' لتر', ''),
-                              ) ??
-                              0,
-                        ),
-                      )
-                      .toList(),
-                ),
-              );
-              if (c.maxWidth >= 720) {
-                return IntrinsicHeight(
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Expanded(child: oilSourceCard),
-                      const SizedBox(width: 12),
-                      Expanded(child: topProductsCard),
-                    ],
-                  ),
-                );
-              }
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  oilSourceCard,
-                  const SizedBox(height: 12),
-                  topProductsCard,
-                ],
-              );
-            },
-          ),
-          const SizedBox(height: 14),
-          _Card(
-            title: 'الخدمات الإضافية',
-            subtitle: 'عدد المرات في الفترة',
-            child: _DataTableSimple(
-              headers: const ['الخدمة', 'المرات', 'قيمة تقديرية'],
-              rows: data.topServices
-                  .map(
-                    (e) => [
-                      e.name,
-                      '${e.count}',
-                      IraqiCurrencyFormat.formatIqd(e.amountIqd),
-                    ],
-                  )
-                  .toList(),
-            ),
-          ),
-          const SizedBox(height: 14),
-          _Card(
-            title: 'أداء الفنيين',
-            subtitle: 'عدد الغيارات وإيراد الفترة',
-            child: _DataTableSimple(
-              headers: const ['الفني', 'العدد', 'الإيراد'],
-              rows: data.topTechnicians
-                  .map(
-                    (e) => [
-                      e.name,
-                      '${e.count}',
-                      IraqiCurrencyFormat.formatIqd(e.amountIqd),
-                    ],
-                  )
-                  .toList(),
-            ),
-          ),
-          const SizedBox(height: 14),
-          _Card(
-            title: 'تفصيل البطاقات',
+        ),
+        if (!data.costGaps.isEmpty)
+          ReportCard(
+            title: 'لماذا الربح تقديري؟',
             subtitle:
-                '${data.detailRows.length} بطاقة في الفترة — سعر البطاقة كما في السجل',
-            child: _DataTableSimple(
-              headers: const [
-                'التاريخ',
-                'العميل',
-                'اللوحة',
-                'السيارة',
-                'العداد',
-                'نوع الزيت',
-                'لتر',
-                'سعر البطاقة',
-                'الفاتورة',
+                'بنود في البطاقات المفوترة لا تُعرف تكلفتها، فيظهر ربحها أعلى من حقيقته. أصلحها ليصير الربح دقيقاً:',
+            accent: ReportAccents.negative,
+            child: ReportTable(
+              headers: const ['السبب', 'المرات', 'الإصلاح'],
+              rows: [
+                if (data.costGaps.unlinkedFilters > 0)
+                  [
+                    'فلاتر غير مربوطة بمنتج',
+                    '${data.costGaps.unlinkedFilters}',
+                    'اربط الفلتر بصنف مخزون له سعر شراء',
+                  ],
+                for (final e
+                    in (data.costGaps.unpricedProducts.entries.toList()
+                      ..sort((a, b) => b.value.compareTo(a.value))))
+                  [
+                    'بلا سعر شراء: ${e.key}',
+                    '${e.value}',
+                    'أدخل سعر الشراء في المخزون',
+                  ],
+                if (data.costGaps.oilWithoutLiters > 0)
+                  [
+                    'زيت المحل بلا لترات',
+                    '${data.costGaps.oilWithoutLiters}',
+                    'سجّل اللترات المصروفة في البطاقة',
+                  ],
+                if (data.costGaps.fluidWithoutProduct > 0)
+                  [
+                    'سائل بلا صنف مخزون',
+                    '${data.costGaps.fluidWithoutProduct}',
+                    'اختر صنف الزيت من المخزون في البطاقة',
+                  ],
               ],
-              rows: data.detailRows
-                  .take(120)
-                  .map(
-                    (e) => [
-                      e.dateLabel,
-                      e.customer.isEmpty ? '—' : e.customer,
-                      e.plate.isEmpty ? '—' : e.plate,
-                      e.car.isEmpty ? '—' : e.car,
-                      oilFormatOdo(e.odometer),
-                      e.oilType.isEmpty ? e.oilProduct : e.oilType,
-                      e.liters,
-                      e.cardPriceIqd > 0
-                          ? IraqiCurrencyFormat.formatIqd(e.cardPriceIqd)
-                          : '—',
-                      e.invoiced && e.invoicePriceIqd > 0
-                          ? IraqiCurrencyFormat.formatIqd(e.invoicePriceIqd)
-                          : '—',
-                    ],
-                  )
-                  .toList(),
             ),
           ),
-        ],
-      ),
-    );
-  }
-}
-
-class _KpiGrid extends StatelessWidget {
-  const _KpiGrid({required this.children});
-  final List<Widget> children;
-
-  @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, c) {
-        final cols = c.maxWidth >= 1100
-            ? 3
-            : c.maxWidth >= 560
-            ? 2
-            : 1;
-        return GridView.count(
-          crossAxisCount: cols,
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          mainAxisSpacing: 10,
-          crossAxisSpacing: 10,
-          childAspectRatio: cols == 1 ? 3.1 : 1.65,
-          children: children,
-        );
-      },
-    );
-  }
-}
-
-class _Kpi extends StatelessWidget {
-  const _Kpi({
-    required this.title,
-    required this.value,
-    required this.icon,
-    required this.color,
-  });
-
-  final String title;
-  final String value;
-  final IconData icon;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Container(
-      decoration: BoxDecoration(
-        color: cs.surfaceContainerHighest.withValues(alpha: 0.3),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: AppColors.accentGold.withValues(alpha: 0.5),
-          width: 1.0,
-        ),
-        boxShadow: oilChangePreferStackedFieldsOf(context)
-            ? kOilChangeCardShadowsLite
-            : [
-                BoxShadow(
-                  color: cs.shadow.withValues(alpha: 0.06),
-                  blurRadius: 14,
-                  offset: const Offset(0, 4),
+        ReportTwoUp(
+          first: ReportCard(
+            title: 'مصدر الزيت',
+            subtitle: 'زيت المحل يخرج من المخزون، وزيت العميل خدمة فقط',
+            accent: _accent,
+            child: ReportDonut(
+              format: (v) => '${v.round()}',
+              centerLabel: '${data.visitCount}\nبطاقة',
+              slices: [
+                ReportSlice('زيت المحل', data.shopOilCount.toDouble(), _accent),
+                ReportSlice(
+                  'زيت العميل',
+                  data.customerOilCount.toDouble(),
+                  cs.tertiary,
                 ),
               ],
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Icon(icon, color: color, size: 22),
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: cs.onSurfaceVariant,
-                      fontWeight: FontWeight.w600,
-                    ),
+          ),
+          second: ReportCard(
+            title: 'الفوترة',
+            subtitle: 'كم من الإيراد صار فاتورة وكم ما زال في البطاقات',
+            accent: _accent,
+            child: ReportDonut(
+              format: (v) => reportMoneyCompact(v.round()),
+              slices: [
+                ReportSlice(
+                  'مفوتر',
+                  cur.invoicedRevenueFils.toDouble(),
+                  ReportAccents.positive,
+                ),
+                ReportSlice(
+                  'غير مفوتر',
+                  (cur.revenueFils - cur.invoicedRevenueFils).toDouble(),
+                  cs.outline,
+                ),
+              ],
+            ),
+          ),
+        ),
+        ReportTwoUp(
+          first: ReportCard(
+            title: 'أصناف الزيت',
+            subtitle: 'اللترات المصروفة من زيت المحل',
+            accent: _accent,
+            child: ReportRankBars(
+              accent: _accent,
+              rows: [
+                for (final e in data.topProducts)
+                  (
+                    e.name,
+                    e.amountIqd,
+                    '${e.amountIqd.toStringAsFixed(1)} لتر · ${e.count}',
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    value,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w900,
-                      fontSize: 15,
-                    ),
-                    textDirection: TextDirection.ltr,
-                    textAlign: TextAlign.start,
+              ],
+            ),
+          ),
+          second: ReportCard(
+            title: 'الفنيون',
+            subtitle: 'مرتبون بعدد السيارات، والمبلغ يشمل المواد',
+            accent: _accent,
+            child: ReportRankBars(
+              accent: _accent,
+              rows: [
+                for (final e in data.topTechnicians)
+                  (
+                    e.name,
+                    e.count.toDouble(),
+                    '${e.count} سيارة · ${reportMoneyCompact(IqdMoney.toFils(e.amountIqd))}',
                   ),
+              ],
+            ),
+          ),
+        ),
+        ReportCard(
+          title: 'الخدمات',
+          subtitle: 'عدد المرات، والقيمة بسعر الخدمة الحالي في الكتالوج',
+          accent: _accent,
+          child: ReportTable(
+            headers: const ['الخدمة', 'المرات', 'قيمة تقديرية'],
+            rows: [
+              for (final e in data.topServices)
+                [
+                  e.name,
+                  '${e.count}',
+                  reportMoney(IqdMoney.toFils(e.amountIqd)),
                 ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _Card extends StatelessWidget {
-  const _Card({
-    required this.title,
-    required this.subtitle,
-    required this.child,
-  });
-
-  final String title;
-  final String subtitle;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Container(
-      decoration: BoxDecoration(
-        color: cs.surfaceContainerHighest.withValues(alpha: 0.3),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: AppColors.accentGold.withValues(alpha: 0.5),
-          width: 1.0,
-        ),
-        boxShadow: oilChangePreferStackedFieldsOf(context)
-            ? kOilChangeCardShadowsLite
-            : [
-                BoxShadow(
-                  color: cs.shadow.withValues(alpha: 0.07),
-                  blurRadius: 22,
-                  offset: const Offset(0, 8),
-                ),
-              ],
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              title,
-              style: TextStyle(
-                fontWeight: FontWeight.w900,
-                fontSize: 14,
-                color: AppColors.accentGold,
-              ),
-              textAlign: TextAlign.start,
-            ),
-            const SizedBox(height: 2),
-            Text(
-              subtitle,
-              style: TextStyle(fontSize: 11.5, color: cs.onSurfaceVariant),
-              textAlign: TextAlign.start,
-            ),
-            const SizedBox(height: 12),
-            child,
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _CountBars extends StatelessWidget {
-  const _CountBars({
-    required this.points,
-    required this.maxY,
-    required this.valueOf,
-    required this.tooltip,
-  });
-
-  final List<OilChangeDailyPoint> points;
-  final double maxY;
-  final double Function(OilChangeDailyPoint) valueOf;
-  final String Function(OilChangeDailyPoint) tooltip;
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    if (points.isEmpty) {
-      return Text(
-        'لا بيانات في هذه الفترة',
-        style: TextStyle(color: cs.onSurfaceVariant),
-        textAlign: TextAlign.center,
-      );
-    }
-    const maxH = 120.0;
-    return SizedBox(
-      height: 168,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        reverse: true,
-        itemCount: points.length,
-        separatorBuilder: (_, _) => const SizedBox(width: 6),
-        itemBuilder: (context, i) {
-          final p = points[i];
-          final v = valueOf(p);
-          final h = maxY <= 0 ? 0.0 : (v / maxY) * maxH;
-          return Column(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              Tooltip(
-                message: tooltip(p),
-                child: Container(
-                  width: 12,
-                  height: h.clamp(4, maxH),
-                  decoration: BoxDecoration(
-                    color: AppColors.accentGold.withValues(alpha: 0.85),
-                    borderRadius: const BorderRadius.vertical(
-                      top: Radius.circular(4),
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                p.dayLabel,
-                style: TextStyle(fontSize: 9, color: cs.onSurfaceVariant),
-              ),
             ],
-          );
-        },
-      ),
-    );
-  }
-}
-
-class _Slice {
-  const _Slice({
-    required this.label,
-    required this.value,
-    required this.color,
-  });
-  final String label;
-  final double value;
-  final Color color;
-}
-
-class _Donut extends StatelessWidget {
-  const _Donut({required this.slices});
-  final List<_Slice> slices;
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final total = slices.fold<double>(0, (a, b) => a + b.value);
-    if (total <= 0) {
-      return Text(
-        'لا بيانات',
-        style: TextStyle(color: cs.onSurfaceVariant),
-        textAlign: TextAlign.center,
-      );
-    }
-    return Row(
-      children: [
-        SizedBox(
-          width: 120,
-          height: 120,
-          child: CustomPaint(
-            painter: _DonutPainter(slices: slices, total: total),
           ),
         ),
-        const SizedBox(width: 16),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              for (final s in slices)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 12,
-                        height: 12,
-                        decoration: BoxDecoration(
-                          color: s.color,
-                          shape: BoxShape.circle,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          '${s.label} (${(s.value / total * 100).toStringAsFixed(0)}%)',
-                          style: const TextStyle(fontSize: 12.5),
-                        ),
-                      ),
-                      Text(
-                        '${s.value.toInt()}',
-                        style: const TextStyle(fontWeight: FontWeight.w800),
-                      ),
-                    ],
-                  ),
-                ),
+        ReportCard(
+          title: 'تفصيل البطاقات',
+          subtitle: '${data.detailRows.length} بطاقة في الفترة',
+          accent: _accent,
+          child: ReportTable(
+            textColumns: const {0, 1, 2, 3, 5, 8},
+            headers: const [
+              'التاريخ',
+              'العميل',
+              'اللوحة',
+              'السيارة',
+              'العداد',
+              'الزيت',
+              'لتر',
+              'سعر البطاقة',
+              'الفاتورة',
+            ],
+            rows: [
+              for (final e in data.detailRows)
+                [
+                  e.dateLabel,
+                  e.customer.isEmpty ? '—' : e.customer,
+                  e.plate.isEmpty ? '—' : e.plate,
+                  e.car.isEmpty ? '—' : e.car,
+                  oilFormatOdo(e.odometer),
+                  e.oilType.isEmpty ? e.oilProduct : e.oilType,
+                  e.liters,
+                  e.cardPriceIqd > 0
+                      ? reportMoney(IqdMoney.toFils(e.cardPriceIqd))
+                      : '—',
+                  e.invoiced
+                      ? reportMoney(IqdMoney.toFils(e.invoicePriceIqd))
+                      : 'غير مفوترة',
+                ],
             ],
           ),
         ),
       ],
     );
   }
-}
 
-class _DonutPainter extends CustomPainter {
-  _DonutPainter({required this.slices, required this.total});
-  final List<_Slice> slices;
-  final double total;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final rect = Rect.fromLTWH(0, 0, size.width, size.height);
-    var start = -math.pi / 2;
-    for (final s in slices) {
-      if (s.value <= 0) continue;
-      final sweep = (s.value / total) * 2 * math.pi;
-      final paint = Paint()
-        ..color = s.color
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 18;
-      canvas.drawArc(rect.deflate(12), start, sweep, false, paint);
-      start += sweep;
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _DonutPainter oldDelegate) => true;
-}
-
-class _RankBars extends StatelessWidget {
-  const _RankBars({required this.rows});
-  final List<(String, double)> rows;
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    if (rows.isEmpty) {
-      return Text('لا بيانات', style: TextStyle(color: cs.onSurfaceVariant));
-    }
-    final maxV = rows.fold<double>(0, (a, b) => b.$2 > a ? b.$2 : a);
-    return Column(
-      children: [
-        for (final r in rows.take(8))
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Row(
-              children: [
-                SizedBox(
-                  width: 88,
-                  child: Text(
-                    r.$1,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 11.5),
-                    textAlign: TextAlign.start,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(4),
-                    child: LinearProgressIndicator(
-                      value: maxV <= 0 ? 0 : (r.$2 / maxV).clamp(0, 1),
-                      minHeight: 10,
-                      backgroundColor:
-                          cs.surfaceContainerHighest.withValues(alpha: 0.5),
-                      color: AppColors.accentGold,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  r.$2.toStringAsFixed(1),
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w800,
-                    fontSize: 11,
-                  ),
-                  textDirection: TextDirection.ltr,
-                ),
-              ],
-            ),
-          ),
-      ],
-    );
+  static String _rangeLabel(OilChangeReportsSnapshot d) {
+    final p = ReportMath.previousRange(d.range);
+    return 'الفترة السابقة (${p.from.day}/${p.from.month} – ${p.to.day}/${p.to.month})';
   }
 }
-
-class _DataTableSimple extends StatelessWidget {
-  const _DataTableSimple({required this.headers, required this.rows});
-  final List<String> headers;
-  final List<List<String>> rows;
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    if (rows.isEmpty) {
-      return Text('لا صفوف', style: TextStyle(color: cs.onSurfaceVariant));
-    }
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: DataTable(
-        headingRowColor: WidgetStateProperty.all(
-          AppColors.accentGold.withValues(alpha: 0.15),
-        ),
-        columns: [
-          for (final h in headers)
-            DataColumn(
-              label: Text(
-                h,
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  color: AppColors.accentGold,
-                ),
-              ),
-            ),
-        ],
-        rows: [
-          for (final r in rows)
-            DataRow(
-              cells: [for (final c in r) DataCell(Text(c))],
-            ),
-        ],
-      ),
-    );
-  }
-}
-
