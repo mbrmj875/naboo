@@ -34,6 +34,7 @@ import '../../owner/widgets/owner_kpi_card_skeleton.dart';
 import '../../owner/utils/owner_debt_reminder.dart';
 import '../../owner/utils/owner_purchase_request_pdf.dart';
 import '../../owner/widgets/charts/owner_dashboard_analytics_panel.dart';
+import '../../owner/widgets/owner_data_status_line.dart';
 import '../../owner/widgets/owner_partial_status_banner.dart';
 import '../../owner/widgets/owner_staff_activity_panel.dart';
 import '../../owner/widgets/owner_sensitive_actions_panel.dart';
@@ -44,6 +45,7 @@ import '../../guides/widgets/guide_owner_home_cta_stub.dart';
 import '../../navigation/content_navigation.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/business_features_provider.dart';
+import '../../services/cloud_sync_service.dart';
 import '../../services/business_setup_settings.dart';
 import '../../services/print_settings_repository.dart';
 import '../../services/tenant_context_service.dart';
@@ -1105,11 +1107,10 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen>
                 },
               ),
               if (_isSyncing) const _SyncTrustBanner(),
-              if (center.isOffline)
-                _OfflineBanner(
-                  stale: center.screenStatus ==
-                      CommandCenterScreenStatus.offlineStale,
-                ),
+              OwnerDataStatusLine(
+                lastSyncAt: CloudSyncService.instance.lastSyncAt,
+                isOffline: center.isOffline,
+              ),
               OwnerPartialStatusBanner(
                 status: center.screenStatus,
                 snapshot: snapshot,
@@ -1207,30 +1208,6 @@ class _SyncTrustBanner extends StatelessWidget {
             ],
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _OfflineBanner extends StatelessWidget {
-  const _OfflineBanner({required this.stale});
-
-  final bool stale;
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
-      child: MaterialBanner(
-        backgroundColor: cs.errorContainer,
-        content: Text(
-          stale
-              ? 'وضع بدون اتصال — البيانات المعروضة قد تكون قديمة'
-              : 'لا اتصال — اسحب للتحديث عند عودة الشبكة',
-          style: TextStyle(color: cs.onErrorContainer),
-        ),
-        actions: const [SizedBox.shrink()],
       ),
     );
   }

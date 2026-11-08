@@ -131,7 +131,10 @@ class OwnerOilKpiStitchTile extends StatelessWidget {
       case OwnerCatalogIds.openShifts:
         final items = (data as OpenShiftsKpi).items;
         if (items.isEmpty) return 'لا ورديات مفتوحة';
-        return items.map((e) => e.staffName.trim()).where((n) => n.isNotEmpty).join('، ');
+        return items
+            .map((e) => e.staffName.trim())
+            .where((n) => n.isNotEmpty)
+            .join('، ');
       case OwnerCatalogIds.oilStockShortages:
         final n = (data as InventoryAlert).shortageCount;
         if (n <= 0) return null;
@@ -181,8 +184,9 @@ class _CompactTile extends StatelessWidget {
 
     final radius = OwnerDashboardGoldBorder.radius;
     final borderRadius = BorderRadius.circular(radius);
-    final alertBorderColor =
-        OwnerOilKpiStitchMetrics.alertAmber.withValues(alpha: 0.55);
+    final alertBorderColor = OwnerOilKpiStitchMetrics.alertAmber.withValues(
+      alpha: 0.55,
+    );
 
     final decoration = OwnerDashboardGoldBorder.boxDecoration(context).copyWith(
       color: alert
@@ -198,22 +202,21 @@ class _CompactTile extends StatelessWidget {
         ? cs.error.withValues(alpha: 0.12)
         : cs.surfaceContainerHighest.withValues(alpha: 0.65);
 
-    final body = Stack(
-      fit: StackFit.expand,
-      clipBehavior: Clip.none,
-      children: [
-        Padding(
-          padding: const EdgeInsets.all(OwnerOilKpiStitchMetrics.padding),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    // عنوان يلتف على سطرين أو أكثر بين الكلمات — لا قص ولا كسر وسط الكلمة.
+    final body = Padding(
+      padding: const EdgeInsets.all(OwnerOilKpiStitchMetrics.padding),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Padding(
-                padding: const EdgeInsetsDirectional.only(end: 36),
+              Expanded(
                 child: Text(
                   title,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
+                  softWrap: true,
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
@@ -224,45 +227,43 @@ class _CompactTile extends StatelessWidget {
                   ),
                 ),
               ),
-              _StitchBody(
-                section: section,
-                sectionId: sectionId,
-                onRetry: onRetry,
-                valueBuilder: valueBuilder,
-                subtitleBuilder: subtitleBuilder,
-                valueStyle: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w800,
-                  color: alert ? cs.error : OwnerOilKpiStitchMetrics.navy,
-                  height: 1.1,
+              const SizedBox(width: 8),
+              Container(
+                width: 28,
+                height: 28,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: iconBoxColor,
+                  borderRadius: BorderRadius.circular(8),
                 ),
-                subtitleStyle: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w500,
-                  color: alert
-                      ? OwnerOilKpiStitchMetrics.navy.withValues(alpha: 0.75)
-                      : cs.onSurfaceVariant,
-                ),
-                skeletonHeight: 28,
+                child: Icon(icon, size: 16, color: iconColor),
               ),
             ],
           ),
-        ),
-        PositionedDirectional(
-          top: OwnerOilKpiStitchMetrics.padding,
-          end: OwnerOilKpiStitchMetrics.padding,
-          child: Container(
-            width: 28,
-            height: 28,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: iconBoxColor,
-              borderRadius: BorderRadius.circular(8),
+          const SizedBox(height: 8),
+          _StitchBody(
+            section: section,
+            sectionId: sectionId,
+            onRetry: onRetry,
+            valueBuilder: valueBuilder,
+            subtitleBuilder: subtitleBuilder,
+            valueStyle: TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.w800,
+              color: alert ? cs.error : OwnerOilKpiStitchMetrics.navy,
+              height: 1.1,
             ),
-            child: Icon(icon, size: 16, color: iconColor),
+            subtitleStyle: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w500,
+              color: alert
+                  ? OwnerOilKpiStitchMetrics.navy.withValues(alpha: 0.75)
+                  : cs.onSurfaceVariant,
+            ),
+            skeletonHeight: 28,
           ),
-        ),
-      ],
+        ],
+      ),
     );
 
     Widget card = DecoratedBox(decoration: decoration, child: body);
@@ -270,7 +271,6 @@ class _CompactTile extends StatelessWidget {
       card = ClipRRect(
         borderRadius: borderRadius,
         child: Stack(
-          fit: StackFit.expand,
           children: [
             card,
             PositionedDirectional(
@@ -292,16 +292,15 @@ class _CompactTile extends StatelessWidget {
       );
     }
 
-    return SizedBox(
-      height: OwnerOilKpiStitchMetrics.compactHeight,
+    // ارتفاع أدنى فقط: البطاقة تكبر مع الخط الكبير بدل قص الرقم.
+    return ConstrainedBox(
+      constraints: const BoxConstraints(
+        minHeight: OwnerOilKpiStitchMetrics.compactHeight,
+      ),
       child: Material(
         color: Colors.transparent,
         clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: borderRadius,
-          child: card,
-        ),
+        child: InkWell(onTap: onTap, borderRadius: borderRadius, child: card),
       ),
     );
   }
@@ -336,8 +335,11 @@ class _HeroTile extends StatelessWidget {
       padding: const EdgeInsets.all(OwnerOilKpiStitchMetrics.padding),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Expanded(
@@ -362,7 +364,7 @@ class _HeroTile extends StatelessWidget {
               ),
             ],
           ),
-          const Spacer(),
+          const SizedBox(height: 12),
           _StitchBody(
             section: section,
             sectionId: sectionId,
@@ -386,8 +388,10 @@ class _HeroTile extends StatelessWidget {
       ),
     );
 
-    return SizedBox(
-      height: OwnerOilKpiStitchMetrics.heroHeight,
+    return ConstrainedBox(
+      constraints: const BoxConstraints(
+        minHeight: OwnerOilKpiStitchMetrics.heroHeight,
+      ),
       child: Material(
         color: Colors.transparent,
         clipBehavior: Clip.antiAlias,
@@ -429,8 +433,101 @@ class _InventoryRowTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
 
-    return SizedBox(
-      height: OwnerOilKpiStitchMetrics.inventoryHeight,
+    const titleStyle = TextStyle(
+      fontSize: 14,
+      fontWeight: FontWeight.w600,
+      color: OwnerOilKpiStitchMetrics.navy,
+      height: 1.25,
+    );
+    const valueStyle = TextStyle(
+      fontSize: 16,
+      fontWeight: FontWeight.w800,
+      color: OwnerOilKpiStitchMetrics.navy,
+    );
+    final subtitleStyle = TextStyle(fontSize: 11, color: cs.onSurfaceVariant);
+
+    final iconBox = Container(
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerHighest.withValues(alpha: 0.6),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Icon(icon, size: 22, color: cs.primary),
+    );
+
+    final data = section.data;
+    final valueText = data != null ? valueBuilder(data) : '—';
+
+    final content = LayoutBuilder(
+      builder: (context, constraints) {
+        // سطر واحد فقط إن اتسع للعنوان والرقم كاملين؛ وإلا يُرصّ عمودياً
+        // (في نصف عرض الهاتف أو مع الخط الكبير) بدل «624,…» و«المخزو/ن».
+        final scaler = MediaQuery.textScalerOf(context);
+        final dir = Directionality.of(context);
+        double widthOf(String text, TextStyle style) {
+          final tp = TextPainter(
+            text: TextSpan(text: text, style: style),
+            textDirection: dir,
+            textScaler: scaler,
+            maxLines: 1,
+          )..layout();
+          return tp.width;
+        }
+
+        const iconWidth = 38.0;
+        final needed =
+            iconWidth +
+            10 +
+            widthOf(title, titleStyle) +
+            12 +
+            widthOf(valueText, valueStyle);
+        final oneLine = needed <= constraints.maxWidth;
+
+        final body = _StitchBody(
+          section: section,
+          sectionId: sectionId,
+          onRetry: onRetry,
+          valueBuilder: valueBuilder,
+          subtitleBuilder: subtitleBuilder,
+          alignEnd: oneLine,
+          valueStyle: valueStyle,
+          subtitleStyle: subtitleStyle,
+          skeletonHeight: 24,
+        );
+
+        if (oneLine) {
+          return Row(
+            children: [
+              iconBox,
+              const SizedBox(width: 10),
+              Expanded(child: Text(title, style: titleStyle)),
+              const SizedBox(width: 12),
+              body,
+            ],
+          );
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                iconBox,
+                const SizedBox(width: 10),
+                Expanded(child: Text(title, softWrap: true, style: titleStyle)),
+              ],
+            ),
+            const SizedBox(height: 8),
+            body,
+          ],
+        );
+      },
+    );
+
+    return ConstrainedBox(
+      constraints: const BoxConstraints(
+        minHeight: OwnerOilKpiStitchMetrics.inventoryHeight,
+      ),
       child: Material(
         color: Colors.transparent,
         child: InkWell(
@@ -441,50 +538,9 @@ class _InventoryRowTile extends StatelessWidget {
             child: Padding(
               padding: const EdgeInsets.symmetric(
                 horizontal: OwnerOilKpiStitchMetrics.padding,
+                vertical: 12,
               ),
-              child: Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: cs.surfaceContainerHighest.withValues(alpha: 0.6),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Icon(icon, size: 22, color: cs.primary),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      title,
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                        color: OwnerOilKpiStitchMetrics.navy,
-                      ),
-                    ),
-                  ),
-                  Flexible(
-                    child: _StitchBody(
-                      section: section,
-                      sectionId: sectionId,
-                      onRetry: onRetry,
-                      valueBuilder: valueBuilder,
-                      subtitleBuilder: subtitleBuilder,
-                      alignEnd: true,
-                      valueStyle: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w800,
-                        color: OwnerOilKpiStitchMetrics.navy,
-                      ),
-                      subtitleStyle: TextStyle(
-                        fontSize: 11,
-                        color: cs.onSurfaceVariant,
-                      ),
-                      skeletonHeight: 24,
-                    ),
-                  ),
-                ],
-              ),
+              child: Center(widthFactor: 1, child: content),
             ),
           ),
         ),
@@ -543,17 +599,24 @@ class _StitchBody extends StatelessWidget {
           : CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text(value, maxLines: 1, overflow: TextOverflow.ellipsis, style: valueStyle),
+        // الرقم كاملاً دائماً: يلتف عند المسافة (قبل «د.ع») ولا يُقص.
+        Text(
+          value,
+          softWrap: true,
+          textAlign: alignEnd ? TextAlign.end : TextAlign.start,
+          style: valueStyle,
+        ),
         if (subtitle != null && subtitle.isNotEmpty)
           Text(
             subtitle,
-            maxLines: 1,
+            maxLines: 2,
             overflow: TextOverflow.ellipsis,
+            textAlign: alignEnd ? TextAlign.end : TextAlign.start,
             style: subtitleStyle,
           ),
       ],
     );
 
-    return alignEnd ? column : column;
+    return column;
   }
 }

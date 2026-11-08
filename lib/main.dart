@@ -15,6 +15,7 @@ import 'package:provider/provider.dart';
 import 'package:app_links/app_links.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'services/cloud_sync_service.dart';
+import 'services/network_status_service.dart';
 import 'services/web_runtime_bootstrap.dart';
 import 'services/auth/web_url_cleanup.dart';
 import 'services/auth/web_auth_history_guard.dart';
@@ -317,6 +318,8 @@ void main() async {
     await WebRuntimeBootstrap.initialize();
   }
   _registerVerticalManifests();
+  // حالة الشبكة الفعلية — لشريط «لا إنترنت» في لوحة المالك.
+  NetworkStatusService.instance.ensureStarted();
   // أظهر الواجهة فوراً — لا تُجمَّد نافذة ويندوز ريثما تكتمل القاعدة/الترخيص.
   runApp(const MyApp());
   unawaited(_startDeferredStorageInit());

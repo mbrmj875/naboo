@@ -76,7 +76,10 @@ class InventoryAlert {
 }
 
 class InventoryValueKpi {
-  const InventoryValueKpi({required this.totalCostFils, required this.productCount});
+  const InventoryValueKpi({
+    required this.totalCostFils,
+    required this.productCount,
+  });
 
   final int totalCostFils;
   final int productCount;
@@ -135,17 +138,38 @@ class OilActiveCarsKpi {
   final int staleWaitingCount;
 }
 
-/// v3 — غيارات مسجّلة في الفترة.
+/// v3 — عمليات محل الزيت في الفترة: غيار + غسيل + بيع مباشر.
 class OilChangesKpi {
   const OilChangesKpi({
     required this.changeCount,
     required this.revenueFils,
     required this.range,
+    this.washCount = 0,
+    this.directSaleCount = 0,
+    this.oilInvoiceCount = 0,
   });
 
+  /// بطاقات غيار الزيت.
   final int changeCount;
+
+  /// إيراد بطاقات الغيار فقط.
   final int revenueFils;
   final OwnerDateRange range;
+
+  /// بطاقات غسيل السيارات.
+  final int washCount;
+
+  /// فواتير بيع بلا بطاقة غيار أو غسيل (بيع مباشر + بيع سريع).
+  final int directSaleCount;
+
+  /// فواتير الفترة المربوطة ببطاقة غيار (حتى لو فُتحت البطاقة في يوم سابق).
+  final int oilInvoiceCount;
+
+  /// غيارات الفترة: البطاقات المفتوحة فيها أو المفوترة فيها، أيهما أكبر.
+  int get oilOperationCount =>
+      changeCount > oilInvoiceCount ? changeCount : oilInvoiceCount;
+
+  int get operationCount => oilOperationCount + washCount + directSaleCount;
 }
 
 /// v3 — متوسط قيمة الغيار (fils).
@@ -191,10 +215,7 @@ class TopSellerRow {
 
 /// أعلى 5 أصناف مبيعاً — تجميع SQL.
 class RetailTopSellersKpi {
-  const RetailTopSellersKpi({
-    required this.items,
-    required this.range,
-  });
+  const RetailTopSellersKpi({required this.items, required this.range});
 
   final List<TopSellerRow> items;
   final OwnerDateRange range;

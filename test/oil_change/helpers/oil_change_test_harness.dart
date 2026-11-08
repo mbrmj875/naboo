@@ -14,6 +14,7 @@ import 'package:naboo/services/business_setup_settings.dart';
 import 'package:naboo/services/cloud_sync_service.dart';
 import 'package:naboo/services/database_helper.dart';
 import 'package:naboo/services/license_service.dart';
+import 'package:naboo/services/network_status_service.dart';
 import 'package:naboo/services/service_order_kinds.dart';
 import 'package:naboo/services/service_orders_sql_ops.dart';
 import 'package:naboo/services/sync_entity_types.dart';
@@ -154,6 +155,16 @@ class OilChangeTestHarness {
       LicenseService.instance.debugSetStateForTesting(_savedLicenseState!);
       _savedLicenseState = null;
     }
+    NetworkStatusService.instance.debugSetOnline(null);
+  }
+
+  /// انقطاع الشبكة الفعلي (لا حالة الاشتراك).
+  void mockOfflineNetwork() {
+    NetworkStatusService.instance.debugSetOnline(false);
+  }
+
+  void mockOnlineNetwork() {
+    NetworkStatusService.instance.debugSetOnline(true);
   }
 
   HomeDashboardSpec homeSpec({bool enablePos = false}) {

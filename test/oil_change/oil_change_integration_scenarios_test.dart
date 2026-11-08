@@ -416,9 +416,9 @@ void main() {
       expect(row['stockVoucherId'], isNull);
     });
 
-    test('F5: offline license marks owner section as stale offline', () async {
+    test('F5: no network marks owner section as stale offline', () async {
       await harness.configureServiceOnly();
-      harness.mockOfflineLicense();
+      harness.mockOfflineNetwork();
 
       final provider = OwnerCommandCenterProvider();
       provider.updateFeatureGate(
@@ -428,6 +428,23 @@ void main() {
 
       expect(provider.snapshot.oilChangesCount?.isOffline, isTrue);
       expect(provider.isOffline, isTrue);
+      provider.dispose();
+    });
+
+    test('F5b: offline license alone does not show no-network state',
+        () async {
+      await harness.configureServiceOnly();
+      harness.mockOfflineLicense();
+      harness.mockOnlineNetwork();
+
+      final provider = OwnerCommandCenterProvider();
+      provider.updateFeatureGate(
+        verticalSettings(BusinessVertical.oilChange, enablePos: false),
+      );
+      await provider.loadSection(OwnerSectionIds.oilChangesCount, force: true);
+
+      expect(provider.isOffline, isFalse);
+      expect(provider.snapshot.oilChangesCount?.isOffline, isFalse);
       provider.dispose();
     });
   });

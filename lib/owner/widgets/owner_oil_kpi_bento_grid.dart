@@ -5,6 +5,7 @@ import '../models/owner_command_center_snapshot.dart';
 import '../providers/owner_command_center_provider.dart';
 import '../specs/owner_catalog_pinned_grid_spec.dart';
 import '../specs/owner_kpi_catalog.dart';
+import '../specs/owner_kpi_catalog_entry.dart';
 import '../specs/owner_dashboard_profile.dart';
 import '../../services/business_setup_settings.dart';
 import 'owner_oil_kpi_stitch_tile.dart';
@@ -74,8 +75,19 @@ class OwnerOilKpiBentoGrid extends StatelessWidget {
       }
       if (tiles.isEmpty) continue;
 
+      // بطاقات المبالغ الكبيرة (قيمة المخزون، الديون) تأخذ صفاً كاملاً حتى
+      // يظهر الرقم والعنوان كاملين؛ في نصف العرض كانت تُقص «624,…».
+      final fullWidth =
+          tiles.length > 1 && slotIds.any(_fullWidthCatalogIds.contains);
       if (tiles.length == 1) {
         children.add(tiles.first);
+      } else if (fullWidth) {
+        for (var i = 0; i < tiles.length; i++) {
+          if (i > 0) {
+            children.add(const SizedBox(height: OwnerOilKpiStitchMetrics.gap));
+          }
+          children.add(tiles[i]);
+        }
       } else {
         children.add(
           IntrinsicHeight(
@@ -102,6 +114,11 @@ class OwnerOilKpiBentoGrid extends StatelessWidget {
       children: children,
     );
   }
+
+  static const _fullWidthCatalogIds = {
+    OwnerCatalogIds.inventoryValue,
+    OwnerCatalogIds.debtsSummary,
+  };
 
   Widget? _buildTile(BuildContext context, String catalogId) {
     final entry = OwnerKpiCatalog.kpiById(catalogId);

@@ -8,6 +8,7 @@ import '../../../utils/stock_quantity_kind.dart';
 import '../../../owner/models/owner_date_range.dart';
 import '../../../owner/models/owner_kpi_models.dart';
 import '../../../owner/models/owner_period_sale_row.dart';
+import '../reports/kit/oil_shop_report_sql.dart';
 
 /// استعلامات v3 لورشة غيار الزيت — [tenantId] إلزامي (لا TenantContext داخلياً).
 class OwnerOilDashboardRepository {
@@ -44,10 +45,29 @@ class OwnerOilDashboardRepository {
       endExclusiveIso: range.endExclusiveUtcIso,
       staffName: staffName,
     );
+    final washCount = await _countWashOrdersInRange(
+      db,
+      tenantId: tenantId,
+      startIso: range.startUtcIso,
+      endExclusiveIso: range.endExclusiveUtcIso,
+      staffName: staffName,
+    );
+    // invoices.date محلي بدون Z — service_orders.createdAt بتوقيت UTC.
+    // نفس شروط «مبيعات الفترة» حتى لا تظهر مبيعات بلا عمليات.
+    final inv = await _countInvoicesByChannel(
+      db,
+      tenantId: tenantId,
+      startIso: range.startLocalIso,
+      endExclusiveIso: range.endExclusiveLocalIso,
+      staffName: staffName,
+    );
     return OilChangesKpi(
       changeCount: stats.count,
       revenueFils: stats.revenueFils,
       range: range,
+      washCount: washCount > inv.wash ? washCount : inv.wash,
+      directSaleCount: inv.direct,
+      oilInvoiceCount: inv.oil,
     );
   }
 
@@ -56,17 +76,18 @@ class OwnerOilDashboardRepository {
     required OwnerDateRange range,
     String? staffName,
   }) async {
-    final stats = await loadOilChangesInRange(
+    final db = await _db.database;
+    final stats = await _aggregateOilOrdersInRange(
+      db,
       tenantId: tenantId,
-      range: range,
+      startIso: range.startUtcIso,
+      endExclusiveIso: range.endExclusiveUtcIso,
       staffName: staffName,
     );
-    final avg = stats.changeCount <= 0
-        ? 0
-        : stats.revenueFils ~/ stats.changeCount;
+    final avg = stats.count <= 0 ? 0 : stats.revenueFils ~/ stats.count;
     return OilAvgTicketKpi(
       avgTicketFils: avg,
-      changeCount: stats.changeCount,
+      changeCount: stats.count,
       range: range,
     );
   }
@@ -380,6 +401,97 @@ class OwnerOilDashboardRepository {
       count: count,
       revenueFils: IqdMoney.toFils(invSum) + cardSumVal,
     );
+  }
+
+  /// بطاقات غسيل غير ملغاة في الفترة.
+  static Future<int> _countWashOrdersInRange(
+    Database db, {
+    required int tenantId,
+    required String startIso,
+    required String endExclusiveIso,
+    String? staffName,
+  }) async {
+    try {
+      final hasOrderKind =
+          await _tableHasColumn(db, 'service_orders', 'orderKind');
+      if (!hasOrderKind) return 0;
+      final hasTech =
+          await _tableHasColumn(db, 'service_orders', 'technicianName');
+      final where = StringBuffer(
+        'so.tenantId = ? AND so.orderKind = ? '
+        'AND ${OilShopReportSql.aliveOrder('so')} '
+        'AND so.createdAt >= ? AND so.createdAt < ?',
+      );
+      final args = <Object?>[
+        tenantId,
+        ServiceOrderKinds.carWash,
+        startIso,
+        endExclusiveIso,
+      ];
+      if (staffName != null && staffName.isNotEmpty && hasTech) {
+        where.write(' AND so.technicianName = ?');
+        args.add(staffName);
+      }
+      final rows = await db.rawQuery(
+        'SELECT COUNT(*) AS c FROM service_orders so WHERE ${where.toString()}',
+        args,
+      );
+      return (rows.first['c'] as num?)?.toInt() ?? 0;
+    } catch (e, st) {
+      AppLogger.error('OwnerOilDashboardRepository', 'countWash failed', e, st);
+      return 0;
+    }
+  }
+
+  /// فواتير الفترة حسب القناة — بنفس شروط [_sumInvoiceSalesFils] (مبيعات
+  /// الفترة): غير محذوفة وليست مرتجعاً.
+  ///
+  /// غسيل = مربوطة ببطاقة غسيل؛ غيار = مربوطة ببطاقة أخرى (قد تكون فُتحت في
+  /// يوم سابق)؛ مباشر = بلا بطاقة (بيع مباشر أو سريع).
+  static Future<({int oil, int wash, int direct})> _countInvoicesByChannel(
+    Database db, {
+    required int tenantId,
+    required String startIso,
+    required String endExclusiveIso,
+    String? staffName,
+  }) async {
+    try {
+      final hasInvoice =
+          await _tableHasColumn(db, 'service_orders', 'invoiceId');
+      final hasKind = await _tableHasColumn(db, 'service_orders', 'orderKind');
+      const linked = 'EXISTS (SELECT 1 FROM service_orders sc '
+          'WHERE sc.invoiceId = i.id AND sc.tenantId = i.tenantId)';
+      final washLinked = hasKind
+          ? 'EXISTS (SELECT 1 FROM service_orders sw '
+              'WHERE sw.invoiceId = i.id AND sw.tenantId = i.tenantId '
+              "AND sw.orderKind = '${ServiceOrderKinds.carWash}')"
+          : '0';
+      final select = hasInvoice
+          ? 'SUM(CASE WHEN $washLinked THEN 1 ELSE 0 END) AS wash, '
+              'SUM(CASE WHEN NOT $washLinked AND $linked THEN 1 ELSE 0 END) AS oil, '
+              'SUM(CASE WHEN NOT $linked THEN 1 ELSE 0 END) AS direct'
+          : '0 AS wash, 0 AS oil, COUNT(*) AS direct';
+      var sql = 'SELECT $select FROM invoices i '
+          'WHERE i.tenantId = ? AND i.deleted_at IS NULL '
+          'AND IFNULL(i.isReturned, 0) = 0 '
+          'AND i.date >= ? AND i.date < ?';
+      final args = <Object?>[tenantId, startIso, endExclusiveIso];
+      if (staffName != null && staffName.isNotEmpty) {
+        sql += ' AND i.createdByUserName = ?';
+        args.add(staffName);
+      }
+      final row = (await db.rawQuery(sql, args)).first;
+      int n(String k) => (row[k] as num?)?.toInt() ?? 0;
+      return (oil: n('oil'), wash: n('wash'), direct: n('direct'));
+    } catch (e, st) {
+      AppLogger.error(
+        'OwnerOilDashboardRepository',
+        'countInvoicesByChannel failed',
+        e,
+        st,
+      );
+      return (oil: 0, wash: 0, direct: 0);
+    }
   }
 
   static Future<int> _sumInvoiceSalesFils(

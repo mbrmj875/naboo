@@ -5,7 +5,7 @@ import 'package:flutter/foundation.dart';
 import '../../services/business_setup_settings.dart';
 import '../../verticals/_contract/vertical_registry.dart';
 import '../../services/cloud_sync_service.dart';
-import '../../services/license_service.dart';
+import '../../services/network_status_service.dart';
 import '../../services/tenant_context_service.dart';
 import '../../utils/app_logger.dart';
 import '../models/owner_dashboard_access_context.dart';
@@ -36,10 +36,13 @@ class OwnerCommandCenterProvider extends ChangeNotifier {
     OwnerCommandCenterRepository? repository,
     TenantContextService? tenant,
     OilOwnerSectionLoader? oilOwnerSectionLoader,
+    NetworkStatusService? network,
   })  : _repository = repository ?? OwnerCommandCenterRepository(),
         _tenant = tenant ?? TenantContextService.instance,
-        _oilOwnerSectionLoader = oilOwnerSectionLoader {
+        _oilOwnerSectionLoader = oilOwnerSectionLoader,
+        _network = network ?? NetworkStatusService.instance {
     _tenant.addListener(_onTenantChanged);
+    _network.addListener(_onNetworkChanged);
     CloudSyncService.instance.remoteImportGeneration.addListener(_onCloudImport);
     OwnerCommandCenterRefreshBridge.instance.addListener(_onLocalSectionInvalidate);
   }
@@ -47,6 +50,7 @@ class OwnerCommandCenterProvider extends ChangeNotifier {
   final OwnerCommandCenterRepository _repository;
   final TenantContextService _tenant;
   final OilOwnerSectionLoader? _oilOwnerSectionLoader;
+  final NetworkStatusService _network;
 
   OwnerCommandCenterSnapshot _snapshot = OwnerCommandCenterSnapshot.initial;
   OwnerDateRange _dateRange = const OwnerDateRange.today();
@@ -72,8 +76,10 @@ class OwnerCommandCenterProvider extends ChangeNotifier {
   int? get staffUserIdFilter => _staffUserIdFilter;
   CommandCenterScreenStatus get screenStatus => _snapshot.screenStatus;
 
-  bool get isOffline =>
-      LicenseService.instance.state.status == LicenseStatus.offline;
+  /// انقطاع الشبكة الفعلي للجهاز — لا حالة الاشتراك.
+  bool get isOffline => _network.isOffline;
+
+  void _onNetworkChanged() => notifyListeners();
 
   void updateFeatureGate(BusinessSetupSettingsData features) {
     _features = features;
@@ -358,7 +364,7 @@ class OwnerCommandCenterProvider extends ChangeNotifier {
     try {
       final tenantId = await _resolveTenantId();
       final fetchedAt = DateTime.now();
-      final offline = LicenseService.instance.state.status == LicenseStatus.offline;
+      final offline = isOffline;
 
       switch (sectionId) {
         case OwnerSectionIds.staffUsers:
@@ -651,8 +657,7 @@ class OwnerCommandCenterProvider extends ChangeNotifier {
   }
 
   void _setSectionError(String sectionId, String message) {
-    final offline =
-        LicenseService.instance.state.status == LicenseStatus.offline;
+    final offline = isOffline;
 
     OwnerSectionResult<T> err<T>(T? staleData) {
       final noCache = staleData == null;
@@ -789,6 +794,7 @@ class OwnerCommandCenterProvider extends ChangeNotifier {
   @override
   void dispose() {
     _tenant.removeListener(_onTenantChanged);
+    _network.removeListener(_onNetworkChanged);
     CloudSyncService.instance.remoteImportGeneration.removeListener(_onCloudImport);
     OwnerCommandCenterRefreshBridge.instance
         .removeListener(_onLocalSectionInvalidate);

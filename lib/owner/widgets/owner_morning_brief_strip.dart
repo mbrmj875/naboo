@@ -56,8 +56,7 @@ class _OwnerMorningBriefStripState extends State<OwnerMorningBriefStrip> {
                   children: [
                     Text(
                       widget.summary,
-                      maxLines: _expanded ? 3 : 1,
-                      overflow: TextOverflow.ellipsis,
+                      softWrap: true,
                       style: TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w700,

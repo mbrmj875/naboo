@@ -1,36 +1,55 @@
 import '../../../owner/models/owner_command_center_snapshot.dart';
 
 /// سطر «ملخص الصباح» — يقرأ أقسام snapshot v3.
+///
+/// يعدّ كل عمليات محل الزيت (غيار + غسيل + بيع مباشر)، فلا يقول «لا نشاط»
+/// والمبيعات ظاهرة في الشاشة نفسها.
 abstract final class OilChangeMorningBriefBuilder {
   OilChangeMorningBriefBuilder._();
+
+  static const emptyText = 'لا نشاط مسجّل بعد — اسحب للتحديث';
+  static const loadingText = 'جارٍ حساب ملخص الفترة…';
+  static const salesOnlyText =
+      'توجد مبيعات في الفترة — التفاصيل في الأرقام أدناه';
 
   static String build(OwnerCommandCenterSnapshot snapshot) {
     final parts = <String>[];
 
-    final changes = snapshot.oilChangesCount;
-    if (changes != null && changes.hasData && changes.data != null) {
-      parts.add('${changes.data!.changeCount} غياراً');
-    }
-
-    final active = snapshot.oilActiveCars;
-    if (active != null && active.hasData && active.data != null) {
-      final n = active.data!.activeCount;
-      if (n > 0) {
-        parts.add('$n سيارات بالانتظار');
+    final ops = snapshot.oilChangesCount;
+    final opsData = ops?.data;
+    if (opsData != null) {
+      if (opsData.oilOperationCount > 0) {
+        parts.add('${opsData.oilOperationCount} غيار');
+      }
+      if (opsData.washCount > 0) {
+        parts.add('${opsData.washCount} غسيل');
+      }
+      if (opsData.directSaleCount > 0) {
+        parts.add('${opsData.directSaleCount} بيع مباشر');
       }
     }
 
-    final shortages = snapshot.oilStockShortages;
-    if (shortages != null && shortages.hasData && shortages.data != null) {
-      final n = shortages.data!.shortageCount;
-      if (n > 0) {
-        parts.add('$n نواقص حرجة');
-      }
+    final active = snapshot.oilActiveCars?.data;
+    if (active != null && active.activeCount > 0) {
+      parts.add('${active.activeCount} سيارات بالانتظار');
     }
 
-    if (parts.isEmpty) {
-      return 'لا نشاط مسجّل بعد — اسحب للتحديث';
+    final shortages = snapshot.oilStockShortages?.data;
+    if (shortages != null && shortages.shortageCount > 0) {
+      parts.add('${shortages.shortageCount} نواقص حرجة');
     }
-    return parts.join(' · ');
+
+    if (parts.isNotEmpty) return parts.join(' · ');
+
+    // لا نقول «لا نشاط» قبل أن تكتمل قراءة العمليات.
+    if (ops != null && !ops.hasData && ops.isLoading) {
+      return loadingText;
+    }
+
+    // حماية أخيرة: مبيعات بلا عمليات معدودة (مثلاً فاتورة من نوع آخر).
+    final salesFils = snapshot.sales.data?.salesFils ?? 0;
+    if (salesFils > 0) return salesOnlyText;
+
+    return emptyText;
   }
 }
