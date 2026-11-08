@@ -1,3 +1,4 @@
+import '../../../printing/receipt_printer.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -321,6 +322,10 @@ class _OilChangeDirectSaleScreenState extends State<OilChangeDirectSaleScreen> {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(snack)));
+      // إيصال البيع المباشر على طابعة الجهاز (إن رُبطت والطباعة التلقائية مفعّلة).
+      unawaited(
+        ReceiptPrinter.autoPrintAfterSave(context, invoiceId: result.invoiceId),
+      );
       unawaited(ProductQuickPickCache.instance.refresh(limit: _initialLimit));
       if (closeRoute) {
         Navigator.of(context).pop(result.invoiceId);

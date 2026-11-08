@@ -1,10 +1,14 @@
 import 'package:flutter/services.dart' show rootBundle;
+import 'package:flutter/widgets.dart' show BuildContext;
 import 'package:intl/intl.dart' hide TextDirection;
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
 import '../../models/expense.dart';
+import '../../printing/printer_connection.dart';
+import '../../printing/receipt_builders.dart';
+import '../../printing/receipt_printer.dart';
 
 /// يطبع/يعاين إيصال مصروف بتصميم مبسط (A6 عمودي).
 class ExpenseReceiptPrinter {
@@ -18,7 +22,20 @@ class ExpenseReceiptPrinter {
     return pw.Font.ttf(data);
   }
 
-  static Future<void> show(ExpenseEntry entry) async {
+  /// مع [context] وطابعة حرارية مربوطة بالجهاز: سند الصرف عليها مباشرة.
+  static Future<void> show(ExpenseEntry entry, {BuildContext? context}) async {
+    if (context != null) {
+      final conn = await PrinterConnection.load();
+      if (conn.isConfigured &&
+          conn.type != PrinterType.system &&
+          context.mounted) {
+        await ReceiptPrinter.printWithFeedback(
+          context,
+          () async => ReceiptBuilders.expense(entry),
+        );
+        return;
+      }
+    }
     final arFont = await _loadAsset('assets/fonts/NotoNaskhArabic-Regular.ttf');
     final arBold = await _loadAsset('assets/fonts/NotoNaskhArabic-Bold.ttf');
     final latinFont = await _loadAsset('assets/fonts/Tajawal-Regular.ttf');

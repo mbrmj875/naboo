@@ -33,6 +33,7 @@ class PrintSettingsData {
     this.storeLatitude,
     this.storeLongitude,
     this.storeLogoBase64 = '',
+    this.receiptTemplates = const {},
   });
 
   factory PrintSettingsData.defaults() => const PrintSettingsData(
@@ -78,6 +79,10 @@ class PrintSettingsData {
 
   /// خط طول موقع المتجر المحدَّد عبر GPS أو الخريطة — `null` يعني غير محدَّد.
   final double? storeLongitude;
+
+  /// قوالب الإيصالات لكل عمل (غيار زيت، بيع مباشر، غسيل...) — JSON حر
+  /// يقرؤه `ReceiptTemplates` في `lib/printing/receipt_model.dart`.
+  final Map<String, dynamic> receiptTemplates;
 
   /// شعار المتجر مُرمَّزاً base64 (PNG أو JPEG) — فارغ يعني بلا شعار.
   final String storeLogoBase64;
@@ -146,6 +151,7 @@ class PrintSettingsData {
         'storeLatitude': storeLatitude,
         'storeLongitude': storeLongitude,
         'storeLogoBase64': storeLogoBase64,
+        'receiptTemplates': receiptTemplates,
       };
 
   factory PrintSettingsData.fromJson(Map<String, dynamic> m) {
@@ -180,6 +186,9 @@ class PrintSettingsData {
       storeLatitude: _readLatitude(m['storeLatitude']),
       storeLongitude: _readLongitude(m['storeLongitude']),
       storeLogoBase64: (m['storeLogoBase64'] as String? ?? '').trim(),
+      receiptTemplates: m['receiptTemplates'] is Map
+          ? Map<String, dynamic>.from(m['receiptTemplates'] as Map)
+          : const {},
     );
   }
 
@@ -274,6 +283,7 @@ class PrintSettingsData {
     double? storeLongitude,
     bool clearStoreLocation = false,
     String? storeLogoBase64,
+    Map<String, dynamic>? receiptTemplates,
   }) {
     return PrintSettingsData(
       paperFormat: paperFormat ?? this.paperFormat,
@@ -294,6 +304,7 @@ class PrintSettingsData {
       storeLongitude:
           clearStoreLocation ? null : storeLongitude ?? this.storeLongitude,
       storeLogoBase64: storeLogoBase64 ?? this.storeLogoBase64,
+      receiptTemplates: receiptTemplates ?? this.receiptTemplates,
     );
   }
 }

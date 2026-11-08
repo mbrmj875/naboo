@@ -4,7 +4,8 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:barcode/barcode.dart' as bc;
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
@@ -15,6 +16,10 @@ import 'package:printing/printing.dart' as printing;
 import '../models/installment.dart';
 import '../models/invoice.dart';
 import '../models/print_settings_data.dart';
+import '../printing/printer_connection.dart';
+import '../printing/receipt_builders.dart';
+import '../printing/receipt_model.dart';
+import '../printing/receipt_printer.dart';
 import '../screens/debts/customer_debt_payment_receipt_screen.dart';
 import '../services/database_helper.dart';
 import '../services/effective_store_branding.dart';
@@ -47,6 +52,35 @@ Future<PrintSettingsData> _effectivePrintSettings(
   }
   return PrintSettingsRepository.instance.load();
 }
+
+Future<ReceiptDocument> _receiptDocFor(Invoice invoice) async {
+  final id = invoice.id;
+  if (id != null) {
+    final doc = await ReceiptBuilders.forInvoiceId(id);
+    if (doc != null) return doc;
+  }
+  return ReceiptBuilders.fromInvoice(invoice);
+}
+
+/// طابعة حرارية مربوطة بهذا الجهاز (بلوتوث أو شبكة)، أو `null`.
+Future<PrinterConnection?> _deviceThermalPrinter(PrintSettingsData s) async {
+  final c = await PrinterConnection.load(legacy: s);
+  final thermal =
+      c.type == PrinterType.bluetooth || c.type == PrinterType.lan;
+  return thermal && c.isConfigured ? c : null;
+}
+
+/// يطبع الفاتورة صورةً نقطية (العربي والشعار سليمان) على طابعة الجهاز.
+Future<PrintResult> _rasterPrint(
+  Invoice invoice,
+  PrintSettingsData settings,
+  PrinterConnection conn,
+) async =>
+    ReceiptPrinter.printDocument(
+      await _receiptDocFor(invoice),
+      settings: settings,
+      connection: conn,
+    );
 
 String _receiptSafe(String? raw) {
   if (raw == null) return '';
@@ -1537,6 +1571,21 @@ class SaleReceiptPdf {
     PrintSettingsData? printSettings,
   }) async {
     if (!context.mounted) return;
+    // طباعة تلقائية إن فعّلها المالك لقالب «تسديد دين» وكانت طابعة مربوطة.
+    unawaited(
+      ReceiptPrinter.autoPrintAfterSave(
+        context,
+        document: ReceiptBuilders.debtPayment(
+          customerName: customerDisplayName,
+          amountApplied: amountApplied,
+          debtBefore: debtBefore,
+          debtAfter: debtAfter,
+          paymentRowId: paymentRowId,
+          receiptInvoiceId: receiptInvoiceId,
+          recordedBy: recordedByUserName,
+        ),
+      ),
+    );
     // صفحة عادية داخل التطبيق — ليست منبثقة ولا معاينة PDF تملأ الشاشة.
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
@@ -1568,9 +1617,16 @@ class SaleReceiptPdf {
     final isThermalPaper = settings.paperFormat == PrintPaperFormat.thermal58 ||
         settings.paperFormat == PrintPaperFormat.thermal80;
 
+    final device = await _deviceThermalPrinter(settings);
+    if (device != null) {
+      final r = await _rasterPrint(invoice, settings, device);
+      if (r.ok) return null;
+      return r.message ?? 'تعذرت الطباعة الحرارية.';
+    }
     if (settings.thermalEscPosEnabled &&
         isThermalPaper &&
         settings.thermalLanHost.trim().isNotEmpty) {
+      // متصفح الويب: جسر الطباعة المحلي يستقبل البايتات كما هي.
       try {
         final payload = ThermalEscPosService.instance.buildReceiptBytes(
           invoice: invoice,
@@ -1610,6 +1666,12 @@ class SaleReceiptPdf {
       }
     }
 
+    // أندرويد وiOS لا يدعمان الطباعة الصامتة على طابعة النظام؛ بلا طابعة
+    // حرارية مربوطة نتخطى بصمت بدل رسالة خطأ بعد كل بيع.
+    if (defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS) {
+      return null;
+    }
     try {
       final printers = await printing.Printing.listPrinters();
       if (printers.isEmpty) return null;
@@ -1656,38 +1718,21 @@ class SaleReceiptPdf {
     if (!context.mounted) return;
     final isThermalPaper = settings.paperFormat == PrintPaperFormat.thermal58 ||
         settings.paperFormat == PrintPaperFormat.thermal80;
-    if (settings.thermalEscPosEnabled && isThermalPaper) {
-      try {
-        final payload = ThermalEscPosService.instance.buildReceiptBytes(
-          invoice: invoice,
-          subtotalBeforeDiscount: subtotalBeforeDiscount,
-          settings: settings,
-        );
-        await ThermalNetworkPrinterService.instance.sendBytes(
-          host: settings.thermalLanHost,
-          port: settings.thermalLanPort,
-          timeoutMs: settings.thermalLanTimeoutMs,
-          payload: payload,
-        );
-        if (!context.mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('تمت الطباعة الحرارية عبر الشبكة بنجاح'),
-            behavior: SnackBarBehavior.floating,
+    final device = await _deviceThermalPrinter(settings);
+    if (settings.thermalEscPosEnabled && isThermalPaper && device != null) {
+      final r = await _rasterPrint(invoice, settings, device);
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            r.ok
+                ? 'أُرسل الإيصال للطابعة الحرارية'
+                : '${r.message} — سيتم فتح PDF كبديل.',
           ),
-        );
-        return;
-      } catch (e) {
-        if (!context.mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'تعذر الطباعة الحرارية عبر الشبكة: $e — سيتم فتح PDF كبديل.',
-            ),
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      if (r.ok) return;
     }
 
     if (fullScreen) {
@@ -1709,6 +1754,14 @@ class SaleReceiptPdf {
                   ),
                   title: const Text('إيصال البيع'),
                   actions: [
+                    IconButton(
+                      icon: const Icon(Icons.print_outlined),
+                      tooltip: 'طباعة على طابعة الجهاز',
+                      onPressed: () => ReceiptPrinter.printWithFeedback(
+                        ctx,
+                        () => _receiptDocFor(invoice),
+                      ),
+                    ),
                     if (openDetails != null)
                       IconButton(
                         icon: const Icon(Icons.receipt_long_outlined),
@@ -1821,6 +1874,15 @@ class SaleReceiptPdf {
                                 fontSize: 16,
                               ),
                               textAlign: TextAlign.center,
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.print_outlined,
+                                color: Colors.white),
+                            tooltip: 'طباعة على طابعة الجهاز',
+                            onPressed: () => ReceiptPrinter.printWithFeedback(
+                              dialogContext,
+                              () => _receiptDocFor(invoice),
                             ),
                           ),
                           if (openDetails != null)

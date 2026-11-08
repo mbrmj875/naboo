@@ -1,5 +1,8 @@
 package com.basra.storemanager.app
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
 import android.view.View
@@ -14,6 +17,7 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.android.FlutterView
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
+import io.flutter.plugin.common.MethodChannel
 
 /**
  * adjustNothing + تصفير IME قبل FlutterView حتى لا يرسل المحرك
@@ -27,6 +31,7 @@ class MainActivity : FlutterActivity() {
   private var imeEvents: EventChannel.EventSink? = null
   private var lastImeBottomPx = 0
   private var lastEmitUptimeMs = 0L
+  private var btPermissionResult: MethodChannel.Result? = null
 
   private val imeStripper: OnApplyWindowInsetsListener =
     OnApplyWindowInsetsListener { view, insets ->
@@ -63,6 +68,25 @@ class MainActivity : FlutterActivity() {
   override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
     super.configureFlutterEngine(flutterEngine)
     PinKdfChannel.register(flutterEngine)
+    // إذن «الأجهزة القريبة» لطابعات البلوتوث (أندرويد 12+). حزمة الطباعة لا
+    // تطلبه بنفسها، وبدونه تعلق استدعاءاتها، فنطلبه وننتظر رد المستخدم.
+    MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL_BT_PERMISSION)
+      .setMethodCallHandler { call, result ->
+        if (call.method != "request") {
+          result.notImplemented()
+          return@setMethodCallHandler
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+          checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) ==
+          PackageManager.PERMISSION_GRANTED
+        ) {
+          result.success(true)
+          return@setMethodCallHandler
+        }
+        btPermissionResult?.success(false)
+        btPermissionResult = result
+        requestPermissions(arrayOf(Manifest.permission.BLUETOOTH_CONNECT), REQUEST_BT_CONNECT)
+      }
     EventChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL_IME_INSETS)
       .setStreamHandler(
         object : EventChannel.StreamHandler {
@@ -76,6 +100,19 @@ class MainActivity : FlutterActivity() {
           }
         },
       )
+  }
+
+  override fun onRequestPermissionsResult(
+    requestCode: Int,
+    permissions: Array<out String>,
+    grantResults: IntArray,
+  ) {
+    super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+    if (requestCode != REQUEST_BT_CONNECT) return
+    val granted =
+      grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED
+    btPermissionResult?.success(granted)
+    btPermissionResult = null
   }
 
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -146,5 +183,7 @@ class MainActivity : FlutterActivity() {
 
   companion object {
     private const val CHANNEL_IME_INSETS = "naboo/ime_insets"
+    private const val CHANNEL_BT_PERMISSION = "naboo/bt_permission"
+    private const val REQUEST_BT_CONNECT = 4107
   }
 }

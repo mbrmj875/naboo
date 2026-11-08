@@ -77,6 +77,7 @@ dependencies:
   flutter_tts: ^4.2.5
   # يجب أن يكون dependency عادي (ليس فقط dev) حتى يدخل في APK الإصدار.
   flutter_native_splash: ^2.4.6
+  print_bluetooth_thermal: ">=1.1.0 <1.2.2"
 
 dev_dependencies:
   flutter_test:

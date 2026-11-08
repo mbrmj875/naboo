@@ -1,5 +1,6 @@
 // ignore_for_file: unused_field, unused_element
 
+import '../../../printing/receipt_printer.dart';
 import 'dart:async';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -79,7 +80,6 @@ import '../../../utils/customer_phone_launch.dart';
 import '../../../utils/iqd_money.dart';
 import '../../../utils/iraqi_currency_format.dart';
 import '../utils/oil_service_whatsapp_message.dart';
-import '../../../utils/sale_receipt_pdf.dart';
 import '../../../utils/screen_layout.dart';
 import '../../../widgets/adaptive/adaptive_form_container.dart';
 import '../../../widgets/raw_keyboard_inset.dart';
@@ -3758,21 +3758,15 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   Future<void> _runOilPostSavePrint(_OilPostSaveJob job) async {
     final invoiceId = job.invoiceId;
     if (invoiceId == null || invoiceId <= 0) return;
-    try {
-      final full = await DatabaseHelper().getInvoiceById(invoiceId);
-      if (full == null) return;
-      final subtotalForPrint =
-          full.items.fold<double>(0, (sum, e) => sum + e.total);
-      final printErr = await SaleReceiptPdf.tryAutoPrintReceipt(
-        invoice: full,
-        subtotalBeforeDiscount: subtotalForPrint,
-        printSettings: job.printSettings,
-      );
-      if (printErr != null) {
-        _showRootSnackBar(printErr);
-      }
-      } catch (e) {
-      _showRootSnackBar('تعذرت الطباعة: $e');
+    // قالب «إيصال غيار زيت» على طابعة الجهاز. لا طابعة أو طباعة تلقائية
+    // مطفأة = لا شيء ولا رسالة؛ الفشل الحقيقي فقط يظهر.
+    final r = await ReceiptPrinter.printInvoice(
+      invoiceId,
+      auto: true,
+      settings: job.printSettings,
+    );
+    if (r.outcome == PrintOutcome.failed) {
+      _showRootSnackBar('حُفظت البطاقة، لكن الطباعة فشلت: ${r.message}');
     }
   }
 

@@ -20,7 +20,7 @@ class OilChangeInvoiceCursor {
   final double total;
 }
 
-/// فواتير غيار الزيت: المرتبطة ببطاقة عبر `service_orders.invoiceId`
+/// فواتير محل الزيت: المرتبطة ببطاقة غيار أو غسيل عبر `service_orders.invoiceId`
 /// أو فواتير «بيع مباشر» الموسومة بـ [OilChangeDirectSaleService.sourceTag].
 class OilChangeInvoicesRepository {
   OilChangeInvoicesRepository._();
@@ -62,7 +62,7 @@ class OilChangeInvoicesRepository {
           'WHERE so.invoiceId = i.id '
           'AND so.tenantId = ? '
           'AND so.deletedAt IS NULL '
-          "AND so.orderKind = ? "
+          "AND so.orderKind IN (?, ?) "
           'AND so.invoiceId IS NOT NULL'
           ')'
           ')',
@@ -72,6 +72,7 @@ class OilChangeInvoicesRepository {
       OilChangeDirectSaleService.sourceTag,
       tid,
       ServiceOrderKinds.oilChange,
+      ServiceOrderKinds.carWash,
     ];
 
     switch (tabIndex) {

@@ -2,6 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 import 'package:printing/printing.dart' as printing;
 
+import '../../printing/printer_connection.dart';
+import '../../printing/receipt_builders.dart';
+import '../../printing/receipt_model.dart';
+import '../../printing/receipt_printer.dart';
 import '../../theme/design_tokens.dart';
 import '../../utils/iraqi_currency_format.dart';
 import '../../utils/sale_receipt_pdf.dart';
@@ -31,7 +35,27 @@ class CustomerDebtPaymentReceiptScreen extends StatelessWidget {
 
   static final _dateFmt = DateFormat('dd/MM/yyyy HH:mm', 'en_US');
 
+  ReceiptDocument get receiptDocument => ReceiptBuilders.debtPayment(
+    customerName: customerDisplayName,
+    amountApplied: amountApplied,
+    debtBefore: debtBefore,
+    debtAfter: debtAfter,
+    paymentRowId: paymentRowId,
+    receiptInvoiceId: receiptInvoiceId,
+    recordedBy: recordedByUserName,
+  );
+
   Future<void> _print(BuildContext context) async {
+    // طابعة حرارية مربوطة بالجهاز: إيصال التسديد عليها مباشرة.
+    final conn = await PrinterConnection.load();
+    if (conn.isConfigured && conn.type != PrinterType.system) {
+      if (!context.mounted) return;
+      await ReceiptPrinter.printWithFeedback(
+        context,
+        () async => receiptDocument,
+      );
+      return;
+    }
     try {
       await printing.Printing.layoutPdf(
         name: 'debt-receipt-$paymentRowId',

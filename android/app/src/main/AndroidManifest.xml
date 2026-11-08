@@ -15,6 +15,15 @@
     <uses-permission
         android:name="android.permission.READ_MEDIA_VIDEO"
         tools:node="remove" />
+    <!-- طابعات البلوتوث: نقرأ الأجهزة المقترنة فقط ولا نمسح، فلا حاجة لـ SCAN
+         (وإلا عاملها متجر Play كصلاحية موقع). القديمة لأندرويد 11 وأقدم فقط. -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_SCAN"
+        tools:node="remove" />
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
     <!-- أندرويد 12 وأقدم فقط؛ المنتقي الحديث لا يحتاجها. -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <application

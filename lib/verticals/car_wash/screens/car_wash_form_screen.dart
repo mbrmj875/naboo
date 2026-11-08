@@ -1,5 +1,7 @@
 import 'dart:async' show unawaited;
 
+import '../../../printing/receipt_printer.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -384,6 +386,10 @@ class _CarWashFormScreenState extends State<CarWashFormScreen> {
       );
       if (!mounted) return;
       setState(() => _saving = false);
+      // إيصال الغسيل على طابعة الجهاز (إن رُبطت والطباعة التلقائية مفعّلة).
+      unawaited(
+        ReceiptPrinter.autoPrintAfterSave(context, invoiceId: result.invoiceId),
+      );
       await showOilChangeSaveSuccessOverlay(
         context,
         message: result.remainderFils > 0

@@ -66,6 +66,7 @@ import 'inventory/stock_analytics_screen.dart';
 import 'inventory/inventory_settings_screen.dart';
 import 'cash/cash_screen.dart';
 import 'printing/printing_screen.dart';
+import '../printing/printing_center_screen.dart';
 import 'users/users_screen.dart';
 import 'users/user_form_screen.dart';
 import 'users/employee_identity_screen.dart';
@@ -1011,7 +1012,14 @@ class _HomeScreenState extends State<HomeScreen>
       title: 'الطباعة',
       iconColor: Colors.blueGrey,
       routeId: AppContentRoutes.printing,
-      destination: (context) => const PrintingScreen(),
+      // محل الزيت: قسم الطباعة الجديد (طابعة الجهاز وقالب لكل عمل).
+      destination: (context) {
+        final biz = context.read<BusinessFeaturesProvider>().data;
+        return biz.enableOilChange ||
+                biz.effectiveVertical == BusinessVertical.oilChange
+            ? const PrintingCenterScreen()
+            : const PrintingScreen();
+      },
     ),
   ];
 

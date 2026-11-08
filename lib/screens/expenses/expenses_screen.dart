@@ -1391,7 +1391,8 @@ class _ExpensesLedgerTab extends StatelessWidget {
                                 minWidth: 40,
                                 minHeight: 40,
                               ),
-                              onPressed: () => ExpenseReceiptPrinter.show(e),
+                              onPressed: () =>
+                                  ExpenseReceiptPrinter.show(e, context: context),
                               icon: const Icon(Icons.print_rounded),
                             ),
                             IconButton(

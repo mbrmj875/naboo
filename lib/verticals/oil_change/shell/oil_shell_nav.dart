@@ -21,7 +21,7 @@ import '../../../screens/inventory/quick_product_update_screen.dart';
 import '../../../screens/inventory/stock_analytics_screen.dart';
 import '../../../screens/inventory/stocktaking_screen.dart';
 import '../../../screens/inventory/warehouses_screen.dart';
-import '../../../screens/printing/printing_screen.dart';
+import '../../../printing/printing_center_screen.dart';
 import '../../../screens/reports/reports_screen.dart';
 import '../../../screens/settings/settings_screen.dart';
 import '../../../screens/users/employee_identity_screen.dart';
@@ -233,7 +233,7 @@ List<ShellNavItem> _catalog() => [
     title: 'الطباعة',
     iconColor: Colors.blueGrey,
     routeId: AppContentRoutes.printing,
-    destination: (_) => const PrintingScreen(),
+    destination: (_) => const PrintingCenterScreen(),
   ),
   ShellNavItem(
     icon: Icons.settings_rounded,
