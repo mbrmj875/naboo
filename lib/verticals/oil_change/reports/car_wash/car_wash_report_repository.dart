@@ -2,6 +2,7 @@ import 'package:sqflite/sqflite.dart';
 
 import '../../../../services/database_helper.dart';
 import '../../../../services/reports_repository.dart';
+import '../../../../services/returns/returns_offers_db_schema.dart';
 import '../../../../services/service_order_kinds.dart';
 import '../../../../services/tenant_context_service.dart';
 import '../kit/oil_shop_report_sql.dart';
@@ -36,6 +37,31 @@ class CarWashVisitRow {
   final bool isCredit;
 }
 
+/// الغسلات المجانية والخصومات في الفترة، حسب نوع العرض.
+class CarWashOfferStats {
+  const CarWashOfferStats({
+    this.freeWashes = 0,
+    this.repeatCount = 0,
+    this.repeatDiscountFils = 0,
+    this.oilCount = 0,
+    this.oilDiscountFils = 0,
+    this.manualCount = 0,
+    this.manualDiscountFils = 0,
+  });
+
+  final int freeWashes;
+  final int repeatCount;
+  final int repeatDiscountFils;
+  final int oilCount;
+  final int oilDiscountFils;
+  final int manualCount;
+  final int manualDiscountFils;
+
+  int get totalDiscountFils =>
+      repeatDiscountFils + oilDiscountFils + manualDiscountFils;
+  bool get isEmpty => totalDiscountFils == 0 && freeWashes == 0;
+}
+
 class CarWashReportSnapshot {
   const CarWashReportSnapshot({
     required this.range,
@@ -50,8 +76,10 @@ class CarWashReportSnapshot {
     required this.topCars,
     required this.heatmap,
     required this.visits,
+    this.offers = const CarWashOfferStats(),
   });
 
+  final CarWashOfferStats offers;
   final ReportDateRange range;
   final CarWashTotals current;
   final CarWashTotals previous;
@@ -108,6 +136,7 @@ class CarWashReportRepository {
     final tid = await _tenantId();
     final db = await _dbHelper.database;
     await _dbHelper.ensureServiceOrdersReadRepair();
+    await ensureReturnsAndOffersSchema(db);
 
     final rows = await _orders(db, tid, range);
     final prevRows = await _orders(db, tid, ReportMath.previousRange(range));
@@ -124,9 +153,26 @@ class CarWashReportRepository {
     final plateAmount = <String, int>{};
     final visits = <CarWashVisitRow>[];
     var revenue = 0;
+    var free = 0, repN = 0, repF = 0, oilN = 0, oilF = 0, manN = 0, manF = 0;
 
     for (final r in rows) {
       final amount = _revenue(r);
+      final alive = ((r['invoiceAlive'] as num?)?.toInt() ?? 0) == 1;
+      final disc = alive ? (r['invoiceDiscountFils'] as num?)?.toInt() ?? 0 : 0;
+      if (disc > 0) {
+        if (amount == 0) free++;
+        switch ((r['washOfferCode'] ?? '').toString()) {
+          case 'repeat':
+            repN++;
+            repF += disc;
+          case 'oil_tier':
+            oilN++;
+            oilF += disc;
+          default:
+            manN++;
+            manF += disc;
+        }
+      }
       revenue += amount;
       final date = DateTime.tryParse(
         (r['createdAt'] ?? '').toString(),
@@ -227,6 +273,15 @@ class CarWashReportRepository {
       topCars: cars.where((c) => c.count > 1).take(10).toList(),
       heatmap: heat,
       visits: visits,
+      offers: CarWashOfferStats(
+        freeWashes: free,
+        repeatCount: repN,
+        repeatDiscountFils: repF,
+        oilCount: oilN,
+        oilDiscountFils: oilF,
+        manualCount: manN,
+        manualDiscountFils: manF,
+      ),
     );
   }
 
@@ -313,7 +368,9 @@ class CarWashReportRepository {
       '''
       SELECT so.id, so.createdAt, so.deviceSerial, so.requestedServices,
              so.technicianName, so.agreedPriceFils, so.estimatedPriceFils,
-             so.invoiceId, i.type AS invoiceType,
+             so.invoiceId, i.type AS invoiceType, so.washOfferCode,
+             CAST(ROUND(CASE WHEN IFNULL(i.discountFils, 0) > 0 THEN i.discountFils
+               ELSE IFNULL(i.discount, 0) * 1000 END) AS INTEGER) AS invoiceDiscountFils,
              ${OilShopReportSql.totalFils('i')} AS invoiceTotalFils,
              CASE WHEN i.id IS NOT NULL AND i.deleted_at IS NULL
                AND IFNULL(i.isReturned, 0) = 0 THEN 1 ELSE 0 END AS invoiceAlive

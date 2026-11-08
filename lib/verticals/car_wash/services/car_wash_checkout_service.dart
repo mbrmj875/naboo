@@ -132,6 +132,9 @@ class CarWashCheckoutService {
     String technicianName = '',
     String note = '',
     String? createdByUserName,
+    int discountFils = 0,
+    String? offerCode,
+    String? offerNote,
   }) async {
     final cleanPlate = plate.trim();
     if (cleanPlate.isEmpty) {
@@ -143,10 +146,14 @@ class CarWashCheckoutService {
       );
     }
 
+    if (discountFils < 0 || discountFils > totalFils) {
+      throw CarWashCheckoutException('قيمة الخصم غير صحيحة.');
+    }
+    final netFils = totalFils - discountFils;
     var paid = paidFils;
     if (paid < 0) paid = 0;
-    if (paid > totalFils) paid = totalFils;
-    final remainderFils = totalFils - paid;
+    if (paid > netFils) paid = netFils;
+    final remainderFils = netFils - paid;
     final isCredit = remainderFils > creditThresholdFils;
 
     final typedName = customerName.trim();
@@ -182,7 +189,7 @@ class CarWashCheckoutService {
       deviceSerial: cleanPlate,
       customerId: resolvedCustomerId,
       estimatedPriceFils: totalFils,
-      agreedPriceFils: totalFils,
+      agreedPriceFils: netFils,
       advancePaymentFils: paid,
       issueDescription: note.trim(),
       requestedServices: lines
@@ -201,15 +208,11 @@ class CarWashCheckoutService {
       customerName: invoiceName,
       date: DateTime.now(),
       type: isCredit ? InvoiceType.credit : InvoiceType.cash,
-      items: buildItems(
-        lines: lines,
-        totalFils: totalFils,
-        plate: cleanPlate,
-      ),
-      discount: 0,
+      items: buildItems(lines: lines, totalFils: totalFils, plate: cleanPlate),
+      discount: IqdMoney.fromFils(discountFils),
       tax: 0,
       advancePayment: IqdMoney.fromFils(paid),
-      total: IqdMoney.fromFils(totalFils),
+      total: IqdMoney.fromFils(netFils),
       customerId: resolvedCustomerId,
       createdByUserName: (createdByUserName ?? '').trim().isEmpty
           ? null
@@ -235,6 +238,22 @@ class CarWashCheckoutService {
       throw CarWashCheckoutException(e.message);
     }
 
+    final code = offerCode?.trim() ?? '';
+    final offerLine = offerNote?.trim() ?? '';
+    if (code.isNotEmpty || offerLine.isNotEmpty) {
+      // الرمز يحدد متى أُخذت المكافأة ومتى يبدأ عدّاد التكرار من جديد.
+      final db = await _db.database;
+      await db.update(
+        'service_orders',
+        {
+          if (code.isNotEmpty) 'washOfferCode': code,
+          if (offerLine.isNotEmpty) 'washOfferNote': offerLine,
+        },
+        where: 'id = ?',
+        whereArgs: [orderId],
+      );
+    }
+
     try {
       await ServiceOrdersRepository.instance.updateServiceOrderById(
         orderId,
@@ -253,7 +272,7 @@ class CarWashCheckoutService {
       orderId: orderId,
       invoiceId: invoiceId,
       invoiceType: invoice.type,
-      totalFils: totalFils,
+      totalFils: netFils,
       paidFils: paid,
       remainderFils: remainderFils,
     );

@@ -42,7 +42,8 @@ class BusinessAuditEvent {
       warehouseId: (row['warehouse_id'] as num?)?.toInt(),
       oldValueJson: row['old_value_json'] as String?,
       newValueJson: row['new_value_json'] as String?,
-      createdAt: DateTime.tryParse((row['created_at'] as String?) ?? '') ??
+      createdAt:
+          DateTime.tryParse((row['created_at'] as String?) ?? '') ??
           DateTime.fromMillisecondsSinceEpoch(0),
     );
   }
@@ -53,8 +54,7 @@ class BusinessAuditEvent {
   /// تفاصيل مقروءة (اسم منتج، مبلغ، نوع السند…).
   String get detailAr => BusinessAuditEventPresentation.detailAr(this);
 
-  String get actorLabelAr =>
-      BusinessAuditEventPresentation.actorLabelAr(this);
+  String get actorLabelAr => BusinessAuditEventPresentation.actorLabelAr(this);
 
   /// هل يُعرض في لوحة «تعديلات حساسة»؟
   bool get showInOwnerSensitivePanel =>
@@ -73,6 +73,8 @@ class BusinessAuditEvent {
       case 'debt_reminder_sent':
       case 'debt_payment_received':
       case 'debt_invoice_customer_linked':
+      case 'return_completed':
+      case 'return_cancelled':
         return BusinessAuditCategory.debt;
       case 'device_access_revoked_at_login':
       case 'device_revoked_on_signout':
@@ -82,6 +84,11 @@ class BusinessAuditEvent {
       case 'owner_emergency_sync_bypass':
       case 'session_locked':
       case 'session_logout_cloud':
+      case 'return_approved':
+      case 'return_approval_rejected':
+      case 'return_policy_changed':
+      case 'wash_offers_changed':
+      case 'wash_discount_override':
         return BusinessAuditCategory.security;
       default:
         return BusinessAuditCategory.other;
@@ -123,11 +130,4 @@ class BusinessAuditEvent {
   }
 }
 
-enum BusinessAuditCategory {
-  price,
-  product,
-  stock,
-  debt,
-  security,
-  other,
-}
+enum BusinessAuditCategory { price, product, stock, debt, security, other }

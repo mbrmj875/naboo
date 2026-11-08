@@ -22,7 +22,6 @@ class BreadcrumbMeta {
   const BreadcrumbMeta(this.title, {this.parentOverride});
 }
 
-
 /// معرّف ثابت لكل شاشة داخل مسار المحتوى (للتسلسل ومنع التكرار).
 abstract class AppContentRoutes {
   static const home = 'app_home';
@@ -32,6 +31,7 @@ abstract class AppContentRoutes {
   static const salePosSettings = 'app_sale_pos_settings';
   static const onlineOrders = 'app_online_orders';
   static const customers = 'app_customers';
+
   /// نفس [customers] مع فتح حوار إضافة عميل عند الدخول (من القائمة الجانبية).
   static const customersAdd = 'app_customers_add';
   static const customerContacts = 'app_customer_contacts';
@@ -41,10 +41,11 @@ abstract class AppContentRoutes {
   static const installmentSettings = 'app_installment_settings';
   static const debts = 'app_debts';
   static const debtSettings = 'app_debt_settings';
-  static const inventory           = 'app_inventory';
-  static const inventoryProducts   = 'app_inventory_products';
+  static const inventory = 'app_inventory';
+  static const inventoryProducts = 'app_inventory_products';
   static const inventoryBarcodeLabels = 'app_inventory_barcode_labels';
-  static const addProduct          = 'app_add_product';
+  static const addProduct = 'app_add_product';
+
   /// تعديل سريع لأسعار وكميات منتجات موجودة (بحث + صفحات، باركود بسياق هذه الشاشة).
   static const quickUpdateProducts = 'app_inventory_quick_update';
   static const inventoryManagement = 'app_inventory_management';
@@ -52,29 +53,34 @@ abstract class AppContentRoutes {
   static const inventoryPriceLists = 'app_inventory_price_lists';
   static const inventoryStocktaking = 'app_inventory_stocktaking';
   static const inventoryPurchaseOrders = 'app_inventory_purchase_orders';
-  static const inventoryAnalytics  = 'app_inventory_analytics';
-  static const inventorySettings   = 'app_inventory_settings';
+  static const inventoryAnalytics = 'app_inventory_analytics';
+  static const inventorySettings = 'app_inventory_settings';
   static const cash = 'app_cash';
   static const expenses = 'app_expenses';
   static const users = 'app_users';
   static const userForm = 'app_user_form';
   static const staffShiftsWeek = 'app_staff_shifts_week';
   static const employeeIdentity = 'app_employee_identity';
+
   /// لوحة صاحب العمل (جذر `/home` عندما يكون الدور owner).
   static const ownerDashboard = 'app_owner_dashboard';
   static const printing = 'app_printing';
   static const settings = 'app_settings';
+
   /// شاشات تُفتح من داخل [SettingsScreen] — لفتات الخبز (لا تُستخدم للقائمة الرئيسية).
   static const settingsStoreInfo = 'app_settings_store_info';
   static const settingsMyBranchInfo = 'app_settings_my_branch_info';
   static const settingsInvoice = 'app_settings_invoice';
+  static const settingsReturnPolicy = 'app_settings_return_policy';
+  static const settingsWashOffers = 'app_settings_wash_offers';
   static const settingsSalePosAppearance = 'app_settings_sale_pos_appearance';
   static const settingsNotifications = 'app_settings_notifications';
   static const settingsPrintingInline = 'app_settings_printing_inline';
   static const settingsDashboardLayout = 'app_settings_dashboard_layout';
   static const settingsRestore = 'app_settings_restore';
   static const settingsSyncQueueHealth = 'app_settings_sync_queue_health';
-  static const settingsSubscriptionAccount = 'app_settings_subscription_account';
+  static const settingsSubscriptionAccount =
+      'app_settings_subscription_account';
   static const settingsBusinessFeatures = 'app_settings_business_features';
   static const subscriptionPlans = 'app_subscription_plans';
   static const reportsPrefix = 'app_reports_';
@@ -83,6 +89,7 @@ abstract class AppContentRoutes {
 
   // ── Services & Job Tickets ────────────────────────────────────────────────
   static const servicesHub = 'app_services_hub';
+
   /// إضافة خدمة فنية للبيع المباشر (مستقل عن إضافة منتج مخزني كامل).
   static const servicesAdd = 'app_services_add';
   static const servicesCatalog = 'app_services_catalog';
@@ -206,10 +213,7 @@ const Map<FeatureGateId, List<String>> featureRouteMapping = {
     AppContentRoutes.installments,
     AppContentRoutes.installmentSettings,
   ],
-  FeatureGateId.debts: [
-    AppContentRoutes.debts,
-    AppContentRoutes.debtSettings,
-  ],
+  FeatureGateId.debts: [AppContentRoutes.debts, AppContentRoutes.debtSettings],
   FeatureGateId.pos: [
     AppContentRoutes.invoices,
     AppContentRoutes.addInvoice,
@@ -230,6 +234,7 @@ const Map<FeatureGateId, List<String>> featureRouteMapping = {
     AppContentRoutes.oilWhatsappConnect,
     AppContentRoutes.carWashCreate,
     AppContentRoutes.carWashServices,
+    AppContentRoutes.settingsWashOffers,
   ],
   FeatureGateId.repairServices: [
     AppContentRoutes.servicesHub,
@@ -263,25 +268,20 @@ const Map<FeatureGateId, List<String>> featurePrefixMapping = {
     AppContentRoutes.oilChangeEditPrefix,
     AppContentRoutes.oilChangeServiceEditPrefix,
   ],
-  FeatureGateId.repairServices: [
-    'app_service_order_edit_',
-  ],
-  FeatureGateId.pos: [
-    'app_process_return_',
-    AppContentRoutes.pharmacyInvoiceDetailPrefix,
-  ],
+  FeatureGateId.repairServices: ['app_service_order_edit_'],
+  // شاشة الاسترجاع لا تُربط بنقطة البيع: محل الزيت يبيع «بيع مباشر» بلا POS،
+  // وحمايتها في سياسة الاسترجاع نفسها (تفعيل المالك، الموافقة، مطالبة الخادم).
+  FeatureGateId.pos: [AppContentRoutes.pharmacyInvoiceDetailPrefix],
 };
 
 /// هل المسار محظور وفق [BusinessSetupSettingsData]؟
-bool isContentRouteBlocked(
-  String routeId,
-  BusinessSetupSettingsData data,
-) {
+bool isContentRouteBlocked(String routeId, BusinessSetupSettingsData data) {
   if (_featureGateExemptRouteIds.contains(routeId)) return false;
 
   if (routeId.startsWith(AppContentRoutes.reportsPrefix)) {
-    final section =
-        routeId.substring(AppContentRoutes.reportsPrefix.length).trim();
+    final section = routeId
+        .substring(AppContentRoutes.reportsPrefix.length)
+        .trim();
     if (section == '4') return !data.enableInstallments;
     for (final manifest in _verticalManifestsForGuards()) {
       for (final spec in manifest.reportSections) {
@@ -533,15 +533,15 @@ FastContentPageRoute<T> contentMaterialRoute<T>({
   return FastContentPageRoute(
     settings: RouteSettings(
       name: routeId,
-      arguments: BreadcrumbMeta(breadcrumbTitle, parentOverride: parentOverride),
+      arguments: BreadcrumbMeta(
+        breadcrumbTitle,
+        parentOverride: parentOverride,
+      ),
     ),
-    builder: (context) => FeatureRouteGuard(
-      routeId: routeId,
-      child: builder(context),
-    ),
+    builder: (context) =>
+        FeatureRouteGuard(routeId: routeId, child: builder(context)),
   );
 }
-
 
 /// يُرجع true إذا أصبحت الشاشة الحالية هي نفس [routeId] (لم نحتج [Navigator.push]).
 bool popUntilContentRoute(NavigatorState nav, String routeId) {
@@ -728,6 +728,10 @@ String breadcrumbFallbackTitleForRouteId(String id) {
       return 'بيانات فرعي';
     case AppContentRoutes.settingsInvoice:
       return 'إعدادات الفواتير';
+    case AppContentRoutes.settingsReturnPolicy:
+      return 'سياسة الاسترجاع';
+    case AppContentRoutes.settingsWashOffers:
+      return 'عروض الغسيل';
     case AppContentRoutes.settingsSalePosAppearance:
       return 'ألوان وهوية التطبيق';
     case AppContentRoutes.settingsNotifications:
@@ -791,7 +795,10 @@ String breadcrumbFallbackTitleForRouteId(String id) {
       return 'تصميم المنيو';
     default:
       if (id.startsWith(AppContentRoutes.pharmacyInvoiceDetailPrefix)) {
-        final n = id.replaceFirst(AppContentRoutes.pharmacyInvoiceDetailPrefix, '');
+        final n = id.replaceFirst(
+          AppContentRoutes.pharmacyInvoiceDetailPrefix,
+          '',
+        );
         return 'فاتورة صيدلية #$n';
       }
       if (id.startsWith(AppContentRoutes.oilChangeServiceEditPrefix)) {
@@ -1009,7 +1016,8 @@ const Map<String, String> routeParentMapping = {
   AppContentRoutes.settingsSyncQueueHealth: AppContentRoutes.settings,
   AppContentRoutes.settingsSubscriptionAccount: AppContentRoutes.settings,
   AppContentRoutes.settingsBusinessFeatures: AppContentRoutes.settings,
-  AppContentRoutes.subscriptionPlans: AppContentRoutes.settingsSubscriptionAccount,
+  AppContentRoutes.subscriptionPlans:
+      AppContentRoutes.settingsSubscriptionAccount,
 
   // Technical Services & Maintenance
   AppContentRoutes.servicesHub: AppContentRoutes.home,
@@ -1083,19 +1091,24 @@ List<BreadcrumbSegment> buildBreadcrumbTrail(
   if (nextId == currentRouteId) nextId = getParentRouteId(currentRouteId);
 
   // صعود شجري متين يتفادى التكرار والدوائر
-  while (nextId != null && nextId != AppContentRoutes.home && seen.add(nextId)) {
-    trail.add(BreadcrumbSegment(
-      id: nextId,
-      title: breadcrumbFallbackTitleForRouteId(nextId),
-    ));
+  while (nextId != null &&
+      nextId != AppContentRoutes.home &&
+      seen.add(nextId)) {
+    trail.add(
+      BreadcrumbSegment(
+        id: nextId,
+        title: breadcrumbFallbackTitleForRouteId(nextId),
+      ),
+    );
     nextId = getParentRouteId(nextId);
   }
 
   // إضافة الرئيسية دائماً في بداية المطاف
   if (currentRouteId != AppContentRoutes.home) {
-    trail.add(const BreadcrumbSegment(id: AppContentRoutes.home, title: 'الرئيسية'));
+    trail.add(
+      const BreadcrumbSegment(id: AppContentRoutes.home, title: 'الرئيسية'),
+    );
   }
 
   return trail.reversed.toList();
 }
-

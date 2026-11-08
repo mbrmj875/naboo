@@ -313,6 +313,20 @@ abstract final class OwnerKpiCatalog {
       requiredFeatures: [OwnerFeatureRequirement.oilChange],
       requiredPermissionKey: PermissionKeys.usersView,
     ),
+    // للمالك فقط: اللوحة نفسها لا تظهر إلا للمالك، والشاشة تطلب رمزه.
+    OwnerShortcutCatalogEntry(
+      id: OwnerShortcutIds.returnPolicy,
+      titleKey: OwnerDashboardL10nKeys.scReturnPolicy,
+      routeId: 'return_policy',
+      verticalAllowList: {..._allVerticals, BusinessVertical.pharmacy},
+    ),
+    OwnerShortcutCatalogEntry(
+      id: OwnerShortcutIds.washOffers,
+      titleKey: OwnerDashboardL10nKeys.scWashOffers,
+      routeId: 'wash_offers',
+      verticalAllowList: _oilVerticals,
+      requiredFeatures: [OwnerFeatureRequirement.oilChange],
+    ),
     OwnerShortcutCatalogEntry(
       id: OwnerShortcutIds.purchasePdf,
       titleKey: OwnerDashboardL10nKeys.scPurchasePdf,

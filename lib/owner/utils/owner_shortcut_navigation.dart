@@ -9,7 +9,9 @@ import '../../verticals/oil_change/screens/oil_change_form_screen.dart';
 import '../../screens/invoices/add_invoice_screen.dart';
 import '../../verticals/oil_change/screens/oil_change_hub_screen.dart';
 import '../../verticals/oil_change/screens/oil_change_ratings_screen.dart';
+import '../../screens/settings/return_policy_settings_screen.dart';
 import '../../screens/users/users_screen.dart';
+import '../../verticals/car_wash/screens/wash_offers_settings_screen.dart';
 import '../specs/owner_kpi_catalog_entry.dart';
 
 /// تنقل اختصارات catalog v3 من لوحة المالk.
@@ -75,6 +77,24 @@ abstract final class OwnerShortcutNavigation {
         );
       case 'oil_change_ratings':
         OilChangeRatingsScreen.open(context);
+      case 'return_policy':
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            settings: const RouteSettings(
+              name: AppContentRoutes.settingsReturnPolicy,
+            ),
+            builder: (_) => const ReturnPolicySettingsScreen(),
+          ),
+        );
+      case 'wash_offers':
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            settings: const RouteSettings(
+              name: AppContentRoutes.settingsWashOffers,
+            ),
+            builder: (_) => const WashOffersSettingsScreen(),
+          ),
+        );
       case 'add_invoice':
         Navigator.of(context).push(
           MaterialPageRoute<void>(

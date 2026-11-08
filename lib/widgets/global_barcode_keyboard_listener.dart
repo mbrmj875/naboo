@@ -23,7 +23,8 @@ class GlobalBarcodeKeyboardListener extends StatefulWidget {
 class _GlobalBarcodeKeyboardListenerState
     extends State<GlobalBarcodeKeyboardListener> {
   /// رموز شائعة في الباركود — يُكمّلها [_charFromPhysicalUsLayout] حتى لا تعتمد على لغة لوحة النظام.
-  static final RegExp _sym = RegExp(r'^[A-Za-z0-9.\-/]$');
+  /// يشمل `: ? = & _` لأن QR الإيصال رابط (`basrainvoice://invoice/12?g=…`).
+  static final RegExp _sym = RegExp(r'^[A-Za-z0-9.\-/:?=&_]$');
 
   final StringBuffer _buf = StringBuffer();
   DateTime? _lastTs;
@@ -63,7 +64,8 @@ class _GlobalBarcodeKeyboardListenerState
     final pk = event.physicalKey;
     final shift = HardwareKeyboard.instance.isShiftPressed;
 
-    String letter(bool upper, String lower) => upper ? lower.toUpperCase() : lower;
+    String letter(bool upper, String lower) =>
+        upper ? lower.toUpperCase() : lower;
 
     // أرقام الصف العلوي والنمط الرقمي
     final topDigits = <PhysicalKeyboardKey, String>{
@@ -88,13 +90,17 @@ class _GlobalBarcodeKeyboardListenerState
       PhysicalKeyboardKey.numpad8: '8',
       PhysicalKeyboardKey.numpad9: '9',
     };
+    if (shift && pk == PhysicalKeyboardKey.digit7) return '&';
     final d = topDigits[pk];
     if (d != null) return d;
 
+    // مع Shift على لوحة US: `-`→`_`، `/`→`?`، `;`→`:`، و`=` بدون Shift.
     final punct = <PhysicalKeyboardKey, String>{
-      PhysicalKeyboardKey.minus: '-',
+      PhysicalKeyboardKey.minus: shift ? '_' : '-',
       PhysicalKeyboardKey.period: '.',
-      PhysicalKeyboardKey.slash: '/',
+      PhysicalKeyboardKey.slash: shift ? '?' : '/',
+      if (shift) PhysicalKeyboardKey.semicolon: ':',
+      PhysicalKeyboardKey.equal: '=',
     };
     final p = punct[pk];
     if (p != null) return p;
@@ -161,7 +167,10 @@ class _GlobalBarcodeKeyboardListenerState
     if (!Provider.of<AuthProvider>(context, listen: false).isLoggedIn) {
       return false;
     }
-    final bridge = Provider.of<GlobalBarcodeRouteBridge>(context, listen: false);
+    final bridge = Provider.of<GlobalBarcodeRouteBridge>(
+      context,
+      listen: false,
+    );
 
     final hk = HardwareKeyboard.instance;
     if (hk.isControlPressed || hk.isMetaPressed || hk.isAltPressed) {
@@ -169,7 +178,8 @@ class _GlobalBarcodeKeyboardListenerState
       return false;
     }
 
-    final isEnter = event.logicalKey == LogicalKeyboardKey.enter ||
+    final isEnter =
+        event.logicalKey == LogicalKeyboardKey.enter ||
         event.logicalKey == LogicalKeyboardKey.numpadEnter;
 
     if (isEnter) {
@@ -186,7 +196,14 @@ class _GlobalBarcodeKeyboardListenerState
       return true;
     }
 
-    final ch = _charFromPhysicalUsLayout(event) ?? _charFromLocalizedFallback(event);
+    // Shift وحده (للحروف الكبيرة و`:` و`?`) جزء من المسح، لا يقطعه.
+    if (event.logicalKey == LogicalKeyboardKey.shiftLeft ||
+        event.logicalKey == LogicalKeyboardKey.shiftRight) {
+      return false;
+    }
+
+    final ch =
+        _charFromPhysicalUsLayout(event) ?? _charFromLocalizedFallback(event);
     if (ch == null) {
       _reset();
       return false;
@@ -200,9 +217,7 @@ class _GlobalBarcodeKeyboardListenerState
         _lastTs = now;
         return false;
       }
-      final gap = _lastTs == null
-          ? Duration.zero
-          : now.difference(_lastTs!);
+      final gap = _lastTs == null ? Duration.zero : now.difference(_lastTs!);
       if (gap < const Duration(milliseconds: 110)) {
         _capturing = true;
         _buf.write(ch);

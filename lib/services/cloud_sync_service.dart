@@ -161,7 +161,10 @@ class AccountDevice {
 /// بيانات السحابة بلقطة محلية فارغة أو ناقصة (سبب شائع لاختفاء البيانات على جهاز آخر).
 enum _PullOutcome { allowPush, blockPush }
 
-typedef _PullSnapshotResult = ({CloudSyncPullStatus status, _PullOutcome outcome});
+typedef _PullSnapshotResult = ({
+  CloudSyncPullStatus status,
+  _PullOutcome outcome,
+});
 
 /// مزامنة سحابية بنمط snapshot:
 /// - تثبيت profile للمستخدم.
@@ -234,8 +237,7 @@ class CloudSyncService {
   bool get isCloudBridgeActive {
     final user = Supabase.instance.client.auth.currentUser;
     if (user == null) return false;
-    return _bootstrappedUserId == user.id &&
-        _connectivitySubscription != null;
+    return _bootstrappedUserId == user.id && _connectivitySubscription != null;
   }
 
   /// نبضة خفيفة: تجديد JWT + تسجيل الجهاز على السيرفر (last_seen_at).
@@ -570,7 +572,7 @@ class CloudSyncService {
     _activeDeltaUserId = null;
     _activeTenantAccessUserId = null;
     _bootstrappedUserId = null;
-    
+
     final channel = _snapshotChannel;
     _snapshotChannel = null;
     if (channel != null) {
@@ -580,7 +582,7 @@ class CloudSyncService {
         AppLogger.warn('CloudSync', 'remove snapshot channel failed: $e');
       }
     }
-    
+
     final devCh = _devicesAccessChannel;
     _devicesAccessChannel = null;
     if (devCh != null) {
@@ -597,7 +599,10 @@ class CloudSyncService {
       try {
         await Supabase.instance.client.removeChannel(syncNotifCh);
       } catch (e) {
-        AppLogger.warn('CloudSync', 'remove sync notification channel failed: $e');
+        AppLogger.warn(
+          'CloudSync',
+          'remove sync notification channel failed: $e',
+        );
       }
     }
 
@@ -643,7 +648,10 @@ class CloudSyncService {
       }
       rethrow;
     } catch (e) {
-      AppLogger.warn('CloudSync', 'device limit check skipped due to error: $e');
+      AppLogger.warn(
+        'CloudSync',
+        'device limit check skipped due to error: $e',
+      );
       // أخطاء الشبكة: لا نكسر الدخول هنا؛ سيظهر وضع مقيّد/رسالة حسب كاش السيرفر في LicenseService.
       return null;
     }
@@ -733,26 +741,21 @@ class CloudSyncService {
       var activeCount = 0;
       for (final row in rows) {
         if (row is! Map) continue;
-        final status =
-            (row['access_status'] ?? 'active').toString().toLowerCase();
+        final status = (row['access_status'] ?? 'active')
+            .toString()
+            .toLowerCase();
         if (status != 'revoked') activeCount++;
       }
       if (activeCount > 0) return false;
 
       final err = await approveDeviceAccess(deviceId);
       if (err != null) {
-        AppLogger.warn(
-          'CloudSync',
-          'orphan device self-recovery failed: $err',
-        );
+        AppLogger.warn('CloudSync', 'orphan device self-recovery failed: $err');
         return false;
       }
       _auditSyncOperation(
         eventType: 'device_orphan_self_recovery',
-        details: {
-          'device_id': deviceId,
-          'reason': 'all_devices_revoked',
-        },
+        details: {'device_id': deviceId, 'reason': 'all_devices_revoked'},
       );
       AppLogger.info(
         'CloudSync',
@@ -760,10 +763,7 @@ class CloudSyncService {
       );
       return true;
     } catch (e) {
-      AppLogger.warn(
-        'CloudSync',
-        'orphan device self-recovery error: $e',
-      );
+      AppLogger.warn('CloudSync', 'orphan device self-recovery error: $e');
       return false;
     }
   }
@@ -856,10 +856,7 @@ class CloudSyncService {
       }
       final status = (existing?['access_status'] ?? 'active').toString();
       if (status.toLowerCase() == 'revoked') {
-        return _resolveRevokedRegistration(
-          userId: user.id,
-          deviceId: deviceId,
-        );
+        return _resolveRevokedRegistration(userId: user.id, deviceId: deviceId);
       }
       try {
         await client.from(_devicesTable).upsert({
@@ -1030,13 +1027,13 @@ class CloudSyncService {
 
       final err = await approveDeviceAccess(deviceId);
       if (err == null) {
-        AppLogger.info('CloudSync', 'orphan device reactivated (no other active)');
+        AppLogger.info(
+          'CloudSync',
+          'orphan device reactivated (no other active)',
+        );
         _auditSyncOperation(
           eventType: 'device_orphan_reactivated',
-          details: {
-            'device_id': deviceId,
-            'reason': 'no_other_active_devices',
-          },
+          details: {'device_id': deviceId, 'reason': 'no_other_active_devices'},
         );
       }
     } catch (e) {
@@ -1114,7 +1111,10 @@ class CloudSyncService {
           await _revokeDeviceRow(userId, d.deviceId);
           anyChange = true;
         } catch (e) {
-          AppLogger.warn('CloudSync', 'dedupe duplicate device revoke failed: $e');
+          AppLogger.warn(
+            'CloudSync',
+            'dedupe duplicate device revoke failed: $e',
+          );
           // لا نكسر تحميل القائمة بسبب تعارض شبكة/سباق؛ المحاولة التالية تكمّل.
         }
       }
@@ -1209,7 +1209,8 @@ class CloudSyncService {
     if (user == null) {
       return 'يجب التحقق من البريد أولاً قبل استعادة الجهاز.';
     }
-    final currentDeviceId = (await LicenseService.instance.getDeviceId()).trim();
+    final currentDeviceId = (await LicenseService.instance.getDeviceId())
+        .trim();
     if (currentDeviceId.isEmpty) {
       return 'تعذّر تحديد معرّف هذا الجهاز.';
     }
@@ -1301,10 +1302,10 @@ class CloudSyncService {
     if (user == null) return null;
 
     try {
-      await syncNow(forcePush: true, forcePull: false).timeout(
-        const Duration(seconds: 15),
-        onTimeout: () {},
-      );
+      await syncNow(
+        forcePush: true,
+        forcePull: false,
+      ).timeout(const Duration(seconds: 15), onTimeout: () {});
     } catch (e) {
       AppLogger.warn('CloudSync', 'pre-signout sync failed: $e');
     }
@@ -1319,9 +1320,7 @@ class CloudSyncService {
           eventType: 'device_revoked_on_signout',
           entityType: 'account_device',
           entityId: deviceId,
-          newValueJson: jsonEncode({
-            'platform': defaultTargetPlatform.name,
-          }),
+          newValueJson: jsonEncode({'platform': defaultTargetPlatform.name}),
         ),
       );
     } on PostgrestException catch (e) {
@@ -1670,11 +1669,7 @@ class CloudSyncService {
     _syncDebounce = Timer(delay, () {
       // سحب آخر لقطة أولاً ثم الرفع — يقلّل استبدال سحابة أحدث بلقطة محلية قديمة.
       unawaited(
-        syncNow(
-          forcePull: true,
-          forceImportOnPull: false,
-          forcePush: false,
-        ),
+        syncNow(forcePull: true, forceImportOnPull: false, forcePush: false),
       );
     });
   }
@@ -1686,11 +1681,7 @@ class CloudSyncService {
     _syncDebounce?.cancel();
     _syncDebounce = Timer(delay, () {
       unawaited(
-        syncNow(
-          forcePull: false,
-          forcePush: true,
-          forceImportOnPull: false,
-        ),
+        syncNow(forcePull: false, forcePush: true, forceImportOnPull: false),
       );
     });
   }
@@ -1703,11 +1694,7 @@ class CloudSyncService {
     _syncDebounce?.cancel();
     _syncDebounce = Timer(delay, () {
       unawaited(
-        syncNow(
-          forcePull: false,
-          forcePush: true,
-          forceImportOnPull: false,
-        ),
+        syncNow(forcePull: false, forcePush: true, forceImportOnPull: false),
       );
     });
   }
@@ -1738,7 +1725,7 @@ class CloudSyncService {
     );
     final stream =
         connectivityStreamOverrideForTesting ??
-            Connectivity().onConnectivityChanged;
+        Connectivity().onConnectivityChanged;
     _connectivitySubscription = stream.listen((results) {
       if (kDebugMode) {
         AppLogger.info('CloudSync', 'Connectivity: $results');
@@ -1769,14 +1756,16 @@ class CloudSyncService {
     }
     if (_activeSnapshotUserId == user.id && _snapshotChannel != null) return;
 
-
     final old = _snapshotChannel;
     _snapshotChannel = null;
     if (old != null) {
       try {
         await client.removeChannel(old);
       } catch (e) {
-        AppLogger.warn('CloudSync', 'detach previous snapshot channel failed: $e');
+        AppLogger.warn(
+          'CloudSync',
+          'detach previous snapshot channel failed: $e',
+        );
       }
     }
 
@@ -1861,8 +1850,8 @@ class CloudSyncService {
       );
       return;
     }
-    if (_activeDeltaUserId == user.id && _syncNotificationsChannel != null) return;
-
+    if (_activeDeltaUserId == user.id && _syncNotificationsChannel != null)
+      return;
 
     final old = _syncNotificationsChannel;
     _syncNotificationsChannel = null;
@@ -1882,34 +1871,36 @@ class CloudSyncService {
 
     final channel = client.channel('sync-notifications-${user.id}');
     try {
-      channel.onPostgresChanges(
-        event: PostgresChangeEvent.insert,
-        schema: 'public',
-        table: 'sync_notifications',
-        callback: (payload) {
-          final newRow = payload.newRecord;
-          final senderId = newRow['sender_device_id']?.toString();
-          _logRealtimeEvent(
-            'Realtime Sync Notifications',
-            'استلام إشعار مزامنة',
-            detail: senderId == deviceId ? 'من هذا الجهاز' : 'من جهاز آخر',
-          );
-          // Self-filtering: Ignore notifications from this device
-          if (senderId == null || senderId == deviceId) {
-            _logRealtimeEvent(
-              'Realtime Sync Notifications',
-              'تجاهل إشعار لا يحتاج معالجة',
-            );
-            return;
-          }
+      channel
+          .onPostgresChanges(
+            event: PostgresChangeEvent.insert,
+            schema: 'public',
+            table: 'sync_notifications',
+            callback: (payload) {
+              final newRow = payload.newRecord;
+              final senderId = newRow['sender_device_id']?.toString();
+              _logRealtimeEvent(
+                'Realtime Sync Notifications',
+                'استلام إشعار مزامنة',
+                detail: senderId == deviceId ? 'من هذا الجهاز' : 'من جهاز آخر',
+              );
+              // Self-filtering: Ignore notifications from this device
+              if (senderId == null || senderId == deviceId) {
+                _logRealtimeEvent(
+                  'Realtime Sync Notifications',
+                  'تجاهل إشعار لا يحتاج معالجة',
+                );
+                return;
+              }
 
-          _pendingDeltas.add(newRow);
-          _debouncedDeltaFetch();
-          _debouncedRealtimePull(user.id);
-        },
-      ).subscribe((status, [error]) {
-        _handleRealtimeStatus(_kSyncNotificationsLabel, status, error);
-      });
+              _pendingDeltas.add(newRow);
+              _debouncedDeltaFetch();
+              _debouncedRealtimePull(user.id);
+            },
+          )
+          .subscribe((status, [error]) {
+            _handleRealtimeStatus(_kSyncNotificationsLabel, status, error);
+          });
       _syncNotificationsChannel = channel;
       realtimeWatchdog.register(
         _kSyncNotificationsLabel,
@@ -1945,7 +1936,9 @@ class CloudSyncService {
     bool uiNeedsRefresh = false;
 
     // 1. Sort by id to ensure UPSERT/DELETE order is correct (replaces sequence_number)
-    deltas.sort((a, b) => (a['id'] as int? ?? 0).compareTo(b['id'] as int? ?? 0));
+    deltas.sort(
+      (a, b) => (a['id'] as int? ?? 0).compareTo(b['id'] as int? ?? 0),
+    );
 
     final deletes = deltas.where((d) => d['operation'] == 'DELETE').toList();
     final upserts = deltas.where((d) => d['operation'] != 'DELETE').toList();
@@ -1967,7 +1960,7 @@ class CloudSyncService {
       final entityType = entry.key;
       final globalIds = entry.value.toList();
       final tableName = _entityToTableMap[entityType];
-      
+
       if (tableName == null) continue;
       fetchedData[tableName] = [];
 
@@ -1981,7 +1974,9 @@ class CloudSyncService {
               .inFilter('global_id', batchIds);
 
           if (remoteRows.isNotEmpty) {
-            fetchedData[tableName]!.addAll(remoteRows.cast<Map<String, dynamic>>());
+            fetchedData[tableName]!.addAll(
+              remoteRows.cast<Map<String, dynamic>>(),
+            );
           }
         } catch (e) {
           if (kDebugMode) {
@@ -1992,7 +1987,13 @@ class CloudSyncService {
             );
           }
           // Basic Retry Logic: Re-add to pending to retry on next tick
-          failedDeltas.addAll(upserts.where((d) => d['entity_type'] == entityType && batchIds.contains(d['global_id'])));
+          failedDeltas.addAll(
+            upserts.where(
+              (d) =>
+                  d['entity_type'] == entityType &&
+                  batchIds.contains(d['global_id']),
+            ),
+          );
         }
       }
     }
@@ -2012,7 +2013,11 @@ class CloudSyncService {
           if (entityType == null || globalId == null) continue;
           final tableName = _entityToTableMap[entityType];
           if (tableName != null) {
-            await txn.delete(tableName, where: 'global_id = ?', whereArgs: [globalId]);
+            await txn.delete(
+              tableName,
+              where: 'global_id = ?',
+              whereArgs: [globalId],
+            );
             uiNeedsRefresh = true;
           }
         }
@@ -2029,11 +2034,7 @@ class CloudSyncService {
       });
     } catch (e) {
       if (kDebugMode) {
-        AppLogger.error(
-          'CloudSync',
-          'Error in _processDeltas transaction',
-          e,
-        );
+        AppLogger.error('CloudSync', 'Error in _processDeltas transaction', e);
       }
     }
 
@@ -2066,7 +2067,10 @@ class CloudSyncService {
       AppLogger.warn('CloudSync', 'device-access realtime: ${e.message}');
       return;
     } catch (e) {
-      AppLogger.warn('CloudSync', 'device-access realtime ensureFreshSession: $e');
+      AppLogger.warn(
+        'CloudSync',
+        'device-access realtime ensureFreshSession: $e',
+      );
       return;
     }
     if (_devicesAccessChannel != null) return;
@@ -2077,7 +2081,10 @@ class CloudSyncService {
       try {
         await client.removeChannel(old);
       } catch (e) {
-        AppLogger.warn('CloudSync', 'detach previous device channel failed: $e');
+        AppLogger.warn(
+          'CloudSync',
+          'detach previous device channel failed: $e',
+        );
       }
     }
 
@@ -2155,8 +2162,7 @@ class CloudSyncService {
   Future<void> handleTenantAccessUpdateForTesting(
     Map<String, dynamic> newRecord,
     String currentUserId,
-  ) =>
-      _handleTenantAccessUpdate(newRecord, currentUserId);
+  ) => _handleTenantAccessUpdate(newRecord, currentUserId);
 
   /// المنطق الفعلي لمعالجة UPDATE على `tenant_access`. مُستخرَج كي يكون
   /// قابلاً للاختبار بمعزل عن Supabase Realtime.
@@ -2240,7 +2246,10 @@ class CloudSyncService {
       AppLogger.warn('CloudSync', 'tenant-access realtime: ${e.message}');
       return;
     } catch (e) {
-      AppLogger.warn('CloudSync', 'tenant-access realtime ensureFreshSession: $e');
+      AppLogger.warn(
+        'CloudSync',
+        'tenant-access realtime ensureFreshSession: $e',
+      );
       return;
     }
     if (_activeTenantAccessUserId == user.id && _tenantAccessChannel != null) {
@@ -2253,7 +2262,10 @@ class CloudSyncService {
       try {
         await client.removeChannel(old);
       } catch (e) {
-        AppLogger.warn('CloudSync', 'detach previous tenant-access channel failed: $e');
+        AppLogger.warn(
+          'CloudSync',
+          'detach previous tenant-access channel failed: $e',
+        );
       }
     }
 
@@ -2274,10 +2286,7 @@ class CloudSyncService {
               value: user.id,
             ),
             callback: (payload) {
-              _logRealtimeEvent(
-                _kTenantAccessLabel,
-                'تحديث tenant_access',
-              );
+              _logRealtimeEvent(_kTenantAccessLabel, 'تحديث tenant_access');
               final map = payload.newRecord;
               if (map.isEmpty) return;
               unawaited(_handleTenantAccessUpdate(map, user.id));
@@ -2297,10 +2306,7 @@ class CloudSyncService {
     } catch (e) {
       lastError.value = humanizeCloudSyncError(e);
       if (kDebugMode) {
-        AppLogger.warn(
-          'CloudSync',
-          '[$_kTenantAccessLabel] فشل الاشتراك: $e',
-        );
+        AppLogger.warn('CloudSync', '[$_kTenantAccessLabel] فشل الاشتراك: $e');
       }
     }
   }
@@ -2503,9 +2509,7 @@ class CloudSyncService {
         final rich = await remoteRichOverride(userId);
         remoteInfo = (
           chunked: rich,
-          counts: {
-            for (final t in kSnapshotBusinessTables) t: rich ? 1 : 0,
-          },
+          counts: {for (final t in kSnapshotBusinessTables) t: rich ? 1 : 0},
         );
       } else {
         remoteInfo = await _remoteBusinessGuardInfo(userId);
@@ -2531,9 +2535,11 @@ class CloudSyncService {
     );
 
     // 3) رفع ذرّي عبر rpc_push_snapshot (+ حلقة تعارض content_version).
-    for (var attempt = 0;
-        attempt < SnapshotRaceGuard.maxConflictAttempts;
-        attempt++) {
+    for (
+      var attempt = 0;
+      attempt < SnapshotRaceGuard.maxConflictAttempts;
+      attempt++
+    ) {
       final expectedVersion =
           prefs.getInt(_prefsKeyLastRemoteContentVersion(userId)) ?? 0;
 
@@ -2889,10 +2895,9 @@ class CloudSyncService {
     required Database db,
     required Set<String> changedTables,
   }) async {
-    final sortedTables = (await _listSyncTables(db))
-        .where(changedTables.contains)
-        .toList()
-      ..sort();
+    final sortedTables = (await _listSyncTables(
+      db,
+    )).where(changedTables.contains).toList()..sort();
     final takenAt = DateTime.now().toUtc().toIso8601String();
     final b = BytesBuilder(copy: false);
     void write(String chunk) => b.add(utf8.encode(chunk));
@@ -3116,13 +3121,11 @@ class CloudSyncService {
         }
 
         final delta = isReturned ? qty : -qty;
-        localOnlyDeltas[productGid] = (localOnlyDeltas[productGid] ?? 0) + delta;
+        localOnlyDeltas[productGid] =
+            (localOnlyDeltas[productGid] ?? 0) + delta;
       }
     } catch (e, st) {
-      AppLogger.warn(
-        'CloudSync',
-        'stock event reconcile skipped: $e',
-      );
+      AppLogger.warn('CloudSync', 'stock event reconcile skipped: $e');
       if (kDebugMode) {
         AppLogger.error('CloudSync', 'stock event reconcile', e, st);
       }
@@ -3132,10 +3135,10 @@ class CloudSyncService {
     for (final entry in baselineQtyByProductGid.entries) {
       final gid = entry.key;
       final next = entry.value + (localOnlyDeltas[gid] ?? 0);
-      await txn.rawUpdate(
-        'UPDATE products SET qty = ? WHERE global_id = ?',
-        [next, gid],
-      );
+      await txn.rawUpdate('UPDATE products SET qty = ? WHERE global_id = ?', [
+        next,
+        gid,
+      ]);
     }
   }
 
@@ -3207,10 +3210,20 @@ class CloudSyncService {
       return true;
     }
 
+    // المرتجع: الرقم المحلي للأصل يختلف بين الأجهزة — يُعاد ربطه بالمعرّف العالمي.
+    if (localCols.contains('originalInvoiceGlobalId')) {
+      await remapReturnOriginalInvoiceId(txn, incoming);
+    }
+
     if (localMatches.isEmpty) {
       final toInsert = Map<String, dynamic>.from(incoming)..remove('id');
       if (localCols.contains('workShiftId')) {
-        final wsg = (incomingRaw['work_shift_global_id'] ?? incoming['work_shift_global_id'] ?? '').toString().trim();
+        final wsg =
+            (incomingRaw['work_shift_global_id'] ??
+                    incoming['work_shift_global_id'] ??
+                    '')
+                .toString()
+                .trim();
         if (wsg.isNotEmpty) {
           final ws = await txn.query(
             'work_shifts',
@@ -3249,8 +3262,8 @@ class CloudSyncService {
       if (!localCols.contains(col)) continue;
       final currentVal = current[col];
       final incomingVal = incoming[col];
-      final canFill = currentVal == null ||
-          (currentVal is num && currentVal.toInt() == 0);
+      final canFill =
+          currentVal == null || (currentVal is num && currentVal.toInt() == 0);
       if (canFill && incomingVal != null) {
         merged[col] = incomingVal;
       }
@@ -3289,7 +3302,11 @@ class CloudSyncService {
     if (!changed) return true;
 
     merged['id'] = current['id'];
-    await txn.insert(table, merged, conflictAlgorithm: ConflictAlgorithm.replace);
+    await txn.insert(
+      table,
+      merged,
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
     return true;
   }
 
@@ -3299,9 +3316,7 @@ class CloudSyncService {
     'loyaltyPoints',
   };
 
-  static const Set<String> _productStockProtectedCols = {
-    'qty',
-  };
+  static const Set<String> _productStockProtectedCols = {'qty'};
 
   /// دمج عملاء/موردين: LWW للبيانات الوصفية فقط — لا يُستبدل الرصيد/النقاط محلياً.
   Future<bool> _mergePartyMasterByGlobalId({
@@ -3526,11 +3541,12 @@ class CloudSyncService {
         if (localCols.contains('cashLedgerId')) {
           toInsert['cashLedgerId'] = null;
         }
-        final cg = (incomingRaw['category_global_id'] ??
-                incoming['category_global_id'] ??
-                '')
-            .toString()
-            .trim();
+        final cg =
+            (incomingRaw['category_global_id'] ??
+                    incoming['category_global_id'] ??
+                    '')
+                .toString()
+                .trim();
         if (cg.isNotEmpty && localCols.contains('categoryId')) {
           final cats = await txn.query(
             'expense_categories',
@@ -3565,9 +3581,17 @@ class CloudSyncService {
       merged[c] = current[c];
     }
     if (table == 'expenses') {
-      final localStatus = (current['status'] ?? '').toString().trim().toLowerCase();
+      final localStatus = (current['status'] ?? '')
+          .toString()
+          .trim()
+          .toLowerCase();
       if (localStatus == 'paid') {
-        for (final col in const ['amount', 'amountFils', 'status', 'affectsCash']) {
+        for (final col in const [
+          'amount',
+          'amountFils',
+          'status',
+          'affectsCash',
+        ]) {
           if (localCols.contains(col)) {
             merged[col] = current[col];
           }
@@ -3576,11 +3600,12 @@ class CloudSyncService {
       if (localCols.contains('cashLedgerId')) {
         merged['cashLedgerId'] = current['cashLedgerId'];
       }
-      final cg = (incomingRaw['category_global_id'] ??
-              incoming['category_global_id'] ??
-              '')
-          .toString()
-          .trim();
+      final cg =
+          (incomingRaw['category_global_id'] ??
+                  incoming['category_global_id'] ??
+                  '')
+              .toString()
+              .trim();
       if (cg.isNotEmpty && localCols.contains('categoryId')) {
         final cats = await txn.query(
           'expense_categories',
@@ -3636,11 +3661,19 @@ class CloudSyncService {
 
     if (localMatches.isEmpty) {
       final toInsert = Map<String, dynamic>.from(incoming)..remove('id');
-      await txn.insert(
+      final newId = await txn.insert(
         table,
         toInsert,
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
+      // أصلٌ وصل بعد مرتجعه في السحب نفسه: اربط المرتجعات المعلّقة به.
+      if (localCols.contains('originalInvoiceGlobalId')) {
+        await txn.rawUpdate(
+          'UPDATE invoices SET originalInvoiceId = ? '
+          'WHERE lower(originalInvoiceGlobalId) = ? AND isReturned = 1',
+          [newId, gid.toLowerCase()],
+        );
+      }
       return true;
     }
 
@@ -3668,6 +3701,27 @@ class CloudSyncService {
     return true;
   }
 
+  /// يضبط `originalInvoiceId` في صف مرتجع وارد على رقم الأصل في هذا الجهاز.
+  /// بلا معرّف عالمي للأصل يبقى الصف كما هو (مرتجعات قديمة).
+  @visibleForTesting
+  static Future<void> remapReturnOriginalInvoiceId(
+    DatabaseExecutor txn,
+    Map<String, dynamic> incoming,
+  ) async {
+    final ogid = (incoming['originalInvoiceGlobalId'] ?? '').toString().trim();
+    if (ogid.isEmpty) return;
+    final rows = await txn.query(
+      'invoices',
+      columns: ['id'],
+      where: 'lower(global_id) = ?',
+      whereArgs: [ogid.toLowerCase()],
+      limit: 1,
+    );
+    incoming['originalInvoiceId'] = rows.isEmpty
+        ? null
+        : (rows.first['id'] as num?)?.toInt();
+  }
+
   Future<bool> _mergeInvoiceItemsByGlobalId({
     required Transaction txn,
     required Map<String, dynamic> incomingRaw,
@@ -3676,15 +3730,17 @@ class CloudSyncService {
     required DateTime? deletedAt,
     required List<String> pkCols,
   }) async {
-    final gid =
-        (incomingRaw['global_id'] ?? incoming['global_id'] ?? '').toString().trim();
-    if (gid.isEmpty) return false;
-
-    final invoiceGlobalId = (incomingRaw['invoice_global_id'] ??
-            incoming['invoice_global_id'] ??
-            '')
+    final gid = (incomingRaw['global_id'] ?? incoming['global_id'] ?? '')
         .toString()
         .trim();
+    if (gid.isEmpty) return false;
+
+    final invoiceGlobalId =
+        (incomingRaw['invoice_global_id'] ??
+                incoming['invoice_global_id'] ??
+                '')
+            .toString()
+            .trim();
     if (invoiceGlobalId.isNotEmpty && localCols.contains('invoiceId')) {
       final inv = await txn.query(
         'invoices',
@@ -3698,11 +3754,12 @@ class CloudSyncService {
       }
     }
 
-    final productGlobalId = (incomingRaw['product_global_id'] ??
-            incoming['product_global_id'] ??
-            '')
-        .toString()
-        .trim();
+    final productGlobalId =
+        (incomingRaw['product_global_id'] ??
+                incoming['product_global_id'] ??
+                '')
+            .toString()
+            .trim();
     if (productGlobalId.isNotEmpty && localCols.contains('productId')) {
       final prod = await txn.query(
         'products',
@@ -3924,7 +3981,8 @@ class CloudSyncService {
         if (handled) continue;
       }
 
-      if (table == 'customer_debt_payments' && localCols.contains('global_id')) {
+      if (table == 'customer_debt_payments' &&
+          localCols.contains('global_id')) {
         final handled = await _mergeCustomerDebtPaymentsByGlobalId(
           txn: txn,
           incomingRaw: incomingRaw,
@@ -3935,9 +3993,10 @@ class CloudSyncService {
         );
         if (handled) continue;
       }
-      
-      if ((table == 'supplier_bills' || table == 'supplier_payouts') && localCols.contains('global_id')) {
-         final handled = await _mergeSupplierFinancialsByGlobalId(
+
+      if ((table == 'supplier_bills' || table == 'supplier_payouts') &&
+          localCols.contains('global_id')) {
+        final handled = await _mergeSupplierFinancialsByGlobalId(
           txn: txn,
           table: table,
           incomingRaw: incomingRaw,
@@ -4066,13 +4125,26 @@ class CloudSyncService {
     required DateTime? deletedAt,
     required List<String> pkCols,
   }) async {
-    final gid = (incomingRaw['global_id'] ?? incoming['global_id'] ?? '').toString().trim();
+    final gid = (incomingRaw['global_id'] ?? incoming['global_id'] ?? '')
+        .toString()
+        .trim();
     if (gid.isEmpty) return false;
 
     if (localCols.contains('customer_global_id')) {
-      final cgid = (incomingRaw['customer_global_id'] ?? incoming['customer_global_id'] ?? '').toString().trim();
+      final cgid =
+          (incomingRaw['customer_global_id'] ??
+                  incoming['customer_global_id'] ??
+                  '')
+              .toString()
+              .trim();
       if (cgid.isNotEmpty) {
-        final c = await txn.query('customers', columns: ['id'], where: 'global_id = ?', whereArgs: [cgid], limit: 1);
+        final c = await txn.query(
+          'customers',
+          columns: ['id'],
+          where: 'global_id = ?',
+          whereArgs: [cgid],
+          limit: 1,
+        );
         if (c.isNotEmpty) {
           incoming['customerId'] = c.first['id'];
         }
@@ -4080,9 +4152,20 @@ class CloudSyncService {
     }
 
     if (localCols.contains('invoice_global_id')) {
-      final igid = (incomingRaw['invoice_global_id'] ?? incoming['invoice_global_id'] ?? '').toString().trim();
+      final igid =
+          (incomingRaw['invoice_global_id'] ??
+                  incoming['invoice_global_id'] ??
+                  '')
+              .toString()
+              .trim();
       if (igid.isNotEmpty) {
-        final i = await txn.query('invoices', columns: ['id'], where: 'global_id = ?', whereArgs: [igid], limit: 1);
+        final i = await txn.query(
+          'invoices',
+          columns: ['id'],
+          where: 'global_id = ?',
+          whereArgs: [igid],
+          limit: 1,
+        );
         if (i.isNotEmpty) {
           incoming['invoiceId'] = i.first['id'];
         }
@@ -4145,13 +4228,24 @@ class CloudSyncService {
     required DateTime? deletedAt,
     required List<String> pkCols,
   }) async {
-    final gid = (incomingRaw['global_id'] ?? incoming['global_id'] ?? '').toString().trim();
+    final gid = (incomingRaw['global_id'] ?? incoming['global_id'] ?? '')
+        .toString()
+        .trim();
     if (gid.isEmpty) return false;
 
     if (localCols.contains('plan_global_id')) {
-      final pgid = (incomingRaw['plan_global_id'] ?? incoming['plan_global_id'] ?? '').toString().trim();
+      final pgid =
+          (incomingRaw['plan_global_id'] ?? incoming['plan_global_id'] ?? '')
+              .toString()
+              .trim();
       if (pgid.isNotEmpty) {
-        final p = await txn.query('installment_plans', columns: ['id'], where: 'global_id = ?', whereArgs: [pgid], limit: 1);
+        final p = await txn.query(
+          'installment_plans',
+          columns: ['id'],
+          where: 'global_id = ?',
+          whereArgs: [pgid],
+          limit: 1,
+        );
         if (p.isNotEmpty) {
           incoming['planId'] = p.first['id'];
         }
@@ -4214,13 +4308,26 @@ class CloudSyncService {
     required DateTime? deletedAt,
     required List<String> pkCols,
   }) async {
-    final gid = (incomingRaw['global_id'] ?? incoming['global_id'] ?? '').toString().trim();
+    final gid = (incomingRaw['global_id'] ?? incoming['global_id'] ?? '')
+        .toString()
+        .trim();
     if (gid.isEmpty) return false;
 
     if (localCols.contains('customer_global_id')) {
-      final cgid = (incomingRaw['customer_global_id'] ?? incoming['customer_global_id'] ?? '').toString().trim();
+      final cgid =
+          (incomingRaw['customer_global_id'] ??
+                  incoming['customer_global_id'] ??
+                  '')
+              .toString()
+              .trim();
       if (cgid.isNotEmpty) {
-        final c = await txn.query('customers', columns: ['id'], where: 'global_id = ?', whereArgs: [cgid], limit: 1);
+        final c = await txn.query(
+          'customers',
+          columns: ['id'],
+          where: 'global_id = ?',
+          whereArgs: [cgid],
+          limit: 1,
+        );
         if (c.isNotEmpty) {
           incoming['customerId'] = c.first['id'];
         }
@@ -4255,7 +4362,7 @@ class CloudSyncService {
     }
     return true;
   }
-  
+
   Future<bool> _mergeSupplierFinancialsByGlobalId({
     required Transaction txn,
     required String table,
@@ -4265,13 +4372,26 @@ class CloudSyncService {
     required DateTime? deletedAt,
     required List<String> pkCols,
   }) async {
-    final gid = (incomingRaw['global_id'] ?? incoming['global_id'] ?? '').toString().trim();
+    final gid = (incomingRaw['global_id'] ?? incoming['global_id'] ?? '')
+        .toString()
+        .trim();
     if (gid.isEmpty) return false;
 
     if (localCols.contains('supplier_global_id')) {
-      final sgid = (incomingRaw['supplier_global_id'] ?? incoming['supplier_global_id'] ?? '').toString().trim();
+      final sgid =
+          (incomingRaw['supplier_global_id'] ??
+                  incoming['supplier_global_id'] ??
+                  '')
+              .toString()
+              .trim();
       if (sgid.isNotEmpty) {
-        final s = await txn.query('suppliers', columns: ['id'], where: 'global_id = ?', whereArgs: [sgid], limit: 1);
+        final s = await txn.query(
+          'suppliers',
+          columns: ['id'],
+          where: 'global_id = ?',
+          whereArgs: [sgid],
+          limit: 1,
+        );
         if (s.isNotEmpty) {
           incoming['supplierId'] = s.first['id'];
         }
@@ -4322,25 +4442,37 @@ class CloudSyncService {
     required Map<String, dynamic> incoming,
     required DateTime? deletedAt,
   }) async {
-    final existing = await txn.query(table, where: 'global_id = ?', whereArgs: [gid], limit: 1);
+    final existing = await txn.query(
+      table,
+      where: 'global_id = ?',
+      whereArgs: [gid],
+      limit: 1,
+    );
     if (deletedAt != null) {
       await txn.delete(table, where: 'global_id = ?', whereArgs: [gid]);
       return;
     }
     if (existing.isEmpty) {
       incoming.remove('id');
-      await txn.insert(table, incoming, conflictAlgorithm: ConflictAlgorithm.replace);
+      await txn.insert(
+        table,
+        incoming,
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
     } else {
       final current = existing.first;
       if (_incomingWins(current, incomingRaw)) {
         incoming['id'] = current['id'];
-        await txn.insert(table, incoming, conflictAlgorithm: ConflictAlgorithm.replace);
+        await txn.insert(
+          table,
+          incoming,
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
       }
     }
   }
 
   Future<List<String>> _primaryKeyColumns(
-
     DatabaseExecutor ex,
     String table,
   ) async {
@@ -4539,12 +4671,7 @@ class CloudSyncService {
     final merged = Map<String, dynamic>.from(incoming);
     merged['id'] = current['id'];
     _preserveLocalUserProfileExtrasIfNeeded(current, merged);
-    await txn.update(
-      table,
-      merged,
-      where: 'global_id = ?',
-      whereArgs: [gid],
-    );
+    await txn.update(table, merged, where: 'global_id = ?', whereArgs: [gid]);
     return true;
   }
 
@@ -4556,7 +4683,10 @@ class CloudSyncService {
     required DateTime? deletedAt,
   }) async {
     const table = 'user_profiles';
-    final username = (incoming['username'] ?? '').toString().trim().toLowerCase();
+    final username = (incoming['username'] ?? '')
+        .toString()
+        .trim()
+        .toLowerCase();
     if (username.isEmpty) return false;
 
     final localMatches = await txn.query(
@@ -4586,7 +4716,10 @@ class CloudSyncService {
           limit: 1,
         );
         if (idConflict.isNotEmpty &&
-            (idConflict.first['username'] ?? '').toString().trim().toLowerCase() !=
+            (idConflict.first['username'] ?? '')
+                    .toString()
+                    .trim()
+                    .toLowerCase() !=
                 username) {
           final maxRow = await txn.rawQuery(
             'SELECT MAX(id) AS m FROM user_profiles',
@@ -4729,15 +4862,16 @@ class CloudSyncService {
   }
 
   Future<Map<String, int>> _localBusinessTableCounts(Database db) async {
-    final out = <String, int>{
-      for (final t in kSnapshotBusinessTables) t: 0,
-    };
+    final out = <String, int>{for (final t in kSnapshotBusinessTables) t: 0};
     for (final t in kSnapshotBusinessTables) {
       try {
         final r = await db.rawQuery('SELECT COUNT(*) AS c FROM $t');
         out[t] = (r.first['c'] as num?)?.toInt() ?? 0;
       } catch (e) {
-        AppLogger.warn('CloudSync', 'count local business table "$t" failed: $e');
+        AppLogger.warn(
+          'CloudSync',
+          'count local business table "$t" failed: $e',
+        );
       }
     }
     return out;
@@ -4756,17 +4890,11 @@ class CloudSyncService {
         .eq('user_id', userId)
         .maybeSingle();
     if (row == null) {
-      return (
-        chunked: false,
-        counts: businessCountsFromSnapshotTables(null),
-      );
+      return (chunked: false, counts: businessCountsFromSnapshotTables(null));
     }
     final raw = row['payload'];
     if (raw == null) {
-      return (
-        chunked: false,
-        counts: businessCountsFromSnapshotTables(null),
-      );
+      return (chunked: false, counts: businessCountsFromSnapshotTables(null));
     }
     final Map<String, dynamic> p;
     if (raw is Map<String, dynamic>) {
@@ -4774,26 +4902,17 @@ class CloudSyncService {
     } else if (raw is Map) {
       p = Map<String, dynamic>.from(raw);
     } else {
-      return (
-        chunked: false,
-        counts: businessCountsFromSnapshotTables(null),
-      );
+      return (chunked: false, counts: businessCountsFromSnapshotTables(null));
     }
     if (p['chunked'] == true) {
       // لقطة مجزّأة: نفترض غنى بيانات العمل دون فك الأجزاء (فشل مغلق).
-      return (
-        chunked: true,
-        counts: businessCountsFromSnapshotTables(null),
-      );
+      return (chunked: true, counts: businessCountsFromSnapshotTables(null));
     }
     final tables = p['tables'];
     final tableMap = tables is Map<String, dynamic>
         ? tables
         : (tables is Map ? Map<String, dynamic>.from(tables) : null);
-    return (
-      chunked: false,
-      counts: businessCountsFromSnapshotTables(tableMap),
-    );
+    return (chunked: false, counts: businessCountsFromSnapshotTables(tableMap));
   }
 
   dynamic _normalizeValue(dynamic v) {

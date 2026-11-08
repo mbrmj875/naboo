@@ -158,6 +158,36 @@ class CarWashReportPanel extends StatelessWidget {
             ),
           ),
         ),
+        if (!data.offers.isEmpty)
+          ReportCard(
+            title: 'العروض والخصومات',
+            subtitle:
+                '${data.offers.freeWashes} غسلة مجانية · خصومات ${reportMoney(data.offers.totalDiscountFils)}',
+            accent: _accent,
+            child: ReportRankBars(
+              accent: _accent,
+              rows: [
+                if (data.offers.repeatCount > 0)
+                  (
+                    'عرض تكرار الغسل',
+                    data.offers.repeatDiscountFils.toDouble(),
+                    '${data.offers.repeatCount} غسلة · ${reportMoneyCompact(data.offers.repeatDiscountFils)}',
+                  ),
+                if (data.offers.oilCount > 0)
+                  (
+                    'خصم زبون الزيت',
+                    data.offers.oilDiscountFils.toDouble(),
+                    '${data.offers.oilCount} غسلة · ${reportMoneyCompact(data.offers.oilDiscountFils)}',
+                  ),
+                if (data.offers.manualCount > 0)
+                  (
+                    'خصم يدوي',
+                    data.offers.manualDiscountFils.toDouble(),
+                    '${data.offers.manualCount} غسلة · ${reportMoneyCompact(data.offers.manualDiscountFils)}',
+                  ),
+              ],
+            ),
+          ),
         ReportCard(
           title: 'أوقات الذروة',
           subtitle: 'عدد السيارات حسب اليوم والساعة',

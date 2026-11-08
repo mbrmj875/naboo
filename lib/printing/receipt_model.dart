@@ -8,6 +8,7 @@ enum ReceiptKind {
   carWash('إيصال غسيل', 'غسيل السيارات'),
   debtPayment('إيصال تسديد دين', 'تسديد دين عميل'),
   expense('سند صرف', 'المصروفات'),
+  saleReturn('إيصال استرجاع', 'الاسترجاع'),
   sale('إيصال بيع', 'فاتورة عامة');
 
   const ReceiptKind(this.title, this.workLabel);
@@ -19,7 +20,14 @@ enum ReceiptKind {
   final String workLabel;
 
   /// الأعمال التي تظهر في قسم الطباعة لمحل الزيت.
-  static const oilShop = [oilChange, directSale, carWash, debtPayment, expense];
+  static const oilShop = [
+    oilChange,
+    directSale,
+    carWash,
+    saleReturn,
+    debtPayment,
+    expense,
+  ];
 
   /// أقسام اختيارية يستطيع المالك إخفاءها من هذا القالب.
   List<ReceiptSection> get sections => switch (this) {
@@ -42,12 +50,19 @@ enum ReceiptKind {
     ],
     debtPayment => const [ReceiptSection.cashier],
     expense => const [ReceiptSection.cashier],
+    saleReturn => const [ReceiptSection.customer, ReceiptSection.cashier],
     sale => const [ReceiptSection.customer, ReceiptSection.payment],
   };
 
   /// الطباعة التلقائية بعد الحفظ مفعّلة افتراضياً لأعمال البيع والخدمة فقط.
   bool get autoPrintByDefault =>
-      this == oilChange || this == directSale || this == carWash;
+      this == oilChange ||
+      this == directSale ||
+      this == carWash ||
+      this == saleReturn;
+
+  /// نسختان للاسترجاع (للزبون وللمحل)، ونسخة لغيره.
+  int get defaultCopies => this == saleReturn ? 2 : 1;
 }
 
 /// قسم اختياري في القالب.
@@ -79,8 +94,10 @@ class ReceiptTemplate {
     this.footer = '',
   });
 
-  factory ReceiptTemplate.defaultsFor(ReceiptKind kind) =>
-      ReceiptTemplate(autoPrint: kind.autoPrintByDefault);
+  factory ReceiptTemplate.defaultsFor(ReceiptKind kind) => ReceiptTemplate(
+    autoPrint: kind.autoPrintByDefault,
+    copies: kind.defaultCopies,
+  );
 
   factory ReceiptTemplate.fromJson(ReceiptKind kind, Object? raw) {
     final d = ReceiptTemplate.defaultsFor(kind);
@@ -96,7 +113,9 @@ class ReceiptTemplate {
     }
     final copies = raw['copies'];
     return ReceiptTemplate(
-      autoPrint: raw['autoPrint'] is bool ? raw['autoPrint'] as bool : d.autoPrint,
+      autoPrint: raw['autoPrint'] is bool
+          ? raw['autoPrint'] as bool
+          : d.autoPrint,
       copies: copies is num ? copies.toInt().clamp(1, 3) : d.copies,
       showLogo: raw['showLogo'] is bool ? raw['showLogo'] as bool : d.showLogo,
       showStoreContact: raw['showStoreContact'] is bool

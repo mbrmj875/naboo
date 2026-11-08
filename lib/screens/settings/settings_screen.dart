@@ -27,6 +27,10 @@ import 'dashboard_layout_settings_screen.dart';
 import 'market_pos_import_screen.dart';
 import 'account_subscription_screen.dart';
 import 'store_info_screen.dart';
+import 'return_policy_settings_screen.dart';
+import '../../providers/business_features_provider.dart';
+import '../../services/business_setup_settings.dart';
+import '../../verticals/car_wash/screens/wash_offers_settings_screen.dart';
 import 'sync_queue_health_screen.dart';
 
 const _kTeal = Color(0xFF0D9488);
@@ -84,300 +88,334 @@ class SettingsScreen extends StatelessWidget {
 
     return SecureScreen(
       child: Directionality(
-      textDirection: TextDirection.rtl,
-      child: Scaffold(
-        backgroundColor: cs.surface,
-        appBar: _settingsAppBar(context, 'الإعدادات'),
-        body: LayoutBuilder(
-          builder: (context, constraints) {
-            /// يمنع كسر [ListTile] عند عرض أقل من ~72 (مثلاً أثناء أنيميشن التصغير).
-            final minW = math.max(constraints.maxWidth, 300.0);
-            final gap = ScreenLayout.of(context).pageHorizontalGap;
-            return Scrollbar(
-              child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
+        textDirection: TextDirection.rtl,
+        child: Scaffold(
+          backgroundColor: cs.surface,
+          appBar: _settingsAppBar(context, 'الإعدادات'),
+          body: LayoutBuilder(
+            builder: (context, constraints) {
+              /// يمنع كسر [ListTile] عند عرض أقل من ~72 (مثلاً أثناء أنيميشن التصغير).
+              final minW = math.max(constraints.maxWidth, 300.0);
+              final gap = ScreenLayout.of(context).pageHorizontalGap;
+              return Scrollbar(
                 child: SingleChildScrollView(
-                  child: SizedBox(
-                    width: minW,
-                    child: Padding(
-                      padding: EdgeInsets.symmetric(
-                        horizontal: gap,
-                        vertical: 16,
-                      ),
-                      child: Column(
-                        children: [
-                          // ── بطاقة الشركة ─────────────────────────────────────────────
-                          const _CompanyCard(),
-                          const SizedBox(height: 16),
-                          // ── المجموعات ────────────────────────────────────────────────
-                          _SettingsGroup(
-                            title: 'المتجر والحساب',
-                            isDark: isDark,
-                            items: [
-                              if (kIsWeb && WebPwaInstall.isWebSupported)
-                                _SettingItem(
-                                  icon: Icons.add_to_home_screen_rounded,
-                                  iconColor: const Color(0xFF071A36),
-                                  title: 'تثبيت نابو على الشاشة الرئيسية',
-                                  subtitle: WebPwaInstall.isStandalone()
-                                      ? 'التطبيق مثبّت — يفتح بدون شريط المتصفح'
-                                      : 'أيقونة مثل التطبيق على هاتفك أو جهازك',
-                                  onTap: () {
-                                    if (WebPwaInstall.isStandalone()) {
-                                      ScaffoldMessenger.of(context)
-                                          .showSnackBar(
-                                        const SnackBar(
-                                          content: Text(
-                                            'نابو مثبّت مسبقاً على هذا الجهاز.',
+                  scrollDirection: Axis.horizontal,
+                  child: SingleChildScrollView(
+                    child: SizedBox(
+                      width: minW,
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(
+                          horizontal: gap,
+                          vertical: 16,
+                        ),
+                        child: Column(
+                          children: [
+                            // ── بطاقة الشركة ─────────────────────────────────────────────
+                            const _CompanyCard(),
+                            const SizedBox(height: 16),
+                            // ── المجموعات ────────────────────────────────────────────────
+                            _SettingsGroup(
+                              title: 'المتجر والحساب',
+                              isDark: isDark,
+                              items: [
+                                if (kIsWeb && WebPwaInstall.isWebSupported)
+                                  _SettingItem(
+                                    icon: Icons.add_to_home_screen_rounded,
+                                    iconColor: const Color(0xFF071A36),
+                                    title: 'تثبيت نابو على الشاشة الرئيسية',
+                                    subtitle: WebPwaInstall.isStandalone()
+                                        ? 'التطبيق مثبّت — يفتح بدون شريط المتصفح'
+                                        : 'أيقونة مثل التطبيق على هاتفك أو جهازك',
+                                    onTap: () {
+                                      if (WebPwaInstall.isStandalone()) {
+                                        ScaffoldMessenger.of(
+                                          context,
+                                        ).showSnackBar(
+                                          const SnackBar(
+                                            content: Text(
+                                              'نابو مثبّت مسبقاً على هذا الجهاز.',
+                                            ),
                                           ),
-                                        ),
-                                      );
-                                      return;
-                                    }
-                                    WebPwaInstall.clearBannerDismiss();
-                                    showModalBottomSheet<void>(
-                                      context: context,
-                                      showDragHandle: true,
-                                      builder: (ctx) => const SafeArea(
-                                        child: SingleChildScrollView(
-                                          child: WebPwaInstallBanner(
-                                            compact: false,
-                                            margin: EdgeInsetsDirectional.all(
-                                              8,
+                                        );
+                                        return;
+                                      }
+                                      WebPwaInstall.clearBannerDismiss();
+                                      showModalBottomSheet<void>(
+                                        context: context,
+                                        showDragHandle: true,
+                                        builder: (ctx) => const SafeArea(
+                                          child: SingleChildScrollView(
+                                            child: WebPwaInstallBanner(
+                                              compact: false,
+                                              margin: EdgeInsetsDirectional.all(
+                                                8,
+                                              ),
                                             ),
                                           ),
                                         ),
+                                      );
+                                    },
+                                  ),
+                                if (isOwner)
+                                  _SettingItem(
+                                    icon: Icons.store_rounded,
+                                    iconColor: cs.primary,
+                                    title: 'بيانات المتجر',
+                                    subtitle:
+                                        'الاسم، العنوان، وأرقام الهاتف للإيصال',
+                                    onTap: () => _goTo(
+                                      context,
+                                      const StoreInfoScreen(),
+                                      routeId:
+                                          AppContentRoutes.settingsStoreInfo,
+                                      breadcrumbTitle: 'بيانات المتجر',
+                                    ),
+                                  )
+                                else
+                                  _SettingItem(
+                                    icon: Icons.storefront_rounded,
+                                    iconColor: cs.primary,
+                                    title: 'بيانات فرعي',
+                                    subtitle:
+                                        'اسم فرعك وشعارك وهاتفك — لواتساب والإيصال',
+                                    onTap: () => _goTo(
+                                      context,
+                                      const StoreInfoScreen(
+                                        scope: StoreInfoScope.myBranch,
+                                      ),
+                                      routeId:
+                                          AppContentRoutes.settingsMyBranchInfo,
+                                      breadcrumbTitle: 'بيانات فرعي',
+                                    ),
+                                  ),
+                                _SettingItem(
+                                  icon: Icons.receipt_long_rounded,
+                                  iconColor: _kTeal,
+                                  title: 'إعدادات الفواتير',
+                                  subtitle:
+                                      'رقم البداية، التذييل، الضريبة، الخصم',
+                                  onTap: () => _goTo(
+                                    context,
+                                    const _InvoiceSettingsScreen(),
+                                    routeId: AppContentRoutes.settingsInvoice,
+                                    breadcrumbTitle: 'إعدادات الفواتير',
+                                  ),
+                                ),
+                                if (isOwner)
+                                  _SettingItem(
+                                    icon: Icons.assignment_return_outlined,
+                                    iconColor: cs.error,
+                                    title: 'سياسة الاسترجاع',
+                                    subtitle:
+                                        'المدة، وما بعدها، والموافقة — للمالك برمزه',
+                                    onTap: () => _goTo(
+                                      context,
+                                      const ReturnPolicySettingsScreen(),
+                                      routeId:
+                                          AppContentRoutes.settingsReturnPolicy,
+                                      breadcrumbTitle: 'سياسة الاسترجاع',
+                                    ),
+                                  ),
+                                if (isOwner && _isServiceShop(context))
+                                  _SettingItem(
+                                    icon: Icons.local_car_wash_rounded,
+                                    iconColor: _kTeal,
+                                    title: 'عروض الغسيل',
+                                    subtitle:
+                                        'تكرار الغسل وخصم زبون الزيت — مطفأة حتى تفعّلها',
+                                    onTap: () => _goTo(
+                                      context,
+                                      const WashOffersSettingsScreen(),
+                                      routeId:
+                                          AppContentRoutes.settingsWashOffers,
+                                      breadcrumbTitle: 'عروض الغسيل',
+                                    ),
+                                  ),
+                                _SettingItem(
+                                  icon: Icons.tune_rounded,
+                                  iconColor: _kAmber,
+                                  title: 'ميزات المتجر',
+                                  subtitle:
+                                      'العملاء، الولاء، الضريبة، الخصم، الديون، التقسيط، الوزن، الملابس، والخدمات',
+                                  onTap: () => _goTo(
+                                    context,
+                                    const BusinessSetupWizardScreen(
+                                      openedFromSettings: true,
+                                    ),
+                                    routeId: AppContentRoutes
+                                        .settingsBusinessFeatures,
+                                    breadcrumbTitle: 'ميزات المتجر',
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 14),
+                            _SettingsGroup(
+                              title: 'المظهر والإشعارات',
+                              isDark: isDark,
+                              items: [
+                                _SettingItem(
+                                  icon: Icons.dashboard_customize_rounded,
+                                  iconColor: _kBlue,
+                                  title: 'تخصيص الشاشة الرئيسية',
+                                  subtitle:
+                                      'إظهار أو إخفاء أقسام لوحة التحكم وترتيبها بالسحب',
+                                  onTap: () => _goTo(
+                                    context,
+                                    const DashboardLayoutSettingsScreen(),
+                                    routeId: AppContentRoutes
+                                        .settingsDashboardLayout,
+                                    breadcrumbTitle: 'تخصيص الشاشة الرئيسية',
+                                  ),
+                                ),
+                                _SettingItem(
+                                  icon: Icons.palette_outlined,
+                                  iconColor: cs.primary,
+                                  title: 'ألوان وهوية التطبيق',
+                                  subtitle:
+                                      'مخططات جاهزة، مخصص، وزوايا البطاقات — تُطبَّق على كل الشاشات',
+                                  onTap: () => _goTo(
+                                    context,
+                                    const SalePosSettingsScreen(
+                                      appearanceOnly: true,
+                                    ),
+                                    routeId: AppContentRoutes
+                                        .settingsSalePosAppearance,
+                                    breadcrumbTitle: 'ألوان وهوية التطبيق',
+                                  ),
+                                ),
+                                _CompactSnackNotificationsTile(isDark: isDark),
+                                _ThemeToggleTile(isDark: isDark),
+                                _SettingItem(
+                                  icon: Icons.language_rounded,
+                                  iconColor: _kTeal,
+                                  title: 'اللغة',
+                                  subtitle: 'العربية',
+                                  trailing: Text(
+                                    'العربية',
+                                    style: TextStyle(
+                                      color: cs.onSurfaceVariant,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                  onTap: () {},
+                                ),
+                                _SettingItem(
+                                  icon: Icons.notifications_rounded,
+                                  iconColor: _kAmber,
+                                  title: 'الإشعارات',
+                                  subtitle:
+                                      'تنبيهات المخزون، الفواتير، الأقساط',
+                                  onTap: () => _goTo(
+                                    context,
+                                    const _NotificationsScreen(),
+                                    routeId:
+                                        AppContentRoutes.settingsNotifications,
+                                    breadcrumbTitle: 'الإشعارات',
+                                  ),
+                                ),
+                                _SettingItem(
+                                  icon: Icons.print_rounded,
+                                  iconColor: cs.primary,
+                                  title: 'إعدادات الطباعة',
+                                  subtitle: 'حجم الورق، الطابعة الافتراضية',
+                                  onTap: () => _goTo(
+                                    context,
+                                    const PrintingScreen(),
+                                    routeId:
+                                        AppContentRoutes.settingsPrintingInline,
+                                    breadcrumbTitle: 'إعدادات الطباعة',
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 14),
+                            _SettingsGroup(
+                              title: 'البيانات والنسخ الاحتياطي',
+                              isDark: isDark,
+                              items: [
+                                _SettingItem(
+                                  icon: Icons.restore_rounded,
+                                  iconColor: _kBlue,
+                                  title: 'استعادة البيانات',
+                                  subtitle: 'من ملف أو سحابة',
+                                  onTap: () => _goTo(
+                                    context,
+                                    const MarketPosImportScreen(),
+                                    routeId: AppContentRoutes.settingsRestore,
+                                    breadcrumbTitle: 'استيراد مواد وأسعار',
+                                  ),
+                                ),
+                                _SettingItem(
+                                  icon: Icons.sync_problem_rounded,
+                                  iconColor: _kRed,
+                                  title: 'حالة المزامنة والعمليات العالقة',
+                                  subtitle:
+                                      'مراقبة pending/failed/dead وإعادة المحاولة',
+                                  onTap: () => _goTo(
+                                    context,
+                                    const SyncQueueHealthScreen(),
+                                    routeId: AppContentRoutes
+                                        .settingsSyncQueueHealth,
+                                    breadcrumbTitle:
+                                        'حالة المزامنة والعمليات العالقة',
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 14),
+                            _SettingsGroup(
+                              title: 'الاشتراك والدعم',
+                              isDark: isDark,
+                              items: [
+                                ListenableBuilder(
+                                  listenable: LicenseService.instance,
+                                  builder: (context, _) {
+                                    return _SettingItem(
+                                      icon: Icons.star_rounded,
+                                      iconColor: _kAmber,
+                                      title: 'خطة الاشتراك',
+                                      subtitle: _subscriptionRowSubtitle(
+                                        LicenseService.instance.state,
+                                      ),
+                                      onTap: () => _goTo(
+                                        context,
+                                        const AccountSubscriptionScreen(),
+                                        routeId: AppContentRoutes
+                                            .settingsSubscriptionAccount,
+                                        breadcrumbTitle: 'خطة الاشتراك والحساب',
                                       ),
                                     );
                                   },
                                 ),
-                              if (isOwner)
                                 _SettingItem(
-                                  icon: Icons.store_rounded,
-                                  iconColor: cs.primary,
-                                  title: 'بيانات المتجر',
-                                  subtitle:
-                                      'الاسم، العنوان، وأرقام الهاتف للإيصال',
-                                  onTap: () => _goTo(
-                                    context,
-                                    const StoreInfoScreen(),
-                                    routeId: AppContentRoutes.settingsStoreInfo,
-                                    breadcrumbTitle: 'بيانات المتجر',
-                                  ),
-                                )
-                              else
+                                  icon: Icons.help_rounded,
+                                  iconColor: _kBlue,
+                                  title: 'المساعدة والدعم',
+                                  subtitle: 'الأسئلة الشائعة والتواصل مع الدعم',
+                                  onTap: () {},
+                                ),
                                 _SettingItem(
-                                  icon: Icons.storefront_rounded,
-                                  iconColor: cs.primary,
-                                  title: 'بيانات فرعي',
+                                  icon: Icons.info_rounded,
+                                  iconColor: Colors.grey,
+                                  title: 'عن التطبيق',
                                   subtitle:
-                                      'اسم فرعك وشعارك وهاتفك — لواتساب والإيصال',
-                                  onTap: () => _goTo(
-                                    context,
-                                    const StoreInfoScreen(
-                                      scope: StoreInfoScope.myBranch,
-                                    ),
-                                    routeId:
-                                        AppContentRoutes.settingsMyBranchInfo,
-                                    breadcrumbTitle: 'بيانات فرعي',
-                                  ),
+                                      'الإصدار 1.0.0 · NaBoo Store Manager',
+                                  onTap: () => _showAbout(context),
                                 ),
-                              _SettingItem(
-                                icon: Icons.receipt_long_rounded,
-                                iconColor: _kTeal,
-                                title: 'إعدادات الفواتير',
-                                subtitle:
-                                    'رقم البداية، التذييل، الضريبة، الخصم',
-                                onTap: () => _goTo(
-                                  context,
-                                  const _InvoiceSettingsScreen(),
-                                  routeId: AppContentRoutes.settingsInvoice,
-                                  breadcrumbTitle: 'إعدادات الفواتير',
-                                ),
-                              ),
-                              _SettingItem(
-                                icon: Icons.tune_rounded,
-                                iconColor: _kAmber,
-                                title: 'ميزات المتجر',
-                                subtitle:
-                                    'العملاء، الولاء، الضريبة، الخصم، الديون، التقسيط، الوزن، الملابس، والخدمات',
-                                onTap: () => _goTo(
-                                  context,
-                                  const BusinessSetupWizardScreen(
-                                    openedFromSettings: true,
-                                  ),
-                                  routeId:
-                                      AppContentRoutes.settingsBusinessFeatures,
-                                  breadcrumbTitle: 'ميزات المتجر',
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 14),
-                          _SettingsGroup(
-                            title: 'المظهر والإشعارات',
-                            isDark: isDark,
-                            items: [
-                              _SettingItem(
-                                icon: Icons.dashboard_customize_rounded,
-                                iconColor: _kBlue,
-                                title: 'تخصيص الشاشة الرئيسية',
-                                subtitle:
-                                    'إظهار أو إخفاء أقسام لوحة التحكم وترتيبها بالسحب',
-                                onTap: () => _goTo(
-                                  context,
-                                  const DashboardLayoutSettingsScreen(),
-                                  routeId:
-                                      AppContentRoutes.settingsDashboardLayout,
-                                  breadcrumbTitle: 'تخصيص الشاشة الرئيسية',
-                                ),
-                              ),
-                              _SettingItem(
-                                icon: Icons.palette_outlined,
-                                iconColor: cs.primary,
-                                title: 'ألوان وهوية التطبيق',
-                                subtitle:
-                                    'مخططات جاهزة، مخصص، وزوايا البطاقات — تُطبَّق على كل الشاشات',
-                                onTap: () => _goTo(
-                                  context,
-                                  const SalePosSettingsScreen(
-                                    appearanceOnly: true,
-                                  ),
-                                  routeId: AppContentRoutes
-                                      .settingsSalePosAppearance,
-                                  breadcrumbTitle: 'ألوان وهوية التطبيق',
-                                ),
-                              ),
-                              _CompactSnackNotificationsTile(isDark: isDark),
-                              _ThemeToggleTile(isDark: isDark),
-                              _SettingItem(
-                                icon: Icons.language_rounded,
-                                iconColor: _kTeal,
-                                title: 'اللغة',
-                                subtitle: 'العربية',
-                                trailing: Text(
-                                  'العربية',
-                                  style: TextStyle(
-                                    color: cs.onSurfaceVariant,
-                                    fontSize: 13,
-                                  ),
-                                ),
-                                onTap: () {},
-                              ),
-                              _SettingItem(
-                                icon: Icons.notifications_rounded,
-                                iconColor: _kAmber,
-                                title: 'الإشعارات',
-                                subtitle: 'تنبيهات المخزون، الفواتير، الأقساط',
-                                onTap: () => _goTo(
-                                  context,
-                                  const _NotificationsScreen(),
-                                  routeId:
-                                      AppContentRoutes.settingsNotifications,
-                                  breadcrumbTitle: 'الإشعارات',
-                                ),
-                              ),
-                              _SettingItem(
-                                icon: Icons.print_rounded,
-                                iconColor: cs.primary,
-                                title: 'إعدادات الطباعة',
-                                subtitle: 'حجم الورق، الطابعة الافتراضية',
-                                onTap: () => _goTo(
-                                  context,
-                                  const PrintingScreen(),
-                                  routeId:
-                                      AppContentRoutes.settingsPrintingInline,
-                                  breadcrumbTitle: 'إعدادات الطباعة',
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 14),
-                          _SettingsGroup(
-                            title: 'البيانات والنسخ الاحتياطي',
-                            isDark: isDark,
-                            items: [
-                              _SettingItem(
-                                icon: Icons.restore_rounded,
-                                iconColor: _kBlue,
-                                title: 'استعادة البيانات',
-                                subtitle: 'من ملف أو سحابة',
-                                onTap: () => _goTo(
-                                  context,
-                                  const MarketPosImportScreen(),
-                                  routeId: AppContentRoutes.settingsRestore,
-                                  breadcrumbTitle: 'استيراد مواد وأسعار',
-                                ),
-                              ),
-                              _SettingItem(
-                                icon: Icons.sync_problem_rounded,
-                                iconColor: _kRed,
-                                title: 'حالة المزامنة والعمليات العالقة',
-                                subtitle:
-                                    'مراقبة pending/failed/dead وإعادة المحاولة',
-                                onTap: () => _goTo(
-                                  context,
-                                  const SyncQueueHealthScreen(),
-                                  routeId:
-                                      AppContentRoutes.settingsSyncQueueHealth,
-                                  breadcrumbTitle:
-                                      'حالة المزامنة والعمليات العالقة',
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 14),
-                          _SettingsGroup(
-                            title: 'الاشتراك والدعم',
-                            isDark: isDark,
-                            items: [
-                              ListenableBuilder(
-                                listenable: LicenseService.instance,
-                                builder: (context, _) {
-                                  return _SettingItem(
-                                    icon: Icons.star_rounded,
-                                    iconColor: _kAmber,
-                                    title: 'خطة الاشتراك',
-                                    subtitle: _subscriptionRowSubtitle(
-                                      LicenseService.instance.state,
-                                    ),
-                                    onTap: () => _goTo(
-                                      context,
-                                      const AccountSubscriptionScreen(),
-                                      routeId: AppContentRoutes
-                                          .settingsSubscriptionAccount,
-                                      breadcrumbTitle: 'خطة الاشتراك والحساب',
-                                    ),
-                                  );
-                                },
-                              ),
-                              _SettingItem(
-                                icon: Icons.help_rounded,
-                                iconColor: _kBlue,
-                                title: 'المساعدة والدعم',
-                                subtitle: 'الأسئلة الشائعة والتواصل مع الدعم',
-                                onTap: () {},
-                              ),
-                              _SettingItem(
-                                icon: Icons.info_rounded,
-                                iconColor: Colors.grey,
-                                title: 'عن التطبيق',
-                                subtitle: 'الإصدار 1.0.0 · NaBoo Store Manager',
-                                onTap: () => _showAbout(context),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 24),
-                        ],
+                              ],
+                            ),
+                            const SizedBox(height: 24),
+                          ],
+                        ),
                       ),
                     ),
                   ),
                 ),
-              ),
-            );
-          },
+              );
+            },
+          ),
         ),
-      ),
       ),
     );
   }
@@ -385,6 +423,12 @@ class SettingsScreen extends StatelessWidget {
   static const _kBlue = Color(0xFF3B82F6);
 
   /// يمرّ عبر نفس [Navigator] الرئيسي مع [RouteSettings.name] حتى يحدّث [NavigatorObserver] فتات الخبز.
+  static bool _isServiceShop(BuildContext context) {
+    final biz = context.read<BusinessFeaturesProvider>().data;
+    return biz.enableOilChange ||
+        biz.effectiveVertical == BusinessVertical.oilChange;
+  }
+
   void _goTo(
     BuildContext context,
     Widget screen, {
@@ -506,14 +550,10 @@ class _CompanyCardState extends State<_CompanyCard> {
           name: isOwner
               ? AppContentRoutes.settingsStoreInfo
               : AppContentRoutes.settingsMyBranchInfo,
-          arguments: BreadcrumbMeta(
-            isOwner ? 'بيانات المتجر' : 'بيانات فرعي',
-          ),
+          arguments: BreadcrumbMeta(isOwner ? 'بيانات المتجر' : 'بيانات فرعي'),
         ),
         builder: (_) => StoreInfoScreen(
-          scope: isOwner
-              ? StoreInfoScope.workspace
-              : StoreInfoScope.myBranch,
+          scope: isOwner ? StoreInfoScope.workspace : StoreInfoScope.myBranch,
         ),
       ),
     );
@@ -528,14 +568,9 @@ class _CompanyCardState extends State<_CompanyCard> {
     final ac = context.appCorners;
     final gap = ScreenLayout.of(context).pageHorizontalGap;
     final isOwner = context.watch<AuthProvider>().isOwner;
-    final store = _effective ??
-        context.watch<PrintSettingsProvider>().data;
-    final name = _loading
-        ? '…'
-        : _storeName(store, isOwner: isOwner);
-    final subtitle = _loading
-        ? ''
-        : _storeSubtitle(store, isOwner: isOwner);
+    final store = _effective ?? context.watch<PrintSettingsProvider>().data;
+    final name = _loading ? '…' : _storeName(store, isOwner: isOwner);
+    final subtitle = _loading ? '' : _storeSubtitle(store, isOwner: isOwner);
 
     return GestureDetector(
       onLongPress: () {
@@ -629,9 +664,7 @@ class _CompanyCardState extends State<_CompanyCard> {
               ),
             ),
             IconButton(
-              tooltip: isOwner
-                  ? 'تعديل بيانات المتجر'
-                  : 'تعديل بيانات فرعي',
+              tooltip: isOwner ? 'تعديل بيانات المتجر' : 'تعديل بيانات فرعي',
               icon: Icon(Icons.edit_rounded, color: cs.onPrimary),
               onPressed: () => unawaited(_openStoreInfo()),
             ),
@@ -884,7 +917,11 @@ class _CompactSnackNotificationsTile extends StatelessWidget {
               color: _kTeal.withValues(alpha: 0.12),
               borderRadius: BorderRadius.zero,
             ),
-            child: const Icon(Icons.view_sidebar_outlined, color: _kTeal, size: 20),
+            child: const Icon(
+              Icons.view_sidebar_outlined,
+              color: _kTeal,
+              size: 20,
+            ),
           ),
           title: const Text(
             'شكل تنبيهات الصفحات (كل التطبيق)',

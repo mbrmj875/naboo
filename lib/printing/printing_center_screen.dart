@@ -462,12 +462,12 @@ class _PrinterCardState extends State<_PrinterCard> {
               runSpacing: 8,
               children: [
                 for (final t in PrinterType.values)
-                  if (t != PrinterType.bluetooth || BluetoothTransport.supported)
+                  if (t != PrinterType.bluetooth ||
+                      BluetoothTransport.supported)
                     ChoiceChip(
                       label: Text(t.label),
                       selected: c.type == t,
-                      onSelected: (_) =>
-                          widget.onChanged(c.copyWith(type: t)),
+                      onSelected: (_) => widget.onChanged(c.copyWith(type: t)),
                     ),
               ],
             ),
@@ -480,14 +480,12 @@ class _PrinterCardState extends State<_PrinterCard> {
                 runSpacing: 8,
                 children: [
                   // الحرارية لفافة فقط؛ A5/A4 لطابعات المكتب عبر طابعة النظام.
-                  for (final p in c.isThermal
-                      ? ReceiptPaper.rolls
-                      : ReceiptPaper.values)
+                  for (final p
+                      in c.isThermal ? ReceiptPaper.rolls : ReceiptPaper.values)
                     ChoiceChip(
                       label: Text(p.label),
                       selected: c.effectivePaper == p,
-                      onSelected: (_) =>
-                          widget.onChanged(c.copyWith(paper: p)),
+                      onSelected: (_) => widget.onChanged(c.copyWith(paper: p)),
                     ),
                 ],
               ),
@@ -617,6 +615,7 @@ class _TemplateCardState extends State<_TemplateCard> {
     ReceiptKind.carWash => Icons.local_car_wash_outlined,
     ReceiptKind.debtPayment => Icons.account_balance_wallet_outlined,
     ReceiptKind.expense => Icons.payments_outlined,
+    ReceiptKind.saleReturn => Icons.assignment_return_outlined,
     ReceiptKind.sale => Icons.receipt_outlined,
   };
 
@@ -687,7 +686,10 @@ class _TemplateCardState extends State<_TemplateCard> {
             ],
           ),
           const SizedBox(height: 14),
-          Text('ما يظهر في الإيصال', style: Theme.of(context).textTheme.labelLarge),
+          Text(
+            'ما يظهر في الإيصال',
+            style: Theme.of(context).textTheme.labelLarge,
+          ),
           const SizedBox(height: 6),
           Wrap(
             spacing: 8,
@@ -917,7 +919,11 @@ class _StyleCard extends StatelessWidget {
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(Icons.info_outline, size: 18, color: cs.onSurfaceVariant),
+                  Icon(
+                    Icons.info_outline,
+                    size: 18,
+                    color: cs.onSurfaceVariant,
+                  ),
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(

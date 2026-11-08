@@ -26,6 +26,9 @@ const Set<String> invoiceFinancialFrozenCols = {
   'loyaltyPointsEarned',
   'isReturned',
   'originalInvoiceId',
+  'originalInvoiceGlobalId',
+  'returnReason',
+  'returnMeta',
   'type',
 };
 
@@ -44,10 +47,7 @@ const Set<String> invoiceEnrichmentCols = {
 };
 
 /// أعمدة لا تتغير أبداً من قبل merge.
-const Set<String> invoiceImmutableKeyCols = {
-  'id',
-  'global_id',
-};
+const Set<String> invoiceImmutableKeyCols = {'id', 'global_id'};
 
 /// نتيجة تطبيق سياسة merge.
 class InvoiceMergeOutcome {
@@ -92,7 +92,8 @@ InvoiceMergeOutcome applyInvoiceMergePolicy({
     final currentVal = current[col];
     final incomingVal = incoming[col];
     if (incomingVal == null) continue;
-    final canFill = currentVal == null ||
+    final canFill =
+        currentVal == null ||
         (currentVal is num && currentVal.toInt() == 0) ||
         (currentVal is String && currentVal.trim().isEmpty);
     if (canFill) {
@@ -201,15 +202,9 @@ const Set<String> installmentPlanFrozenCols = {
   'invoiceId',
 };
 
-const Set<String> installmentPlanMaxCols = {
-  'paidAmount',
-  'paidAmountFils',
-};
+const Set<String> installmentPlanMaxCols = {'paidAmount', 'paidAmountFils'};
 
-const Set<String> installmentPlanImmutableKeyCols = {
-  'id',
-  'global_id',
-};
+const Set<String> installmentPlanImmutableKeyCols = {'id', 'global_id'};
 
 InvoiceMergeOutcome applyInstallmentPlanMergePolicy({
   required Map<String, Object?> current,
@@ -263,10 +258,7 @@ const Set<String> installmentFrozenCols = {
   'planId',
 };
 
-const Set<String> installmentImmutableKeyCols = {
-  'id',
-  'global_id',
-};
+const Set<String> installmentImmutableKeyCols = {'id', 'global_id'};
 
 InvoiceMergeOutcome applyInstallmentMergePolicy({
   required Map<String, Object?> current,

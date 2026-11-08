@@ -253,7 +253,8 @@ extension DbInvoices on DatabaseHelper {
     };
 
     final whereSql = where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}';
-    final rows = await db.rawQuery('''
+    final rows = await db.rawQuery(
+      '''
       SELECT
         i.*,
         c.phone AS customerPhone
@@ -262,13 +263,16 @@ extension DbInvoices on DatabaseHelper {
       $whereSql
       ORDER BY $orderBy
       LIMIT ? OFFSET ?
-    ''', [...args, limit, offset]);
+    ''',
+      [...args, limit, offset],
+    );
 
     return rows.whereType<Map<String, dynamic>>().map((invoiceMap) {
       return Invoice(
         id: invoiceMap['id'] as int?,
         customerName: invoiceMap['customerName'] as String? ?? '',
-        date: DateTime.tryParse((invoiceMap['date'] ?? '').toString()) ??
+        date:
+            DateTime.tryParse((invoiceMap['date'] ?? '').toString()) ??
             DateTime.fromMillisecondsSinceEpoch(0),
         type: invoiceTypeFromDb(invoiceMap['type']),
         items: const <InvoiceItem>[],
@@ -316,10 +320,10 @@ extension DbInvoices on DatabaseHelper {
             (invoiceMap['installmentInterestAmount'] as num?)?.toDouble() ?? 0,
         installmentTotalWithInterest:
             (invoiceMap['installmentTotalWithInterest'] as num?)?.toDouble() ??
-                0,
+            0,
         installmentSuggestedMonthly:
             (invoiceMap['installmentSuggestedMonthly'] as num?)?.toDouble() ??
-                0,
+            0,
       );
     }).toList();
   }
@@ -392,9 +396,10 @@ extension DbInvoices on DatabaseHelper {
   Future<int> _insertInvoiceInTransaction(
     Transaction txn,
     Invoice invoice,
-    LoyaltySettingsData loyaltySettings,
-    {required bool enforceStockNonZero, bool syncWarehouseStock = false}
-  ) async {
+    LoyaltySettingsData loyaltySettings, {
+    required bool enforceStockNonZero,
+    bool syncWarehouseStock = false,
+  }) async {
     _validateInvoiceForSave(invoice);
     final tenantId = await _resolveActiveTenantIdForLocalDb(txn);
     final actor = (invoice.createdByUserName ?? '').trim();
@@ -426,7 +431,8 @@ extension DbInvoices on DatabaseHelper {
       workShiftId: shiftId,
     );
     final nowIso = DateTime.now().toUtc().toIso8601String();
-    final invoiceGlobalId = const Uuid().v4();
+    final preset = invoice.presetGlobalId?.trim().toLowerCase() ?? '';
+    final invoiceGlobalId = preset.isNotEmpty ? preset : const Uuid().v4();
 
     final id = await txn.insert('invoices', {
       'tenantId': tenantId,
@@ -462,6 +468,10 @@ extension DbInvoices on DatabaseHelper {
       'installmentTotalWithInterest': invoice.installmentTotalWithInterest,
       'installmentSuggestedMonthly': invoice.installmentSuggestedMonthly,
       'updatedAt': nowIso,
+      if (invoice.originalInvoiceGlobalId != null)
+        'originalInvoiceGlobalId': invoice.originalInvoiceGlobalId,
+      if (invoice.returnReason != null) 'returnReason': invoice.returnReason,
+      if (invoice.returnMeta != null) 'returnMeta': invoice.returnMeta,
     });
     await _insertActivityLogInTxn(
       txn,
@@ -565,8 +575,9 @@ extension DbInvoices on DatabaseHelper {
     }
 
     if (!invoice.isReturned) {
-        final warehouseLines = <({int productId, double qty, double unitPrice})>[];
-        if (!serviceReceipt) {
+      final warehouseLines =
+          <({int productId, double qty, double unitPrice})>[];
+      if (!serviceReceipt) {
         if (enforceStockNonZero) {
           // منع البيع عند مخزون 0 في الوضع المقيّد (طبقة الخدمة).
           for (final item in invoice.items) {
@@ -596,7 +607,9 @@ extension DbInvoices on DatabaseHelper {
             final delta = item.baseQtyResolved;
             final q = delta.round();
             if ((delta - q).abs() > 1e-9) {
-              throw const FormatException('كمية الملابس يجب أن تكون رقماً صحيحاً.');
+              throw const FormatException(
+                'كمية الملابس يجب أن تكون رقماً صحيحاً.',
+              );
             }
             final affected = await txn.rawUpdate(
               'UPDATE product_variants SET quantity = quantity - ? '
@@ -604,7 +617,9 @@ extension DbInvoices on DatabaseHelper {
               [q, pvId, q],
             );
             if (affected < 1 && !allowNeg) {
-              throw const FormatException('لا توجد كمية متوفرة لهذا المقاس/اللون.');
+              throw const FormatException(
+                'لا توجد كمية متوفرة لهذا المقاس/اللون.',
+              );
             }
 
             // Sync mutation for this variant (best-effort).
@@ -696,7 +711,8 @@ extension DbInvoices on DatabaseHelper {
               whereArgs: [pid, tenantId],
               limit: 1,
             );
-            final tracks = tracked.isNotEmpty &&
+            final tracks =
+                tracked.isNotEmpty &&
                 ((tracked.first['trackInventory'] as num?)?.toInt() ?? 1) != 0;
             if (tracks) {
               warehouseLines.add((
@@ -800,7 +816,9 @@ extension DbInvoices on DatabaseHelper {
             final delta = item.baseQtyResolved;
             final q = delta.round();
             if ((delta - q).abs() > 1e-9) {
-              throw const FormatException('كمية الملابس يجب أن تكون رقماً صحيحاً.');
+              throw const FormatException(
+                'كمية الملابس يجب أن تكون رقماً صحيحاً.',
+              );
             }
             await txn.rawUpdate(
               'UPDATE product_variants SET quantity = quantity + ? '
@@ -1068,7 +1086,9 @@ extension DbInvoices on DatabaseHelper {
 
     void ensureFinite(String label, double v) {
       if (!isFiniteNum(v)) {
-        throw const FormatException('بيانات الفاتورة غير صالحة (قيمة رقمية غير منتهية).');
+        throw const FormatException(
+          'بيانات الفاتورة غير صالحة (قيمة رقمية غير منتهية).',
+        );
       }
       if (_toFils(v) < -moneyTolFils) {
         throw FormatException('لا يمكن أن يكون $label أقل من الصفر.');
@@ -1125,10 +1145,14 @@ extension DbInvoices on DatabaseHelper {
       ensureFinite('سعر البند رقم $lineNo', item.price);
       ensureFinite('إجمالي البند رقم $lineNo', item.total);
       if (!isFiniteNum(enteredQty) || enteredQty <= 0) {
-        throw FormatException('كمية البيع في البند رقم $lineNo يجب أن تكون أكبر من صفر.');
+        throw FormatException(
+          'كمية البيع في البند رقم $lineNo يجب أن تكون أكبر من صفر.',
+        );
       }
       if (!isFiniteNum(baseQty) || baseQty <= 0) {
-        throw FormatException('كمية المخزون الأساسية في البند رقم $lineNo غير صالحة.');
+        throw FormatException(
+          'كمية المخزون الأساسية في البند رقم $lineNo غير صالحة.',
+        );
       }
       if (item.productId != null && item.productId! <= 0) {
         throw FormatException('معرّف المنتج في البند رقم $lineNo غير صالح.');
@@ -1162,7 +1186,9 @@ extension DbInvoices on DatabaseHelper {
       );
     }
     if (advanceFils - totalFils > moneyTolFils) {
-      throw const FormatException('الدفعة المقدمة لا يمكن أن تتجاوز إجمالي الفاتورة.');
+      throw const FormatException(
+        'الدفعة المقدمة لا يمكن أن تتجاوز إجمالي الفاتورة.',
+      );
     }
   }
 
@@ -1182,6 +1208,90 @@ extension DbInvoices on DatabaseHelper {
       case InvoiceType.supplierPayment:
         return 0;
     }
+  }
+
+  /// مرتجع فاتورة آجلة: يُخصم من دينها المتبقي ولا يُصرف نقداً.
+  /// يعيد المبلغ المخصوم فعلاً (لا يتجاوز المتبقي).
+  Future<double> applyReturnToCreditInvoiceDebt(
+    int originalInvoiceId,
+    double amount,
+  ) async {
+    if (amount <= 0) return 0;
+    final db = await database;
+    final tenantId = await _resolveActiveTenantIdForLocalDb(db);
+    return db.transaction<double>((txn) async {
+      final rows = await txn.query(
+        'invoices',
+        columns: ['total', 'totalFils', 'advancePayment', 'advancePaymentFils'],
+        where: 'id = ? AND tenantId = ? AND deleted_at IS NULL',
+        whereArgs: [originalInvoiceId, tenantId],
+        limit: 1,
+      );
+      if (rows.isEmpty) return 0;
+      final r = rows.first;
+      final totalFils =
+          (r['totalFils'] as num?)?.toInt() ??
+          _toFils((r['total'] as num?)?.toDouble() ?? 0);
+      final advFils =
+          (r['advancePaymentFils'] as num?)?.toInt() ??
+          _toFils((r['advancePayment'] as num?)?.toDouble() ?? 0);
+      final remaining = totalFils - advFils;
+      if (remaining <= 0) return 0;
+      final apply = _toFils(amount) > remaining ? remaining : _toFils(amount);
+      final newAdv = advFils + apply;
+      await txn.update(
+        'invoices',
+        {
+          'advancePayment': newAdv / 1000.0,
+          'advancePaymentFils': newAdv,
+          'updatedAt': DateTime.now().toUtc().toIso8601String(),
+        },
+        where: 'id = ? AND tenantId = ?',
+        whereArgs: [originalInvoiceId, tenantId],
+      );
+      return apply / 1000.0;
+    });
+  }
+
+  /// المتبقي من دين فاتورة آجلة (لعرضه قبل الاسترجاع).
+  Future<double> creditInvoiceRemaining(int invoiceId) async {
+    final db = await database;
+    final tenantId = await _resolveActiveTenantIdForLocalDb(db);
+    final rows = await db.query(
+      'invoices',
+      columns: ['total', 'totalFils', 'advancePayment', 'advancePaymentFils'],
+      where: 'id = ? AND tenantId = ? AND deleted_at IS NULL',
+      whereArgs: [invoiceId, tenantId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return 0;
+    final r = rows.first;
+    final totalFils =
+        (r['totalFils'] as num?)?.toInt() ??
+        _toFils((r['total'] as num?)?.toDouble() ?? 0);
+    final advFils =
+        (r['advancePaymentFils'] as num?)?.toInt() ??
+        _toFils((r['advancePayment'] as num?)?.toDouble() ?? 0);
+    final rem = totalFils - advFils;
+    return rem > 0 ? rem / 1000.0 : 0;
+  }
+
+  /// الرقم المحلي لفاتورة من معرّفها العالمي (المطبوع في QR الإيصال).
+  /// نطاق المستأجر النشط فقط: رمز من محل آخر لا يجد شيئاً.
+  Future<int?> getInvoiceIdByGlobalId(String globalId) async {
+    final g = globalId.trim().toLowerCase();
+    if (g.isEmpty) return null;
+    final db = await database;
+    final tenantId = await _resolveActiveTenantIdForLocalDb(db);
+    final rows = await db.query(
+      'invoices',
+      columns: ['id'],
+      where: 'lower(global_id) = ? AND tenantId = ? AND deleted_at IS NULL',
+      whereArgs: [g, tenantId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return (rows.first['id'] as num?)?.toInt();
   }
 
   /// فاتورة واحدة مع بنودها (نطاق المستأجر النشط + غير محذوفة).
@@ -1231,12 +1341,10 @@ extension DbInvoices on DatabaseHelper {
       originalInvoiceId: invoiceMap['originalInvoiceId'] as int?,
       deliveryAddress: invoiceMap['deliveryAddress'] as String?,
       createdByUserName: invoiceMap['createdByUserName'] as String?,
-      discountPercent:
-          (invoiceMap['discountPercent'] as num?)?.toDouble() ?? 0,
+      discountPercent: (invoiceMap['discountPercent'] as num?)?.toDouble() ?? 0,
       workShiftId: invoiceMap['workShiftId'] as int?,
       customerId: invoiceMap['customerId'] as int?,
-      loyaltyDiscount:
-          (invoiceMap['loyaltyDiscount'] as num?)?.toDouble() ?? 0,
+      loyaltyDiscount: (invoiceMap['loyaltyDiscount'] as num?)?.toDouble() ?? 0,
       loyaltyPointsRedeemed:
           (invoiceMap['loyaltyPointsRedeemed'] as num?)?.toInt() ?? 0,
       loyaltyPointsEarned:
@@ -1250,11 +1358,13 @@ extension DbInvoices on DatabaseHelper {
       installmentInterestAmount:
           (invoiceMap['installmentInterestAmount'] as num?)?.toDouble() ?? 0,
       installmentTotalWithInterest:
-          (invoiceMap['installmentTotalWithInterest'] as num?)?.toDouble() ??
-          0,
+          (invoiceMap['installmentTotalWithInterest'] as num?)?.toDouble() ?? 0,
       installmentSuggestedMonthly:
-          (invoiceMap['installmentSuggestedMonthly'] as num?)?.toDouble() ??
-          0,
+          (invoiceMap['installmentSuggestedMonthly'] as num?)?.toDouble() ?? 0,
+      globalId: (invoiceMap['global_id'] as String?)?.trim(),
+      originalInvoiceGlobalId: invoiceMap['originalInvoiceGlobalId'] as String?,
+      returnReason: invoiceMap['returnReason'] as String?,
+      returnMeta: invoiceMap['returnMeta'] as String?,
     );
   }
 

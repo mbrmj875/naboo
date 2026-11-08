@@ -57,6 +57,8 @@ class OwnerDashboardSummarySection extends StatelessWidget {
       ...shortcutIds,
       OwnerShortcutIds.users,
       OwnerShortcutIds.oilRatings,
+      OwnerShortcutIds.returnPolicy,
+      OwnerShortcutIds.washOffers,
     ]) {
       if (!seen.add(id)) continue;
       final entry = allowed[id];
@@ -72,15 +74,26 @@ class OwnerDashboardSummarySection extends StatelessWidget {
       features: features,
       access: access,
     );
-    const wideIds = {OwnerShortcutIds.users, OwnerShortcutIds.oilRatings};
+    const wideIds = {
+      OwnerShortcutIds.users,
+      OwnerShortcutIds.oilRatings,
+      OwnerShortcutIds.returnPolicy,
+      OwnerShortcutIds.washOffers,
+    };
     final gridShortcuts = shortcuts
         .where((e) => !wideIds.contains(e.id))
         .toList(growable: false);
     OwnerShortcutCatalogEntry? usersShortcut;
     OwnerShortcutCatalogEntry? ratingsShortcut;
+    OwnerShortcutCatalogEntry? returnPolicyShortcut;
+    OwnerShortcutCatalogEntry? washOffersShortcut;
     for (final entry in shortcuts) {
       if (entry.id == OwnerShortcutIds.users) usersShortcut = entry;
       if (entry.id == OwnerShortcutIds.oilRatings) ratingsShortcut = entry;
+      if (entry.id == OwnerShortcutIds.returnPolicy) {
+        returnPolicyShortcut = entry;
+      }
+      if (entry.id == OwnerShortcutIds.washOffers) washOffersShortcut = entry;
     }
 
     return Column(
@@ -133,6 +146,24 @@ class OwnerDashboardSummarySection extends StatelessWidget {
             icon: Icons.star_rate_rounded,
             filled: false,
             onTap: () => onShortcutTap(ratingsShortcut!),
+          ),
+        ],
+        if (returnPolicyShortcut != null) ...[
+          const SizedBox(height: 10),
+          _WideShortcutButton(
+            label: ownerDashboardL10n(OwnerDashboardL10nKeys.scReturnPolicy),
+            icon: Icons.assignment_return_outlined,
+            filled: false,
+            onTap: () => onShortcutTap(returnPolicyShortcut!),
+          ),
+        ],
+        if (washOffersShortcut != null) ...[
+          const SizedBox(height: 10),
+          _WideShortcutButton(
+            label: ownerDashboardL10n(OwnerDashboardL10nKeys.scWashOffers),
+            icon: Icons.local_car_wash_outlined,
+            filled: false,
+            onTap: () => onShortcutTap(washOffersShortcut!),
           ),
         ],
       ],

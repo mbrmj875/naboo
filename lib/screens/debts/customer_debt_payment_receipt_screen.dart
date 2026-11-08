@@ -21,6 +21,7 @@ class CustomerDebtPaymentReceiptScreen extends StatelessWidget {
     required this.debtAfter,
     required this.paymentRowId,
     this.receiptInvoiceId,
+    this.receiptInvoiceGlobalId,
     this.recordedByUserName,
   });
 
@@ -31,6 +32,7 @@ class CustomerDebtPaymentReceiptScreen extends StatelessWidget {
   final double debtAfter;
   final int paymentRowId;
   final int? receiptInvoiceId;
+  final String? receiptInvoiceGlobalId;
   final String? recordedByUserName;
 
   static final _dateFmt = DateFormat('dd/MM/yyyy HH:mm', 'en_US');
@@ -42,6 +44,7 @@ class CustomerDebtPaymentReceiptScreen extends StatelessWidget {
     debtAfter: debtAfter,
     paymentRowId: paymentRowId,
     receiptInvoiceId: receiptInvoiceId,
+    receiptInvoiceGlobalId: receiptInvoiceGlobalId,
     recordedBy: recordedByUserName,
   );
 
@@ -59,24 +62,23 @@ class CustomerDebtPaymentReceiptScreen extends StatelessWidget {
     try {
       await printing.Printing.layoutPdf(
         name: 'debt-receipt-$paymentRowId',
-        onLayout: (format) => SaleReceiptPdf.buildCustomerDebtPaymentReceiptBytes(
-          customerDisplayName: customerDisplayName,
-          customerId: customerId,
-          amountApplied: amountApplied,
-          debtBefore: debtBefore,
-          debtAfter: debtAfter,
-          paymentRowId: paymentRowId,
-          receiptInvoiceId: receiptInvoiceId,
-          recordedByUserName: recordedByUserName,
-          pageFormat: format,
-        ),
+        onLayout: (format) =>
+            SaleReceiptPdf.buildCustomerDebtPaymentReceiptBytes(
+              customerDisplayName: customerDisplayName,
+              customerId: customerId,
+              amountApplied: amountApplied,
+              debtBefore: debtBefore,
+              debtAfter: debtAfter,
+              paymentRowId: paymentRowId,
+              receiptInvoiceId: receiptInvoiceId,
+              recordedByUserName: recordedByUserName,
+              pageFormat: format,
+            ),
       );
     } catch (_) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('تعذّرت الطباعة. راجع اتصال الطابعة.'),
-        ),
+        const SnackBar(content: Text('تعذّرت الطباعة. راجع اتصال الطابعة.')),
       );
     }
   }
@@ -99,9 +101,9 @@ class CustomerDebtPaymentReceiptScreen extends StatelessWidget {
       );
     } catch (_) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('تعذّرت مشاركة الإيصال')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('تعذّرت مشاركة الإيصال')));
     }
   }
 

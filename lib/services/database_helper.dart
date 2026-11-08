@@ -35,6 +35,7 @@ import '../owner/models/owner_section_ttl.dart';
 import '../owner/services/business_audit_log_service.dart';
 import '../verticals/pharmacy/services/pharmacy_db_schema.dart';
 import '../verticals/restaurant/services/restaurant_db_schema.dart';
+import 'returns/returns_offers_db_schema.dart';
 
 part 'db_settings.dart';
 part 'db_stock.dart';
@@ -55,8 +56,6 @@ part 'db_product_variants.dart';
 part 'db_oil_product_grades.dart';
 part 'db_products_sync.dart';
 part 'db_financial_sync.dart';
-
-
 
 class DatabaseHelper {
   static final DatabaseHelper _instance = DatabaseHelper._internal();
@@ -363,6 +362,7 @@ class DatabaseHelper {
   Future<void> ensureRestaurantSchema() async {
     final db = await database;
     await ensureRestaurantTables(db);
+    await ensureReturnsAndOffersSchema(db);
   }
 
   Future<void> _ensureOilChangeServicesTable(Database db) async {
@@ -524,9 +524,7 @@ class DatabaseHelper {
       ];
       for (final (col, type) in cols) {
         if (!await _tableHasColumn(db, 'service_orders', col)) {
-          await db.execute(
-            'ALTER TABLE service_orders ADD COLUMN $col $type',
-          );
+          await db.execute('ALTER TABLE service_orders ADD COLUMN $col $type');
         }
       }
     } catch (_) {}
@@ -687,12 +685,20 @@ class DatabaseHelper {
           'INTEGER NOT NULL DEFAULT 0',
         );
       }
-      if (!await _tableHasColumn(db, 'service_orders', 'hydraulicWarehouseId')) {
+      if (!await _tableHasColumn(
+        db,
+        'service_orders',
+        'hydraulicWarehouseId',
+      )) {
         await db.execute(
           'ALTER TABLE service_orders ADD COLUMN hydraulicWarehouseId INTEGER',
         );
       }
-      if (!await _tableHasColumn(db, 'service_orders', 'hydraulicStockVoucherId')) {
+      if (!await _tableHasColumn(
+        db,
+        'service_orders',
+        'hydraulicStockVoucherId',
+      )) {
         await db.execute(
           'ALTER TABLE service_orders ADD COLUMN hydraulicStockVoucherId INTEGER',
         );
@@ -712,12 +718,20 @@ class DatabaseHelper {
           'ALTER TABLE service_orders ADD COLUMN powerHydraulicSize TEXT',
         );
       }
-      if (!await _tableHasColumn(db, 'service_orders', 'powerHydraulicProductId')) {
+      if (!await _tableHasColumn(
+        db,
+        'service_orders',
+        'powerHydraulicProductId',
+      )) {
         await db.execute(
           'ALTER TABLE service_orders ADD COLUMN powerHydraulicProductId INTEGER',
         );
       }
-      if (!await _tableHasColumn(db, 'service_orders', 'powerHydraulicLitersUsed')) {
+      if (!await _tableHasColumn(
+        db,
+        'service_orders',
+        'powerHydraulicLitersUsed',
+      )) {
         await db.execute(
           'ALTER TABLE service_orders ADD COLUMN powerHydraulicLitersUsed REAL',
         );
@@ -732,7 +746,11 @@ class DatabaseHelper {
           'INTEGER NOT NULL DEFAULT 0',
         );
       }
-      if (!await _tableHasColumn(db, 'service_orders', 'powerHydraulicWarehouseId')) {
+      if (!await _tableHasColumn(
+        db,
+        'service_orders',
+        'powerHydraulicWarehouseId',
+      )) {
         await db.execute(
           'ALTER TABLE service_orders ADD COLUMN powerHydraulicWarehouseId INTEGER',
         );
@@ -753,7 +771,11 @@ class DatabaseHelper {
   /// مرحلة 1 زيوت: متوسط تكلفة/مستودع + لقطات وحدة على بنود السند.
   Future<void> _ensureOilVolumeStockPhase1Schema(Database db) async {
     try {
-      if (!await _tableHasColumn(db, 'product_warehouse_stock', 'avgCostFils')) {
+      if (!await _tableHasColumn(
+        db,
+        'product_warehouse_stock',
+        'avgCostFils',
+      )) {
         await db.execute(
           'ALTER TABLE product_warehouse_stock '
           'ADD COLUMN avgCostFils INTEGER NOT NULL DEFAULT 0',
@@ -972,7 +994,11 @@ class DatabaseHelper {
   /// مدة الخدمة المتوقعة وموعد التسليم المقترح — لتذاكر الصيانة.
   Future<void> _ensureServiceOrdersEtaColumns(Database db) async {
     try {
-      if (!await _tableHasColumn(db, 'service_orders', 'expectedDurationMinutes')) {
+      if (!await _tableHasColumn(
+        db,
+        'service_orders',
+        'expectedDurationMinutes',
+      )) {
         await db.execute(
           'ALTER TABLE service_orders ADD COLUMN expectedDurationMinutes INTEGER',
         );
@@ -1029,7 +1055,7 @@ class DatabaseHelper {
         'oilSize',
         'filterType',
         'requestedServices',
-        'customerPhone'
+        'customerPhone',
       ];
       for (final col in cols) {
         if (!await _tableHasColumn(db, 'service_orders', col)) {
@@ -1173,9 +1199,8 @@ class DatabaseHelper {
     if (!await _tableHasColumn(db, 'product_colors', 'global_id')) {
       await DbMigrationSafety.runIdempotent(
         'add product_colors.global_id',
-        () => db.execute(
-          'ALTER TABLE product_colors ADD COLUMN global_id TEXT',
-        ),
+        () =>
+            db.execute('ALTER TABLE product_colors ADD COLUMN global_id TEXT'),
       );
     }
     if (!await _tableHasColumn(db, 'product_variants', 'global_id')) {
@@ -1368,29 +1393,25 @@ class DatabaseHelper {
     for (final u in users) {
       final idNum = u['id'] as num?;
       if (idNum == null) continue;
-      batch.insert(
-        'user_profiles',
-        {
-          'id': idNum.toInt(),
-          'username': (u['username'] ?? '').toString().trim().toLowerCase(),
-          'role': ((u['role'] ?? 'staff').toString().trim().isEmpty)
-              ? 'staff'
-              : (u['role'] ?? 'staff').toString().trim(),
-          'email': (u['email'] ?? '').toString().trim(),
-          'phone': (u['phone'] ?? '').toString().trim(),
-          'phone2': (u['phone2'] ?? '').toString().trim(),
-          'displayName': (u['displayName'] ?? '').toString().trim(),
-          'jobTitle': (u['jobTitle'] ?? '').toString().trim(),
-          'isActive': ((u['isActive'] as num?)?.toInt() ?? 1) == 1 ? 1 : 0,
-          'createdAt': ((u['createdAt'] ?? '').toString().trim().isEmpty)
-              ? now
-              : (u['createdAt'] ?? '').toString(),
-          'updatedAt': ((u['updatedAt'] ?? '').toString().trim().isEmpty)
-              ? now
-              : (u['updatedAt'] ?? '').toString(),
-        },
-        conflictAlgorithm: ConflictAlgorithm.replace,
-      );
+      batch.insert('user_profiles', {
+        'id': idNum.toInt(),
+        'username': (u['username'] ?? '').toString().trim().toLowerCase(),
+        'role': ((u['role'] ?? 'staff').toString().trim().isEmpty)
+            ? 'staff'
+            : (u['role'] ?? 'staff').toString().trim(),
+        'email': (u['email'] ?? '').toString().trim(),
+        'phone': (u['phone'] ?? '').toString().trim(),
+        'phone2': (u['phone2'] ?? '').toString().trim(),
+        'displayName': (u['displayName'] ?? '').toString().trim(),
+        'jobTitle': (u['jobTitle'] ?? '').toString().trim(),
+        'isActive': ((u['isActive'] as num?)?.toInt() ?? 1) == 1 ? 1 : 0,
+        'createdAt': ((u['createdAt'] ?? '').toString().trim().isEmpty)
+            ? now
+            : (u['createdAt'] ?? '').toString(),
+        'updatedAt': ((u['updatedAt'] ?? '').toString().trim().isEmpty)
+            ? now
+            : (u['updatedAt'] ?? '').toString(),
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
     }
     await batch.commit(noResult: true);
   }
@@ -1779,7 +1800,6 @@ class DatabaseHelper {
       where: 'id = ?',
       whereArgs: [planId],
     );
-
   }
 
   Future<void> _reconcileInstallmentPlanPaidAmounts(Database db) async {
@@ -2027,7 +2047,11 @@ class DatabaseHelper {
   /// ترحيل لمرة واحدة: منتجات [stockBaseKind]=1 كانت تُخزَّن بالـ **غرام** وتُسعَّر للغرام؛
   /// أصبحت بالـ **كيلوغرام** مع سعر للكيلو. تُحافظ على إجماليات الأسطر والتكاليف.
   Future<void> _migrateWeightStockBaseGramsToKilograms(Database db) async {
-    final hasPoItems = await _tableHasColumn(db, 'purchase_order_items', 'productId');
+    final hasPoItems = await _tableHasColumn(
+      db,
+      'purchase_order_items',
+      'productId',
+    );
     await db.transaction((txn) async {
       await txn.execute('''
         UPDATE product_unit_variants
@@ -2512,10 +2536,10 @@ class DatabaseHelper {
   /// حقول إضافية لبطاقة المنتج: الرتبة/الدرجة (grade)، رقم الدفعة (batchNumber).
   Future<void> _ensureInventoryProductExtendedCols(Database db) async {
     final cols = <String, String>{
-      'grade':           'TEXT',
-      'batchNumber':     'TEXT',
+      'grade': 'TEXT',
+      'batchNumber': 'TEXT',
       'expiryAlertDaysBefore': 'INTEGER',
-      'imageUrl':        'TEXT',
+      'imageUrl': 'TEXT',
     };
     for (final e in cols.entries) {
       if (!await _tableHasColumn(db, 'products', e.key)) {
@@ -2724,9 +2748,7 @@ class DatabaseHelper {
   Future<void> _ensureSoftDeleteColumn(Database db, String table) async {
     if (!await _tableHasColumn(db, table, 'deleted_at')) {
       try {
-        await db.execute(
-          'ALTER TABLE $table ADD COLUMN deleted_at TEXT',
-        );
+        await db.execute('ALTER TABLE $table ADD COLUMN deleted_at TEXT');
       } catch (e, st) {
         if (kDebugMode) {
           AppLogger.error(
@@ -2866,9 +2888,7 @@ class DatabaseHelper {
       if (await _tableHasColumn(db, 'invoices', e.key)) continue;
       await DbMigrationSafety.runIdempotent(
         'add invoices.${e.key}',
-        () => db.execute(
-          'ALTER TABLE invoices ADD COLUMN ${e.key} ${e.value}',
-        ),
+        () => db.execute('ALTER TABLE invoices ADD COLUMN ${e.key} ${e.value}'),
       );
     }
   }
@@ -2927,15 +2947,11 @@ class DatabaseHelper {
     );
     final n = rows.isEmpty ? 0 : (rows.first['c'] as num?)?.toInt() ?? 0;
     if (n == 0) {
-      await db.insert(
-        'debt_settings', 
-        {
-          'id': 1,
-          'payload': DebtSettingsData.defaults().toJsonString(),
-          'updatedAt': DateTime.now().toIso8601String(),
-        },
-        conflictAlgorithm: ConflictAlgorithm.ignore,
-      );
+      await db.insert('debt_settings', {
+        'id': 1,
+        'payload': DebtSettingsData.defaults().toJsonString(),
+        'updatedAt': DateTime.now().toIso8601String(),
+      }, conflictAlgorithm: ConflictAlgorithm.ignore);
     }
   }
 

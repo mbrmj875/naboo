@@ -41,7 +41,8 @@ class ServiceOrdersSqlOps {
     final statusClause = (status != null && status.trim().isNotEmpty)
         ? 'AND so.status = ?'
         : '';
-    final sql = '''
+    final sql =
+        '''
       SELECT
         so.*,
         inv.type            AS invType,
@@ -123,10 +124,12 @@ class ServiceOrdersSqlOps {
     String? statusKey,
     int limit,
   ) {
-    Iterable<Map<String, dynamic>> out = raw.where((r) {
-      final tid = _tenantIdFromRow(r);
-      return tid == tenantId;
-    }).where(_rowNotSoftDeleted);
+    Iterable<Map<String, dynamic>> out = raw
+        .where((r) {
+          final tid = _tenantIdFromRow(r);
+          return tid == tenantId;
+        })
+        .where(_rowNotSoftDeleted);
     final sk = statusKey?.trim();
     if (sk != null && sk.isNotEmpty) {
       out = out.where((r) => (r['status'] ?? '').toString() == sk);
@@ -169,6 +172,20 @@ class ServiceOrdersSqlOps {
     int tenantId, {
     required String deviceSerial,
     int? excludeOrderId,
+  }) => getLatestByPlate(
+    db,
+    tenantId,
+    deviceSerial: deviceSerial,
+    excludeOrderId: excludeOrderId,
+  );
+
+  /// آخر بطاقة (زيت أو غسيل حسب [orderKind]) لهذه اللوحة، بعد توحيد كتابتها.
+  static Future<Map<String, dynamic>?> getLatestByPlate(
+    DatabaseExecutor db,
+    int tenantId, {
+    required String deviceSerial,
+    int? excludeOrderId,
+    String orderKind = ServiceOrderKinds.oilChange,
   }) async {
     final plate = deviceSerial.trim();
     if (plate.isEmpty) return null;
@@ -184,6 +201,7 @@ class ServiceOrdersSqlOps {
         excludeOrderId: excludeOrderId,
         extraWhere: 'deviceSerial = ?',
         extraArgs: [variant],
+        orderKind: orderKind,
       );
       if (row != null) return row;
     }
@@ -193,6 +211,7 @@ class ServiceOrdersSqlOps {
       tenantId,
       plateKey: plateKey,
       excludeOrderId: excludeOrderId,
+      orderKind: orderKind,
     );
   }
 
@@ -202,13 +221,14 @@ class ServiceOrdersSqlOps {
     required String extraWhere,
     required List<Object?> extraArgs,
     int? excludeOrderId,
+    String orderKind = ServiceOrderKinds.oilChange,
   }) async {
     // المعلّقة ليست «آخر زيارة» مكتملة — جلبها كان يفسد القراءة الحالية/اللاحقة.
     final where = StringBuffer(
       'tenantId = ? AND deletedAt IS NULL AND orderKind = ? '
       "AND status != '${OilChangeOrderStatus.suspended}' AND $extraWhere",
     );
-    final args = <Object?>[tenantId, ServiceOrderKinds.oilChange, ...extraArgs];
+    final args = <Object?>[tenantId, orderKind, ...extraArgs];
     if (excludeOrderId != null && excludeOrderId > 0) {
       where.write(' AND id != ?');
       args.add(excludeOrderId);
@@ -228,13 +248,14 @@ class ServiceOrdersSqlOps {
     int tenantId, {
     required String plateKey,
     int? excludeOrderId,
+    String orderKind = ServiceOrderKinds.oilChange,
   }) async {
     final where = StringBuffer(
       'tenantId = ? AND deletedAt IS NULL AND orderKind = ? '
       "AND status != '${OilChangeOrderStatus.suspended}' "
       "AND deviceSerial IS NOT NULL AND trim(deviceSerial) != ''",
     );
-    final args = <Object?>[tenantId, ServiceOrderKinds.oilChange];
+    final args = <Object?>[tenantId, orderKind];
     if (excludeOrderId != null && excludeOrderId > 0) {
       where.write(' AND id != ?');
       args.add(excludeOrderId);
@@ -276,11 +297,7 @@ class ServiceOrdersSqlOps {
       "tenantId = ? AND (deletedAt IS NULL OR TRIM(COALESCE(deletedAt,'')) = '') "
       'AND orderKind = ? AND (customerId = ?',
     );
-    final args = <Object?>[
-      tenantId,
-      ServiceOrderKinds.oilChange,
-      customerId,
-    ];
+    final args = <Object?>[tenantId, ServiceOrderKinds.oilChange, customerId];
     if (nameKey.isNotEmpty) {
       where.write(
         ' OR ('
@@ -469,7 +486,9 @@ class ServiceOrdersSqlOps {
     });
 
     if (afterId != null && afterId > 0) {
-      out = out.where((r) => ((r['id'] as num?)?.toInt() ?? 0) < afterId).toList();
+      out = out
+          .where((r) => ((r['id'] as num?)?.toInt() ?? 0) < afterId)
+          .toList();
     }
 
     if (out.length > cap) {
@@ -494,18 +513,22 @@ class ServiceOrdersSqlOps {
     final hasSearch = q != null && q.isNotEmpty;
     final like = hasSearch ? '%$q%' : null;
 
-    final hasOrderKind =
-        await _tableHasColumn(db, 'service_orders', 'orderKind');
-    final hasCustomerPhone =
-        await _tableHasColumn(db, 'service_orders', 'customerPhone');
+    final hasOrderKind = await _tableHasColumn(
+      db,
+      'service_orders',
+      'orderKind',
+    );
+    final hasCustomerPhone = await _tableHasColumn(
+      db,
+      'service_orders',
+      'customerPhone',
+    );
 
     try {
       final where = StringBuffer(
         "tenantId = ? AND (deletedAt IS NULL OR TRIM(COALESCE(deletedAt,'')) = '')",
       );
-      final args = <Object?>[
-        tenantId,
-      ];
+      final args = <Object?>[tenantId];
 
       if (hasOrderKind) {
         where.write(
@@ -515,10 +538,7 @@ class ServiceOrdersSqlOps {
           "(odometerCurrent IS NOT NULL AND TRIM(odometerCurrent) != '')"
           ")))",
         );
-        args.addAll([
-          ServiceOrderKinds.oilChange,
-          ServiceOrderKinds.repair,
-        ]);
+        args.addAll([ServiceOrderKinds.oilChange, ServiceOrderKinds.repair]);
       }
 
       if (afterId != null && afterId > 0) {
@@ -702,4 +722,3 @@ class ServiceOrdersSqlOps {
     );
   }
 }
-

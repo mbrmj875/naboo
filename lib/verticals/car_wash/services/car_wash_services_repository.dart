@@ -1,8 +1,12 @@
 import 'package:sqflite/sqflite.dart';
 
 import '../models/car_wash_service_item.dart';
+import 'wash_offer_engine.dart';
+import 'wash_offer_history_loader.dart';
 import '../../../services/cloud_sync_service.dart';
 import '../../../services/database_helper.dart';
+import '../../../services/service_order_kinds.dart';
+import '../../../services/service_orders_sql_ops.dart';
 import '../../../services/tenant_context_service.dart';
 
 /// كتالوج أنواع غسيل السيارات — اسم وسعر يُختار عند إنشاء بطاقة غسيل.
@@ -21,6 +25,32 @@ class CarWashServicesRepository {
     final t = TenantContextService.instance;
     if (!t.loaded) await t.load();
     return t.requireActiveTenantId();
+  }
+
+  /// آخر غسلة لهذه اللوحة (بعد توحيد كتابتها) — لتعبئة غسلة جديدة منها.
+  Future<Map<String, dynamic>?> latestWashByPlate(String plate) async {
+    if (plate.trim().isEmpty) return null;
+    final db = await _db;
+    return ServiceOrdersSqlOps.getLatestByPlate(
+      db,
+      await _tenantId(),
+      deviceSerial: plate,
+      orderKind: ServiceOrderKinds.carWash,
+    );
+  }
+
+  /// سجل السيارة لعروض الغسيل (الغسلات والغيارات منذ [since]).
+  Future<WashOfferHistory> offerHistory(
+    String plate, {
+    required DateTime since,
+  }) async {
+    final db = await _db;
+    return WashOfferHistoryLoader.load(
+      db,
+      await _tenantId(),
+      plate: plate,
+      since: since,
+    );
   }
 
   void _scheduleSync() {
@@ -53,10 +83,7 @@ class CarWashServicesRepository {
   }
 
   /// يُرجع معرّف النوع؛ الاسم المكرر يُحدَّث سعره بدل إنشاء صف ثانٍ.
-  Future<int> insert({
-    required String name,
-    required int priceFils,
-  }) async {
+  Future<int> insert({required String name, required int priceFils}) async {
     final clean = normalizeName(name);
     if (clean.isEmpty) return 0;
 

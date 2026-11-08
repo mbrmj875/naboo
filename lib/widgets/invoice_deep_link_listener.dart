@@ -11,6 +11,8 @@ import '../screens/debts/customer_debt_detail_screen.dart';
 import '../utils/app_logger.dart';
 import '../utils/customer_debt_deep_link.dart';
 import '../utils/invoice_deep_link.dart';
+import '../navigation/app_root_navigator_key.dart';
+import '../navigation/scanned_receipt_lookup.dart';
 import 'invoice_detail_sheet.dart';
 
 /// يستمع لروابط `basrainvoice://invoice/{id}` (مثلاً من مسح QR على الإيصال) ويعرض تفاصيل الفاتورة.
@@ -70,7 +72,8 @@ class _InvoiceDeepLinkListenerState extends State<InvoiceDeepLinkListener> {
       _lastOpenedCustomerId = customerId;
       _lastOpenedCustomerAt = now;
       unawaited(
-        Navigator.of(context).push<void>(
+        // المستمع فوق [MaterialApp]: لا Navigator في سياقه، نستخدم الجذر.
+        appRootNavigatorKey.currentState?.push<void>(
           MaterialPageRoute<void>(
             builder: (_) => CustomerDebtDetailScreen.fromCustomerId(
               registeredCustomerId: customerId,
@@ -81,20 +84,34 @@ class _InvoiceDeepLinkListenerState extends State<InvoiceDeepLinkListener> {
       return;
     }
 
-    final id = InvoiceDeepLink.parseInvoiceId(uri);
-    if (id == null || id <= 0) return;
-    if (!features.data.enablePos) return;
+    final ref = InvoiceDeepLink.parse(uri);
+    if (ref == null) return;
     if (!context.read<AuthProvider>().isLoggedIn) return;
     final now = DateTime.now();
-    if (_lastOpenedId == id &&
+    if (_lastOpenedId == ref.localId &&
         now.difference(_lastOpenedAt) < const Duration(milliseconds: 900)) {
       return;
     }
-    _lastOpenedId = id;
+    _lastOpenedId = ref.localId;
     _lastOpenedAt = now;
-    unawaited(
-      showInvoiceDetailSheet(context, DatabaseHelper(), id),
-    );
+    unawaited(_openInvoice(ref));
+  }
+
+  /// الرقم المطبوع يختلف بين الأجهزة: نفتح الفاتورة بمعرّفها العالمي.
+  Future<void> _openInvoice(InvoiceLinkRef ref) async {
+    final r = await ScannedReceiptLookup.resolve(ref);
+    if (!mounted) return;
+    // المستمع فوق [MaterialApp]: لا Navigator ولا Scaffold في سياقه.
+    final navCtx = appRootNavigatorKey.currentContext;
+    if (navCtx == null || !navCtx.mounted) return;
+    final rec = r.receipt;
+    if (rec == null) {
+      ScaffoldMessenger.maybeOf(
+        navCtx,
+      )?.showSnackBar(SnackBar(content: Text(r.error ?? '')));
+      return;
+    }
+    await showInvoiceDetailSheet(navCtx, DatabaseHelper(), rec.invoiceId);
   }
 
   @override

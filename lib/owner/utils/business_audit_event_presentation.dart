@@ -38,6 +38,20 @@ abstract final class BusinessAuditEventPresentation {
         return 'تعديل بطاقة غيار زيت';
       case 'oil_change_voided':
         return 'حذف بطاقة غيار زيت';
+      case 'return_completed':
+        return 'استرجاع فاتورة';
+      case 'return_approved':
+        return 'موافقة على استرجاع أو خصم';
+      case 'return_approval_rejected':
+        return 'رفض أو إلغاء موافقة';
+      case 'return_cancelled':
+        return 'إلغاء استرجاع';
+      case 'return_policy_changed':
+        return 'تغيير سياسة الاسترجاع';
+      case 'wash_offers_changed':
+        return 'تغيير عروض الغسيل';
+      case 'wash_discount_override':
+        return 'تعديل خصم أو سعر غسلة';
       case 'owner_emergency_shift_bypass':
         return 'تجاوز طوارئ — وردية';
       case 'owner_emergency_sync_bypass':
@@ -117,6 +131,35 @@ abstract final class BusinessAuditEventPresentation {
         return _oilChangeAmendDetail(oldMap, newMap);
       case 'oil_change_voided':
         return _oilChangeVoidDetail(oldMap, newMap);
+      case 'return_completed':
+        return _returnDetail(oldMap, newMap);
+      case 'return_approved':
+        return [
+          if (_stringField(newMap, 'approver') != null)
+            'الموافِق: ${_stringField(newMap, 'approver')}',
+          if (_numField(newMap, 'amount') != null)
+            _formatMoney(_numField(newMap, 'amount')!),
+          if (_stringField(newMap, 'reasons') != null)
+            _stringField(newMap, 'reasons')!,
+        ].join(' · ');
+      case 'return_approval_rejected':
+        return _stringField(newMap, 'cause') == 'wrong_pin'
+            ? 'رمز خاطئ'
+            : 'أُلغيت الموافقة';
+      case 'return_cancelled':
+        return 'لم يكتمل الحفظ — حُررت المواد';
+      case 'return_policy_changed':
+      case 'wash_offers_changed':
+        return 'غيّره المالك برمزه';
+      case 'wash_discount_override':
+        return [
+          if (_stringField(newMap, 'plate') != null)
+            'لوحة ${_stringField(newMap, 'plate')}',
+          if (_numField(newMap, 'discount') != null)
+            'خصم ${_formatMoney(_numField(newMap, 'discount')!)}',
+          if (_stringField(newMap, 'approver') != null)
+            'الموافِق: ${_stringField(newMap, 'approver')}',
+        ].join(' · ');
       case 'owner_emergency_shift_bypass':
         return _emergencyShiftDetail(newMap);
       case 'owner_emergency_sync_bypass':
@@ -243,10 +286,12 @@ abstract final class BusinessAuditEventPresentation {
     Map<String, dynamic>? newMap,
   ) {
     final parts = <String>[];
-    final name = _stringField(newMap, 'customerName') ??
+    final name =
+        _stringField(newMap, 'customerName') ??
         _stringField(oldMap, 'customerName');
     final plate = _stringField(newMap, 'plate');
-    final invoiceId = _numField(newMap, 'invoiceId')?.round() ??
+    final invoiceId =
+        _numField(newMap, 'invoiceId')?.round() ??
         _numField(oldMap, 'invoiceId')?.round();
     final oldTotal = _numField(oldMap, 'totalFils');
     final newTotal = _numField(newMap, 'totalFils');
@@ -260,7 +305,9 @@ abstract final class BusinessAuditEventPresentation {
     } else if (newTotal != null) {
       parts.add('المبلغ: ${_formatMoney(newTotal / 1000)}');
     }
-    return parts.isEmpty ? 'تعديل بطاقة غيار مربوطة بفاتورة' : parts.join(' · ');
+    return parts.isEmpty
+        ? 'تعديل بطاقة غيار مربوطة بفاتورة'
+        : parts.join(' · ');
   }
 
   static String _oilChangeVoidDetail(
@@ -268,11 +315,13 @@ abstract final class BusinessAuditEventPresentation {
     Map<String, dynamic>? newMap,
   ) {
     final parts = <String>[];
-    final name = _stringField(oldMap, 'customerName') ??
+    final name =
+        _stringField(oldMap, 'customerName') ??
         _stringField(newMap, 'customerName');
-    final plate = _stringField(oldMap, 'plate') ??
-        _stringField(newMap, 'plate');
-    final invoiceId = _numField(oldMap, 'invoiceId')?.round() ??
+    final plate =
+        _stringField(oldMap, 'plate') ?? _stringField(newMap, 'plate');
+    final invoiceId =
+        _numField(oldMap, 'invoiceId')?.round() ??
         _numField(newMap, 'invoiceId')?.round();
     final total = _numField(oldMap, 'totalFils');
     if (name != null && name.isNotEmpty) parts.add(name);
@@ -280,6 +329,27 @@ abstract final class BusinessAuditEventPresentation {
     if (invoiceId != null) parts.add('فاتورة #$invoiceId');
     if (total != null) parts.add('ملغى: ${_formatMoney(total / 1000)}');
     return parts.isEmpty ? 'إبطال بطاقة غيار وفاتورتها' : parts.join(' · ');
+  }
+
+  static String _returnDetail(
+    Map<String, dynamic>? oldMap,
+    Map<String, dynamic>? newMap,
+  ) {
+    final parts = <String>[];
+    final orig = _numField(oldMap, 'originalInvoiceId')?.round();
+    final ret = _numField(newMap, 'returnInvoiceId')?.round();
+    final amount = _numField(newMap, 'amount');
+    if (orig != null) parts.add('الأصل #$orig');
+    if (ret != null) parts.add('المرتجع #$ret');
+    if (amount != null) parts.add(_formatMoney(amount));
+    final reason = _stringField(newMap, 'reason');
+    if (reason != null && reason.isNotEmpty) parts.add('السبب: $reason');
+    final approver = _stringField(newMap, 'approver');
+    if (approver != null && approver.isNotEmpty)
+      parts.add('الموافِق: $approver');
+    if (newMap?['legacy'] == true) parts.add('إيصال قديم');
+    if (newMap?['outsideWindow'] == true) parts.add('خارج المدة');
+    return parts.join(' · ');
   }
 
   static String _emergencyShiftDetail(Map<String, dynamic>? map) {
@@ -294,7 +364,8 @@ abstract final class BusinessAuditEventPresentation {
   }
 
   static String _deviceDetail(Map<String, dynamic>? map, String? entityId) {
-    final device = _stringField(map, 'deviceLabel') ??
+    final device =
+        _stringField(map, 'deviceLabel') ??
         _stringField(map, 'deviceId') ??
         entityId;
     if (device != null && device.isNotEmpty) return 'الجهاز: $device';

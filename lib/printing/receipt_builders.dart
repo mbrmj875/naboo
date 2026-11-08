@@ -1,6 +1,9 @@
+import 'package:intl/intl.dart';
+
 import '../models/expense.dart';
 import '../models/invoice.dart';
 import '../services/database_helper.dart';
+import '../services/returns/return_meta.dart';
 import '../services/service_order_kinds.dart';
 import '../utils/invoice_deep_link.dart';
 import '../utils/iqd_money.dart';
@@ -16,14 +19,37 @@ abstract final class ReceiptBuilders {
     final helper = DatabaseHelper();
     final invoice = await helper.getInvoiceById(invoiceId);
     if (invoice == null) return null;
+    return fromInvoice(invoice, order: await linkedOrder(invoiceId));
+  }
+
+  /// نوع العمل الذي تمثّله الفاتورة (بطاقتها المرتبطة أولاً، ثم علامة البيع).
+  static ReceiptKind kindOf(Invoice invoice, {Map<String, dynamic>? order}) =>
+      invoice.isReturned
+      ? ReceiptKind.saleReturn
+      : switch (order) {
+          final o? when ServiceOrderKinds.isCarWash(o) => ReceiptKind.carWash,
+          final o? when ServiceOrderKinds.isOilChangeLogRow(o) =>
+            ReceiptKind.oilChange,
+          _
+              when invoice.deliveryAddress ==
+                  OilChangeDirectSaleService.sourceTag =>
+            ReceiptKind.directSale,
+          _ => ReceiptKind.sale,
+        };
+
+  /// بطاقة الخدمة المرتبطة بالفاتورة (زيت/غسيل) إن وُجدت.
+  static Future<Map<String, dynamic>?> linkedOrder(int invoiceId) async {
+    final helper = DatabaseHelper();
     final db = await helper.database;
+    final tenantId = await helper.resolveLocalBusinessTenantId();
     final rows = await db.rawQuery(
       'SELECT so.* FROM service_orders so '
       'JOIN invoices i ON i.id = so.invoiceId AND i.tenantId = so.tenantId '
-      'WHERE so.invoiceId = ? ORDER BY so.id DESC LIMIT 1',
-      [invoiceId],
+      'WHERE so.invoiceId = ? AND so.tenantId = ? AND so.deletedAt IS NULL '
+      'ORDER BY so.id DESC LIMIT 1',
+      [invoiceId, tenantId],
     );
-    return fromInvoice(invoice, order: rows.isEmpty ? null : rows.first);
+    return rows.isEmpty ? null : rows.first;
   }
 
   /// يبني الإيصال من فاتورة محمّلة، ومعها بطاقة الخدمة المرتبطة إن وُجدت.
@@ -31,14 +57,8 @@ abstract final class ReceiptBuilders {
     Invoice invoice, {
     Map<String, dynamic>? order,
   }) {
-    final kind = switch (order) {
-      final o? when ServiceOrderKinds.isCarWash(o) => ReceiptKind.carWash,
-      final o? when ServiceOrderKinds.isOilChangeLogRow(o) =>
-        ReceiptKind.oilChange,
-      _ when invoice.deliveryAddress == OilChangeDirectSaleService.sourceTag =>
-        ReceiptKind.directSale,
-      _ => ReceiptKind.sale,
-    };
+    final kind = kindOf(invoice, order: order);
+    if (kind == ReceiptKind.saleReturn) return saleReturn(invoice);
 
     final fields = <ReceiptField>[];
     final highlights = <ReceiptHighlight>[];
@@ -139,7 +159,12 @@ abstract final class ReceiptBuilders {
       }
     }
 
+    final notes = <String>[];
     if (kind == ReceiptKind.carWash) {
+      // سبب الخصم والسطر التشجيعي («غسلتان من 3 — الغسلة القادمة مجانية»).
+      for (final line in s('washOfferNote').split('\n')) {
+        if (line.trim().isNotEmpty) notes.add(line.trim());
+      }
       final washer = s('technicianName');
       if (washer.isNotEmpty) {
         fields.add(
@@ -214,11 +239,88 @@ abstract final class ReceiptBuilders {
       lines: lines,
       totals: totals,
       highlights: highlights,
+      notes: notes,
       qrData: invoice.id == null
           ? null
-          : InvoiceDeepLink.uriForInvoiceId(invoice.id!),
+          : InvoiceDeepLink.uriForInvoiceId(
+              invoice.id!,
+              globalId: invoice.globalId,
+            ),
     );
   }
+
+  /// إيصال استرجاع: الأصل، المواد، المبلغ المسترد بخط كبير، والتوقيع.
+  /// رمزه للعرض فقط (مسحه لا يفتح استرجاعاً).
+  static ReceiptDocument saleReturn(Invoice ret) {
+    final meta = ReturnMeta.parse(ret.returnMeta);
+    final df = DateFormat('yyyy/MM/dd');
+    final customer = ret.customerName.trim();
+    final fields = <ReceiptField>[
+      if (meta.originalNumber != null)
+        ReceiptField('الفاتورة الأصلية', '#${meta.originalNumber}', bold: true)
+      else if (ret.originalInvoiceId != null)
+        ReceiptField(
+          'الفاتورة الأصلية',
+          '#${ret.originalInvoiceId}',
+          bold: true,
+        ),
+      if (meta.originalDate != null)
+        ReceiptField('تاريخها', df.format(meta.originalDate!)),
+      if (customer.isNotEmpty &&
+          customer != 'زبون نقدي' &&
+          customer != 'بيع مباشر' &&
+          customer != OilChangeDirectSaleService.defaultActorLabel)
+        ReceiptField('العميل', customer, section: ReceiptSection.customer),
+      ReceiptField(
+        'طريقة الإرجاع',
+        meta.refundMethodAr ?? refundMethodAr(ret.type),
+      ),
+      if ((ret.returnReason ?? '').trim().isNotEmpty)
+        ReceiptField('السبب', ret.returnReason!.trim()),
+      if ((meta.actor ?? ret.createdByUserName ?? '').trim().isNotEmpty)
+        ReceiptField(
+          'المنفّذ',
+          (meta.actor ?? ret.createdByUserName)!.trim(),
+          section: ReceiptSection.cashier,
+        ),
+      if ((meta.approver ?? '').trim().isNotEmpty)
+        ReceiptField('الموافِق', meta.approver!.trim()),
+    ];
+    final lines = [
+      for (final it in ret.items)
+        ReceiptLine(
+          name: it.productName,
+          quantity: it.enteredQtyResolved,
+          unit: it.unitLabel,
+          unitPriceFils: IqdMoney.toFils(it.price),
+          totalFils: IqdMoney.toFils(it.total),
+        ),
+    ];
+    final refund = IqdMoney.toFils(ret.total);
+    return ReceiptDocument(
+      kind: ReceiptKind.saleReturn,
+      date: ret.date,
+      number: ret.id == null ? null : '${ret.id}',
+      status: 'مرتجع',
+      fields: fields,
+      lines: lines,
+      totals: [ReceiptTotal('المبلغ المسترد', refund, emphasis: true)],
+      notes: const [
+        'تأكدت أن المواد سليمة وغير مفتوحة.',
+        'توقيع الزبون: ____________________',
+      ],
+      qrData: ret.id == null
+          ? null
+          : InvoiceDeepLink.uriForInvoiceId(ret.id!, globalId: ret.globalId),
+    );
+  }
+
+  /// طريقة إرجاع المبلغ حسب نوع الفاتورة الأصلية.
+  static String refundMethodAr(InvoiceType t) => switch (t) {
+    InvoiceType.credit => 'خصم من الدين (لا يُصرف نقداً)',
+    InvoiceType.installment => 'خصم من التقسيط',
+    _ => 'نقداً من الصندوق',
+  };
 
   /// إيصال تسديد دين عميل.
   static ReceiptDocument debtPayment({
@@ -228,6 +330,7 @@ abstract final class ReceiptBuilders {
     required double debtAfter,
     required int paymentRowId,
     int? receiptInvoiceId,
+    String? receiptInvoiceGlobalId,
     String? recordedBy,
     DateTime? date,
   }) {
@@ -243,8 +346,11 @@ abstract final class ReceiptBuilders {
       ],
       totals: [
         ReceiptTotal('الدين قبل التسديد', IqdMoney.toFils(debtBefore)),
-        ReceiptTotal('المبلغ المسدَّد', IqdMoney.toFils(amountApplied),
-            emphasis: true),
+        ReceiptTotal(
+          'المبلغ المسدَّد',
+          IqdMoney.toFils(amountApplied),
+          emphasis: true,
+        ),
         ReceiptTotal('الدين المتبقي', IqdMoney.toFils(debtAfter)),
       ],
       highlights: [
@@ -253,7 +359,10 @@ abstract final class ReceiptBuilders {
       ],
       qrData: receiptInvoiceId == null
           ? null
-          : InvoiceDeepLink.uriForInvoiceId(receiptInvoiceId),
+          : InvoiceDeepLink.uriForInvoiceId(
+              receiptInvoiceId,
+              globalId: receiptInvoiceGlobalId,
+            ),
     );
   }
 
@@ -278,7 +387,9 @@ abstract final class ReceiptBuilders {
             section: ReceiptSection.cashier,
           ),
       ],
-      totals: [ReceiptTotal('المبلغ', IqdMoney.toFils(e.amount), emphasis: true)],
+      totals: [
+        ReceiptTotal('المبلغ', IqdMoney.toFils(e.amount), emphasis: true),
+      ],
       notes: const ['التوقيع: ....................'],
     );
   }
@@ -383,6 +494,38 @@ abstract final class ReceiptBuilders {
             total: 43000,
             advancePayment: 20000,
             deliveryAddress: OilChangeDirectSaleService.sourceTag,
+          ),
+        );
+      case ReceiptKind.saleReturn:
+        return saleReturn(
+          Invoice(
+            id: 1031,
+            customerName: 'محمد',
+            date: now,
+            type: InvoiceType.cash,
+            items: [
+              InvoiceItem(
+                productName: 'زيت محرك 5W30 فل سنثتك',
+                quantity: 1,
+                price: 9000,
+                total: 9000,
+              ),
+            ],
+            discount: 0,
+            tax: 0,
+            total: 9000,
+            advancePayment: 0,
+            isReturned: true,
+            originalInvoiceId: 1026,
+            returnReason: 'الزبون اشترى لزوجة غير مناسبة',
+            returnMeta: ReturnMeta(
+              originalNumber: 1026,
+              originalDate: now.subtract(const Duration(days: 2)),
+              actor: 'الكاشير',
+              approver: 'المالك',
+              refundMethodAr: 'نقداً من الصندوق',
+              intactConfirmedBy: 'الكاشير',
+            ).encode(),
           ),
         );
       case ReceiptKind.debtPayment:
