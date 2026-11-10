@@ -43,6 +43,7 @@ import '../services/auth/owner_supabase_credential_store.dart';
 import '../services/auth/native_google_id_token_sign_in.dart';
 import '../services/auth/auth_network_guard.dart';
 import '../services/auth/auth_session_diagnostics.dart';
+import '../services/auth/email_otp_cooldown.dart';
 import '../services/auth/supabase_sign_in_failure_policy.dart';
 import '../services/auth/auth_user_messages.dart';
 import '../services/auth/native_google_id_token_sign_in_result.dart';
@@ -1829,27 +1830,6 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
-  /// يضمن وجود كلمة Supabase داخلية محفوظة للدخول بـ البريد+PIN لاحقاً.
-  Future<void> _ensureInternalSupabasePasswordPersisted(String mail) async {
-    final normalized = mail.trim().toLowerCase();
-    if (normalized.isEmpty || !normalized.contains('@')) return;
-    if (Supabase.instance.client.auth.currentUser == null) return;
-
-    final existing =
-        await OwnerSupabaseCredentialStore.instance.read(normalized);
-    if (existing != null && existing.isNotEmpty) return;
-
-    final internalPassword = _generateInternalSupabasePassword();
-    AuthSessionDiagnostics.instance.noteEvent(
-      'internal_password_rotation',
-      source: 'ensure_internal_password',
-    );
-    await Supabase.instance.client.auth.updateUser(
-      UserAttributes(password: internalPassword),
-    );
-    await _persistOwnerSupabaseCredential(normalized, internalPassword);
-  }
-
   /// بعد OTP ناجح لمسار إعادة دخول البريد+PIN على جهاز بلا جلسة محلية.
   Future<String?> completeEmailPinLoginAfterOtp({
     required String otp,
@@ -2198,6 +2178,9 @@ class AuthProvider extends ChangeNotifier {
       }
       final msg = e.message.toLowerCase();
       final statusCode = int.tryParse('${e.statusCode ?? ''}');
+      // مهلة قصيرة بين طلبين: الرمز السابق صالح، فنذكر الثواني بدقة.
+      final cooldown = emailOtpCooldownSeconds(e.message);
+      if (cooldown != null) return emailOtpCooldownMessageAr(cooldown);
       if (msg.contains('rate limit') ||
           msg.contains('too many') ||
           msg.contains('security purposes') ||
@@ -3355,21 +3338,8 @@ class AuthProvider extends ChangeNotifier {
       AppLogger.warn('AuthProvider', 'Google profile metadata update: $e');
     }
 
-    // فعّل الدخول لاحقاً بـ (البريد + PIN) على هذا الجهاز:
-    // كلمة Supabase داخلية قوية ≠ PIN، وتُحفظ محلياً في Secure Storage.
-    final mail = (Supabase.instance.client.auth.currentUser?.email ?? '')
-        .trim()
-        .toLowerCase();
-    if (mail.isNotEmpty) {
-      try {
-        await _ensureInternalSupabasePasswordPersisted(mail);
-      } catch (e) {
-        AppLogger.warn(
-          'AuthProvider',
-          'Google profile internal password persist: $e',
-        );
-      }
-    }
+    // لا نغيّر كلمة Supabase هنا: تغييرها يُنهي جلسات كل أجهزة الحساب.
+    // الجهاز يبقى متصلاً بجلسة Google، والدخول بالبريد + PIN يمر برمز البريد.
 
     final rowAfter = await _db.getUserById(localId);
     if (rowAfter == null) return 'تعذر قراءة الحساب بعد الحفظ.';

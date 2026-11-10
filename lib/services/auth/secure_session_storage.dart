@@ -62,19 +62,21 @@ class SecureLocalStorage extends LocalStorage {
   final SecureKvStore _secure;
   final Future<SharedPreferences> Function() _prefsFactory;
 
+  /// Keychain ثبت أنه لا يحفظ القيم (مثل بناء غير موقّع): SharedPreferences فقط.
   bool _useFallback = false;
+
+  /// مهلة كل محاولة قراءة/كتابة في Keychain.
+  static const Duration _secureOpTimeout = Duration(seconds: 2);
 
   @override
   Future<void> initialize() async {
     try {
-      await _initializeSecureOrFallback()
-          .timeout(const Duration(seconds: 2));
+      await _initializeSecureOrFallback().timeout(const Duration(seconds: 4));
     } on Object catch (e) {
-      _useFallback = true;
+      // بطء مؤقت (مثلاً تشغيل بالخلفية قبل فتح القفل) ليس عطلاً دائماً:
+      // لا نتخلى عن Keychain، بل نعيد المحاولة عند القراءة.
       if (kDebugMode) {
-        debugPrint(
-          '[SecureLocalStorage] init timed out/failed ($e) — SharedPreferences',
-        );
+        debugPrint('[SecureLocalStorage] init slow/failed ($e) — will retry on read');
       }
     }
   }
@@ -97,11 +99,9 @@ class SecureLocalStorage extends LocalStorage {
       }
       await _migrateLegacyTokenIfNeeded();
     } on Object catch (e) {
-      _useFallback = true;
+      // استثناء لا يعني أن Keychain معطّل دائماً. نعيد المحاولة لاحقاً.
       if (kDebugMode) {
-        debugPrint(
-          '[SecureLocalStorage] Keychain unavailable ($e) — session fallback to SharedPreferences',
-        );
+        debugPrint('[SecureLocalStorage] Keychain error at init ($e) — will retry');
       }
     }
   }
@@ -120,13 +120,20 @@ class SecureLocalStorage extends LocalStorage {
   }
 
   Future<void> _migrateLegacyTokenIfNeeded() async {
+    if (_useFallback) return;
     try {
       final hasSecure = await _secure.containsKey(persistSessionKey);
       if (hasSecure) {
         // Already migrated; clean up any plain residue defensively.
         try {
           final prefs = await _prefsFactory();
-          if (prefs.containsKey(persistSessionKey)) {
+          final plain = prefs.getString(persistSessionKey);
+          if (plain != null) {
+            final secureValue = await _secure.read(persistSessionKey);
+            // نسخة احتياطية أحدث كُتبت أثناء تعطل مؤقت: انقلها قبل الحذف.
+            if (isNewerSession(plain, secureValue)) {
+              await _secure.write(persistSessionKey, plain);
+            }
             await prefs.remove(persistSessionKey);
           }
         } catch (_) {
@@ -140,39 +147,50 @@ class SecureLocalStorage extends LocalStorage {
       await _secure.write(persistSessionKey, legacy);
       await prefs.remove(persistSessionKey);
     } on Object catch (_) {
-      // Migration is best-effort; session may need re-login if Keychain fails.
-      _useFallback = true;
+      // Migration is best-effort; the plain copy stays readable below.
+    }
+  }
+
+  /// يقرأ من Keychain مع إعادة المحاولة، ويعيد null إن تعذّر بعد كل المحاولات.
+  Future<({bool ok, String? value})> _readSecureWithRetry() async {
+    for (var attempt = 0; attempt < 3; attempt++) {
+      try {
+        final v = await _secure
+            .read(persistSessionKey)
+            .timeout(_secureOpTimeout);
+        return (ok: true, value: v);
+      } on Object {
+        if (attempt < 2) {
+          await Future<void>.delayed(const Duration(milliseconds: 500));
+        }
+      }
+    }
+    return (ok: false, value: null);
+  }
+
+  Future<String?> _readPlain() async {
+    try {
+      final prefs = await _prefsFactory();
+      return prefs.getString(persistSessionKey);
+    } catch (_) {
+      return null;
     }
   }
 
   @override
   Future<bool> hasAccessToken() async {
-    if (_useFallback) {
-      final prefs = await _prefsFactory();
-      return prefs.containsKey(persistSessionKey);
-    }
-    try {
-      return await _secure.containsKey(persistSessionKey);
-    } catch (e) {
-      _useFallback = true;
-      final prefs = await _prefsFactory();
-      return prefs.containsKey(persistSessionKey);
-    }
+    return (await accessToken()) != null;
   }
 
   @override
   Future<String?> accessToken() async {
-    if (_useFallback) {
-      final prefs = await _prefsFactory();
-      return prefs.getString(persistSessionKey);
-    }
-    try {
-      return await _secure.read(persistSessionKey);
-    } catch (e) {
-      _useFallback = true;
-      final prefs = await _prefsFactory();
-      return prefs.getString(persistSessionKey);
-    }
+    final plain = await _readPlain();
+    if (_useFallback) return plain;
+    final secure = await _readSecureWithRetry();
+    if (!secure.ok) return plain;
+    final value = secure.value;
+    if (value == null || value.isEmpty) return plain;
+    return isNewerSession(plain, value) ? plain : value;
   }
 
   @override
@@ -193,19 +211,40 @@ class SecureLocalStorage extends LocalStorage {
 
   @override
   Future<void> persistSession(String persistSessionString) async {
+    final prefs = await _prefsFactory();
     if (_useFallback) {
-      final prefs = await _prefsFactory();
       await prefs.setString(persistSessionKey, persistSessionString);
       return;
     }
     try {
-      await _secure.write(persistSessionKey, persistSessionString);
+      await _secure
+          .write(persistSessionKey, persistSessionString)
+          .timeout(_secureOpTimeout);
+      // نجحت الكتابة الآمنة: لا نُبقي نسخة نصية.
+      if (prefs.containsKey(persistSessionKey)) {
+        await prefs.remove(persistSessionKey);
+      }
     } catch (e) {
-      _useFallback = true;
-      final prefs = await _prefsFactory();
+      // تعطل مؤقت: احفظ نسخة احتياطية حتى لا تضيع الجلسة، ولا نتخلى عن Keychain.
       await prefs.setString(persistSessionKey, persistSessionString);
     }
   }
+}
+
+/// هل الجلسة [candidate] أحدث من [current]؟ المقارنة على `expires_at`.
+@visibleForTesting
+bool isNewerSession(String? candidate, String? current) {
+  final c = _sessionExpiresAt(candidate);
+  if (c == null) return false;
+  final cur = _sessionExpiresAt(current);
+  if (cur == null) return true;
+  return c > cur;
+}
+
+int? _sessionExpiresAt(String? raw) {
+  if (raw == null || raw.isEmpty) return null;
+  final m = RegExp(r'"expires_at"\s*:\s*(\d+)').firstMatch(raw);
+  return m == null ? null : int.tryParse(m.group(1)!);
 }
 
 /// Helper that mirrors Supabase's default `persistSessionKey` derivation:

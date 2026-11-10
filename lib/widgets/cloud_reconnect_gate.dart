@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../navigation/app_root_navigator_key.dart';
 import '../providers/auth_provider.dart';
+import '../services/auth/auth_network_guard.dart';
 import '../services/auth/cloud_session_link_state.dart';
 import '../theme/design_tokens.dart';
 import 'glass/glass_background.dart';
@@ -57,9 +58,9 @@ class _CloudReconnectGateState extends State<CloudReconnectGate> {
                       ),
                       const SizedBox(height: 10),
                       const Text(
-                        'بيانات المحل على هذا الجهاز محفوظة. '
-                        'واتساب البطاقات ومزامنة الأجهزة يتوقفان حتى إعادة الربط. '
-                        'لا حاجة لمسح بيانات التطبيق.',
+                        'بيانات المحل على هذا الجهاز محفوظة ولن تُمسح. '
+                        'أعد الربط للمتابعة حتى تعود مزامنة الأجهزة '
+                        'وواتساب البطاقات.',
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           color: Color(0xFFCBD5E1),
@@ -97,7 +98,8 @@ class _CloudReconnectGateState extends State<CloudReconnectGate> {
                               )
                             : const Text('إعادة الربط'),
                       ),
-                      if (!AuthProvider.hasSilentGoogleRestore) ...[
+                      // يظهر على كل المنصات: بلا زر متابعة، صاحب حساب البريد يحتاجه.
+                      ...[
                         const SizedBox(height: 10),
                         OutlinedButton(
                           onPressed: link.reconnecting
@@ -109,16 +111,6 @@ class _CloudReconnectGateState extends State<CloudReconnectGate> {
                           ),
                         ),
                       ],
-                      const SizedBox(height: 10),
-                      TextButton(
-                        onPressed: link.reconnecting
-                            ? null
-                            : CloudSessionLinkController.instance.continueLocally,
-                        child: const Text(
-                          'متابعة بدون سحابة',
-                          style: TextStyle(color: Color(0xFFE2E8F0)),
-                        ),
-                      ),
                     ],
                   ),
                 ),
@@ -130,9 +122,15 @@ class _CloudReconnectGateState extends State<CloudReconnectGate> {
     );
   }
 
-  void _signInAgainWithEmail() {
-    CloudSessionLinkController.instance.continueLocally();
-    appRootNavigatorKey.currentState?.pushNamed('/login');
+  Future<void> _signInAgainWithEmail() async {
+    final link = CloudSessionLinkController.instance;
+    link.continueLocally();
+    try {
+      await appRootNavigatorKey.currentState?.pushNamed('/login');
+    } finally {
+      // رجع من شاشة الدخول دون ربط: يعود الحاجز.
+      link.endEmailSignInDetour();
+    }
   }
 
   Future<void> _reconnect(BuildContext context) async {
@@ -150,6 +148,11 @@ class _CloudReconnectGateState extends State<CloudReconnectGate> {
         return;
       }
       link.markLocked();
+      if (!await AuthNetworkGuard.hasNetworkLink()) {
+        link.setOffline(true);
+        return;
+      }
+      if (!mounted) return;
       setState(() {
         _error =
             auth.lastCloudReconnectError ??
@@ -158,6 +161,34 @@ class _CloudReconnectGateState extends State<CloudReconnectGate> {
     } finally {
       if (link.reconnecting) link.setReconnecting(false);
     }
+  }
+}
+
+/// شريط ثابت: الجلسة مفقودة والإنترنت مقطوع. البيع مستمر حتى عودة الشبكة.
+class CloudOfflineLockedBanner extends StatelessWidget {
+  const CloudOfflineLockedBanner({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return const Material(
+      color: Color(0xFF991B1B),
+      child: SafeArea(
+        bottom: false,
+        child: Padding(
+          padding: EdgeInsetsDirectional.fromSTEB(16, 8, 16, 8),
+          child: Text(
+            'الحساب منفصل عن السحابة ولا يوجد إنترنت. البيع يُحفظ على الجهاز، '
+            'وستُطلب إعادة الربط عند عودة الإنترنت.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 

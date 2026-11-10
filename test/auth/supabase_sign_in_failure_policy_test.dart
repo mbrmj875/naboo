@@ -120,11 +120,11 @@ void main() {
       expect(fn, isNot(contains('_ensureInternalSupabasePasswordPersisted')));
     });
 
-    test('تعيين كلمة السر مسموح فقط عند إنشاء الحساب', () {
+    test('لا يوجد مسار يغيّر كلمة السر بعد إنشاء الحساب', () {
       expect(
         '_ensureInternalSupabasePasswordPersisted('.allMatches(auth).length,
-        2,
-        reason: 'التعريف + استدعاء completeGoogleOwnerProfile فقط',
+        0,
+        reason: 'إكمال ملف Google كان يغيّرها فيُخرج بقية الأجهزة',
       );
     });
   });
