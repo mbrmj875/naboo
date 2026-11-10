@@ -79,7 +79,12 @@ for await (const s of rows(`${dir}/app_snapshots.ndjson.gz`)) {
     const invTotal = inv ? invFils(inv) : null;
     const sum = list.reduce((a, r) => a + fils(r), 0);
     let verdict;
-    if (amounts.size === 1 && spanMs <= 120000 && invTotal !== null && invTotal === fils(list[0]) && sum > invTotal) {
+    // التكرار في الثانية نفسها يدمجه التطبيق المحدَّث وحده عند المزامنة
+    // (SyncSafety: الوقت والنوع والمبلغ والفاتورة)، فعكسه بقيد ينقص البيع مرتين.
+    const sameSecond = list.every((r) => r.createdAt === list[0].createdAt);
+    if (amounts.size === 1 && sameSecond) {
+      verdict = 'merged_by_app_update';
+    } else if (amounts.size === 1 && spanMs <= 120000 && invTotal !== null && invTotal === fils(list[0]) && sum > invTotal) {
       verdict = 'likely_duplicate';
     } else if (amounts.size > 1) {
       verdict = 'different_invoices_same_local_id';
@@ -92,8 +97,11 @@ for await (const s of rows(`${dir}/app_snapshots.ndjson.gz`)) {
       invoice_total_fils: invTotal,
       entries: list.map((r) => ({ id: r.id, global_id: r.global_id || null, fils: fils(r), createdAt: r.createdAt })),
       // يبقى الأول، ويُعكس كل ما بعده بقيد سحب يحمل مرجع القيد الأصلي. لا حذف.
+      // يُعكس قيد واحد لكل وقت مختلف بعد الأول؛ ما شارك غيره الثانية نفسها يدمجه التطبيق.
       draft_reversals: verdict === 'likely_duplicate'
-        ? list.slice(1).map((r) => ({
+        ? list
+            .filter((r, i) => i > 0 && list.findIndex((x) => x.createdAt === r.createdAt) === i && r.createdAt !== list[0].createdAt)
+            .map((r) => ({
             transactionType: 'manual_out',
             amountFils: fils(r),
             amount: fils(r) / 1000,
@@ -112,6 +120,7 @@ for await (const s of rows(`${dir}/app_snapshots.ndjson.gz`)) {
   const rev = by('likely_duplicate').flatMap((i) => i.draft_reversals);
   summary.push({
     acct,
+    merged_by_app_update: by('merged_by_app_update').length,
     likely_duplicate_groups: by('likely_duplicate').length,
     draft_reversals: rev.length,
     reversal_dinar: rev.reduce((a, r) => a + r.amountFils, 0) / 1000,
