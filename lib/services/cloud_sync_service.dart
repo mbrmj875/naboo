@@ -276,6 +276,36 @@ class CloudSyncService {
 
   bool _preflightInProgress = false;
   DateTime? _lastSuccessfulPreflightAt;
+
+  // فحوص الوصول لا تتكرر مع كل رفع: الفصل وإيقاف الحساب يصلان فوراً عبر
+  // قناتي Realtime الخاصتين بهما، فهذه الفحوص شبكة أمان فقط.
+  static const Duration _licenseCheckEvery = Duration(hours: 1);
+  static const Duration _deviceCheckEvery = Duration(minutes: 15);
+  static const Duration _remoteConfigCheckEvery = Duration(minutes: 15);
+  String? _accessChecksUserId;
+  DateTime? _lastDeviceAccessOkAt;
+  DateTime? _lastRemoteConfigAt;
+
+  /// يصفّر مواعيد الفحوص عند تغيّر الحساب، فيُفحص الحساب الجديد فوراً.
+  void _resetAccessChecksIfUserChanged(String userId) {
+    if (_accessChecksUserId == userId) return;
+    _accessChecksUserId = userId;
+    _lastSuccessfulPreflightAt = null;
+    _lastDeviceAccessOkAt = null;
+    _lastRemoteConfigAt = null;
+  }
+
+  @visibleForTesting
+  static bool isAccessCheckDue(
+    DateTime? lastOk,
+    Duration every, {
+    DateTime? now,
+  }) {
+    if (lastOk == null) return true;
+    final elapsed = (now ?? DateTime.now()).difference(lastOk);
+    // ساعة الجهاز رجعت للخلف: نفحص بدل أن نثق بالمؤقت.
+    return elapsed.isNegative || elapsed >= every;
+  }
   final Map<String, String> _lastRealtimeStatusLog = {};
   final Map<String, DateTime> _lastRealtimeErrorLogAt = {};
 
@@ -790,11 +820,9 @@ class CloudSyncService {
     final now = DateTime.now().toUtc().toIso8601String();
     final platform = kIsWeb ? 'web' : defaultTargetPlatform.name;
 
-    await _ensureCurrentDeviceActiveIfReturning(
-      userId: user.id,
-      deviceId: deviceId,
-    );
-
+    // لا استعلام قبل التسجيل: app_register_device تُرجع حالة الجهاز، وتعيد
+    // تفعيل الجهاز المفصول إن كان في الحد مكان، والمفصول بلا مكان يمر على
+    // _resolveRevokedRegistration. طلب واحد بدل طلبين.
     try {
       // Prefer server-side enforcement if RPC exists.
       try {
@@ -989,69 +1017,6 @@ class CloudSyncService {
     return changed;
   }
 
-  /// Orphan recovery only: re-activate this handset if it was revoked AND
-  /// no other device is still active (owner lost all sessions). Never bypass
-  /// an intentional revoke while another approved device remains active.
-  Future<void> _ensureCurrentDeviceActiveIfReturning({
-    required String userId,
-    required String deviceId,
-  }) async {
-    if (deviceId.trim().isEmpty) return;
-    final client = Supabase.instance.client;
-
-    Map<String, dynamic>? row;
-    try {
-      row = await client
-          .from(_devicesTable)
-          .select('access_status')
-          .eq('user_id', userId)
-          .eq('device_id', deviceId)
-          .maybeSingle();
-    } on PostgrestException catch (e) {
-      if (_isMissingAccountDevicesTable(e)) return;
-      rethrow;
-    }
-
-    if (row == null) return;
-    final status = (row['access_status'] ?? 'active').toString().toLowerCase();
-    if (status != 'revoked') return;
-
-    try {
-      final rows = await client
-          .from(_devicesTable)
-          .select('access_status')
-          .eq('user_id', userId);
-      var activeCount = 0;
-      for (final r in rows) {
-        if (r is! Map) continue;
-        final s = (r['access_status'] ?? 'active').toString().toLowerCase();
-        if (s != 'revoked') activeCount++;
-      }
-
-      // Intentional revoke stands if any other device is still active.
-      if (activeCount > 0) {
-        AppLogger.info(
-          'CloudSync',
-          'self device reactivate skipped — other active devices exist',
-        );
-        return;
-      }
-
-      final err = await approveDeviceAccess(deviceId);
-      if (err == null) {
-        AppLogger.info('CloudSync', 'orphan device reactivated (no other active)');
-        _auditSyncOperation(
-          eventType: 'device_orphan_reactivated',
-          details: {
-            'device_id': deviceId,
-            'reason': 'no_other_active_devices',
-          },
-        );
-      }
-    } catch (e) {
-      AppLogger.warn('CloudSync', 'ensureCurrentDeviceActiveIfReturning: $e');
-    }
-  }
 
   Future<void> _deleteDeviceRow(String userId, String deviceId) async {
     if (deviceId.isEmpty) return;
@@ -1493,11 +1458,12 @@ class CloudSyncService {
     var pushAttempted = false;
     var pushSucceeded = false;
     try {
-      final lastOk = _lastSuccessfulPreflightAt;
-      final okFresh =
-          lastOk != null &&
-          DateTime.now().difference(lastOk) < const Duration(seconds: 60);
-      if (!okFresh && !_preflightInProgress) {
+      _resetAccessChecksIfUserChanged(user.id);
+      final licenseDue = isAccessCheckDue(
+        _lastSuccessfulPreflightAt,
+        _licenseCheckEvery,
+      );
+      if (licenseDue && !_preflightInProgress) {
         _preflightInProgress = true;
         try {
           await LicenseService.instance.checkLicense(forceRemote: true);
@@ -1526,9 +1492,13 @@ class CloudSyncService {
         );
       }
 
-      final remoteCfg = await AppRemoteConfigService.instance.refresh(
-        force: true,
-      );
+      final AppRemoteConfigData remoteCfg;
+      if (isAccessCheckDue(_lastRemoteConfigAt, _remoteConfigCheckEvery)) {
+        remoteCfg = await AppRemoteConfigService.instance.refresh(force: true);
+        _lastRemoteConfigAt = DateTime.now();
+      } else {
+        remoteCfg = AppRemoteConfigService.instance.current;
+      }
       if (remoteCfg.syncPausedGlobally) {
         lastError.value = remoteCfg.syncPausedMessageAr;
         return CloudSyncRunResult(
@@ -1539,9 +1509,14 @@ class CloudSyncService {
           errorMessage: lastError.value,
         );
       }
-      DeviceAccessResult access;
+      DeviceAccessResult access = DeviceAccessResult.ok;
       try {
-        access = await registerCurrentDevice();
+        if (isAccessCheckDue(_lastDeviceAccessOkAt, _deviceCheckEvery)) {
+          access = await registerCurrentDevice();
+          if (access == DeviceAccessResult.ok) {
+            _lastDeviceAccessOkAt = DateTime.now();
+          }
+        }
       } on DeviceLimitReachedException {
         lastError.value =
             'تم الوصول إلى الحد الأقصى للأجهزة في الحساب. افصل جهازاً أو قم بترقية الخطة.';
