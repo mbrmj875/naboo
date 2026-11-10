@@ -346,6 +346,11 @@ class CloudSyncService {
   })?
   pushSnapshotRpcOverrideForTesting;
 
+  /// للاختبارات فقط — حد التجزئة. اختبارات اللقطات الحقيقية الكبيرة ترفعها
+  /// كاملة إلى الخادم الوهمي، لأن رفع الأجزاء يذهب إلى Supabase مباشرة.
+  @visibleForTesting
+  int? chunkThresholdCharsOverrideForTesting;
+
   /// للاختبارات فقط — يستبدل فحص «السحابة غنية» (مسار قديم؛ يُفضَّل [remoteBusinessGuardInfoForTesting]).
   @visibleForTesting
   Future<bool> Function(String userId)?
@@ -2606,7 +2611,8 @@ class CloudSyncService {
 
       String? uploadId;
       Map<String, dynamic> rpcPayload;
-      if (estimatedBase64Chars <= _chunkThresholdChars) {
+      if (estimatedBase64Chars <=
+          (chunkThresholdCharsOverrideForTesting ?? _chunkThresholdChars)) {
         rpcPayload = payloadMap;
       } else {
         uploadId = idemKey;
@@ -3150,15 +3156,37 @@ class CloudSyncService {
         // - ندمج كل سجل حسب المفتاح الأساسي.
         // - عند التعارض: الأحدث (updatedAt/updated_at) يفوز.
         // - إذا وجد deletedAt/deleted_at نطبق حذف منطقي.
+        // لقطات النسخ الأقدم لا تحمل invoice_global_id في قيود الصندوق. رقم
+        // الفاتورة فيها محلي للجهاز الرافع، وفواتيره في اللقطة نفسها، فنستخرجه منها.
+        List<Map<String, dynamic>>? cashRows;
+        if (SyncSafety.enabled && tableNames.contains('cash_ledger')) {
+          final invoiceGids = {
+            for (final r in await readTable('invoices'))
+              r['id']?.toString(): (r['global_id'] ?? '').toString(),
+          };
+          cashRows = [
+            for (final r in await readTable('cash_ledger'))
+              if ((r['invoice_global_id'] ?? '').toString().isEmpty &&
+                  (invoiceGids[r['invoiceId']?.toString()] ?? '').isNotEmpty)
+                {...r, 'invoice_global_id': invoiceGids[r['invoiceId']?.toString()]}
+              else
+                r,
+          ];
+        }
         for (final table in tableNames) {
-          final rows = await readTable(table);
+          final rows = table == 'cash_ledger' && cashRows != null
+              ? cashRows
+              : await readTable(table);
           if (replaceTables.contains(table)) {
             await txn.delete(table);
           }
           await _mergeTableRows(txn, table, rows);
         }
         if (SyncSafety.enabled && tableNames.contains('cash_ledger')) {
-          await _relinkCashRowsToInvoices(txn, await readTable('cash_ledger'));
+          await _relinkCashRowsToInvoices(
+            txn,
+            cashRows ?? await readTable('cash_ledger'),
+          );
         }
         // ويب فقط: إعادة احتساب qty من خط أساس اللقطة + بنود فاتورة محلية غير واردة.
         // المنصات الأصلية تبقى على حماية qty المحلية (أوفلاين أولاً).
@@ -3412,7 +3440,30 @@ class CloudSyncService {
         whereArgs: [incoming['createdAt'], incoming['transactionType']],
       );
       final key = SyncSafety.cashContentKey(incoming);
-      if (twins.any((t) => SyncSafety.cashContentKey(t) == key)) return true;
+      // فاتورتان مختلفتان في الثانية نفسها وبالمبلغ نفسه ليستا قيداً واحداً
+      // (ضاع قيد 700,000 دينار بهذا في دمج لقطة حقيقية). يبقى توأماً إن لم
+      // نستطع التمييز، كما كان.
+      final inInvoiceId = incoming['invoiceId'];
+      final inInvoiceGid =
+          (incomingRaw['invoice_global_id'] ?? '').toString().trim();
+      for (final t in twins.where(
+        (t) => SyncSafety.cashContentKey(t) == key,
+      )) {
+        final tInvoiceId = t['invoiceId'];
+        if (tInvoiceId == null || inInvoiceId == null) return true;
+        if (tInvoiceId.toString() == inInvoiceId.toString()) return true;
+        if (inInvoiceGid.isEmpty) return true;
+        final inv = await txn.query(
+          'invoices',
+          columns: ['global_id'],
+          where: 'id = ?',
+          whereArgs: [tInvoiceId],
+          limit: 1,
+        );
+        final tGid =
+            inv.isEmpty ? '' : (inv.first['global_id'] ?? '').toString();
+        if (tGid == inInvoiceGid) return true;
+      }
     }
 
     if (localMatches.isEmpty) {
