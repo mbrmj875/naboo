@@ -2,9 +2,11 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../utils/app_logger.dart';
+import 'sync_safety.dart';
 
 /// إعدادات من جدول [app_remote_config] (صف واحد id=1).
 /// تُقرأ بدون تسجيل دخول (سياسة RLS للجميع SELECT).
@@ -24,6 +26,7 @@ class AppRemoteConfigData {
     required this.announcementBodyAr,
     required this.announcementUrl,
     this.oilShellDisabled = false,
+    this.syncSafetyDisabled = false,
   });
 
   final bool maintenanceMode;
@@ -45,6 +48,9 @@ class AppRemoteConfigData {
 
   /// مفتاح رجوع: يعيد موظف الزيت إلى الرئيسية المشتركة عند أول تشغيل متصل.
   final bool oilShellDisabled;
+
+  /// مفتاح إيقاف إصلاحات المزامنة ([SyncSafety]) لكل الأجهزة دون إصدار.
+  final bool syncSafetyDisabled;
 
   static const AppRemoteConfigData fallback = AppRemoteConfigData(
     maintenanceMode: false,
@@ -100,6 +106,7 @@ class AppRemoteConfigData {
       announcementBodyAr: s('announcement_body_ar'),
       announcementUrl: s('announcement_url'),
       oilShellDisabled: b('oil_shell_disabled'),
+      syncSafetyDisabled: b('sync_safety_disabled'),
     );
   }
 }
@@ -159,6 +166,7 @@ class AppRemoteConfigService {
   /// يجلب الإعدادات ويخزّن نسخة في الذاكرة.
   /// [force] يتجاهل التخزين المؤقت القصير.
   Future<AppRemoteConfigData> refresh({bool force = false}) async {
+    await _restoreSyncSafetySwitchOnce();
     if (!force &&
         _lastFetch != null &&
         DateTime.now().difference(_lastFetch!) < const Duration(minutes: 2)) {
@@ -179,6 +187,7 @@ class AppRemoteConfigService {
         final raw = row['config'];
         if (raw is Map<String, dynamic>) {
           _cached = AppRemoteConfigData.fromJson(raw);
+          await applySyncSafetySwitch(disabled: _cached.syncSafetyDisabled);
         } else {
           _cached = AppRemoteConfigData.fallback;
         }
@@ -195,5 +204,33 @@ class AppRemoteConfigService {
 
     _lastFetch = DateTime.now();
     return _cached;
+  }
+
+  static const String syncSafetyDisabledPrefKey = 'remote.sync_safety_disabled';
+  bool _syncSafetyRestored = false;
+
+  /// آخر قرار من الخادم يبقى بعد إعادة التشغيل دون إنترنت. فشل الجلب لا
+  /// يغيّره، فلا يعود الإصلاح للعمل لمجرد انقطاع الشبكة.
+  Future<void> _restoreSyncSafetySwitchOnce() async {
+    if (_syncSafetyRestored) return;
+    _syncSafetyRestored = true;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (prefs.getBool(syncSafetyDisabledPrefKey) == true) {
+        SyncSafety.enabled = false;
+      }
+    } catch (e) {
+      AppLogger.warn('RemoteConfig', 'restore sync safety switch: $e');
+    }
+  }
+
+  Future<void> applySyncSafetySwitch({required bool disabled}) async {
+    SyncSafety.enabled = !disabled;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(syncSafetyDisabledPrefKey, disabled);
+    } catch (e) {
+      AppLogger.warn('RemoteConfig', 'persist sync safety switch: $e');
+    }
   }
 }
