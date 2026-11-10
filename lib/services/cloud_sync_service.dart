@@ -15,6 +15,7 @@ import '../models/invoice.dart';
 import '../utils/app_logger.dart';
 import '../owner/services/business_audit_log_service.dart';
 import 'app_remote_config_service.dart';
+import 'sync_echo_guard.dart';
 import 'sync_safety.dart';
 import 'database_helper.dart';
 import 'device_version_reporter.dart';
@@ -2430,6 +2431,11 @@ class CloudSyncService {
     if (remoteUpdatedAt.isNotEmpty) {
       await prefs.setString(importedKey, remoteUpdatedAt);
     }
+    await _skipEchoPushIfNothingNew(
+      userId: userId,
+      payload: payload,
+      prefs: prefs,
+    );
     await _markDeviceHydrated(userId);
     lastSyncAt.value = DateTime.now();
     remoteImportGeneration.value = remoteImportGeneration.value + 1;
@@ -2437,6 +2443,64 @@ class CloudSyncService {
       status: CloudSyncPullStatus.imported,
       outcome: _PullOutcome.allowPush,
     );
+  }
+
+  /// البند 1.8: بعد السحب، إن لم يبقَ على الجهاز صف لا يملكه الخادم ولا عملية
+  /// في الطابور، تُسجَّل الحالة الحالية كأنها مرفوعة، فلا يُعاد رفع ما وصل للتو.
+  /// أي شك، أو أي خطأ في الفحص، يترك الرفع كما هو.
+  Future<void> _skipEchoPushIfNothingNew({
+    required String userId,
+    required Map<String, dynamic> payload,
+    required SharedPreferences prefs,
+  }) async {
+    if (!SyncSafety.enabled) return;
+    final tables = payload['tables'];
+    if (tables is! Map) return;
+    try {
+      final db = await _dbHelper.database;
+      final pending = await db.rawQuery(
+        "SELECT 1 FROM sync_queue WHERE status IN ('pending', 'failed', 'dead') LIMIT 1",
+      );
+      if (pending.isNotEmpty) return;
+      final tableNames = await _listSyncTables(db);
+      for (final t in tableNames) {
+        final cols = (await db.rawQuery('PRAGMA table_info($t)'))
+            .map((r) => (r['name'] ?? '').toString())
+            .where((s) => s.isNotEmpty)
+            .toSet();
+        final pkCols = await _primaryKeyColumns(db, t);
+        final raw = tables[t];
+        final remote = raw is List
+            ? raw
+                .whereType<Map>()
+                .map(
+                  (e) => e.map(
+                    (k, v) => MapEntry(k.toString(), _normalizeValue(v)),
+                  ),
+                )
+                .toList()
+            : const <Map<String, Object?>>[];
+        final local = await db.rawQuery('SELECT * FROM $t');
+        if (!SyncEchoGuard.tableCovered(
+          localCols: cols,
+          local: local,
+          remote: remote,
+          pkCols: pkCols,
+        )) {
+          if (kDebugMode) {
+            AppLogger.info('CloudSync', 'echo push kept: "$t" has local news');
+          }
+          return;
+        }
+      }
+      final sigs = await _buildTableSignatures(db, tableNames);
+      await prefs.setString(
+        _prefsKeyLastPushedTableSignatures(userId),
+        jsonEncode(sigs),
+      );
+    } catch (e) {
+      AppLogger.warn('CloudSync', 'echo push check skipped: $e');
+    }
   }
 
   /// يعيد `false` إذا أُوقف الرفع (ترطيب / حارس بيانات العمل / تعارض إصدار).
@@ -2787,6 +2851,20 @@ class CloudSyncService {
   @visibleForTesting
   Future<void> importSnapshotForTesting(Map<String, dynamic> payload) =>
       _importSnapshot(payload);
+
+  /// للاختبارات: الخطوة التي تلي الاستيراد في السحب الحقيقي (البند 1.8).
+  @visibleForTesting
+  Future<void> skipEchoPushIfNothingNewForTesting({
+    required String userId,
+    required Map<String, dynamic> payload,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    await _skipEchoPushIfNothingNew(
+      userId: userId,
+      payload: payload,
+      prefs: prefs,
+    );
+  }
 
   /// للاختبارات: إعادة تطبيق الطابور غير المرفوع.
   @visibleForTesting

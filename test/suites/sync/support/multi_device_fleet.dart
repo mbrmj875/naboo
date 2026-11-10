@@ -214,6 +214,11 @@ class Fleet {
       'sync.last_remote_content_version.$userId',
       await this.remote.currentVersion(),
     );
+    // كما في السحب الحقيقي: لا يُعاد رفع ما وصل للتو إن لم يبقَ جديد محلي.
+    await _sync.skipEchoPushIfNothingNewForTesting(
+      userId: userId,
+      payload: copy,
+    );
   }
 
   /// نفس ترتيب scheduleSyncSoon: سحب ثم رفع.
