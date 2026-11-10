@@ -15,6 +15,7 @@ import '../models/invoice.dart';
 import '../utils/app_logger.dart';
 import '../owner/services/business_audit_log_service.dart';
 import 'app_remote_config_service.dart';
+import 'sync_safety.dart';
 import 'database_helper.dart';
 import 'device_version_reporter.dart';
 import 'invoice_merge_policy.dart';
@@ -2533,6 +2534,16 @@ class CloudSyncService {
       return false;
     }
 
+    if (SyncSafety.enabled) {
+      // المفتاح يخص محتوى بعينه؛ لو تغير المحتوى لا يجوز أن يبتلعه رد «سبق استلامه».
+      final fingerprintKey = 'sync.pending_push_fingerprint.$userId';
+      final fingerprint = jsonEncode(currentSigMap);
+      final previous = prefs.getString(fingerprintKey);
+      if (previous != null && previous != fingerprint) {
+        await _clearPendingIdempotencyKey(prefs: prefs, userId: userId);
+      }
+      await prefs.setString(fingerprintKey, fingerprint);
+    }
     final idemKey = await _getOrCreatePendingIdempotencyKey(
       prefs: prefs,
       userId: userId,
@@ -2915,13 +2926,45 @@ class CloudSyncService {
 
     var firstTable = true;
     for (final table in sortedTables) {
-      final rows = await _readSyncTableRows(db, table);
+      var rows = await _readSyncTableRows(db, table);
+      if (SyncSafety.enabled && table == 'service_orders') {
+        rows = await _withServiceOrderLinkGlobalIds(db, rows);
+      }
+      if (SyncSafety.enabled && table == 'cash_ledger') {
+        final refs = await db.query('invoices', columns: ['id', 'global_id']);
+        final gids = {for (final r in refs) r['id']: r['global_id']};
+        rows = [
+          for (final r in rows)
+            {...r, 'invoice_global_id': gids[r['invoiceId']]},
+        ];
+      }
       if (!firstTable) write(',');
       firstTable = false;
       write('${jsonEncode(table)}:${jsonEncode(rows)}');
     }
     write('}}');
     return b.toBytes();
+  }
+
+  Future<List<Map<String, dynamic>>> _withServiceOrderLinkGlobalIds(
+    Database db,
+    List<Map<String, dynamic>> rows,
+  ) async {
+    Future<Map<Object?, Object?>> gids(String table) async {
+      final refs = await db.query(table, columns: ['id', 'global_id']);
+      return {for (final r in refs) r['id']: r['global_id']};
+    }
+
+    final invoices = await gids('invoices');
+    final customers = await gids('customers');
+    return [
+      for (final r in rows)
+        {
+          ...r,
+          'invoice_global_id': invoices[r['invoiceId']],
+          'customer_global_id': customers[r['customerId']],
+        },
+    ];
   }
 
   Future<Map<String, dynamic>?> _fetchChunkedPayload({
@@ -3061,6 +3104,9 @@ class CloudSyncService {
           }
           await _mergeTableRows(txn, table, rows);
         }
+        if (SyncSafety.enabled && tableNames.contains('cash_ledger')) {
+          await _relinkCashRowsToInvoices(txn, await readTable('cash_ledger'));
+        }
         // ويب فقط: إعادة احتساب qty من خط أساس اللقطة + بنود فاتورة محلية غير واردة.
         // المنصات الأصلية تبقى على حماية qty المحلية (أوفلاين أولاً).
         if (kIsWeb) {
@@ -3190,6 +3236,91 @@ class CloudSyncService {
     );
   }
 
+  /// دمج البطاقات وبنودها بالمعرف العالمي، فلا يمس صف صفاً آخر يحمل رقمه المحلي.
+  Future<bool> _mergeServiceRowByGlobalId({
+    required Transaction txn,
+    required String table,
+    required Map<String, dynamic> incomingRaw,
+    required Map<String, dynamic> incoming,
+    required DateTime? deletedAt,
+  }) async {
+    final gid = (incoming['global_id'] ?? '').toString().trim();
+    if (gid.isEmpty) return false;
+    final local = await txn.query(
+      table,
+      where: 'global_id = ?',
+      whereArgs: [gid],
+      limit: 1,
+    );
+    if (deletedAt != null) {
+      await txn.delete(table, where: 'global_id = ?', whereArgs: [gid]);
+      return true;
+    }
+    final row = Map<String, dynamic>.from(incoming)..remove('id');
+    if (table == 'service_orders') {
+      Future<void> relink(String column, String refTable, String gidKey) async {
+        if (!row.containsKey(column)) return;
+        final refGid = (incomingRaw[gidKey] ?? '').toString().trim();
+        if (refGid.isNotEmpty) {
+          final ref = await txn.query(
+            refTable,
+            columns: ['id'],
+            where: 'global_id = ?',
+            whereArgs: [refGid],
+            limit: 1,
+          );
+          row[column] = ref.isEmpty ? null : ref.first['id'];
+        } else if (local.isNotEmpty && local.first[column] != null) {
+          // نسخة قديمة لا ترسل المعرف: رقمها المحلي لا يعني شيئاً هنا.
+          row[column] = local.first[column];
+        }
+      }
+
+      await relink('invoiceId', 'invoices', 'invoice_global_id');
+      await relink('customerId', 'customers', 'customer_global_id');
+    }
+    if (local.isEmpty) {
+      await txn.insert(table, row);
+      return true;
+    }
+    if (_incomingWins(local.first, incomingRaw)) {
+      await txn.update(
+        table,
+        row,
+        where: 'id = ?',
+        whereArgs: [local.first['id']],
+      );
+    }
+    return true;
+  }
+
+  /// رقم الفاتورة محلي، فيُربط القيد بفاتورته بعد دمج الفواتير على هذا الجهاز.
+  Future<void> _relinkCashRowsToInvoices(
+    Transaction txn,
+    List<Map<String, dynamic>> incoming,
+  ) async {
+    final linked = incoming.where(
+      (r) => (r['invoice_global_id'] ?? '').toString().isNotEmpty,
+    );
+    if (linked.isEmpty) return;
+    final invoices = await txn.query('invoices', columns: ['id', 'global_id']);
+    final invoiceIds = {for (final r in invoices) r['global_id']: r['id']};
+    final cash = await txn.query('cash_ledger', columns: ['global_id', 'invoiceId']);
+    final current = {for (final r in cash) r['global_id']: r['invoiceId']};
+    for (final r in linked) {
+      final target = invoiceIds[r['invoice_global_id']];
+      final gid = r['global_id'];
+      if (target == null || !current.containsKey(gid)) continue;
+      if (current[gid] == target) continue;
+      await txn.update(
+        'cash_ledger',
+        {'invoiceId': target},
+        where: 'global_id = ?',
+        whereArgs: [gid],
+      );
+    }
+  }
+
   /// دمج [cash_ledger] عبر [global_id] (مزامنة لقطة + طابور).
   Future<bool> _mergeCashLedgerByGlobalId({
     required Transaction txn,
@@ -3200,7 +3331,12 @@ class CloudSyncService {
     required List<String> pkCols,
   }) async {
     const table = 'cash_ledger';
-    final gid = (incoming['global_id'] ?? '').toString().trim();
+    var gid = (incoming['global_id'] ?? '').toString().trim();
+    if (gid.isEmpty && SyncSafety.enabled) {
+      // قيد من نسخة قديمة بلا معرف: كل جهاز جديد يحسب له المعرف نفسه.
+      gid = SyncSafety.cashGlobalId(incoming);
+      incoming['global_id'] = gid;
+    }
     if (gid.isEmpty) return false;
 
     final localMatches = await txn.query(
@@ -3213,6 +3349,17 @@ class CloudSyncService {
     if (deletedAt != null) {
       await txn.delete(table, where: 'global_id = ?', whereArgs: [gid]);
       return true;
+    }
+
+    if (localMatches.isEmpty && SyncSafety.enabled) {
+      // القيد نفسه بمعرف آخر أعطته نسخة قديمة: لا نضيفه مرة ثانية.
+      final twins = await txn.query(
+        table,
+        where: 'createdAt = ? AND transactionType = ? AND deleted_at IS NULL',
+        whereArgs: [incoming['createdAt'], incoming['transactionType']],
+      );
+      final key = SyncSafety.cashContentKey(incoming);
+      if (twins.any((t) => SyncSafety.cashContentKey(t) == key)) return true;
     }
 
     if (localMatches.isEmpty) {
@@ -3828,6 +3975,19 @@ class CloudSyncService {
           localCols: localCols,
           deletedAt: deletedAt,
           pkCols: pkCols,
+        );
+        if (handled) continue;
+      }
+
+      if (SyncSafety.enabled &&
+          (table == 'service_orders' || table == 'service_order_items') &&
+          localCols.contains('global_id')) {
+        final handled = await _mergeServiceRowByGlobalId(
+          txn: txn,
+          table: table,
+          incomingRaw: incomingRaw,
+          incoming: incoming,
+          deletedAt: deletedAt,
         );
         if (handled) continue;
       }

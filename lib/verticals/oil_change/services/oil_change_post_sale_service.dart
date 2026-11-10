@@ -9,6 +9,7 @@ import '../../../services/cloud_sync_service.dart';
 import '../../../services/database_helper.dart';
 import '../../../services/sale_debt_caps_validator.dart';
 import '../../../services/service_orders_sql_ops.dart';
+import '../../../services/sync_safety.dart';
 import '../../../services/tenant_context_service.dart';
 import '../../../utils/app_logger.dart';
 import '../../../utils/invoice_validation.dart';
@@ -644,6 +645,7 @@ class OilChangePostSaleService {
 
     if (rows.isEmpty) {
       await txn.insert('cash_ledger', {
+        ...SyncSafety.newCashGlobalIdField(),
         'tenantId': tenantId,
         'transactionType': typeLabel,
         'amount': cashAmount,
