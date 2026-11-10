@@ -611,6 +611,11 @@ class DatabaseHelper {
     await _ensureOilChangeOilCatalogTable(db);
     await _ensureOilChangeHydraulicCatalogTable(db);
     await _ensureOilChangeFilterCatalogTable(db);
+    // البند 1.9: الاستيراد من السحابة يتخطى الجداول غير الموجودة محلياً، فكانت
+    // هذه الثلاثة تُنشأ فارغة لاحقاً وتُرفع فارغة فوق بيانات الخادم.
+    await _ensureOilChangeFilterKindsTable(db);
+    await _ensureOilChangeServicesTable(db);
+    await _ensureCarWashServicesTable(db);
     await _ensureServiceOrdersOilChangeFilterColumns(db);
     await ensureOilProductGradesSchema(db);
     await ensureBusinessAuditEventsTable(db);

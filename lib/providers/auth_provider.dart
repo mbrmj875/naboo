@@ -78,6 +78,10 @@ class AuthProvider extends ChangeNotifier {
 
   /// يحدّد آخر «مالك بيانات» على الجهاز — لا يُحذف عند الخروج لاكتشاف تبديل الحساب.
   static const _prefActiveDataOwner = 'auth.active_data_owner';
+
+  /// صاحب البيانات الموجودة فعلاً في القاعدة بعد فك الربط. يُبقي البيانات عند
+  /// الدخول بالحساب نفسه بدل مسحها (البند 1.9).
+  static const _prefLastDataOwner = 'auth.last_data_owner';
   static const _prefPendingGoogleOAuthIntent = 'auth.pending_google_oauth_intent';
 
   /// يُعاد من [signInWithGoogle] عندما يلزم إكمال جوال + PIN قبل bootstrap.
@@ -365,7 +369,16 @@ class AuthProvider extends ChangeNotifier {
   }) async {
     final prefs = await SharedPreferences.getInstance();
     final previous = prefs.getString(_prefActiveDataOwner);
-    if (previous == newOwnerKey) return;
+    if (isSameDataOwner(
+      active: previous,
+      lastAfterUnlink: prefs.getString(_prefLastDataOwner),
+      incoming: newOwnerKey,
+    )) {
+      if (previous != newOwnerKey) {
+        await prefs.setString(_prefActiveDataOwner, newOwnerKey);
+      }
+      return;
+    }
 
     // حماية: إذا كان المفتاح غير موجود (مثلاً بعد تحديث/ترحيل/إعادة تثبيت جزئية)،
     // اعتبره "تبديل" حتى لا تُعرض بيانات حساب سابق بالخطأ.
@@ -392,9 +405,23 @@ class AuthProvider extends ChangeNotifier {
       await CloudSyncService.instance.clearSyncPreferences();
       await _clearAccountUiPreferences(prefs);
       await LicenseService.instance.resetLicenseStateForDataScopeChange();
+      await prefs.remove(_prefLastDataOwner);
     }
     await prefs.setString(_prefActiveDataOwner, newOwnerKey);
     await TenantContextService.instance.load();
+  }
+
+  /// هل البيانات في القاعدة لصاحب هذا الدخول؟ بعد فك الربط تبقى البيانات، فإن
+  /// دخل الحساب نفسه لا تُمسح. أي حساب آخر، أو جهاز لا نعرف صاحب بياناته، يُمسح.
+  @visibleForTesting
+  static bool isSameDataOwner({
+    required String? active,
+    required String? lastAfterUnlink,
+    required String incoming,
+  }) {
+    if (incoming.isEmpty) return false;
+    if (active != null) return active == incoming;
+    return lastAfterUnlink == incoming;
   }
 
   Future<void> _refreshTenantContextSilently() async {
@@ -456,6 +483,11 @@ class AuthProvider extends ChangeNotifier {
     await prefs.remove(_prefDeviceOwnerBound);
     await prefs.remove(_prefDeviceOwnerSupabaseUid);
     await prefs.remove(_prefDeviceBoundAt);
+    // البيانات تبقى في القاعدة بعد فك الربط، فنتذكّر صاحبها.
+    final dataOwner = prefs.getString(_prefActiveDataOwner);
+    if (dataOwner != null && dataOwner.isNotEmpty) {
+      await prefs.setString(_prefLastDataOwner, dataOwner);
+    }
     await prefs.remove(_prefActiveDataOwner);
     _deviceOwnerBound = false;
     notifyListeners();
@@ -4390,6 +4422,7 @@ class AuthProvider extends ChangeNotifier {
         await _db.closeAndDeleteDatabaseFile();
         final prefsAfter = await SharedPreferences.getInstance();
         await prefsAfter.remove(_prefActiveDataOwner);
+        await prefsAfter.remove(_prefLastDataOwner);
         await prefsAfter.remove(_prefDeviceOwnerBound);
       } catch (e, st) {
         AppLogger.error('AuthProvider', 'web logout DB wipe failed', e, st);
