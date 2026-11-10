@@ -16,6 +16,7 @@ import '../utils/app_logger.dart';
 import '../owner/services/business_audit_log_service.dart';
 import 'app_remote_config_service.dart';
 import 'database_helper.dart';
+import 'device_version_reporter.dart';
 import 'invoice_merge_policy.dart';
 import 'license_service.dart';
 import 'realtime_watchdog.dart';
@@ -819,6 +820,13 @@ class CloudSyncService {
             deviceId: deviceId,
           );
         }
+        // مرة واحدة عند تغيّر النسخة: لمعرفة الأجهزة التي لم تحدَّث بعد.
+        unawaited(
+          DeviceVersionReporter.instance.reportIfNeeded(
+            userId: user.id,
+            deviceId: deviceId,
+          ),
+        );
         return DeviceAccessResult.ok;
       } on PostgrestException catch (e) {
         final m = e.message.toUpperCase();
