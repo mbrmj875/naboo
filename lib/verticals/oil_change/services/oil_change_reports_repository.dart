@@ -362,9 +362,20 @@ class OilChangeReportsRepository {
 
     final where = StringBuffer(
       "so.tenantId = ? AND (so.deletedAt IS NULL OR TRIM(COALESCE(so.deletedAt,'')) = '') "
-      "AND so.createdAt >= ? AND so.createdAt <= ?",
+      "AND so.createdAt >= ? AND so.createdAt < ?",
     );
-    final args = <Object?>[tenantId, range.fromIso, range.toIso];
+    // createdAt يُحفظ بتوقيت UTC (service_orders_repository)، وحدود الفترة
+    // أيام محلية. نحوّل الحدود إلى UTC كما تفعل لوحة المالك، وإلا اختفت
+    // بطاقات ما بعد منتصف الليل حتى الساعة 3 فجراً بتوقيت بغداد.
+    final startUtc =
+        DateTime(range.from.year, range.from.month, range.from.day).toUtc();
+    final endExclusiveUtc =
+        DateTime(range.to.year, range.to.month, range.to.day + 1).toUtc();
+    final args = <Object?>[
+      tenantId,
+      startUtc.toIso8601String(),
+      endExclusiveUtc.toIso8601String(),
+    ];
 
     if (hasOrderKind) {
       where.write(
