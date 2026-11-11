@@ -18,6 +18,7 @@ import 'app_remote_config_service.dart';
 import 'sync_echo_guard.dart';
 import 'sync_safety.dart';
 import 'sync_tombstones.dart';
+import 'stock_ledger.dart';
 import 'database_helper.dart';
 import 'device_version_reporter.dart';
 import 'invoice_merge_policy.dart';
@@ -2529,6 +2530,8 @@ class CloudSyncService {
     if (SyncSafety.enabled) {
       await _purgeOldCardTombstones(db);
       await SyncTombstones.purgeOld(db);
+      await StockLedger.ensureSchema(db);
+      await StockLedger.ensureOpenings(db);
     }
     final tableNames = await _listSyncTables(db);
     final sigMapKey = _prefsKeyLastPushedTableSignatures(userId);
@@ -3150,7 +3153,10 @@ class CloudSyncService {
     }
 
     // ينشئ جدول شاهد الحذف قبل القراءة، ليستلم الجهاز حذف غيره ولو لم يحذف هو.
-    if (SyncSafety.enabled) await SyncTombstones.ensureTable(db);
+    if (SyncSafety.enabled) {
+      await SyncTombstones.ensureTable(db);
+      await StockLedger.ensureSchema(db);
+    }
     final tableNames = await _listSyncTables(db);
 
     // في SQLite لا يُطبَّق تعطيل المفاتيح الأجنبية إذا وُضع PRAGMA داخل معاملة؛
@@ -3180,6 +3186,8 @@ class CloudSyncService {
                 r,
           ];
         }
+        // الكمية تُحسب من الحركات بعد الدمج، فلا يكتب الدمج حركات.
+        if (SyncSafety.enabled) await StockLedger.setPaused(txn, true);
         for (final table in tableNames) {
           final rows = table == 'cash_ledger' && cashRows != null
               ? cashRows
@@ -3208,6 +3216,11 @@ class CloudSyncService {
             baselineQtyByProductGid: baselineQtyByProductGid,
             incomingInvoiceItemGids: incomingInvoiceItemGids,
           );
+        }
+        if (SyncSafety.enabled) {
+          await StockLedger.ensureOpenings(txn);
+          await StockLedger.recompute(txn);
+          await StockLedger.setPaused(txn, false);
         }
         await applyUserProfilesIntoUsersTransaction(txn);
       });
@@ -4144,6 +4157,11 @@ class CloudSyncService {
         if (handled) continue;
       }
 
+      if (table == StockLedger.table) {
+        await StockLedger.mergeIncoming(txn, incomingRaw);
+        continue;
+      }
+
       if (table == 'work_shifts' && localCols.contains('global_id')) {
         final handled = await _mergeWorkShiftsByGlobalId(
           txn: txn,
@@ -4977,6 +4995,7 @@ class CloudSyncService {
       'users', // secrets في user_profiles.pinHash/pinSalt — لا نرفع users مباشرة
       'sync_queue', // طابور المزامنة محلي لكل جهاز — لا يُرفع في اللقطة
       'product_warehouse_stock',
+      StockLedger.ctlTable, // إيقاف المشغّل محلي لكل جهاز
     };
     return !excluded.contains(tableName);
   }

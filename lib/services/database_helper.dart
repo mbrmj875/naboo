@@ -8,6 +8,7 @@ import 'package:path/path.dart';
 import 'package:uuid/uuid.dart';
 import 'sync_safety.dart';
 import 'sync_tombstones.dart';
+import 'stock_ledger.dart';
 import 'cloud_sync_service.dart';
 import 'marketplace/marketplace_catalog_sync_service.dart';
 import 'customer_delete_guard.dart';
@@ -111,6 +112,7 @@ class DatabaseHelper {
     await ensureSuppliersGlobalIdSchema(db);
     await ensureCategoriesBrandsGlobalIdSchema(db);
     await ensureProductsGlobalIdSchema(db);
+    await StockLedger.ensureSchema(db);
     await ensureInvoicesGlobalIdSchema(db);
     await ensureFinancialGlobalIdSchema(db);
     await ensureUserDirectoryGlobalIdSchema(db);
@@ -596,6 +598,7 @@ class DatabaseHelper {
     await ensureSuppliersGlobalIdSchema(db);
     await ensureCategoriesBrandsGlobalIdSchema(db);
     await ensureProductsGlobalIdSchema(db);
+    await StockLedger.ensureSchema(db);
     await ensureInvoicesGlobalIdSchema(db);
     await _ensureInvoiceItemsUnitCost(db);
     await _ensureProductUnitVariantsSchema(db);
