@@ -268,6 +268,40 @@ void main() {
     expect(b, ['twin-a']);
   }, timeout: slow);
 
+  // حالة حساب حقيقي (a66b5bad): جهاز يحمل البيع مرتين بمعرفين، والآخر يحمل
+  // الأكبر فقط. الجهاز الأول يبقي الأصغر ويحذف الأكبر عند فتح الصندوق.
+  // إن وصل القيد الحي قبل علامة الحذف، كان الجهاز الثاني يتخطاه كتوأم ثم
+  // يحذف نسخته فيضيع البيع.
+  test('ت8: توأمان على جهاز والأكبر على الآخر: لا يضيع البيع', () async {
+    await sell(f['A'], 'TWIN-1');
+    await f.converge();
+    final a = await f.activate(f['A']);
+    final row = Map<String, dynamic>.from(
+      (await a.query('cash_ledger',
+              where: 'deleted_at IS NULL', orderBy: 'id DESC', limit: 1))
+          .first,
+    );
+    final big = row['global_id'] as String;
+    const small = '00000000-0000-4000-8000-000000000000';
+    await a.update('cash_ledger', {'global_id': small},
+        where: 'id = ?', whereArgs: [row['id']]);
+    await a.insert('cash_ledger', {...row..remove('id'), 'global_id': big});
+    await OilChangeTestHarness.instance.dbHelper.getCashSummary();
+    await f.converge();
+    // يُفحص B قبل فتح صندوقه: فتح الصندوق يعيد بناء القيد من الفاتورة فيخفي
+    // الضياع، ولا يقدر على ذلك إن لم تصل الفاتورة أو كانت آجلة.
+    final b = await f.activate(f['B']);
+    final live = (await b.query('cash_ledger',
+            columns: ['global_id'], where: 'deleted_at IS NULL'))
+        .map((r) => r['global_id'])
+        .toList();
+    final out = await cycles(3);
+    _report['t8_twin_order'] = {'cycles': out, 'B_live_after_sync': live};
+    expect(live, [small], reason: 'B فقد البيع بعد المزامنة');
+    expect(out.last['fils_A'], fils);
+    expect(out.last['fils_B'], fils);
+  }, timeout: slow);
+
   test('ت6: ضابط: النسخة الحالية تبقي قيداً واحداً أيضاً', () async {
     f['A'].legacy = true;
     f['B'].legacy = true;

@@ -82,8 +82,23 @@ for await (const s of rows(`${dir}/app_snapshots.ndjson.gz`)) {
     // التكرار في الثانية نفسها يدمجه التطبيق المحدَّث وحده عند المزامنة
     // (SyncSafety: الوقت والنوع والمبلغ والفاتورة)، فعكسه بقيد ينقص البيع مرتين.
     const sameSecond = list.every((r) => r.createdAt === list[0].createdAt);
+    // قيد كُتب بعد فاتورة أخرى بأجزاء من الثانية وبمبلغها هو بيعها هي، ربطه
+    // رقم فاتورة محلي مكرر بفاتورة غيرها. عكسه يُنقص بيعاً حقيقياً (a66b5bad:
+    // فاتورة 533 ظهرت كتكرار للفاتورة 532).
+    const otherInvoiceSale = (r) =>
+      [...invoices.values()].some(
+        (i) =>
+          String(i.id) !== String(r.invoiceId) &&
+          invFils(i) === fils(r) &&
+          Math.abs(Date.parse(r.createdAt) - Date.parse(i.date)) <= 2000,
+      );
     if (amounts.size === 1 && sameSecond) {
       verdict = 'merged_by_app_update';
+    } else if (
+      amounts.size === 1 &&
+      list.filter((r) => r.createdAt !== list[0].createdAt).some(otherInvoiceSale)
+    ) {
+      verdict = 'different_invoices_same_local_id';
     } else if (amounts.size === 1 && spanMs <= 120000 && invTotal !== null && invTotal === fils(list[0]) && sum > invTotal) {
       verdict = 'likely_duplicate';
     } else if (amounts.size > 1) {

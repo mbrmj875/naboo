@@ -3446,13 +3446,29 @@ class CloudSyncService {
       final inInvoiceId = incoming['invoiceId'];
       final inInvoiceGid =
           (incomingRaw['invoice_global_id'] ?? '').toString().trim();
+      // يبقى من التوأمين صاحب أصغر معرف، فتحمل كل الأجهزة النسخة نفسها
+      // ويصل حذفها لاحقاً إلى الجميع.
+      Future<bool> keepSmallerId(Map<String, dynamic> t) async {
+        final tGid = (t['global_id'] ?? '').toString();
+        if (tGid.isNotEmpty && gid.compareTo(tGid) < 0) {
+          await txn.update(
+            table,
+            {'global_id': gid},
+            where: 'id = ?',
+            whereArgs: [t['id']],
+          );
+        }
+        return true;
+      }
       for (final t in twins.where(
         (t) => SyncSafety.cashContentKey(t) == key,
       )) {
         final tInvoiceId = t['invoiceId'];
-        if (tInvoiceId == null || inInvoiceId == null) return true;
-        if (tInvoiceId.toString() == inInvoiceId.toString()) return true;
-        if (inInvoiceGid.isEmpty) return true;
+        if (tInvoiceId == null || inInvoiceId == null) return keepSmallerId(t);
+        if (tInvoiceId.toString() == inInvoiceId.toString()) {
+          return keepSmallerId(t);
+        }
+        if (inInvoiceGid.isEmpty) return keepSmallerId(t);
         final inv = await txn.query(
           'invoices',
           columns: ['global_id'],
@@ -3462,7 +3478,7 @@ class CloudSyncService {
         );
         final tGid =
             inv.isEmpty ? '' : (inv.first['global_id'] ?? '').toString();
-        if (tGid == inInvoiceGid) return true;
+        if (tGid == inInvoiceGid) return keepSmallerId(t);
       }
     }
 
