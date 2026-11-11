@@ -2525,6 +2525,7 @@ class CloudSyncService {
       return false;
     }
 
+    if (SyncSafety.enabled) await _purgeOldCardTombstones(db);
     final tableNames = await _listSyncTables(db);
     final sigMapKey = _prefsKeyLastPushedTableSignatures(userId);
     final currentSigMap = await _buildTableSignatures(db, tableNames);
@@ -3188,6 +3189,7 @@ class CloudSyncService {
             cashRows ?? await readTable('cash_ledger'),
           );
         }
+        if (SyncSafety.enabled) await _purgeOldCardTombstones(txn);
         // ويب فقط: إعادة احتساب qty من خط أساس اللقطة + بنود فاتورة محلية غير واردة.
         // المنصات الأصلية تبقى على حماية qty المحلية (أوفلاين أولاً).
         if (kIsWeb) {
@@ -3333,10 +3335,9 @@ class CloudSyncService {
       whereArgs: [gid],
       limit: 1,
     );
-    if (deletedAt != null) {
-      await txn.delete(table, where: 'global_id = ?', whereArgs: [gid]);
-      return true;
-    }
+    // الحذف الوارد لا يزيل الصف: يبقى بتاريخ حذفه كما عند الجهاز الذي حذف،
+    // فيُرفع مع اللقطة القادمة، ولا تعيده نسخة قديمة من جهاز لم يتزامن.
+    // الأحدث يفوز بين الحذف والتعديل كأي تعديل آخر. يُزال بعد 90 يوماً.
     final row = Map<String, dynamic>.from(incoming)..remove('id');
     if (table == 'service_orders') {
       Future<void> relink(String column, String refTable, String gidKey) async {
@@ -3373,6 +3374,27 @@ class CloudSyncService {
       );
     }
     return true;
+  }
+
+  /// البطاقة المحذوفة تبقى 90 يوماً ليصل حذفها إلى كل جهاز، ثم تُزال من
+  /// الجهاز، فتخرج من لقطته التالية.
+  static const cardTombstoneDays = 90;
+
+  Future<void> _purgeOldCardTombstones(DatabaseExecutor txn) async {
+    final cutoff = DateTime.now()
+        .toUtc()
+        .subtract(const Duration(days: cardTombstoneDays))
+        .toIso8601String();
+    for (final table in const ['service_order_items', 'service_orders']) {
+      final cols = await txn.rawQuery('PRAGMA table_info($table)');
+      if (!cols.any((c) => c['name'] == 'deletedAt')) continue;
+      await txn.delete(
+        table,
+        where: "deletedAt IS NOT NULL AND TRIM(deletedAt) <> '' "
+            'AND deletedAt < ?',
+        whereArgs: [cutoff],
+      );
+    }
   }
 
   /// رقم الفاتورة محلي، فيُربط القيد بفاتورته بعد دمج الفواتير على هذا الجهاز.
