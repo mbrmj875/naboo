@@ -19,6 +19,7 @@ import 'sync_echo_guard.dart';
 import 'sync_safety.dart';
 import 'sync_tombstones.dart';
 import 'stock_ledger.dart';
+import 'local_device.dart';
 import 'database_helper.dart';
 import 'device_version_reporter.dart';
 import 'invoice_merge_policy.dart';
@@ -4996,6 +4997,7 @@ class CloudSyncService {
       'sync_queue', // طابور المزامنة محلي لكل جهاز — لا يُرفع في اللقطة
       'product_warehouse_stock',
       StockLedger.ctlTable, // إيقاف المشغّل محلي لكل جهاز
+      LocalDevice.table, // معرّف الجهاز محلي، لا يُنسخ إلى جهاز آخر
     };
     return !excluded.contains(tableName);
   }

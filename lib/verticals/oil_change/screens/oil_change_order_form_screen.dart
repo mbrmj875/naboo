@@ -24,6 +24,7 @@ import '../services/oil_change_oil_catalog_repository.dart';
 import '../../../screens/customers/customer_form_screen.dart';
 import '../../../services/customer_search_index.dart';
 import '../../../services/database_helper.dart';
+import '../../../services/paid_card_lock.dart';
 import '../../../services/tenant_context_service.dart';
 import '../../../services/product_repository.dart';
 import '../services/oil_change_orders_repository.dart';
@@ -4009,6 +4010,21 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       openInvoice = true;
     }
     if (_hydratingEdit || _saving) return;
+
+    // البند 4.3: الوردية قد تُغلق والشاشة مفتوحة. يُفحص قبل حفظ صف البطاقة،
+    // فلا تتغير البطاقة دون فاتورتها.
+    if (widget.amendInvoicedOrder &&
+        await PaidCardLock.isLocked(
+          await DatabaseHelper().database,
+          _editInvoiceId,
+        )) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text(PaidCardLock.message)),
+        );
+      }
+      return;
+    }
 
     if (widget.amendInvoicedOrder && intent == _OilSubmitIntent.suspend) {
       if (mounted) {

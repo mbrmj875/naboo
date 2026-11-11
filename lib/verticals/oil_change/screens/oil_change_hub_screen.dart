@@ -11,6 +11,7 @@ import '../../../providers/auth_provider.dart';
 import '../../../services/cloud_sync_service.dart';
 import '../../../services/customer_search_index.dart';
 import '../../../services/database_helper.dart';
+import '../../../services/paid_card_lock.dart';
 import '../services/oil_change_orders_repository.dart';
 import '../services/oil_change_post_sale_service.dart';
 import '../services/oil_change_settings.dart';
@@ -1172,6 +1173,19 @@ class _OilChangeHubScreenState extends State<OilChangeHubScreen>
     return invoiceId > 0;
   }
 
+  /// البند 4.3: بعد إغلاق وردية البطاقة يكون التصحيح بمرتجع ثم بطاقة جديدة.
+  Future<bool> _blockedByClosedShift(Map<String, dynamic> r) async {
+    final invoiceId = (r['invoiceId'] as num?)?.toInt() ?? 0;
+    final db = await DatabaseHelper().database;
+    if (!await PaidCardLock.isLocked(db, invoiceId)) return false;
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text(PaidCardLock.message)),
+      );
+    }
+    return true;
+  }
+
   Future<void> _openAmendInvoiced(Map<String, dynamic> r) async {
     final id = _orderIdFromRow(r);
     if (id == null || id <= 0) return;
@@ -1182,6 +1196,7 @@ class _OilChangeHubScreenState extends State<OilChangeHubScreen>
       );
       return;
     }
+    if (await _blockedByClosedShift(r)) return;
 
     final pinOk = await confirmOwnerPinForSensitiveAction(
       context,
@@ -1227,6 +1242,7 @@ class _OilChangeHubScreenState extends State<OilChangeHubScreen>
       );
       return;
     }
+    if (await _blockedByClosedShift(r)) return;
 
     final name = (r['customerNameSnapshot'] ?? '').toString().trim();
     final plate = oilFormatPlate(r);

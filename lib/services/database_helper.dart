@@ -9,6 +9,7 @@ import 'package:uuid/uuid.dart';
 import 'sync_safety.dart';
 import 'sync_tombstones.dart';
 import 'stock_ledger.dart';
+import 'local_device.dart';
 import 'cloud_sync_service.dart';
 import 'marketplace/marketplace_catalog_sync_service.dart';
 import 'customer_delete_guard.dart';
