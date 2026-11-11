@@ -17,6 +17,7 @@ import '../owner/services/business_audit_log_service.dart';
 import 'app_remote_config_service.dart';
 import 'sync_echo_guard.dart';
 import 'sync_safety.dart';
+import 'sync_tombstones.dart';
 import 'database_helper.dart';
 import 'device_version_reporter.dart';
 import 'invoice_merge_policy.dart';
@@ -2525,7 +2526,10 @@ class CloudSyncService {
       return false;
     }
 
-    if (SyncSafety.enabled) await _purgeOldCardTombstones(db);
+    if (SyncSafety.enabled) {
+      await _purgeOldCardTombstones(db);
+      await SyncTombstones.purgeOld(db);
+    }
     final tableNames = await _listSyncTables(db);
     final sigMapKey = _prefsKeyLastPushedTableSignatures(userId);
     final currentSigMap = await _buildTableSignatures(db, tableNames);
@@ -3145,6 +3149,8 @@ class CloudSyncService {
       }
     }
 
+    // ينشئ جدول شاهد الحذف قبل القراءة، ليستلم الجهاز حذف غيره ولو لم يحذف هو.
+    if (SyncSafety.enabled) await SyncTombstones.ensureTable(db);
     final tableNames = await _listSyncTables(db);
 
     // في SQLite لا يُطبَّق تعطيل المفاتيح الأجنبية إذا وُضع PRAGMA داخل معاملة؛
@@ -3189,7 +3195,11 @@ class CloudSyncService {
             cashRows ?? await readTable('cash_ledger'),
           );
         }
-        if (SyncSafety.enabled) await _purgeOldCardTombstones(txn);
+        if (SyncSafety.enabled) {
+          await _purgeOldCardTombstones(txn);
+          await SyncTombstones.apply(txn);
+          await SyncTombstones.purgeOld(txn);
+        }
         // ويب فقط: إعادة احتساب qty من خط أساس اللقطة + بنود فاتورة محلية غير واردة.
         // المنصات الأصلية تبقى على حماية qty المحلية (أوفلاين أولاً).
         if (kIsWeb) {
