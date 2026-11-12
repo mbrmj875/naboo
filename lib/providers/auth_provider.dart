@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../services/database_helper.dart';
+import '../services/db_file_parking.dart';
 import '../services/app_settings_repository.dart';
 import '../services/business_setup_settings.dart';
 import '../services/cloud_sync_service.dart'
@@ -395,8 +396,15 @@ class AuthProvider extends ChangeNotifier {
       );
       await CloudSyncService.instance.stopForSignOut();
       if (newOwnerKey.startsWith('cloud:')) {
-        // حساب سحابي: من الآمن حذف الملف بالكامل لأن المصدر الحقيقي سيُسترد من السحابة.
-        await _db.closeAndDeleteDatabaseFile();
+        // البند 5.1: ملف المالك السابق يُحفظ جانباً بدل حذفه، فلا يضيع بيع لم
+        // يُرفع، ويعود إذا دخل حسابه مجدداً ثم يُدمج مع السحابة.
+        await _db.closeAndSwapAccountDatabaseFile(
+          parkAs: DbFileParking.ownerKeyForParking(
+            active: previous,
+            lastAfterUnlink: prefs.getString(_prefLastDataOwner),
+          ),
+          restoreFor: newOwnerKey,
+        );
         _pendingCloudWorkspaceRestore = true;
       } else {
         // حساب محلي: امسح بيانات العمل وابقِ المستخدمين المحليين فقط.

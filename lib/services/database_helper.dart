@@ -11,6 +11,7 @@ import 'sync_tombstones.dart';
 import 'stock_ledger.dart';
 import 'local_device.dart';
 import 'cloud_sync_service.dart';
+import 'db_file_parking.dart';
 import 'marketplace/marketplace_catalog_sync_service.dart';
 import 'customer_delete_guard.dart';
 import 'password_hashing.dart';
@@ -200,6 +201,45 @@ class DatabaseHelper {
         CREATE INDEX IF NOT EXISTS idx_product_variants_tenant_deleted_qty
         ON product_variants(tenantId, deleted_at, quantity)
       ''');
+    }
+  }
+
+  /// تبديل الحساب السحابي دون حذف شيء (البند 5.1): يُحفظ ملف المالك السابق
+  /// جانباً باسمه، ويُستعاد ملف الحساب الجديد إن كان محفوظاً على هذا الجهاز.
+  /// يعيد true إن استُعيد ملف. على الويب يبقى السلوك القديم (حذف).
+  ///
+  /// إن تعذر نقل الملف يُرمى خطأ ولا يُحذف شيء، فضياع بيع أسوأ من تعثر دخول.
+  Future<bool> closeAndSwapAccountDatabaseFile({
+    required String parkAs,
+    required String restoreFor,
+  }) async {
+    final parking = DbFileParking.instance;
+    if (!parking.supported) {
+      await closeAndDeleteDatabaseFile();
+      return false;
+    }
+    await _closeDatabase();
+    final path = join(await getDatabasesPath(), 'business_app.db');
+    final parked = await parking.park(path, parkAs);
+    final restored = await parking.restore(path, restoreFor);
+    AppLogger.info(
+      'DatabaseHelper',
+      'account file swap: parked=${parked != null} restored=$restored',
+    );
+    return restored;
+  }
+
+  Future<void> _closeDatabase() async {
+    final pending = _opening;
+    _opening = null;
+    if (pending != null) {
+      try {
+        await pending;
+      } catch (_) {}
+    }
+    if (_database != null) {
+      await _database!.close();
+      _database = null;
     }
   }
 
