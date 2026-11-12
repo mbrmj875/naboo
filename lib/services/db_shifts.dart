@@ -550,22 +550,50 @@ extension DbShifts on DatabaseHelper {
   Future<Map<String, dynamic>?> getOpenWorkShift() async {
     final db = await database;
     final tid = await _resolveActiveTenantIdForLocalDb(db);
-    return DbShiftsSqlOps.getOpenWorkShift(
+    final deviceId = await LocalDevice.id(db);
+    return _claimLegacyShift(
       db,
-      tid,
-      deviceId: await LocalDevice.id(db),
+      await DbShiftsSqlOps.getOpenWorkShift(db, tid, deviceId: deviceId),
+      deviceId,
     );
+  }
+
+  /// وردية قديمة مفتوحة بلا جهاز (قبل التحديث) تُنسب إلى أول جهاز يستعملها،
+  /// فلا يراها جهاز آخر كورديته ولا يغلقها كمكررة. تصل النسبة إلى الأجهزة
+  /// الأخرى في اللقطة.
+  Future<Map<String, dynamic>?> _claimLegacyShift(
+    Database db,
+    Map<String, dynamic>? row,
+    String deviceId,
+  ) async {
+    if (row == null) return null;
+    final current = (row['device_id'] ?? '').toString().trim();
+    final id = (row['id'] as num?)?.toInt();
+    if (current.isNotEmpty || id == null) return row;
+    final nowIso = DateTime.now().toUtc().toIso8601String();
+    await db.update(
+      'work_shifts',
+      {'device_id': deviceId, 'updatedAt': nowIso},
+      where: "id = ? AND (device_id IS NULL OR TRIM(device_id) = '')",
+      whereArgs: [id],
+    );
+    return {...row, 'device_id': deviceId, 'updatedAt': nowIso};
   }
 
   /// وردية مفتوحة لموظف الوردية المحدد.
   Future<Map<String, dynamic>?> getOpenWorkShiftForStaff(int shiftStaffUserId) async {
     final db = await database;
     final tid = await _resolveActiveTenantIdForLocalDb(db);
-    return DbShiftsSqlOps.getOpenWorkShiftForStaff(
+    final deviceId = await LocalDevice.id(db);
+    return _claimLegacyShift(
       db,
-      tid,
-      shiftStaffUserId,
-      deviceId: await LocalDevice.id(db),
+      await DbShiftsSqlOps.getOpenWorkShiftForStaff(
+        db,
+        tid,
+        shiftStaffUserId,
+        deviceId: deviceId,
+      ),
+      deviceId,
     );
   }
 
@@ -587,11 +615,15 @@ extension DbShifts on DatabaseHelper {
     final nowIso = DateTime.now().toUtc().toIso8601String();
 
     final deviceId = await LocalDevice.id(db);
-    final existing = await DbShiftsSqlOps.getOpenWorkShiftForStaff(
+    final existing = await _claimLegacyShift(
       db,
-      tid,
-      shiftStaffUserId,
-      deviceId: deviceId,
+      await DbShiftsSqlOps.getOpenWorkShiftForStaff(
+        db,
+        tid,
+        shiftStaffUserId,
+        deviceId: deviceId,
+      ),
+      deviceId,
     );
     if (existing != null) {
       final existingId = (existing['id'] as num?)?.toInt();

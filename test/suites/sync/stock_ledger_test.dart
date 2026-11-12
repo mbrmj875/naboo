@@ -161,4 +161,48 @@ void main() {
     final after = await qtyByDevice('زيت-4');
     expect(after.values.toSet(), hasLength(1), reason: '$after');
   }, timeout: slow);
+
+  test('ضم الحركات الأقدم من 90 يوماً لا يغيّر الكمية على أي جهاز', () async {
+    await addProduct(f['A'], 'زيت-5', 10);
+    await f.converge();
+    await sell(f['A'], 'زيت-5', 2);
+    await sell(f['B'], 'زيت-5', 3);
+    await f.converge();
+
+    // كأن البيعين قبل 100 يوم، على كل الأجهزة.
+    final old = DateTime.now()
+        .toUtc()
+        .subtract(const Duration(days: 100))
+        .toIso8601String();
+    for (final d in f.devices) {
+      final db = await f.activate(d);
+      await db.rawUpdate(
+        "UPDATE ${StockLedger.table} SET created_at = ? "
+        "WHERE global_id NOT LIKE 'open-%'",
+        [old],
+      );
+    }
+
+    // A يضم أولاً ويرفع، ثم يسحب B وC افتتاحيته ويزيلان حركاتهما القديمة.
+    await f.syncDevice(f['A']);
+    await f.syncDevice(f['B']);
+    await f.syncDevice(f['C']);
+    await f.converge();
+    expect(await qtyByDevice('زيت-5'), {'A': 5.0, 'B': 5.0, 'C': 5.0});
+    for (final d in f.devices) {
+      final db = await f.activate(d);
+      final rows = await db.rawQuery(
+        "SELECT l.global_id, l.delta FROM ${StockLedger.table} l "
+        "JOIN products p ON p.global_id = l.product_global_id "
+        "WHERE p.name = 'زيت-5'",
+      );
+      expect(rows, hasLength(1), reason: 'بقيت حركات قديمة على ${d.name}');
+      expect((rows.first['delta'] as num).toDouble(), 5.0);
+    }
+
+    // بيع جديد بعد الضم يُحسب كالعادة.
+    await sell(f['C'], 'زيت-5', 1);
+    await f.converge();
+    expect(await qtyByDevice('زيت-5'), {'A': 4.0, 'B': 4.0, 'C': 4.0});
+  }, timeout: slow);
 }

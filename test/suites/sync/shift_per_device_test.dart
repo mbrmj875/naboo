@@ -134,4 +134,31 @@ void main() {
     final openA = await DatabaseHelper().getOpenWorkShiftForStaff(owner);
     expect(openA?['global_id'], a);
   }, timeout: slow);
+
+  test('وردية قديمة بلا جهاز تُنسب إلى أول جهاز يستعملها', () async {
+    // وردية من قبل التحديث: لا جهاز عليها، ووصلت إلى الجهازين.
+    final a = await gidOf(f['A'], await openShift(f['A']));
+    final dbA = await f.activate(f['A']);
+    await dbA.update('work_shifts', {'device_id': null},
+        where: 'global_id = ?', whereArgs: [a]);
+    await f.converge();
+
+    // A يستعملها أولاً بعد التحديث.
+    await f.activate(f['A']);
+    final mine = await DatabaseHelper().getOpenWorkShiftForStaff(owner);
+    expect(mine?['global_id'], a);
+    await f.converge();
+
+    // B لا يأخذها ولا يغلقها، ويفتح وردية له.
+    await f.activate(f['B']);
+    expect(await DatabaseHelper().getOpenWorkShiftForStaff(owner), isNull);
+    await DatabaseHelper().repairDuplicateOpenShifts();
+    final b = await gidOf(f['B'], await openShift(f['B']));
+    expect(b, isNot(a));
+    await f.converge();
+    for (final d in f.devices) {
+      expect(await openGids(d), {a, b},
+          reason: 'أُغلقت وردية الجهاز A على ${d.name}');
+    }
+  }, timeout: slow);
 }

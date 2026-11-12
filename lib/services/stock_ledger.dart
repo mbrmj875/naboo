@@ -31,6 +31,9 @@ class StockLedger {
     return r.isNotEmpty;
   }
 
+  /// الحركات الأقدم من هذا تُضم إلى الافتتاحية.
+  static const keepDays = 90;
+
   static Future<void> ensureSchema(DatabaseExecutor db) async {
     await db.execute('''
       CREATE TABLE IF NOT EXISTS $table (
@@ -38,9 +41,14 @@ class StockLedger {
         product_global_id TEXT NOT NULL,
         delta REAL NOT NULL,
         created_at TEXT NOT NULL,
-        updatedAt TEXT NOT NULL
+        updatedAt TEXT NOT NULL,
+        compacted_before TEXT
       )
     ''');
+    final cols = await db.rawQuery('PRAGMA table_info($table)');
+    if (!cols.any((c) => c['name'] == 'compacted_before')) {
+      await db.execute('ALTER TABLE $table ADD COLUMN compacted_before TEXT');
+    }
     await db.execute(
       'CREATE INDEX IF NOT EXISTS idx_stock_ledger_product '
       'ON $table (product_global_id)',
@@ -116,8 +124,9 @@ class StockLedger {
     ''');
   }
 
-  /// دمج حركة واردة: الافتتاحية الواردة تغلب المحلية دائماً، فتتفق كل
-  /// الأجهزة على افتتاحية من وصل إلى الخادم أولاً. باقي الحركات لا تتغير.
+  /// دمج حركة واردة: الافتتاحية الواردة تغلب المحلية، إلا إذا كانت المحلية
+  /// مضغوطة إلى تاريخ أحدث، فتتفق كل الأجهزة على افتتاحية واحدة. باقي
+  /// الحركات لا تتغير.
   static Future<void> mergeIncoming(
     DatabaseExecutor txn,
     Map<String, dynamic> row,
@@ -126,19 +135,72 @@ class StockLedger {
     final pgid = (row['product_global_id'] ?? '').toString().trim();
     final delta = (row['delta'] as num?)?.toDouble();
     if (gid.isEmpty || pgid.isEmpty || delta == null) return;
+    final cut = (row['compacted_before'] ?? '').toString().trim();
     final clean = {
       'global_id': gid,
       'product_global_id': pgid,
       'delta': delta,
       'created_at': (row['created_at'] ?? '').toString(),
       'updatedAt': (row['updatedAt'] ?? row['created_at'] ?? '').toString(),
+      'compacted_before': cut.isEmpty ? null : cut,
     };
-    await txn.insert(
-      table,
-      clean,
-      conflictAlgorithm: gid.startsWith(openingPrefix)
-          ? ConflictAlgorithm.replace
-          : ConflictAlgorithm.ignore,
-    );
+    if (!gid.startsWith(openingPrefix)) {
+      await txn.insert(table, clean,
+          conflictAlgorithm: ConflictAlgorithm.ignore);
+      return;
+    }
+    final local = await txn.query(table,
+        columns: ['compacted_before'],
+        where: 'global_id = ?',
+        whereArgs: [gid],
+        limit: 1);
+    final localCut = local.isEmpty
+        ? ''
+        : (local.first['compacted_before'] ?? '').toString();
+    if (local.isNotEmpty && localCut.compareTo(cut) > 0) return;
+    await txn.insert(table, clean,
+        conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  /// بعد الاستيراد: حركة أقدم من تاريخ ضغط افتتاحيتها محسوبة فيها، فتُزال.
+  static Future<int> dropCompacted(DatabaseExecutor db) => db.rawDelete('''
+        DELETE FROM $table
+        WHERE global_id NOT LIKE '$openingPrefix%'
+          AND EXISTS (
+            SELECT 1 FROM $table o
+            WHERE o.global_id = '$openingPrefix' || $table.product_global_id
+              AND o.compacted_before IS NOT NULL
+              AND $table.created_at < o.compacted_before
+          )
+      ''');
+
+  /// يضم الحركات الأقدم من [keepDays] إلى افتتاحية منتجها، ويكتب تاريخ الضغط
+  /// عليها. لا تتغير الكمية. التاريخ بداية يوم، فتتفق الأجهزة عليه.
+  static Future<int> compact(DatabaseExecutor db, {DateTime? now}) async {
+    final day = (now ?? DateTime.now()).toUtc();
+    final cutDay = DateTime.utc(day.year, day.month, day.day)
+        .subtract(const Duration(days: keepDays));
+    final cut = cutDay.toIso8601String();
+    final stamp = day.toIso8601String();
+    await db.rawUpdate('''
+      UPDATE $table SET
+        delta = ROUND(delta + COALESCE((
+          SELECT SUM(l.delta) FROM $table l
+          WHERE l.product_global_id = $table.product_global_id
+            AND l.global_id NOT LIKE '$openingPrefix%'
+            AND l.created_at < ?
+        ), 0), 3),
+        compacted_before = ?,
+        updatedAt = ?
+      WHERE global_id LIKE '$openingPrefix%'
+        AND (compacted_before IS NULL OR compacted_before < ?)
+        AND EXISTS (
+          SELECT 1 FROM $table l
+          WHERE l.product_global_id = $table.product_global_id
+            AND l.global_id NOT LIKE '$openingPrefix%'
+            AND l.created_at < ?
+        )
+    ''', [cut, cut, stamp, cut, cut]);
+    return dropCompacted(db);
   }
 }

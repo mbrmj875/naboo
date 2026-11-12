@@ -2533,6 +2533,7 @@ class CloudSyncService {
       await SyncTombstones.purgeOld(db);
       await StockLedger.ensureSchema(db);
       await StockLedger.ensureOpenings(db);
+      await StockLedger.compact(db);
     }
     final tableNames = await _listSyncTables(db);
     final sigMapKey = _prefsKeyLastPushedTableSignatures(userId);
@@ -3219,6 +3220,7 @@ class CloudSyncService {
           );
         }
         if (SyncSafety.enabled) {
+          await StockLedger.dropCompacted(txn);
           await StockLedger.ensureOpenings(txn);
           await StockLedger.recompute(txn);
           await StockLedger.setPaused(txn, false);
