@@ -4452,6 +4452,8 @@ class AuthProvider extends ChangeNotifier {
       if (prefs.containsKey(sessionKey)) {
         await prefs.remove(sessionKey);
       }
+      // جلسة ويندوز المشفرة (البند 5.3) تُمسح معها، وإلا بقيت جلسة شبحية.
+      await prefs.remove('$sessionKey.dpapi');
     } catch (e) {
       AppLogger.warn('AuthProvider', 'fallback session clear failed: $e');
     }
