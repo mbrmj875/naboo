@@ -49,6 +49,20 @@ Map<String, dynamic> gzipBase64DecodeSnapshotJson(String encoded) {
   return data;
 }
 
+/// حقول يقرؤها حارس الخادم من غلاف اللقطة المقسّمة (البند 5.1).
+///
+/// الخادم لا يفك ضغط الأجزاء، فبدون هذه الحقول لا يرى أي جدول ولا الحجم.
+/// تُكتب للقراءة فقط، والتطبيق لا يعتمد عليها عند الاستيراد.
+Map<String, Object> chunkedManifestGuardFields(
+  Map<String, dynamic> payload,
+  int rawBytes,
+) {
+  final tables = payload['tables'];
+  final names = tables is Map ? tables.keys.map((k) => '$k').toList() : <String>[];
+  names.sort();
+  return {'table_names': names, 'raw_bytes': rawBytes};
+}
+
 /// فك gzip bytes ثم JSON — دالة top-level لاستخدامها داخل [compute] (R8).
 Map<String, dynamic> gzipBytesDecodeSnapshotJson(Uint8List gzBytes) {
   final decodedBytes = const GZipDecoder().decodeBytes(gzBytes);
@@ -2647,6 +2661,8 @@ class CloudSyncService {
           'upload_id': uploadId,
           'chunk_count': chunkCount,
           'encoding': 'gzip-bytechunks-base64-v2',
+          // البند 5.1: الخادم لا يفك الضغط، فيقرأ أسماء الجداول والحجم من هنا.
+          ...chunkedManifestGuardFields(payloadMap, utf8Bytes.length),
         };
       }
 
