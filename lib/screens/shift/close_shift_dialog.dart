@@ -6,7 +6,6 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../navigation/app_root_navigator_key.dart';
-import '../../providers/auth_provider.dart';
 import '../../providers/notification_provider.dart';
 import '../../providers/shift_provider.dart';
 import '../../services/database_helper.dart';

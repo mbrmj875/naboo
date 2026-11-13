@@ -2,7 +2,6 @@ import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../utils/app_logger.dart';
-import 'wa_oil_followup_copy.dart';
 
 /// جدولة تذكير بعد حفظ بطاقة غيار — مستقل عن إرسال البطاقة الفوري.
 class WaOilFollowupScheduler {

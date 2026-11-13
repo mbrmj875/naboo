@@ -1,6 +1,5 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import '../../../utils/app_logger.dart';
 import '../models/wa_oil_followup_job.dart';
 import '../models/wa_oil_followup_rule.dart';
 import 'oil_change_whatsapp_gateway_service.dart';

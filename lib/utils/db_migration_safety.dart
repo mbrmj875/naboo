@@ -56,4 +56,46 @@ class DbMigrationSafety {
       rethrow;
     }
   }
+
+  /// أقصى عدد أخطاء تُحفظ على الجهاز، فلا ينمو الجدول بلا حد.
+  static const int maxStoredIssues = 200;
+
+  static final List<MigrationIssue> _pending = [];
+
+  /// أخطاء لم تُحفظ بعد في قاعدة الجهاز.
+  @visibleForTesting
+  static List<MigrationIssue> get pendingIssues => List.unmodifiable(_pending);
+
+  @visibleForTesting
+  static void resetForTesting() => _pending.clear();
+
+  /// بديل `catch (_) {}`: الترقية تستمر كما كانت، لكن الخطأ الحقيقي لا يضيع.
+  ///
+  /// الخطأ الحميد (عمود أو جدول موجود) يُهمل. غيره يُسجَّل ويُحفظ لاحقاً في
+  /// جدول local_migration_issues عبر [takePending]، فنعرف مثلاً أن فهرساً
+  /// فريداً لم يُنشأ بسبب تكرار قديم.
+  static void noteIgnored(String label, Object e, [StackTrace? st]) {
+    if (isBenignMigrationError(e)) return;
+    AppLogger.error('Migration', '$label ignored', e, st);
+    if (_pending.length >= maxStoredIssues) return;
+    var msg = e.toString();
+    if (msg.length > 500) msg = msg.substring(0, 500);
+    _pending.add(MigrationIssue(label, msg, DateTime.now().toUtc()));
+  }
+
+  /// يسلّم الأخطاء المنتظرة ويفرغ القائمة.
+  static List<MigrationIssue> takePending() {
+    final out = List<MigrationIssue>.of(_pending);
+    _pending.clear();
+    return out;
+  }
+}
+
+/// خطأ ترقية أُهمل لكي لا يتوقف فتح القاعدة.
+class MigrationIssue {
+  const MigrationIssue(this.label, this.error, this.at);
+
+  final String label;
+  final String error;
+  final DateTime at;
 }
