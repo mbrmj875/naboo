@@ -423,6 +423,19 @@ void main() {
       expect(r.coversSnapshot, isFalse);
     }, timeout: slow);
 
+    test('a change in a table keyed by a local number needs the snapshot',
+        () async {
+      final sync = CloudSyncService.instance;
+      await f.syncDevice(f['A']);
+      final db = await f.activate(f['A']);
+      expect(await sync.localKeyedTablesChanged(f['A'].userId), isFalse);
+      await db.insert('warehouses', {
+        'name': 'needs-snapshot',
+        'createdAt': DateTime.now().toUtc().toIso8601String(),
+      });
+      expect(await sync.localKeyedTablesChanged(f['A'].userId), isTrue);
+    }, timeout: slow);
+
     test('the full snapshot is due once a day', () async {
       final sync = CloudSyncService.instance;
       expect(await sync.fullSnapshotDue('u1'), isTrue);

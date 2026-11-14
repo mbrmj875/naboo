@@ -262,6 +262,33 @@ void main() {
     expect(await outbox(db), isEmpty);
   }, timeout: slow);
 
+  test('tables keyed by a local number are left to the full snapshot',
+      () async {
+    final db = await f.activate(f['A']);
+    final now = DateTime.now().toUtc().toIso8601String();
+    final id = await db.insert(
+        'warehouses', {'name': 'local-key-probe', 'createdAt': now});
+    await db.delete('warehouses', where: 'id = ?', whereArgs: [id]);
+    expect(
+      (await outbox(db)).where((r) => r['tbl'] == 'warehouses'),
+      isEmpty,
+    );
+    expect(await ChangeCapture.localKeyedTables(db), contains('warehouses'));
+
+    // تعديل وارد بمفتاح رقم محلي من جهاز آخر لا يمس السطر الذي يحمل الرقم
+    // نفسه هنا.
+    final mine = await db.insert(
+        'warehouses', {'name': 'mine', 'createdAt': now});
+    await CloudSyncService.instance.applyCapturedChanges([
+      CapturedChange(
+          outboxId: 1, table: 'warehouses', key: '$mine', op: 'D'),
+    ]);
+    expect(
+      await db.query('warehouses', where: 'id = ?', whereArgs: [mine]),
+      isNotEmpty,
+    );
+  }, timeout: slow);
+
   test('switch off: no triggers and nothing captured', () async {
     SyncSafety.changeCapture = false;
     final db = await f.reopen(f['A']);

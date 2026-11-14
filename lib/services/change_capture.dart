@@ -91,14 +91,29 @@ class ChangeCapture {
     );
   }
 
-  /// عمود المفتاح: global_id إن وُجد، وإلا المفتاح الأساسي إن كان عموداً
-  /// واحداً (`id`، أو `key` في app_settings).
+  /// عمود مفتاح واحد على كل جهاز: global_id إن وُجد، وإلا مفتاح أساسي نصي
+  /// من عمود واحد (`key` في app_settings).
+  ///
+  /// الرقم المحلي `id` لا يُقبل: يختلف بين الأجهزة، فحذف بـ id=7 على جهاز آخر
+  /// يحذف سطراً آخر. جداوله تبقى على النسخة الكاملة حتى تأخذ معرّفاً عاماً.
   static Future<String?> keyColumn(DatabaseExecutor db, String table) async {
     final cols = await db.rawQuery('PRAGMA table_info($table)');
     if (cols.any((c) => c['name'] == 'global_id')) return 'global_id';
     final pk = cols.where((c) => ((c['pk'] as num?)?.toInt() ?? 0) > 0);
-    if (pk.length == 1) return pk.first['name'].toString();
-    return null;
+    if (pk.length != 1) return null;
+    final name = pk.first['name'].toString();
+    final type = (pk.first['type'] ?? '').toString().toUpperCase();
+    if (name == 'id' || type.contains('INT')) return null;
+    return name;
+  }
+
+  /// جداول تُرفع في النسخة ولا تُلتقط لأن مفتاحها رقم محلي.
+  static Future<List<String>> localKeyedTables(DatabaseExecutor db) async {
+    final out = <String>[];
+    for (final t in await _capturedTables(db)) {
+      if (await keyColumn(db, t) == null) out.add(t);
+    }
+    return out;
   }
 
   static Future<List<String>> _capturedTables(DatabaseExecutor db) async {
@@ -265,7 +280,7 @@ class ChangeCapture {
         final rows = await db.query(
           table,
           where: '$col = ?',
-          whereArgs: [col == 'id' ? int.tryParse(key) ?? key : key],
+          whereArgs: [key],
           limit: 1,
         );
         if (rows.isNotEmpty) row = Map<String, dynamic>.from(rows.first);

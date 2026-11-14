@@ -1634,7 +1634,8 @@ class CloudSyncService {
       if (!forcePush &&
           delta != null &&
           delta.coversSnapshot &&
-          !await fullSnapshotDue(user.id)) {
+          !await fullSnapshotDue(user.id) &&
+          !await localKeyedTablesChanged(user.id)) {
         await refreshDevices();
         lastError.value = null;
         lastSyncAt.value = DateTime.now();
@@ -2035,6 +2036,28 @@ class CloudSyncService {
     if (since >= fullSnapshotEvery) return true;
     final hour = t.toLocal().hour;
     return hour < 6 && since >= fullSnapshotNightAfter;
+  }
+
+  /// جداول مفتاحها رقم محلي لا تُلتقط، فتغيّرها يحتاج النسخة الكاملة. يقارن
+  /// بصمتها (العدد وآخر وقت) بما رُفع أو استُورد آخر مرة.
+  @visibleForTesting
+  Future<bool> localKeyedTablesChanged(String userId) async {
+    try {
+      final dbProvider = databaseProviderForTesting;
+      final db =
+          dbProvider != null ? await dbProvider() : await _dbHelper.database;
+      final prefs = await SharedPreferences.getInstance();
+      final previous = _readSignatureMap(
+        prefs.getString(_prefsKeyLastPushedTableSignatures(userId)),
+      );
+      if (previous.isEmpty) return true;
+      final tables = await ChangeCapture.localKeyedTables(db);
+      final now = await _buildTableSignatures(db, tables);
+      return tables.any((t) => now[t] != previous[t]);
+    } catch (e) {
+      AppLogger.warn('CloudSync', 'local-keyed check failed: $e');
+      return true;
+    }
   }
 
   Future<void> _markFullSnapshot(String userId) async {
@@ -3653,17 +3676,17 @@ class CloudSyncService {
           i++;
           continue;
         }
+        final col = keyCols.containsKey(c.table)
+            ? keyCols[c.table]
+            : (keyCols[c.table] = await ChangeCapture.keyColumn(txn, c.table));
+        // جدول مفتاحه رقم محلي هنا: لا يُطبَّق تعديل بمفتاح جهاز آخر. النسخة
+        // الكاملة تحمله.
+        if (col == null) {
+          i++;
+          continue;
+        }
         if (c.op == 'D') {
-          final col = keyCols.containsKey(c.table)
-              ? keyCols[c.table]
-              : (keyCols[c.table] = await ChangeCapture.keyColumn(txn, c.table));
-          if (col != null) {
-            await txn.delete(
-              c.table,
-              where: '$col = ?',
-              whereArgs: [col == 'id' ? int.tryParse(c.key) ?? c.key : c.key],
-            );
-          }
+          await txn.delete(c.table, where: '$col = ?', whereArgs: [c.key]);
           i++;
           continue;
         }
