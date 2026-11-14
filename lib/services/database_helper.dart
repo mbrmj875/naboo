@@ -636,6 +636,10 @@ class DatabaseHelper {
         } catch (_) {
           // Some platforms/configurations may not support WAL; ignore safely.
         }
+        // ترقية القاعدة وإصلاحات الفتح صيانة محلية يجريها كل جهاز بنفسه:
+        // لا تُلتقط، وإلا وصل حذف إصلاح محلي إلى كل الأجهزة. يعود الالتقاط
+        // في آخر [_onOpen].
+        await ChangeCapture.setPaused(db, true);
       },
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
@@ -705,6 +709,7 @@ class DatabaseHelper {
     await ensureRestaurantTables(db);
     // آخر خطوة: المشغّلات تُبنى على الجداول والأعمدة بعد اكتمال الترقية.
     await ChangeCapture.ensure(db);
+    await ChangeCapture.setPaused(db, false);
     await _flushMigrationIssues(db);
   }
 

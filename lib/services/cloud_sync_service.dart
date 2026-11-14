@@ -2602,13 +2602,7 @@ class CloudSyncService {
       return false;
     }
 
-    if (SyncSafety.enabled) {
-      await _purgeOldCardTombstones(db);
-      await SyncTombstones.purgeOld(db);
-      await StockLedger.ensureSchema(db);
-      await StockLedger.ensureOpenings(db);
-      await StockLedger.compact(db);
-    }
+    if (SyncSafety.enabled) await runLocalCleanup(db);
     final tableNames = await _listSyncTables(db);
     final sigMapKey = _prefsKeyLastPushedTableSignatures(userId);
     final currentSigMap = await _buildTableSignatures(db, tableNames);
@@ -3691,6 +3685,20 @@ class CloudSyncService {
   /// البطاقة المحذوفة تبقى 90 يوماً ليصل حذفها إلى كل جهاز، ثم تُزال من
   /// الجهاز، فتخرج من لقطته التالية.
   static const cardTombstoneDays = 90;
+
+  /// تنظيف قبل الرفع يجريه كل جهاز بنفسه: شواهد الحذف القديمة، وضغط حركات
+  /// المخزون الأقدم من 90 يوماً. لا يُلتقط، وإلا أُرسل حذف آلاف الحركات إلى
+  /// كل الأجهزة. داخل معاملة، فلا يضيع التقاط بيع يحدث في اللحظة نفسها.
+  @visibleForTesting
+  Future<void> runLocalCleanup(Database db) => db.transaction((txn) async {
+        await ChangeCapture.setPaused(txn, true);
+        await _purgeOldCardTombstones(txn);
+        await SyncTombstones.purgeOld(txn);
+        await StockLedger.ensureSchema(txn);
+        await StockLedger.ensureOpenings(txn);
+        await StockLedger.compact(txn);
+        await ChangeCapture.setPaused(txn, false);
+      });
 
   Future<void> _purgeOldCardTombstones(DatabaseExecutor txn) async {
     final cutoff = DateTime.now()

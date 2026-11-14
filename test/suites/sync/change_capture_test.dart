@@ -10,6 +10,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:naboo/services/change_capture.dart';
 import 'package:naboo/services/cloud_sync_service.dart';
 import 'package:naboo/services/sync_safety.dart';
+import 'package:naboo/services/sync_tombstones.dart';
 import 'package:naboo/services/sync_tables.dart';
 import 'package:naboo/services/tenant_context.dart';
 import 'package:naboo/verticals/oil_change/services/oil_change_oil_catalog_repository.dart';
@@ -114,6 +115,73 @@ void main() {
     // الالتقاط يعود بعد الإفراغ.
     await f.createCard(f['A'], 'WIPE-2');
     expect(await outbox(db), isNotEmpty);
+  }, timeout: slow);
+
+  test('repairs run while opening the database are not captured', () async {
+    var db = await f.activate(f['A']);
+    // خطة تقسيط وصلت قبل فاتورتها: إصلاح الفتح يحذفها محلياً.
+    await db.execute('PRAGMA foreign_keys = OFF');
+    await db.insert('installment_plans', {
+      'invoiceId': 987654,
+      'customerName': 'x',
+      'totalAmount': 10.0,
+      'paidAmount': 0.0,
+      'numberOfInstallments': 2,
+    });
+    await db.execute('PRAGMA foreign_keys = ON');
+    await db.delete(ChangeCapture.outbox);
+
+    db = await f.reopen(f['A']);
+    expect(
+      await db.query('installment_plans', where: 'invoiceId = 987654'),
+      isEmpty,
+    );
+    expect(
+      (await outbox(db)).where((r) => r['tbl'] == 'installment_plans'),
+      isEmpty,
+    );
+    // الالتقاط عاد بعد الفتح.
+    final ctl = await db.query(ChangeCapture.ctlTable);
+    expect(ctl.single['paused'], 0);
+    await f.createCard(f['A'], 'AFTER-OPEN');
+    expect(
+      (await outbox(db)).where((r) => r['tbl'] == 'service_orders'),
+      isNotEmpty,
+    );
+  }, timeout: slow);
+
+  test('upload-time cleanup is not captured', () async {
+    final db = await f.activate(f['A']);
+    final old = DateTime.now()
+        .toUtc()
+        .subtract(const Duration(days: 400))
+        .toIso8601String();
+    await SyncTombstones.ensureTable(db);
+    await ChangeCapture.ensure(db);
+    await db.insert(SyncTombstones.table, {
+      'table_name': 'customers',
+      'global_id': 'old-tombstone',
+      'removed_at': old,
+      'updatedAt': old,
+    });
+    expect(
+      (await outbox(db)).where((r) => r['tbl'] == SyncTombstones.table),
+      isNotEmpty,
+      reason: 'the table is captured, so the check below means something',
+    );
+    await db.delete(ChangeCapture.outbox);
+
+    await CloudSyncService.instance.runLocalCleanup(db);
+    expect(
+      await db.query(SyncTombstones.table,
+          where: 'global_id = ?', whereArgs: ['old-tombstone']),
+      isEmpty,
+      reason: 'the old record is cleaned up before upload',
+    );
+    expect(
+      (await outbox(db)).where((r) => r['op'] == 'D'),
+      isEmpty,
+    );
   }, timeout: slow);
 
   test('switch off: no triggers and nothing captured', () async {
