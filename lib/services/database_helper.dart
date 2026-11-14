@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import 'package:uuid/uuid.dart';
+import 'catalog_identity.dart';
 import 'sync_safety.dart';
 import 'sync_tombstones.dart';
 import 'stock_ledger.dart';
@@ -351,16 +352,19 @@ class DatabaseHelper {
   Future<void> ensureCarWashServicesSchema() async {
     final db = await database;
     await _ensureCarWashServicesTable(db);
+    await CatalogIdentity.ensure(db);
   }
 
   Future<void> ensureOilChangeOilCatalogSchema() async {
     final db = await database;
     await _ensureOilChangeOilCatalogTable(db);
+    await CatalogIdentity.ensure(db);
   }
 
   Future<void> ensureOilChangeHydraulicCatalogSchema() async {
     final db = await database;
     await _ensureOilChangeHydraulicCatalogTable(db);
+    await CatalogIdentity.ensure(db);
   }
 
   Future<void> ensureOilChangeFilterCatalogSchema() async {
@@ -368,6 +372,7 @@ class DatabaseHelper {
     await _ensureOilChangeFilterKindsTable(db);
     await _ensureOilChangeFilterCatalogTable(db);
     await _ensureServiceOrdersOilChangeFilterColumns(db);
+    await CatalogIdentity.ensure(db);
   }
 
   Future<void> _ensureOilChangeFilterKindsTable(Database db) async {
@@ -687,6 +692,7 @@ class DatabaseHelper {
     await _ensureOilChangeServicesTable(db);
     await _ensureCarWashServicesTable(db);
     await _ensureServiceOrdersOilChangeFilterColumns(db);
+    await CatalogIdentity.ensure(db);
     await ensureOilProductGradesSchema(db);
     await ensureBusinessAuditEventsTable(db);
     await ensureOwnerDashboardQueryIndexes(db);

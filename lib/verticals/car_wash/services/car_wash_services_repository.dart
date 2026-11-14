@@ -1,3 +1,4 @@
+import '../../../services/catalog_identity.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../models/car_wash_service_item.dart';
@@ -85,6 +86,7 @@ class CarWashServicesRepository {
     );
     final nextSort = ((maxRow.first['m'] as num?)?.toInt() ?? 0) + 1;
     final id = await db.insert('car_wash_services', {
+      'global_id': CatalogIdentity.newId(),
       'tenantId': tid,
       'name': clean,
       'priceFils': priceFils < 0 ? 0 : priceFils,

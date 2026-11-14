@@ -4,6 +4,10 @@ import 'package:uuid/uuid.dart';
 class SyncSafety {
   static bool enabled = true;
 
+  /// المرحلة 2: دمج كتالوجات الزيوت والغسيل بالمعرّف العام بدل الرقم المحلي.
+  /// مطفأ حتى تتحدث كل أجهزة المحل، ويُشغَّل ليلاً.
+  static bool catalogIdentity = false;
+
   static int cashFils(Map<String, dynamic> row) {
     final fils = (row['amountFils'] as num?)?.toInt() ?? 0;
     if (fils != 0) return fils;

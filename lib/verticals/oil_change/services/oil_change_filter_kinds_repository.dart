@@ -1,3 +1,4 @@
+import '../../../services/catalog_identity.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../models/oil_change_filter_kind.dart';
@@ -61,6 +62,7 @@ class OilChangeFilterKindsRepository {
     final now = DateTime.now().toUtc().toIso8601String();
     for (final k in OilChangeFilterKind.builtins) {
       await db.insert('oil_change_filter_kinds', {
+        'global_id': CatalogIdentity.builtinFilterKindId(k.code),
         'tenantId': tid,
         'code': k.code,
         'labelAr': k.label,
@@ -113,6 +115,7 @@ class OilChangeFilterKindsRepository {
     final code = await _nextCustomCode(db, tid);
     final now = DateTime.now().toUtc().toIso8601String();
     final id = await db.insert('oil_change_filter_kinds', {
+      'global_id': CatalogIdentity.newId(),
       'tenantId': tid,
       'code': code,
       'labelAr': label,

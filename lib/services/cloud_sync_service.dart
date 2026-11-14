@@ -16,6 +16,7 @@ import '../utils/app_logger.dart';
 import '../owner/services/business_audit_log_service.dart';
 import 'app_remote_config_service.dart';
 import 'sync_echo_guard.dart';
+import 'catalog_identity.dart';
 import 'sync_safety.dart';
 import 'sync_tombstones.dart';
 import 'stock_ledger.dart';
@@ -3418,6 +3419,88 @@ class CloudSyncService {
     return true;
   }
 
+  /// كتالوجات الزيوت والغسيل: المطابقة بالمعرّف العام، لا بالرقم المحلي.
+  ///   * نفس المعرّف: الأحدث يفوز، والرقم المحلي يبقى.
+  ///   * صنف بنفس المفتاح الطبيعي ومعرّف آخر (أضافه جهازان دون إنترنت): سطر
+  ///     واحد، ويأخذ الجهازان المعرّف الأصغر فيتطابقان.
+  ///   * صنف جديد: يُدرج برقمه إن كان الرقم فارغاً هنا، وإلا برقم جديد، فلا
+  ///     يكتب فوق صنف آخر. الطلبات القديمة ما زالت تشير للرقم المحلي.
+  ///   * الحذف منطقي (deletedAt) ويصل كأي تعديل.
+  /// سطر بلا معرّف (جهاز لم يتحدث) يرجع للمسار القديم.
+  Future<bool> _mergeCatalogByGlobalId({
+    required Transaction txn,
+    required String table,
+    required Map<String, dynamic> incomingRaw,
+    required Map<String, dynamic> incoming,
+  }) async {
+    final gid = (incoming['global_id'] ?? '').toString().trim();
+    if (gid.isEmpty) return false;
+    final row = Map<String, dynamic>.from(incoming)..remove('id');
+
+    var local = await txn.query(
+      table,
+      where: 'global_id = ?',
+      whereArgs: [gid],
+      limit: 1,
+    );
+    if (local.isEmpty) {
+      final natural = CatalogIdentity.naturalWhere(table, incoming);
+      if (natural != null) {
+        final (where, args) = natural;
+        local = await txn.query(
+          table,
+          where: where,
+          whereArgs: args,
+          orderBy: 'deletedAt IS NOT NULL, id',
+          limit: 1,
+        );
+      }
+    }
+
+    if (local.isEmpty) {
+      final id = (incoming['id'] as num?)?.toInt();
+      if (id != null) {
+        final taken = await txn.query(
+          table,
+          columns: ['id'],
+          where: 'id = ?',
+          whereArgs: [id],
+          limit: 1,
+        );
+        if (taken.isEmpty) row['id'] = id;
+      }
+      try {
+        await txn.insert(table, row);
+      } on DatabaseException catch (e) {
+        // تعارض مع فهرس محلي آخر: يبقى المحلي، والسطر يصل مع اللقطة القادمة.
+        AppLogger.warn('CloudSync', 'catalog insert $table skipped: $e');
+      }
+      return true;
+    }
+
+    final current = local.first;
+    final currentGid = (current['global_id'] ?? '').toString().trim();
+    final winnerGid = currentGid.isEmpty || gid.compareTo(currentGid) < 0
+        ? gid
+        : currentGid;
+    final update = _incomingWins(current, incomingRaw)
+        ? row
+        : <String, dynamic>{};
+    update['global_id'] = winnerGid;
+    try {
+      await txn.update(
+        table,
+        update,
+        where: 'id = ?',
+        whereArgs: [current['id']],
+      );
+    } on DatabaseException catch (e) {
+      // اسم جديد يطابق صنفاً آخر هنا: يبقى المحلي حتى يُحل يدوياً.
+      AppLogger.warn('CloudSync', 'catalog update $table skipped: $e');
+    }
+    return true;
+  }
+
   /// البطاقة المحذوفة تبقى 90 يوماً ليصل حذفها إلى كل جهاز، ثم تُزال من
   /// الجهاز، فتخرج من لقطته التالية.
   static const cardTombstoneDays = 90;
@@ -4302,6 +4385,18 @@ class CloudSyncService {
           localCols: localCols,
           deletedAt: deletedAt,
           pkCols: pkCols,
+        );
+        if (handled) continue;
+      }
+
+      if (SyncSafety.catalogIdentity &&
+          CatalogIdentity.covers(table) &&
+          localCols.contains('global_id')) {
+        final handled = await _mergeCatalogByGlobalId(
+          txn: txn,
+          table: table,
+          incomingRaw: incomingRaw,
+          incoming: incoming,
         );
         if (handled) continue;
       }
