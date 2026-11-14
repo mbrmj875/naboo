@@ -34,6 +34,8 @@ Future<void> ensureWorkShiftsGlobalIdSchema(Database db) async {
   await addColumn('global_id', 'TEXT');
   await addColumn('updatedAt', 'TEXT');
   await addColumn('tenantId', 'INTEGER NOT NULL DEFAULT 1');
+  // البند 4.3: الجهاز الذي فتح الوردية. فارغ للورديات القديمة.
+  await addColumn('device_id', 'TEXT');
 
   Future<bool> colExists(String name) async {
     final rows = await db.rawQuery('PRAGMA table_info(work_shifts)');
@@ -132,12 +134,15 @@ AND $tenantScopeWhere
 
   static Future<Map<String, dynamic>?> getOpenWorkShift(
     DatabaseExecutor db,
-    int tenantId,
-  ) async {
+    int tenantId, {
+    String? deviceId,
+  }) async {
     final rows = await db.query(
       'work_shifts',
-      where: openShiftWhere,
-      whereArgs: [tenantId],
+      where: deviceId == null
+          ? openShiftWhere
+          : '$openShiftWhere AND ${LocalDevice.shiftWhere}',
+      whereArgs: [tenantId, if (deviceId != null) deviceId],
       orderBy: 'datetime(openedAt) DESC, id DESC',
       limit: 1,
     );
@@ -148,13 +153,21 @@ AND $tenantScopeWhere
   static Future<Map<String, dynamic>?> getOpenWorkShiftForStaff(
     DatabaseExecutor db,
     int tenantId,
-    int shiftStaffUserId,
-  ) async {
+    int shiftStaffUserId, {
+    String? deviceId,
+  }) async {
     if (shiftStaffUserId <= 0) return null;
     final rows = await db.query(
       'work_shifts',
-      where: '$openShiftWhere AND shiftStaffUserId = ?',
-      whereArgs: [tenantId, shiftStaffUserId],
+      where: deviceId == null
+          ? '$openShiftWhere AND shiftStaffUserId = ?'
+          : '$openShiftWhere AND shiftStaffUserId = ? '
+              'AND ${LocalDevice.shiftWhere}',
+      whereArgs: [
+        tenantId,
+        shiftStaffUserId,
+        if (deviceId != null) deviceId,
+      ],
       orderBy: 'datetime(openedAt) DESC, id DESC',
       limit: 1,
     );
@@ -401,8 +414,9 @@ extension DbShifts on DatabaseHelper {
     final rows = await db.query(
       'work_shifts',
       columns: const ['id', 'shiftStaffName'],
-      where: '${DbShiftsSqlOps.openShiftWhere} AND shiftStaffUserId = ?',
-      whereArgs: [tid, shiftStaffUserId],
+      where: '${DbShiftsSqlOps.openShiftWhere} AND shiftStaffUserId = ? '
+          'AND ${LocalDevice.shiftWhere}',
+      whereArgs: [tid, shiftStaffUserId, await LocalDevice.id(db)],
       orderBy: 'datetime(openedAt) DESC, id DESC',
     );
     if (rows.length <= 1) return;
@@ -435,9 +449,10 @@ extension DbShifts on DatabaseHelper {
       FROM work_shifts ws
       LEFT JOIN users u ON u.id = ws.shiftStaffUserId
       WHERE ${DbShiftsSqlOps.openShiftWhere.replaceAll('tenantId', 'ws.tenantId').replaceAll('closedAt', 'ws.closedAt').replaceAll('deleted_at', 'ws.deleted_at')}
+        AND ${LocalDevice.shiftWhere.replaceAll('device_id', 'ws.device_id')}
       ORDER BY datetime(ws.openedAt) DESC, ws.id DESC
       ''',
-      [tid],
+      [tid, await LocalDevice.id(db)],
     );
     if (rows.length <= 1) return;
     final nowIso = DateTime.now().toUtc().toIso8601String();
@@ -505,8 +520,8 @@ extension DbShifts on DatabaseHelper {
     final openRows = await db.query(
       'work_shifts',
       columns: const ['id', 'shiftStaffName', 'shiftStaffUserId'],
-      where: DbShiftsSqlOps.openShiftWhere,
-      whereArgs: [tid],
+      where: '${DbShiftsSqlOps.openShiftWhere} AND ${LocalDevice.shiftWhere}',
+      whereArgs: [tid, await LocalDevice.id(db)],
     );
     final nowIso = DateTime.now().toUtc().toIso8601String();
     for (final row in openRows) {
@@ -535,14 +550,51 @@ extension DbShifts on DatabaseHelper {
   Future<Map<String, dynamic>?> getOpenWorkShift() async {
     final db = await database;
     final tid = await _resolveActiveTenantIdForLocalDb(db);
-    return DbShiftsSqlOps.getOpenWorkShift(db, tid);
+    final deviceId = await LocalDevice.id(db);
+    return _claimLegacyShift(
+      db,
+      await DbShiftsSqlOps.getOpenWorkShift(db, tid, deviceId: deviceId),
+      deviceId,
+    );
+  }
+
+  /// وردية قديمة مفتوحة بلا جهاز (قبل التحديث) تُنسب إلى أول جهاز يستعملها،
+  /// فلا يراها جهاز آخر كورديته ولا يغلقها كمكررة. تصل النسبة إلى الأجهزة
+  /// الأخرى في اللقطة.
+  Future<Map<String, dynamic>?> _claimLegacyShift(
+    Database db,
+    Map<String, dynamic>? row,
+    String deviceId,
+  ) async {
+    if (row == null) return null;
+    final current = (row['device_id'] ?? '').toString().trim();
+    final id = (row['id'] as num?)?.toInt();
+    if (current.isNotEmpty || id == null) return row;
+    final nowIso = DateTime.now().toUtc().toIso8601String();
+    await db.update(
+      'work_shifts',
+      {'device_id': deviceId, 'updatedAt': nowIso},
+      where: "id = ? AND (device_id IS NULL OR TRIM(device_id) = '')",
+      whereArgs: [id],
+    );
+    return {...row, 'device_id': deviceId, 'updatedAt': nowIso};
   }
 
   /// وردية مفتوحة لموظف الوردية المحدد.
   Future<Map<String, dynamic>?> getOpenWorkShiftForStaff(int shiftStaffUserId) async {
     final db = await database;
     final tid = await _resolveActiveTenantIdForLocalDb(db);
-    return DbShiftsSqlOps.getOpenWorkShiftForStaff(db, tid, shiftStaffUserId);
+    final deviceId = await LocalDevice.id(db);
+    return _claimLegacyShift(
+      db,
+      await DbShiftsSqlOps.getOpenWorkShiftForStaff(
+        db,
+        tid,
+        shiftStaffUserId,
+        deviceId: deviceId,
+      ),
+      deviceId,
+    );
   }
 
   /// فتح وردية جديدة.
@@ -562,10 +614,16 @@ extension DbShifts on DatabaseHelper {
     await ensureWorkShiftsGlobalIdSchema(db);
     final nowIso = DateTime.now().toUtc().toIso8601String();
 
-    final existing = await DbShiftsSqlOps.getOpenWorkShiftForStaff(
+    final deviceId = await LocalDevice.id(db);
+    final existing = await _claimLegacyShift(
       db,
-      tid,
-      shiftStaffUserId,
+      await DbShiftsSqlOps.getOpenWorkShiftForStaff(
+        db,
+        tid,
+        shiftStaffUserId,
+        deviceId: deviceId,
+      ),
+      deviceId,
     );
     if (existing != null) {
       final existingId = (existing['id'] as num?)?.toInt();
@@ -583,6 +641,7 @@ extension DbShifts on DatabaseHelper {
     final shiftPayload = {
       'global_id': globalId,
       'tenantId': tid,
+      'device_id': deviceId,
       'sessionUserId': sessionUserId,
       'shiftStaffUserId': shiftStaffUserId,
       'openedAt': nowIso,

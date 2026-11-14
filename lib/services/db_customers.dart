@@ -655,6 +655,9 @@ LEFT JOIN (
       for (final r in rows) {
         final gid = r['global_id'] as String?;
         if (gid != null && gid.isNotEmpty) {
+          if (SyncSafety.enabled) {
+            await SyncTombstones.record(txn, 'customers', gid);
+          }
           await SyncQueueService.instance.enqueueMutation(
             txn,
             entityType: 'customer',

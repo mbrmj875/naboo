@@ -62,6 +62,8 @@ import 'navigation/app_root_navigator_key.dart';
 import 'services/marketplace/marketplace_session_service.dart';
 import 'services/tenant_context_service.dart';
 import 'services/supabase_config.dart';
+import 'services/auth/auth_session_diagnostics.dart';
+import 'services/auth/protected_prefs_session_storage.dart';
 import 'services/auth/secure_session_storage.dart';
 import 'screens/auth/device_access_revoked_screen.dart';
 import 'screens/auth/device_kicked_out_screen.dart';
@@ -269,14 +271,19 @@ void main() async {
         autoRefreshToken: true,
         // نعالج deep links يدوياً (ويب + موبايل) مع try/catch — تجنب crash PKCE.
         detectSessionInUri: false,
-        // ويندوز: SharedPreferences. تخزين DPAPI كان يعلق الإقلاع ويضيع جلسة Google.
+        // ويندوز (البند 5.3): مكتبة التخزين الآمن كانت تعلق الإقلاع لأنها تعمل
+        // على خيط النافذة. الجلسة الآن مشفرة بـ DPAPI في عزلة خلفية بمهلة،
+        // وإن تعذر التشفير تبقى نصاً كما كانت.
         // أندرويد وiOS وmacOS تبقى على التخزين الآمن كما هي.
-        localStorage: kIsWeb ||
-                defaultTargetPlatform == TargetPlatform.windows
+        localStorage: kIsWeb
             ? WebSharedPreferencesLocalStorage(
                 persistSessionKey: sessionPersistKey,
               )
-            : SecureLocalStorage(persistSessionKey: sessionPersistKey),
+            : defaultTargetPlatform == TargetPlatform.windows
+                ? ProtectedPrefsLocalStorage(
+                    persistSessionKey: sessionPersistKey,
+                  )
+                : SecureLocalStorage(persistSessionKey: sessionPersistKey),
       ),
     ).timeout(const Duration(seconds: 8));
     _registerMobileOAuthDeepLinkHandler();
@@ -357,6 +364,7 @@ Future<void> _startDeferredStorageInit() async {
 }
 
 Future<void> _startPostUiServices() async {
+  AuthSessionDiagnostics.instance.start();
   try {
     await SystemNotificationService.instance.initialize();
   } catch (e, st) {

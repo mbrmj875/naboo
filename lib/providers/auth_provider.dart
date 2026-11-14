@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../services/database_helper.dart';
+import '../services/db_file_parking.dart';
 import '../services/app_settings_repository.dart';
 import '../services/business_setup_settings.dart';
 import '../services/cloud_sync_service.dart'
@@ -42,6 +43,9 @@ import '../services/auth/owner_business_vertical_cloud_service.dart';
 import '../services/auth/owner_supabase_credential_store.dart';
 import '../services/auth/native_google_id_token_sign_in.dart';
 import '../services/auth/auth_network_guard.dart';
+import '../services/auth/auth_session_diagnostics.dart';
+import '../services/auth/email_otp_cooldown.dart';
+import '../services/auth/supabase_sign_in_failure_policy.dart';
 import '../services/auth/auth_user_messages.dart';
 import '../services/auth/native_google_id_token_sign_in_result.dart';
 import '../services/auth/web_app_origin.dart';
@@ -63,6 +67,7 @@ enum _SupabaseSignInOutcome {
   success,
   invalidCredentials,
   networkError,
+  temporaryFailure,
 }
 
 /// جلسة محلية فقط (SharedPreferences + SQLite). بدون سحابة أو اشتراك.
@@ -74,6 +79,10 @@ class AuthProvider extends ChangeNotifier {
 
   /// يحدّد آخر «مالك بيانات» على الجهاز — لا يُحذف عند الخروج لاكتشاف تبديل الحساب.
   static const _prefActiveDataOwner = 'auth.active_data_owner';
+
+  /// صاحب البيانات الموجودة فعلاً في القاعدة بعد فك الربط. يُبقي البيانات عند
+  /// الدخول بالحساب نفسه بدل مسحها (البند 1.9).
+  static const _prefLastDataOwner = 'auth.last_data_owner';
   static const _prefPendingGoogleOAuthIntent = 'auth.pending_google_oauth_intent';
 
   /// يُعاد من [signInWithGoogle] عندما يلزم إكمال جوال + PIN قبل bootstrap.
@@ -90,6 +99,9 @@ class AuthProvider extends ChangeNotifier {
 
   /// Android/iOS/macOS: منتقي حسابات Google الأصلي — لا نُسقط للمتصفح الخارجي.
   /// Windows/Linux: لا يوجد منتقي أصلي رسمي من google_sign_in → متصفح.
+  /// هل يستطيع هذا الجهاز استعادة جلسة Google بصمت؟ ويندوز والويب لا.
+  static bool get hasSilentGoogleRestore => _prefersNativeGoogleAccountPicker;
+
   static bool get _prefersNativeGoogleAccountPicker =>
       !kIsWeb &&
       (defaultTargetPlatform == TargetPlatform.android ||
@@ -358,7 +370,16 @@ class AuthProvider extends ChangeNotifier {
   }) async {
     final prefs = await SharedPreferences.getInstance();
     final previous = prefs.getString(_prefActiveDataOwner);
-    if (previous == newOwnerKey) return;
+    if (isSameDataOwner(
+      active: previous,
+      lastAfterUnlink: prefs.getString(_prefLastDataOwner),
+      incoming: newOwnerKey,
+    )) {
+      if (previous != newOwnerKey) {
+        await prefs.setString(_prefActiveDataOwner, newOwnerKey);
+      }
+      return;
+    }
 
     // حماية: إذا كان المفتاح غير موجود (مثلاً بعد تحديث/ترحيل/إعادة تثبيت جزئية)،
     // اعتبره "تبديل" حتى لا تُعرض بيانات حساب سابق بالخطأ.
@@ -375,8 +396,15 @@ class AuthProvider extends ChangeNotifier {
       );
       await CloudSyncService.instance.stopForSignOut();
       if (newOwnerKey.startsWith('cloud:')) {
-        // حساب سحابي: من الآمن حذف الملف بالكامل لأن المصدر الحقيقي سيُسترد من السحابة.
-        await _db.closeAndDeleteDatabaseFile();
+        // البند 5.1: ملف المالك السابق يُحفظ جانباً بدل حذفه، فلا يضيع بيع لم
+        // يُرفع، ويعود إذا دخل حسابه مجدداً ثم يُدمج مع السحابة.
+        await _db.closeAndSwapAccountDatabaseFile(
+          parkAs: DbFileParking.ownerKeyForParking(
+            active: previous,
+            lastAfterUnlink: prefs.getString(_prefLastDataOwner),
+          ),
+          restoreFor: newOwnerKey,
+        );
         _pendingCloudWorkspaceRestore = true;
       } else {
         // حساب محلي: امسح بيانات العمل وابقِ المستخدمين المحليين فقط.
@@ -385,9 +413,23 @@ class AuthProvider extends ChangeNotifier {
       await CloudSyncService.instance.clearSyncPreferences();
       await _clearAccountUiPreferences(prefs);
       await LicenseService.instance.resetLicenseStateForDataScopeChange();
+      await prefs.remove(_prefLastDataOwner);
     }
     await prefs.setString(_prefActiveDataOwner, newOwnerKey);
     await TenantContextService.instance.load();
+  }
+
+  /// هل البيانات في القاعدة لصاحب هذا الدخول؟ بعد فك الربط تبقى البيانات، فإن
+  /// دخل الحساب نفسه لا تُمسح. أي حساب آخر، أو جهاز لا نعرف صاحب بياناته، يُمسح.
+  @visibleForTesting
+  static bool isSameDataOwner({
+    required String? active,
+    required String? lastAfterUnlink,
+    required String incoming,
+  }) {
+    if (incoming.isEmpty) return false;
+    if (active != null) return active == incoming;
+    return lastAfterUnlink == incoming;
   }
 
   Future<void> _refreshTenantContextSilently() async {
@@ -449,6 +491,11 @@ class AuthProvider extends ChangeNotifier {
     await prefs.remove(_prefDeviceOwnerBound);
     await prefs.remove(_prefDeviceOwnerSupabaseUid);
     await prefs.remove(_prefDeviceBoundAt);
+    // البيانات تبقى في القاعدة بعد فك الربط، فنتذكّر صاحبها.
+    final dataOwner = prefs.getString(_prefActiveDataOwner);
+    if (dataOwner != null && dataOwner.isNotEmpty) {
+      await prefs.setString(_prefLastDataOwner, dataOwner);
+    }
     await prefs.remove(_prefActiveDataOwner);
     _deviceOwnerBound = false;
     notifyListeners();
@@ -572,6 +619,7 @@ class AuthProvider extends ChangeNotifier {
             'restoreSession clearing ghost Supabase session (device NOT bound)',
           );
           try {
+            AuthSessionDiagnostics.instance.noteExpectedSignOut('restoreSession');
             await Supabase.instance.client.auth.signOut();
           } catch (e) {
             AppLogger.warn('AuthProvider', 'ghost Supabase signOut failed: $e');
@@ -927,6 +975,7 @@ class AuthProvider extends ChangeNotifier {
         await prefs.remove(_prefUserId);
         await CloudSyncService.instance.stopForSignOut();
         try {
+          AuthSessionDiagnostics.instance.noteExpectedSignOut('_completeCloudBootstrapAfterRestore');
           await Supabase.instance.client.auth.signOut();
         } catch (e) {
           AppLogger.warn(
@@ -1008,6 +1057,7 @@ class AuthProvider extends ChangeNotifier {
           await prefs.remove(_prefUserId);
           await CloudSyncService.instance.stopForSignOut();
           try {
+            AuthSessionDiagnostics.instance.noteExpectedSignOut('_completeCloudBootstrapAfterRestore');
             await Supabase.instance.client.auth.signOut();
           } catch (e) {
             AppLogger.warn('AuthProvider', 'signOut after restore fail: $e');
@@ -1385,6 +1435,12 @@ class AuthProvider extends ChangeNotifier {
     }
 
     final ghostBlock = await _blockGhostLoginIfCloudDead(row: row, login: login);
+    if (ghostBlock == _ghostNeedsEmailReauth) {
+      final mail = _cloudLoginEmailForRow(row, login);
+      if (mail != null) {
+        return _beginEmailPinReauthOtp(mail: mail, pin: password);
+      }
+    }
     if (ghostBlock != null) {
       _lastLoginErrorMessage = ghostBlock;
       return false;
@@ -1541,9 +1597,14 @@ class AuthProvider extends ChangeNotifier {
     Map<String, dynamic> row, {
     String? email,
   }) async {
+    AuthSessionDiagnostics.instance.noteEvent(
+      'stale_cloud_login_rejected',
+      source: 'ghost_guard',
+    );
     final mail = email ?? _cloudLoginEmailForRow(row, '');
     await _clearSecureAuthCredentialsForEmail(mail);
     try {
+      AuthSessionDiagnostics.instance.noteExpectedSignOut('_rejectStaleCloudLocalLogin');
       await Supabase.instance.client.auth.signOut();
     } catch (e) {
       AppLogger.warn('AuthProvider', 'reject stale cloud login signOut: $e');
@@ -1552,6 +1613,8 @@ class AuthProvider extends ChangeNotifier {
       await clearDeviceOwnerBinding();
     }
   }
+
+  static const String _ghostNeedsEmailReauth = '__ghost_needs_email_reauth__';
 
   /// يمنع دخول «شبح» بـ PIN محلي بعد حذف الحساب من السحابة (عند توفر شبكة).
   Future<String?> _blockGhostLoginIfCloudDead({
@@ -1583,8 +1646,9 @@ class AuthProvider extends ChangeNotifier {
         if (outcome == _SupabaseSignInOutcome.success) {
           session = Supabase.instance.client.auth.currentUser;
         } else if (outcome == _SupabaseSignInOutcome.invalidCredentials) {
-          await _rejectStaleCloudLocalLogin(row, email: mail);
-          return kLoginNoCloudAccountMessage;
+          // كلمة قديمة لا تعني حساباً محذوفاً: رمز البريد يحسم ذلك.
+          await _clearSecureAuthCredentialsForEmail(mail);
+          return _ghostNeedsEmailReauth;
         } else {
           return null;
         }
@@ -1725,7 +1789,8 @@ class AuthProvider extends ChangeNotifier {
         if (outcome == _SupabaseSignInOutcome.success) {
           return _completeCloudLoginAfterSession(mail: mail, pin: pin);
         }
-        if (outcome == _SupabaseSignInOutcome.networkError) {
+        if (outcome == _SupabaseSignInOutcome.networkError ||
+            outcome == _SupabaseSignInOutcome.temporaryFailure) {
           _lastLoginErrorMessage = kAuthServerUnreachableMessage;
           return false;
         }
@@ -1733,6 +1798,10 @@ class AuthProvider extends ChangeNotifier {
         AppLogger.info(
           'AuthProvider',
           '_loginViaSupabaseFallback: clearing stale stored supabase password',
+        );
+        AuthSessionDiagnostics.instance.noteEvent(
+          'stored_password_cleared',
+          source: 'login_fallback',
         );
         await _clearSecureAuthCredentialsForEmail(mail);
       }
@@ -1801,23 +1870,6 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
-  /// يضمن وجود كلمة Supabase داخلية محفوظة للدخول بـ البريد+PIN لاحقاً.
-  Future<void> _ensureInternalSupabasePasswordPersisted(String mail) async {
-    final normalized = mail.trim().toLowerCase();
-    if (normalized.isEmpty || !normalized.contains('@')) return;
-    if (Supabase.instance.client.auth.currentUser == null) return;
-
-    final existing =
-        await OwnerSupabaseCredentialStore.instance.read(normalized);
-    if (existing != null && existing.isNotEmpty) return;
-
-    final internalPassword = _generateInternalSupabasePassword();
-    await Supabase.instance.client.auth.updateUser(
-      UserAttributes(password: internalPassword),
-    );
-    await _persistOwnerSupabaseCredential(normalized, internalPassword);
-  }
-
   /// بعد OTP ناجح لمسار إعادة دخول البريد+PIN على جهاز بلا جلسة محلية.
   Future<String?> completeEmailPinLoginAfterOtp({
     required String otp,
@@ -1833,20 +1885,13 @@ class AuthProvider extends ChangeNotifier {
 
     final ok = await _completeCloudLoginAfterSession(mail: mail, pin: pin);
     if (!ok) {
-      return _lastLoginErrorMessage ?? AuthUserMessages.wrongPin;
+      final message = _lastLoginErrorMessage;
+      return message == null || message == AuthUserMessages.wrongPin
+          ? AuthUserMessages.wrongPinAfterEmailVerified
+          : message;
     }
 
-    // ثبّت كلمة داخلية قوية لهذا الجهاز لتسجيل الدخول التالي بلا OTP.
-    try {
-      final internalPassword = _generateInternalSupabasePassword();
-      await Supabase.instance.client.auth.updateUser(
-        UserAttributes(password: internalPassword),
-      );
-      await _persistOwnerSupabaseCredential(mail, internalPassword);
-    } catch (e) {
-      AppLogger.warn('AuthProvider', 'persist internal pwd after reauth: $e');
-    }
-
+    // لا نغيّر كلمة Supabase هنا: تغييرها يُنهي جلسات كل أجهزة الحساب.
     clearPendingEmailReauth();
     return null;
   }
@@ -1911,13 +1956,19 @@ class AuthProvider extends ChangeNotifier {
         return _SupabaseSignInOutcome.networkError;
       }
       AppLogger.warn('AuthProvider', 'signInWithPassword failed: ${e.message}');
-      return _SupabaseSignInOutcome.invalidCredentials;
+      return isDefinitiveCredentialRejection(
+        code: e.code,
+        statusCode: e.statusCode,
+        message: e.message,
+      )
+          ? _SupabaseSignInOutcome.invalidCredentials
+          : _SupabaseSignInOutcome.temporaryFailure;
     } catch (e) {
       if (_isLikelyNetworkError(e)) {
         return _SupabaseSignInOutcome.networkError;
       }
       AppLogger.warn('AuthProvider', 'signInWithPassword unexpected: $e');
-      return _SupabaseSignInOutcome.invalidCredentials;
+      return _SupabaseSignInOutcome.temporaryFailure;
     }
   }
 
@@ -1959,6 +2010,7 @@ class AuthProvider extends ChangeNotifier {
     if (!await PasswordHashing.verifyPin(pin, secret.pinSalt, secret.pinHash)) {
       _lastLoginErrorMessage = AuthUserMessages.wrongPin;
       try {
+        AuthSessionDiagnostics.instance.noteExpectedSignOut('_completeCloudLoginAfterSession');
         await Supabase.instance.client.auth.signOut();
       } catch (e) {
         AppLogger.warn('AuthProvider', 'signOut after bad PIN: $e');
@@ -2166,6 +2218,9 @@ class AuthProvider extends ChangeNotifier {
       }
       final msg = e.message.toLowerCase();
       final statusCode = int.tryParse('${e.statusCode ?? ''}');
+      // مهلة قصيرة بين طلبين: الرمز السابق صالح، فنذكر الثواني بدقة.
+      final cooldown = emailOtpCooldownSeconds(e.message);
+      if (cooldown != null) return emailOtpCooldownMessageAr(cooldown);
       if (msg.contains('rate limit') ||
           msg.contains('too many') ||
           msg.contains('security purposes') ||
@@ -2509,6 +2564,10 @@ class AuthProvider extends ChangeNotifier {
     // كلمة السر ثُبّتت عند signUp قبل إرسال الرمز — لا نعيد إرسالها هنا
     // (Supabase يرفض أحياناً updateUser بنفس كلمة السر بعد OTP).
     try {
+      AuthSessionDiagnostics.instance.noteEvent(
+        'user_metadata_update',
+        source: 'verify_email_profile',
+      );
       await Supabase.instance.client.auth.updateUser(
         UserAttributes(
           data: {'full_name': displayName.trim(), 'phone': normalizedPhone},
@@ -2753,13 +2812,7 @@ class AuthProvider extends ChangeNotifier {
         );
       }
 
-      // 1) دوّر كلمة Supabase الداخلية القوية — لا ترسل PIN إلى Auth.
-      final internalPassword = _generateInternalSupabasePassword();
-      await Supabase.instance.client.auth.updateUser(
-        UserAttributes(password: internalPassword),
-      );
-      await _persistOwnerSupabaseCredential(mail, internalPassword);
-
+      // 1) لا نغيّر كلمة Supabase: PIN منفصل عنها، وتغييرها يُخرج كل الأجهزة.
       final userEmail = (user.email ?? mail).trim();
       final displayName =
           (user.userMetadata?['full_name'] as String?) ??
@@ -2859,11 +2912,17 @@ class AuthProvider extends ChangeNotifier {
     }
 
     if (signOutAfterReset) {
-      // لا نُبقي جلسة OTP مفتوحة — الدخول اللاحق عبر البريد+PIN + الكلمة الداخلية.
-      try {
-        await Supabase.instance.client.auth.signOut();
-      } catch (e) {
-        AppLogger.warn('AuthProvider', 'post-reset Supabase signOut failed: $e');
+      // بلا كلمة محفوظة تبقى الجلسة، وإلا طُلب رمز البريد مرة ثانية فوراً.
+      if (shouldEndSessionAfterPinReset(
+        signOutAfterReset: signOutAfterReset,
+        hasStoredPassword: await _hasStoredOwnerPassword([mail]),
+      )) {
+        try {
+          AuthSessionDiagnostics.instance.noteExpectedSignOut('resetLocalAndServerPassword');
+          await Supabase.instance.client.auth.signOut();
+        } catch (e) {
+          AppLogger.warn('AuthProvider', 'post-reset Supabase signOut failed: $e');
+        }
       }
     } else {
       try {
@@ -2957,6 +3016,7 @@ class AuthProvider extends ChangeNotifier {
 
   Future<void> _signOutSupabaseAfterFailedGoogleLink() async {
     try {
+      AuthSessionDiagnostics.instance.noteExpectedSignOut('_signOutSupabaseAfterFailedGoogleLink');
       await Supabase.instance.client.auth.signOut();
     } catch (e) {
       AppLogger.warn(
@@ -2971,6 +3031,7 @@ class AuthProvider extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_prefUserId);
     try {
+      AuthSessionDiagnostics.instance.noteExpectedSignOut('_revertGoogleSessionAfterIntentMismatch');
       await Supabase.instance.client.auth.signOut();
     } catch (e) {
       AppLogger.warn(
@@ -3157,20 +3218,6 @@ class AuthProvider extends ChangeNotifier {
         return kGoogleOwnerProfileRequired;
       case GoogleOwnerProfileGate.complete:
         if (kIsWeb) _webForceOwnerPinRestoreOtp = false;
-        final mail =
-            (Supabase.instance.client.auth.currentUser?.email ?? '')
-                .trim()
-                .toLowerCase();
-        if (mail.isNotEmpty) {
-          try {
-            await _ensureInternalSupabasePasswordPersisted(mail);
-          } catch (e) {
-            AppLogger.warn(
-              'AuthProvider',
-              'ensure internal pwd after Google login: $e',
-            );
-          }
-        }
         final bootstrapErr =
             await _completeCloudBootstrapAfterRestore(localId);
         if (bootstrapErr != null) return bootstrapErr;
@@ -3315,6 +3362,10 @@ class AuthProvider extends ChangeNotifier {
     }
 
     try {
+      AuthSessionDiagnostics.instance.noteEvent(
+        'user_metadata_update',
+        source: 'google_profile_phone',
+      );
       await Supabase.instance.client.auth.updateUser(
         UserAttributes(data: {'phone': phone.trim()}),
       );
@@ -3327,21 +3378,8 @@ class AuthProvider extends ChangeNotifier {
       AppLogger.warn('AuthProvider', 'Google profile metadata update: $e');
     }
 
-    // فعّل الدخول لاحقاً بـ (البريد + PIN) على هذا الجهاز:
-    // كلمة Supabase داخلية قوية ≠ PIN، وتُحفظ محلياً في Secure Storage.
-    final mail = (Supabase.instance.client.auth.currentUser?.email ?? '')
-        .trim()
-        .toLowerCase();
-    if (mail.isNotEmpty) {
-      try {
-        await _ensureInternalSupabasePasswordPersisted(mail);
-      } catch (e) {
-        AppLogger.warn(
-          'AuthProvider',
-          'Google profile internal password persist: $e',
-        );
-      }
-    }
+    // لا نغيّر كلمة Supabase هنا: تغييرها يُنهي جلسات كل أجهزة الحساب.
+    // الجهاز يبقى متصلاً بجلسة Google، والدخول بالبريد + PIN يمر برمز البريد.
 
     final rowAfter = await _db.getUserById(localId);
     if (rowAfter == null) return 'تعذر قراءة الحساب بعد الحفظ.';
@@ -3805,6 +3843,10 @@ class AuthProvider extends ChangeNotifier {
       _setFromRow(row);
 
       try {
+        AuthSessionDiagnostics.instance.noteEvent(
+          'user_metadata_update',
+          source: 'owner_restore_phone',
+        );
         await Supabase.instance.client.auth.updateUser(
           UserAttributes(data: {'phone': secret.phone.trim()}),
         );
@@ -3953,6 +3995,7 @@ class AuthProvider extends ChangeNotifier {
   Future<void> signOutWebBrowserOnly() async {
     if (!kIsWeb) return;
     try {
+      AuthSessionDiagnostics.instance.noteExpectedSignOut('signOutWebBrowserOnly');
       await Supabase.instance.client.auth.signOut();
     } catch (e) {
       AppLogger.warn('AuthProvider', 'signOutWebBrowserOnly supabase: $e');
@@ -4204,6 +4247,7 @@ class AuthProvider extends ChangeNotifier {
       } on session_freshness.SessionExpiredException catch (e) {
         if (shouldSignOutAfterEnsureFreshFailure(e)) {
           try {
+            AuthSessionDiagnostics.instance.noteExpectedSignOut('tryRestoreCloudSessionSilently');
             await Supabase.instance.client.auth.signOut();
           } catch (signOutErr) {
             AppLogger.warn(
@@ -4274,7 +4318,8 @@ class AuthProvider extends ChangeNotifier {
         _publishCloudLinkConnected();
         return true;
       }
-      if (outcome == _SupabaseSignInOutcome.networkError) {
+      if (outcome == _SupabaseSignInOutcome.networkError ||
+          outcome == _SupabaseSignInOutcome.temporaryFailure) {
         AppLogger.warn('AuthProvider', 'silent restore blocked by network');
         _publishCloudLinkDegraded();
         return false;
@@ -4282,6 +4327,10 @@ class AuthProvider extends ChangeNotifier {
       AppLogger.info(
         'AuthProvider',
         'silent restore failed for stored credential — clearing stale',
+      );
+      AuthSessionDiagnostics.instance.noteEvent(
+        'stored_password_cleared',
+        source: 'silent_restore',
       );
       await _clearSecureAuthCredentialsForEmail(mail);
     }
@@ -4365,6 +4414,7 @@ class AuthProvider extends ChangeNotifier {
     // لا نمسح OwnerSupabaseCredentialStore عند الخروج العادي — يُستخدم لاستعادة
     // جلسة السحابة على نفس الجهاز. يُمسح عند إلغاء ربط الجهاز بالمالك.
     try {
+      AuthSessionDiagnostics.instance.noteExpectedSignOut('logout');
       await Supabase.instance.client.auth.signOut();
     } catch (e) {
       AppLogger.warn('AuthProvider', 'Supabase signOut failed: $e');
@@ -4380,6 +4430,7 @@ class AuthProvider extends ChangeNotifier {
         await _db.closeAndDeleteDatabaseFile();
         final prefsAfter = await SharedPreferences.getInstance();
         await prefsAfter.remove(_prefActiveDataOwner);
+        await prefsAfter.remove(_prefLastDataOwner);
         await prefsAfter.remove(_prefDeviceOwnerBound);
       } catch (e, st) {
         AppLogger.error('AuthProvider', 'web logout DB wipe failed', e, st);
@@ -4401,6 +4452,8 @@ class AuthProvider extends ChangeNotifier {
       if (prefs.containsKey(sessionKey)) {
         await prefs.remove(sessionKey);
       }
+      // جلسة ويندوز المشفرة (البند 5.3) تُمسح معها، وإلا بقيت جلسة شبحية.
+      await prefs.remove('$sessionKey.dpapi');
     } catch (e) {
       AppLogger.warn('AuthProvider', 'fallback session clear failed: $e');
     }

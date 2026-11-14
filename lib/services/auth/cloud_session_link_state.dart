@@ -1,4 +1,9 @@
+import 'dart:async';
+
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
+
+import '../connectivity_resume_sync.dart';
 
 /// حالة ربط السحابة الظاهرة للمستخدم — عقد `cloud-soft-gate`.
 enum CloudSessionLinkPhase {
@@ -17,16 +22,28 @@ enum CloudSessionLinkPhase {
 
 /// هل يُعرض حاجز إعادة الربط؟
 ///
-/// لا يُعرض أثناء [CloudSessionLinkPhase.unknown] ولا عند اختيار المتابعة المحلية
-/// ولا قبل ربط الجهاز بمالك.
+/// إعادة الربط إجبارية: لا زر «متابعة بدون سحابة». الاستثناء الوحيد انقطاع
+/// الإنترنت، فيستمر البيع مع شريط ثابت حتى تعود الشبكة ثم يعود الحاجز.
+/// [localContinue] يُستعمل فقط أثناء فتح شاشة الدخول بالبريد من الحاجز.
 bool shouldShowCloudReconnectGate({
   required CloudSessionLinkPhase phase,
   required bool localContinue,
   required bool deviceOwnerBound,
+  bool offline = false,
 }) {
   return phase == CloudSessionLinkPhase.locked &&
       !localContinue &&
+      !offline &&
       deviceOwnerBound;
+}
+
+/// الجلسة مفقودة والإنترنت مقطوع: البيع مستمر مع شريط أحمر ثابت.
+bool shouldShowCloudOfflineLockedBanner({
+  required CloudSessionLinkPhase phase,
+  required bool deviceOwnerBound,
+  required bool offline,
+}) {
+  return phase == CloudSessionLinkPhase.locked && offline && deviceOwnerBound;
 }
 
 /// إعادة الربط تقبل حساب مالك هذا الجهاز فقط — لا يُربط جهاز متجر بحساب آخر.
@@ -59,6 +76,48 @@ class CloudSessionLinkController extends ChangeNotifier {
   bool localContinue = false;
   bool reconnecting = false;
 
+  /// لا يوجد رابط شبكة على الجهاز الآن.
+  bool offline = false;
+
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
+
+  /// يتابع حالة الشبكة مرة واحدة طوال عمر التطبيق.
+  void watchConnectivity() {
+    if (_connectivitySub != null) return;
+    try {
+      final connectivity = Connectivity();
+      unawaited(
+        connectivity
+            .checkConnectivity()
+            .then(_onConnectivity)
+            .catchError((_) {}),
+      );
+      _connectivitySub = connectivity.onConnectivityChanged.listen(
+        _onConnectivity,
+        onError: (_) {},
+      );
+    } catch (_) {
+      // منصة بلا دعم للشبكة: نعدّها متصلة فيظهر الحاجز كالمعتاد.
+    }
+  }
+
+  void _onConnectivity(List<ConnectivityResult> results) {
+    setOffline(!connectivityResultsOnline(results));
+  }
+
+  void setOffline(bool value) {
+    if (offline == value) return;
+    offline = value;
+    notifyListeners();
+  }
+
+  /// انتهت شاشة الدخول بالبريد دون ربط: يعود الحاجز.
+  void endEmailSignInDetour() {
+    if (!localContinue) return;
+    localContinue = false;
+    notifyListeners();
+  }
+
   void markConnected() {
     phase = CloudSessionLinkPhase.connected;
     localContinue = false;
@@ -78,7 +137,7 @@ class CloudSessionLinkController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// المستخدم اختار البيع المحلي. الحاجز يُرفع؛ السحابة تبقى مقفولة حتى الربط.
+  /// يُرفع الحاجز مؤقتاً أثناء شاشة الدخول بالبريد فقط.
   void continueLocally() {
     localContinue = true;
     reconnecting = false;
@@ -103,5 +162,6 @@ class CloudSessionLinkController extends ChangeNotifier {
     phase = CloudSessionLinkPhase.unknown;
     localContinue = false;
     reconnecting = false;
+    offline = false;
   }
 }

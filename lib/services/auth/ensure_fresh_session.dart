@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'auth_session_diagnostics.dart';
+
 /// تُرمى عندما لا توجد جلسة Supabase نشطة، أو رُفض التجديد رفضاً نهائياً.
 class SessionExpiredException implements Exception {
   const SessionExpiredException([this.message = 'انتهت جلسة السحابة']);
@@ -87,6 +89,7 @@ Future<void> ensureFreshSession({
       'انتهت مهلة تجديد الجلسة السحابية',
     );
   } on AuthException catch (e) {
+    AuthSessionDiagnostics.instance.noteRefreshFailure(e.code ?? e.statusCode);
     if (e is AuthRetryableFetchException) {
       throw SessionRefreshTransientException(
         e.message.trim().isEmpty

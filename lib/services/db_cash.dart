@@ -54,22 +54,29 @@ Future<void> ensureCashLedgerGlobalIdSchema(Database db) async {
   if (!await colExists('global_id')) return;
 
   final missing = await db.rawQuery('''
-    SELECT id FROM cash_ledger
+    SELECT id, createdAt, transactionType, amountFils, amount FROM cash_ledger
     WHERE global_id IS NULL OR TRIM(IFNULL(global_id, '')) = ''
   ''');
   final nowIso = DateTime.now().toUtc().toIso8601String();
   for (final r in missing) {
     final id = r['id'] as int?;
     if (id == null) continue;
-    await db.update(
-      'cash_ledger',
-      {
-        'global_id': const Uuid().v4(),
-        'updatedAt': nowIso,
-      },
-      where: 'id = ?',
-      whereArgs: [id],
-    );
+    Future<void> write(String gid) => db.update(
+          'cash_ledger',
+          {'global_id': gid, 'updatedAt': nowIso},
+          where: 'id = ?',
+          whereArgs: [id],
+        );
+    if (!SyncSafety.enabled) {
+      await write(const Uuid().v4());
+      continue;
+    }
+    try {
+      await write(SyncSafety.cashGlobalId(r));
+    } on DatabaseException {
+      // صفان بالبصمة نفسها على الجهاز: لا نكسر الفتح، ويبقى الثاني بمعرف مستقل.
+      await write(const Uuid().v4());
+    }
   }
 
   await db.execute('''
@@ -182,6 +189,10 @@ class DbCashSqlOps {
   ) {
     final stamped = Map<String, dynamic>.from(values);
     stamped['tenantId'] = tenantId;
+    if (SyncSafety.enabled &&
+        (stamped['global_id'] ?? '').toString().trim().isEmpty) {
+      stamped['global_id'] = const Uuid().v4();
+    }
     return txn.insert('cash_ledger', stamped);
   }
 
@@ -211,6 +222,21 @@ extension DbCash on DatabaseHelper {
   }
 
   /// يُزيل قيوداً مكررة لنفس الفاتورة (invoiceId) — يُبقي الأقدم ويُ soft-delete الباقي.
+  int _invoiceCashFils(Map<String, dynamic> row) {
+    final total = (row['total'] as num?)?.toDouble() ?? 0;
+    final advance = (row['advancePayment'] as num?)?.toDouble() ?? 0;
+    return switch (invoiceTypeFromDb(row['type'])) {
+      InvoiceType.cash || InvoiceType.delivery => _toFils(total),
+      InvoiceType.credit ||
+      InvoiceType.installment =>
+        advance > 0 ? _toFils(advance) : 0,
+      InvoiceType.debtCollection ||
+      InvoiceType.installmentCollection =>
+        _toFils(total),
+      InvoiceType.supplierPayment => 0,
+    };
+  }
+
   Future<void> _dedupeCashLedgerByInvoice(Database db, int tid) async {
     final dupes = await db.rawQuery('''
       SELECT invoiceId, COUNT(*) AS c
@@ -229,6 +255,43 @@ extension DbCash on DatabaseHelper {
       for (final d in dupes) {
         final invoiceId = (d['invoiceId'] as num?)?.toInt();
         if (invoiceId == null || invoiceId <= 0) continue;
+        if (SyncSafety.enabled) {
+          // القاعدة نفسها: قيد واحد لكل فاتورة، لكن كل الأجهزة تبقي القيد نفسه.
+          // الأولوية لما يطابق مبلغ الفاتورة، ثم لغير المعاد بناؤه، ثم لأصغر معرف عالمي.
+          final all = List<Map<String, dynamic>>.of(await txn.query(
+            'cash_ledger',
+            where: 'invoiceId = ? AND deleted_at IS NULL',
+            whereArgs: [invoiceId],
+          ));
+          final invoice = await txn.query(
+            'invoices',
+            columns: ['date', 'type', 'total', 'advancePayment'],
+            where: 'id = ?',
+            whereArgs: [invoiceId],
+            limit: 1,
+          );
+          final inv = invoice.isEmpty ? null : invoice.first;
+          final expectedFils = inv == null ? null : _invoiceCashFils(inv);
+          int rank(Map<String, dynamic> r) =>
+              (SyncSafety.cashFils(r) == expectedFils ? 0 : 2) +
+              (r['createdAt'] == inv?['date'] ? 1 : 0);
+          all.sort((x, y) {
+            final byRank = rank(x).compareTo(rank(y));
+            if (byRank != 0) return byRank;
+            return (x['global_id'] ?? '')
+                .toString()
+                .compareTo((y['global_id'] ?? '').toString());
+          });
+          for (final extra in all.skip(1)) {
+            await txn.update(
+              'cash_ledger',
+              {'deleted_at': nowIso, 'updatedAt': nowIso},
+              where: 'id = ?',
+              whereArgs: [extra['id']],
+            );
+          }
+          continue;
+        }
         final rows = await txn.query(
           'cash_ledger',
           columns: ['id'],
@@ -390,7 +453,13 @@ extension DbCash on DatabaseHelper {
             'سند تسديد قسط #$invoiceId — $label',
           _ => 'فاتورة بيع #$invoiceId — $label',
         };
-        final globalId = const Uuid().v4();
+        final globalId = SyncSafety.enabled && row['date'] != null
+            ? SyncSafety.cashGlobalId({
+                'createdAt': row['date'],
+                'transactionType': typeLabel,
+                'amountFils': cashAmountFils,
+              })
+            : const Uuid().v4();
         final shiftId = row['workShiftId'] as int?;
         final payload = {
           'global_id': globalId,
