@@ -174,10 +174,10 @@ void main() {
         snapshotPulls++;
       })
       ..resetBackoff();
-    // السجل يبدأ من نسخة واحدة مشتركة.
+    // السجل يبدأ من نسخة واحدة مشتركة، وكل جهاز أخذ بيانات الحساب.
     for (final d in f.devices) {
       final db = await f.activate(d);
-      await db.delete(ChangeCapture.outbox);
+      await ChangeCapture.dropInstallSeed(db);
     }
   });
 
@@ -498,6 +498,73 @@ void main() {
       reason: 'the check only records',
     );
   }, timeout: slow);
+
+  group('a new device before it has the account data', () {
+    Future<Database> fresh(FleetDevice d) async {
+      final db = await f.activate(d);
+      await db.rawUpdate('UPDATE ${ChangeCapture.ctlTable} SET seeded = 0');
+      await ChangeCapture.writeCursor(db, lastSeq: 0, generation: 0);
+      // ما يكتبه التثبيت: قيمة افتراضية تخالف قيمة الحساب.
+      await db.insert(
+        'app_settings',
+        {
+          'key': 't:1:biz.vertical',
+          'value': 'general_retail',
+          'updatedAt': DateTime.now().toIso8601String(),
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+      expect(await ChangeCapture.pendingCount(db), greaterThan(0));
+      return db;
+    }
+
+    test('sends nothing and waits for the full snapshot', () async {
+      final db = await fresh(f.devices[0]);
+      final r = await cycle(f.devices[0]);
+      expect(r.stoppedBy, 'unseeded');
+      expect(r.coversSnapshot, isFalse);
+      expect(server.pushCalls, 0);
+      expect(server.changes, isEmpty);
+      expect(await ChangeCapture.pendingCount(db), greaterThan(0));
+    });
+
+    test('the first import drops install values, later work is sent',
+        () async {
+      final db = await fresh(f.devices[0]);
+      expect(await ChangeCapture.dropInstallSeed(db), greaterThan(0));
+      expect(await ChangeCapture.pendingCount(db), 0);
+      expect(await ChangeCapture.isSeeded(db), isTrue);
+      await db.insert(
+        'app_settings',
+        {
+          'key': 't:1:after.import',
+          'value': 'x',
+          'updatedAt': DateTime.now().toIso8601String(),
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+      // الاستيراد الثاني لا يحذف عملاً حقيقياً.
+      expect(await ChangeCapture.dropInstallSeed(db), 0);
+      final r = await cycle(f.devices[0]);
+      expect(r.stoppedBy, isNull);
+      expect(
+        server.changes.map((c) => c['row_key']),
+        contains('t:1:after.import'),
+      );
+      expect(
+        server.changes.map((c) => c['row_key']),
+        isNot(contains('t:1:biz.vertical')),
+      );
+    });
+
+    test('a device that already receives changes keeps its log', () async {
+      final db = await fresh(f.devices[0]);
+      await ChangeCapture.writeCursor(db, lastSeq: 5, generation: 0);
+      expect(await ChangeCapture.isSeeded(db), isTrue);
+      expect(await ChangeCapture.dropInstallSeed(db), 0);
+      expect(await ChangeCapture.pendingCount(db), greaterThan(0));
+    });
+  });
 
   test('switch off: no calls at all', () async {
     SyncSafety.deltaSync = false;

@@ -76,6 +76,13 @@ class ChangeCapture {
     await db.execute(
       'INSERT OR IGNORE INTO $ctlTable (id, paused) VALUES (1, 0)',
     );
+    // الجهاز أخذ بيانات الحساب مرة على الأقل. قبلها ما في السجل قيم التثبيت.
+    final ctlCols = await db.rawQuery('PRAGMA table_info($ctlTable)');
+    if (!ctlCols.any((c) => c['name'] == 'seeded')) {
+      await db.execute(
+        'ALTER TABLE $ctlTable ADD COLUMN seeded INTEGER NOT NULL DEFAULT 0',
+      );
+    }
     // مؤشر الاستلام للمرحلة 4: آخر رقم تعديل طُبِّق، ورقم جيل الحساب.
     // يُكتب داخل معاملة الدمج نفسها، فلا يُطبَّق تعديل مرتين ولا يُتجاوز.
     await db.execute('''
@@ -242,6 +249,35 @@ class ChangeCapture {
       // قاعدة لم تُنشأ جداولها بعد: لا مشغّلات فيها أصلاً.
       AppLogger.warn('ChangeCapture', 'setPaused skipped: $e');
     }
+  }
+
+  /// الجهاز أخذ بيانات الحساب: علامة الاستيراد الأول، أو مؤشر استلام سابق
+  /// (جهاز كان يعمل قبل هذه العلامة).
+  static Future<bool> isSeeded(DatabaseExecutor db) async {
+    try {
+      final r = await db.query(ctlTable, columns: ['seeded'], where: 'id = 1');
+      if (r.isNotEmpty && ((r.first['seeded'] as num?)?.toInt() ?? 0) == 1) {
+        return true;
+      }
+    } on DatabaseException {
+      return true;
+    }
+    final c = await readCursor(db);
+    return c.lastSeq > 0 || c.generation > 0;
+  }
+
+  /// أول استيراد لبيانات الحساب على هذا الجهاز. ما في السجل قبله كتبه التثبيت
+  /// (إعدادات افتراضية، ملف موظف مؤقت)، وإرساله يقلب الأجهزة الأخرى لحظةً إلى
+  /// القيم الافتراضية. يُحذف هنا. عمل حقيقي سبق الاستيراد الأول تحمله النسخة
+  /// الكاملة التي ترفع بعده.
+  static Future<int> dropInstallSeed(DatabaseExecutor db) async {
+    if (await isSeeded(db)) return 0;
+    final n = await db.delete(outbox);
+    await db.rawUpdate('UPDATE $ctlTable SET seeded = 1 WHERE id = 1');
+    if (n > 0) {
+      AppLogger.info('ChangeCapture', 'first import: dropped $n install rows');
+    }
+    return n;
   }
 
   /// في وضع الظل فقط. حين يُرسل السجل لا يُقص: سطر واحد لكل مفتاح، فلا يزيد

@@ -3334,6 +3334,7 @@ class CloudSyncService {
         }
         // ما جاء من الخادم لا يُلتقط، فلا يرتد إليه (المرحلة 3).
         await ChangeCapture.setPaused(txn, true);
+        await ChangeCapture.dropInstallSeed(txn);
         // الكمية تُحسب من الحركات بعد الدمج، فلا يكتب الدمج حركات.
         if (SyncSafety.enabled) await StockLedger.setPaused(txn, true);
         for (final table in tableNames) {

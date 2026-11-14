@@ -139,6 +139,12 @@ class DeltaSyncService {
       final db = await database();
       final me = await deviceId();
       await ChangeCapture.ensureLateTables(db);
+      // جهاز لم يأخذ بيانات الحساب بعد: سجله قيم التثبيت، والتعديلات وحدها لا
+      // تحمل كل بياناته. ينتظر النسخة الكاملة، وهي تحذف قيم التثبيت.
+      if (!await ChangeCapture.isSeeded(db)) {
+        r.stoppedBy = 'unseeded';
+        return r;
+      }
       await _push(db, me, r);
       r.leftInOutbox = await ChangeCapture.pendingCount(db);
       if (r.stoppedBy == null || r.stoppedBy == 'generation_mismatch') {
