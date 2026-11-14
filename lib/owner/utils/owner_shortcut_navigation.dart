@@ -10,6 +10,7 @@ import '../../screens/invoices/add_invoice_screen.dart';
 import '../../verticals/oil_change/screens/oil_change_hub_screen.dart';
 import '../../verticals/oil_change/screens/oil_change_ratings_screen.dart';
 import '../../screens/settings/return_policy_settings_screen.dart';
+import '../../screens/settings/settings_screen.dart';
 import '../../screens/users/users_screen.dart';
 import '../../verticals/car_wash/screens/wash_offers_settings_screen.dart';
 import '../specs/owner_kpi_catalog_entry.dart';
@@ -23,7 +24,16 @@ abstract final class OwnerShortcutNavigation {
     OwnerShortcutCatalogEntry entry, {
     VoidCallback? onPurchasePdf,
   }) {
-    switch (entry.routeId) {
+    openRoute(context, entry.routeId, onPurchasePdf: onPurchasePdf);
+  }
+
+  /// يفتح الشاشة المرتبطة بـ [routeId] (أزرار «إدارة المحل» واختصارات الكتالوج).
+  static void openRoute(
+    BuildContext context,
+    String routeId, {
+    VoidCallback? onPurchasePdf,
+  }) {
+    switch (routeId) {
       case 'reports':
         Navigator.of(context).push(
           MaterialPageRoute<void>(
@@ -93,6 +103,13 @@ abstract final class OwnerShortcutNavigation {
               name: AppContentRoutes.settingsWashOffers,
             ),
             builder: (_) => const WashOffersSettingsScreen(),
+          ),
+        );
+      case 'store_settings':
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            settings: const RouteSettings(name: AppContentRoutes.settings),
+            builder: (_) => const SettingsScreen(),
           ),
         );
       case 'add_invoice':

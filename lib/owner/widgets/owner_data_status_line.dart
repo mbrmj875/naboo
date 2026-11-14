@@ -14,12 +14,16 @@ class OwnerDataStatusLine extends StatefulWidget {
     required this.isOffline,
     this.now = DateTime.now,
     this.tick = const Duration(seconds: 30),
+    this.syncing = false,
   });
 
   final ValueListenable<DateTime?> lastSyncAt;
   final bool isOffline;
   final DateTime Function() now;
   final Duration tick;
+
+  /// مزامنة جارية: مؤشر دوار صغير + «جارٍ المزامنة…» بدل شريط كبير.
+  final bool syncing;
 
   @override
   State<OwnerDataStatusLine> createState() => _OwnerDataStatusLineState();
@@ -48,11 +52,13 @@ class _OwnerDataStatusLineState extends State<OwnerDataStatusLine> {
     return ValueListenableBuilder<DateTime?>(
       valueListenable: widget.lastSyncAt,
       builder: (context, last, _) {
-        final text = ownerDataStatusText(
+        final base = ownerDataStatusText(
           lastSyncAt: last,
           isOffline: widget.isOffline,
           now: widget.now(),
         );
+        final syncing = widget.syncing && !widget.isOffline;
+        final text = syncing ? 'جارٍ المزامنة… · $base' : base;
         final cs = Theme.of(context).colorScheme;
         final offline = widget.isOffline;
         final fg = offline ? cs.onErrorContainer : cs.onSurfaceVariant;
@@ -61,11 +67,22 @@ class _OwnerDataStatusLineState extends State<OwnerDataStatusLine> {
           children: [
             Padding(
               padding: const EdgeInsetsDirectional.only(top: 2),
-              child: Icon(
-                offline ? Icons.wifi_off_rounded : Icons.cloud_done_outlined,
-                size: 16,
-                color: fg,
-              ),
+              child: syncing
+                  ? SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: fg,
+                      ),
+                    )
+                  : Icon(
+                      offline
+                          ? Icons.wifi_off_rounded
+                          : Icons.cloud_done_outlined,
+                      size: 16,
+                      color: fg,
+                    ),
             ),
             const SizedBox(width: 6),
             Expanded(

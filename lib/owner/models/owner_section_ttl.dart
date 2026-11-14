@@ -50,6 +50,8 @@ class OwnerSectionTtl {
         return inventoryShortages;
       case OwnerSectionIds.clothingSlowMovers:
         return inventoryValue;
+      case OwnerSectionIds.ownerAttention:
+        return debts;
       default:
         return const Duration(minutes: 2);
     }
@@ -109,4 +111,7 @@ abstract class OwnerSectionIds {
   // ── v3.1 clothing ──
   static const clothingVariantShortages = 'clothingVariantShortages';
   static const clothingSlowMovers = 'clothingSlowMovers';
+
+  // ── v4 owner dashboard ──
+  static const ownerAttention = 'ownerAttention';
 }

@@ -150,6 +150,13 @@ class OwnerCommandCenterProvider extends ChangeNotifier {
   static const _oilInventoryRowSectionIds = [
     OwnerSectionIds.inventoryValue,
     OwnerSectionIds.debts,
+    // لوحة v4: كل ما تعرضه الأقسام الستة يُحمَّل دائماً.
+    OwnerSectionIds.openShifts,
+    OwnerSectionIds.oilActiveCars,
+    OwnerSectionIds.oilChangesCount,
+    OwnerSectionIds.oilStockShortages,
+    OwnerSectionIds.oilAvgTicket,
+    OwnerSectionIds.ownerAttention,
   ];
 
   List<String> get _enabledSectionIds {
@@ -326,6 +333,8 @@ class OwnerCommandCenterProvider extends ChangeNotifier {
         return _snapshot.clothingVariantShortages;
       case OwnerSectionIds.clothingSlowMovers:
         return _snapshot.clothingSlowMovers;
+      case OwnerSectionIds.ownerAttention:
+        return _snapshot.ownerAttention;
       default:
         return null;
     }
@@ -378,7 +387,8 @@ class OwnerCommandCenterProvider extends ChangeNotifier {
             sales: _dataResult(data, fetchedAt, offline: offline),
           );
           if (_v3Profile == OwnerDashboardProfile.supermarket ||
-              _v3Profile == OwnerDashboardProfile.clothingStore) {
+              _v3Profile == OwnerDashboardProfile.clothingStore ||
+              _v3Profile == OwnerDashboardProfile.oilChangeService) {
             await _loadTrendForSection(
               sectionId,
               () => _repository.loadRetailSalesTrendWoW(
@@ -392,6 +402,11 @@ class OwnerCommandCenterProvider extends ChangeNotifier {
           final data = await _loadSalesSparklineFils(tenantId);
           _snapshot = _snapshot.copyWith(
             salesSparkline: _dataResult(data, fetchedAt, offline: offline),
+          );
+        case OwnerSectionIds.ownerAttention:
+          final data = await _repository.loadOwnerAttention(tenantId: tenantId);
+          _snapshot = _snapshot.copyWith(
+            ownerAttention: _dataResult(data, fetchedAt, offline: offline),
           );
         case OwnerSectionIds.openShifts:
           final data = await _repository.loadOpenShifts(tenantId: tenantId);
@@ -652,6 +667,10 @@ class OwnerCommandCenterProvider extends ChangeNotifier {
         _snapshot = _snapshot.copyWith(
           clothingSlowMovers: const OwnerSectionResult.loading(),
         );
+      case OwnerSectionIds.ownerAttention:
+        _snapshot = _snapshot.copyWith(
+          ownerAttention: const OwnerSectionResult.loading(),
+        );
     }
     notifyListeners();
   }
@@ -738,20 +757,18 @@ class OwnerCommandCenterProvider extends ChangeNotifier {
         _snapshot = _snapshot.copyWith(
           clothingSlowMovers: err(_snapshot.clothingSlowMovers?.data),
         );
+      case OwnerSectionIds.ownerAttention:
+        _snapshot = _snapshot.copyWith(
+          ownerAttention: err(_snapshot.ownerAttention?.data),
+        );
     }
   }
 
-  /// مبيعات الفترة — ورشة الزيت: إيراد الغيارات (فواتير + بطاقات بدون فاتورة).
+  /// مبيعات الفترة — نفس الفواتير التي يرسمها مخطط 7 أيام وقائمة المبيعات.
   Future<SalesKpi> _loadPeriodSalesKpi(int tenantId) async {
     final profile = _v3Profile;
-    if (profile == OwnerDashboardProfile.oilChangeService) {
-      final oil = await _repository.loadOilChangesCount(
-        tenantId: tenantId,
-        range: _dateRange,
-        staffName: _staffFilter,
-      );
-      return SalesKpi(salesFils: oil.revenueFils, range: _dateRange);
-    }
+    // محل الزيت: كل الفواتير (غيار + غسيل + بيع مباشر). بطاقة بلا فاتورة = سيارة
+    // لم تُبع بعد، فلا تُحسب مبيعات.
     if (profile == OwnerDashboardProfile.oilChangeHybrid) {
       final hybrid = await _repository.loadHybridRevenueSplit(
         tenantId: tenantId,
@@ -767,14 +784,9 @@ class OwnerCommandCenterProvider extends ChangeNotifier {
     );
   }
 
-  /// مخطط 7 أيام — ورشة الزيت: إيراد يومي من سجل الغيارات.
+  /// مخطط 7 أيام — مجموع الفواتير لكل يوم.
   Future<List<int>> _loadSalesSparklineFils(int tenantId) async {
-    if (_v3Profile == OwnerDashboardProfile.oilChangeService) {
-      return _repository.loadOilDailyRevenueSparkline(
-        tenantId: tenantId,
-        staffName: _staffFilter,
-      );
-    }
+    // عمود اليوم = رقم «مبيعات اليوم» (نفس شروط الفواتير) لكل التخصصات.
     return _repository.loadSalesSparkline(
       tenantId: tenantId,
       staffName: _staffFilter,

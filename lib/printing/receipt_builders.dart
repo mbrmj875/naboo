@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:intl/intl.dart';
 
 import '../models/expense.dart';
@@ -50,6 +52,35 @@ abstract final class ReceiptBuilders {
       [invoiceId, tenantId],
     );
     return rows.isEmpty ? null : rows.first;
+  }
+
+  /// بطاقات الخدمة المرتبطة بعدة فواتير باستعلام واحد (لقوائم الفواتير).
+  /// يُرجع لكل فاتورة أحدث بطاقة: النوع والأعمدة اللازمة لـ [kindOf] فقط.
+  static Future<Map<int, Map<String, dynamic>>> linkedOrderKinds(
+    Set<int> invoiceIds,
+  ) async {
+    if (invoiceIds.isEmpty) return const {};
+    final helper = DatabaseHelper();
+    final db = await helper.database;
+    final tenantId = await helper.resolveLocalBusinessTenantId();
+    final out = <int, Map<String, dynamic>>{};
+    final ids = invoiceIds.toList(growable: false);
+    for (var i = 0; i < ids.length; i += 400) {
+      final chunk = ids.sublist(i, math.min(i + 400, ids.length));
+      final marks = List.filled(chunk.length, '?').join(',');
+      final rows = await db.rawQuery(
+        'SELECT invoiceId, orderKind, oilType, odometerCurrent '
+        'FROM service_orders '
+        'WHERE tenantId = ? AND deletedAt IS NULL AND invoiceId IN ($marks) '
+        'ORDER BY id DESC',
+        [tenantId, ...chunk],
+      );
+      for (final r in rows) {
+        final id = (r['invoiceId'] as num?)?.toInt();
+        if (id != null) out.putIfAbsent(id, () => r);
+      }
+    }
+    return out;
   }
 
   /// يبني الإيصال من فاتورة محمّلة، ومعها بطاقة الخدمة المرتبطة إن وُجدت.

@@ -11,6 +11,9 @@ import '../verticals/oil_change/owner/owner_oil_dashboard_repository.dart';
 import 'owner_supermarket_dashboard_repository.dart';
 import 'owner_clothing_dashboard_repository.dart';
 import 'owner_trend_repository.dart';
+import 'services/business_audit_log_service.dart';
+import '../models/credit_debt_invoice.dart';
+import '../models/invoice.dart';
 import 'models/owner_date_range.dart';
 import 'models/owner_kpi_models.dart';
 import 'models/owner_kpi_trend.dart';
@@ -297,8 +300,8 @@ class OwnerCommandCenterRepository {
     String? afterCreatedAt,
     int? afterId,
   }) {
-    if (profile == OwnerDashboardProfile.oilChangeService ||
-        profile == OwnerDashboardProfile.oilChangeHybrid) {
+    // محل الزيت: «المبيعات» = الفواتير (غيار + غسيل + بيع مباشر) — نفس المجموع.
+    if (profile == OwnerDashboardProfile.oilChangeHybrid) {
       return _oil.listOilSalesInRange(
         tenantId: tenantId,
         range: range,
@@ -612,6 +615,88 @@ class OwnerCommandCenterRepository {
       [table],
     );
     return rows.isNotEmpty;
+  }
+
+  /// «يحتاج انتباهك»: المتأخرون بالسداد (نفس منطق شاشة الديون) + تعديلات حساسة اليوم.
+  Future<OwnerAttentionKpi> loadOwnerAttention({
+    required int tenantId,
+    DateTime? now,
+  }) async {
+    final clock = now ?? DateTime.now();
+    final db = await _db.database;
+    final settings = await _db.getDebtSettings();
+    final warnDays = settings.warnDebtAgeDays;
+
+    var lateCount = 0;
+    var lateFils = 0;
+    if (warnDays > 0) {
+      // نفس استعلام شاشة الديون (getNonReturnedCreditInvoices) ونفس شروطها.
+      final raw = await db.rawQuery(
+        '''
+        SELECT id, customerName, customerId, date,
+               total, advancePayment, totalFils, advancePaymentFils
+        FROM invoices
+        WHERE tenantId = ?
+          AND type = ?
+          AND IFNULL(isReturned, 0) = 0
+          AND deleted_at IS NULL
+        ''',
+        [tenantId, InvoiceType.credit.index],
+      );
+      final debtorKeys = <String>{};
+      for (final row in raw) {
+        final date = DateTime.tryParse('${row['date'] ?? ''}'.trim());
+        if (date == null) continue;
+        final r = CreditDebtInvoice(
+          invoiceId: (row['id'] as num?)?.toInt() ?? 0,
+          customerName: (row['customerName'] as String?)?.trim() ?? '',
+          customerId: (row['customerId'] as num?)?.toInt(),
+          date: date,
+          total: (row['total'] as num?)?.toDouble() ?? 0,
+          advancePayment: (row['advancePayment'] as num?)?.toDouble() ?? 0,
+          totalFils: (row['totalFils'] as num?)?.toInt(),
+          advancePaymentFils: (row['advancePaymentFils'] as num?)?.toInt(),
+        );
+        if (r.isSettled) continue;
+        if (r.daysSinceInvoice(clock) < warnDays) continue;
+        final key = r.customerId != null
+            ? 'id:${r.customerId}'
+            : 'name:${r.customerName.trim().toLowerCase()}';
+        debtorKeys.add(key);
+        lateFils += r.remainingFils;
+      }
+      lateCount = debtorKeys.length;
+    }
+
+    var sensitiveToday = 0;
+    try {
+      await BusinessAuditLogService.instance.ensureReady();
+      final events = await BusinessAuditLogService.instance.loadPage(
+        tenantId: tenantId,
+        limit: 200,
+        excludeDiagnostics: true,
+      );
+      final today = DateTime(clock.year, clock.month, clock.day);
+      for (final e in events) {
+        if (!e.isSensitive) continue;
+        final at = e.createdAt.toLocal();
+        if (DateTime(at.year, at.month, at.day) == today) sensitiveToday++;
+      }
+    } catch (e, st) {
+      AppLogger.error(
+        'OwnerCommandCenterRepo',
+        'تعذر عدّ التعديلات الحساسة اليوم',
+        e,
+        st,
+      );
+    }
+
+    return OwnerAttentionKpi(
+      warnDebtAgeDays: warnDays,
+      lateDebtorCount: lateCount,
+      lateDebtFils: lateFils,
+      sensitiveTodayCount: sensitiveToday,
+    );
   }
 
   /// للاختبارات — يتحقق من tenant context.

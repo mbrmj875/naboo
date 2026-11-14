@@ -290,3 +290,25 @@ class ClothingSlowMoverRow {
     return parts.join(' — ');
   }
 }
+
+/// بيانات قسم «يحتاج انتباهك» في لوحة المالك (محل الزيت v4).
+class OwnerAttentionKpi {
+  const OwnerAttentionKpi({
+    required this.warnDebtAgeDays,
+    required this.lateDebtorCount,
+    required this.lateDebtFils,
+    required this.sensitiveTodayCount,
+  });
+
+  /// إعداد «تحذير عمر الدين» من إعدادات الديون (0 = معطّل).
+  final int warnDebtAgeDays;
+
+  /// عملاء لديهم فاتورة آجل مفتوحة أقدم من [warnDebtAgeDays].
+  final int lateDebtorCount;
+
+  /// المتبقي على تلك الفواتير المتأخرة فقط.
+  final int lateDebtFils;
+
+  /// تعديلات حساسة مسجّلة اليوم (تعديل سعر، حذف منتج، سند مخزون، تحصيل دين…).
+  final int sensitiveTodayCount;
+}

@@ -63,6 +63,24 @@ enum ReceiptKind {
 
   /// نسختان للاسترجاع (للزبون وللمحل)، ونسخة لغيره.
   int get defaultCopies => this == saleReturn ? 2 : 1;
+
+  /// اسم قصير لنوع العمل على بطاقة الفاتورة في القوائم.
+  String get shortLabel => switch (this) {
+    oilChange => 'غيار زيت',
+    directSale => 'بيع مباشر',
+    carWash => 'غسيل سيارة',
+    debtPayment => 'تسديد دين',
+    expense => 'مصروف',
+    saleReturn => 'استرجاع',
+    sale => 'بيع',
+  };
+
+  /// له إيصال خاص بنوع العمل (لا «إيصال بيع» العام).
+  bool get isWorkSpecific =>
+      this == oilChange ||
+      this == directSale ||
+      this == carWash ||
+      this == saleReturn;
 }
 
 /// قسم اختياري في القالب.

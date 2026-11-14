@@ -9,6 +9,9 @@ import '../../providers/invoice_list_controller.dart';
 import '../../providers/invoice_provider.dart';
 import '../../providers/product_provider.dart';
 import '../../models/invoice.dart';
+import '../../printing/invoice_receipt_screen.dart';
+import '../../printing/receipt_builders.dart';
+import '../../printing/receipt_model.dart';
 import '../../services/database_helper.dart';
 import '../../utils/app_logger.dart';
 import '../../utils/sale_receipt_pdf.dart';
@@ -129,6 +132,10 @@ class _InvoicesScreenState extends State<InvoicesScreen>
   Map<int, Map<String, dynamic>> _shiftById = {};
   String _shiftIdsSig = '';
 
+  /// نوع العمل لكل فاتورة (غيار زيت، غسيل، بيع مباشر، استرجاع، بيع).
+  Map<int, ReceiptKind> _kindById = {};
+  String _kindIdsSig = '';
+
   /// الفاتورة المحدّدة لعرض تفاصيلها في الـ Detail Panel
   /// (وضع `MasterDetailLayout` على `tabletLG+` فقط).
   int? _selectedInvoiceId;
@@ -218,6 +225,25 @@ class _InvoicesScreenState extends State<InvoicesScreen>
       );
       return;
     }
+    // غيار زيت / غسيل / بيع مباشر / استرجاع: إيصال نوع العمل نفسه الذي يُطبع بعد الحفظ.
+    Map<String, dynamic>? order;
+    try {
+      order = await ReceiptBuilders.linkedOrder(id);
+    } catch (e, st) {
+      AppLogger.error('Invoices', 'تعذّر جلب بطاقة الخدمة للفاتورة', e, st);
+    }
+    if (!mounted) return;
+    if (ReceiptBuilders.kindOf(full, order: order).isWorkSpecific) {
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => InvoiceReceiptScreen(
+            document: ReceiptBuilders.fromInvoice(full, order: order),
+            onOpenDetails: (c) => showInvoiceDetailSheet(c, _db, id),
+          ),
+        ),
+      );
+      return;
+    }
     final subtotalBeforeDiscount =
         full.items.fold<double>(0, (sum, e) => sum + e.total);
     try {
@@ -257,6 +283,27 @@ class _InvoicesScreenState extends State<InvoicesScreen>
     final map = await _db.getWorkShiftsMapByIds(ids);
     if (!mounted) return;
     setState(() => _shiftById = map);
+  }
+
+  Future<void> _ensureKindsLoaded(List<Invoice> invoices) async {
+    final ids = invoices.map((e) => e.id).whereType<int>().toSet();
+    final sig = ids.join(',');
+    if (sig == _kindIdsSig) return;
+    _kindIdsSig = sig;
+    Map<int, Map<String, dynamic>> orders = const {};
+    try {
+      orders = await ReceiptBuilders.linkedOrderKinds(ids);
+    } catch (e, st) {
+      AppLogger.error('Invoices', 'تعذّر جلب أنواع الفواتير', e, st);
+    }
+    if (!mounted) return;
+    setState(() {
+      _kindById = {
+        for (final inv in invoices)
+          if (inv.id != null)
+            inv.id!: ReceiptBuilders.kindOf(inv, order: orders[inv.id]),
+      };
+    });
   }
 
   int _compareShiftKeys(
@@ -301,6 +348,7 @@ class _InvoicesScreenState extends State<InvoicesScreen>
         final provider = listController;
         final all = provider.invoices;
         Future.microtask(() => _ensureShiftMetaLoaded(all));
+        Future.microtask(() => _ensureKindsLoaded(all));
         // NestedScrollView: يجعل شريط الإحصاء والبحث يطويان عند التمرير
         // بينما تبقى التبويبات ثابتة في الأعلى (Sticky). عند العودة للأعلى،
         // تعود كل الأقسام طبيعياً.
@@ -346,6 +394,7 @@ class _InvoicesScreenState extends State<InvoicesScreen>
                 isDark: isDark,
                 groupByShift: _groupByShift,
                 shiftById: _shiftById,
+                kindById: _kindById,
                 compareShiftKeys: _compareShiftKeys,
                 dateTimeFmt: _dateTimeFmt,
                 onInvoiceTap: _openInvoiceDetails,
@@ -973,6 +1022,9 @@ class _InvoiceList extends StatelessWidget {
   final bool isDark;
   final bool groupByShift;
   final Map<int, Map<String, dynamic>> shiftById;
+
+  /// نوع العمل لكل فاتورة (يُكتب على البطاقة).
+  final Map<int, ReceiptKind> kindById;
   final int Function(int? a, int? b) compareShiftKeys;
   final DateFormat dateTimeFmt;
   final Future<void> Function(Invoice) onInvoiceTap;
@@ -999,6 +1051,7 @@ class _InvoiceList extends StatelessWidget {
     required this.isDark,
     required this.groupByShift,
     required this.shiftById,
+    this.kindById = const {},
     required this.compareShiftKeys,
     required this.dateTimeFmt,
     required this.onInvoiceTap,
@@ -1052,6 +1105,7 @@ class _InvoiceList extends StatelessWidget {
             invoice: inv,
             isDark: isDark,
             shiftStaffLabel: _labelFor(inv.workShiftId),
+            workKind: inv.id == null ? null : kindById[inv.id],
             isSelected: inv.id != null && inv.id == selectedInvoiceId,
             serviceProductIds: serviceProductIds,
             hideReturnAction: hideReturnAction,
@@ -1103,6 +1157,7 @@ class _InvoiceList extends StatelessWidget {
           invoice: inv,
           isDark: isDark,
           shiftStaffLabel: _labelFor(inv.workShiftId),
+          workKind: inv.id == null ? null : kindById[inv.id],
           isSelected: inv.id != null && inv.id == selectedInvoiceId,
           serviceProductIds: serviceProductIds,
           hideReturnAction: hideReturnAction,
@@ -1271,10 +1326,14 @@ class _InvoiceCard extends StatelessWidget {
   /// إخفاء زر «ترجيع» (تخصص غيار الزيت).
   final bool hideReturnAction;
 
+  /// نوع العمل (غيار زيت، غسيل…)؛ `null` أو بيع عام = لا علامة.
+  final ReceiptKind? workKind;
+
   const _InvoiceCard({
     required this.invoice,
     required this.isDark,
     this.shiftStaffLabel,
+    this.workKind,
     required this.onTap,
     required this.serviceProductIds,
     this.hideReturnAction = false,
@@ -1312,10 +1371,17 @@ class _InvoiceCard extends StatelessWidget {
     }
   }
 
+  /// علامة نوع العمل تظهر فقط لأنواع لها إيصال خاص.
+  ReceiptKind? get _shownKind {
+    final k = workKind;
+    return k != null && k.isWorkSpecific ? k : null;
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final statusColor = _invoiceStatusColor(invoice, cs);
+    final kind = _shownKind;
     final cardRadius = BorderRadius.circular(12);
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
@@ -1357,7 +1423,11 @@ class _InvoiceCard extends StatelessWidget {
                     color: statusColor.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(10),
                   ),
-                  child: Icon(_typeIcon, color: statusColor, size: 22),
+                  child: Icon(
+                    kind == null ? _typeIcon : invoiceWorkKindIcon(kind),
+                    color: statusColor,
+                    size: 22,
+                  ),
                 ),
                 const SizedBox(width: 12),
                 // بيانات الفاتورة
@@ -1384,6 +1454,10 @@ class _InvoiceCard extends StatelessWidget {
                           ),
                         ],
                       ),
+                      if (kind != null) ...[
+                        const SizedBox(height: 5),
+                        _WorkKindChip(kind: kind, isDark: isDark),
+                      ],
                       const SizedBox(height: 5),
                       Row(
                         children: [
@@ -1507,6 +1581,61 @@ class _InvoiceCard extends StatelessWidget {
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// أيقونة نوع العمل على بطاقة الفاتورة.
+IconData invoiceWorkKindIcon(ReceiptKind kind) => switch (kind) {
+  ReceiptKind.oilChange => Icons.oil_barrel_rounded,
+  ReceiptKind.carWash => Icons.local_car_wash_rounded,
+  ReceiptKind.directSale => Icons.shopping_bag_rounded,
+  ReceiptKind.saleReturn => Icons.assignment_return_rounded,
+  ReceiptKind.debtPayment => Icons.account_balance_wallet_rounded,
+  ReceiptKind.expense => Icons.money_off_rounded,
+  ReceiptKind.sale => Icons.point_of_sale_rounded,
+};
+
+/// علامة صغيرة باسم نوع العمل: «غيار زيت»، «غسيل سيارة»…
+class _WorkKindChip extends StatelessWidget {
+  const _WorkKindChip({required this.kind, required this.isDark});
+
+  final ReceiptKind kind;
+  final bool isDark;
+
+  @override
+  Widget build(BuildContext context) {
+    final fg = isDark ? AppColors.accentGold : AppColors.primary;
+    return Align(
+      alignment: AlignmentDirectional.centerStart,
+      child: Container(
+        key: ValueKey('invoice-kind-${kind.name}'),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: fg.withValues(alpha: isDark ? 0.16 : 0.08),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: fg.withValues(alpha: 0.25)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ExcludeSemantics(
+              child: Icon(invoiceWorkKindIcon(kind), size: 13, color: fg),
+            ),
+            const SizedBox(width: 4),
+            Flexible(
+              child: Text(
+                kind.shortLabel,
+                style: TextStyle(
+                  color: fg,
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
