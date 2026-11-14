@@ -27,6 +27,9 @@ class AppRemoteConfigData {
     required this.announcementUrl,
     this.oilShellDisabled = false,
     this.syncSafetyDisabled = false,
+    this.catalogIdentityEnabled = false,
+    this.changeCaptureEnabled = false,
+    this.deltaSyncEnabled = false,
   });
 
   final bool maintenanceMode;
@@ -51,6 +54,12 @@ class AppRemoteConfigData {
 
   /// مفتاح إيقاف إصلاحات المزامنة ([SyncSafety]) لكل الأجهزة دون إصدار.
   final bool syncSafetyDisabled;
+
+  /// خطة المزامنة، المراحل 2 و3 و4: تُشغَّل ليلاً لكل الأجهزة دون إصدار.
+  /// الإرسال والاستلام يحتاجان أيضاً تشغيل الحساب على الخادم.
+  final bool catalogIdentityEnabled;
+  final bool changeCaptureEnabled;
+  final bool deltaSyncEnabled;
 
   static const AppRemoteConfigData fallback = AppRemoteConfigData(
     maintenanceMode: false,
@@ -107,6 +116,9 @@ class AppRemoteConfigData {
       announcementUrl: s('announcement_url'),
       oilShellDisabled: b('oil_shell_disabled'),
       syncSafetyDisabled: b('sync_safety_disabled'),
+      catalogIdentityEnabled: b('catalog_identity_enabled'),
+      changeCaptureEnabled: b('change_capture_enabled'),
+      deltaSyncEnabled: b('delta_sync_enabled'),
     );
   }
 }
@@ -188,6 +200,7 @@ class AppRemoteConfigService {
         if (raw is Map<String, dynamic>) {
           _cached = AppRemoteConfigData.fromJson(raw);
           await applySyncSafetySwitch(disabled: _cached.syncSafetyDisabled);
+          await applySyncPlanSwitches(_cached);
         } else {
           _cached = AppRemoteConfigData.fallback;
         }
@@ -219,6 +232,12 @@ class AppRemoteConfigService {
       if (prefs.getBool(syncSafetyDisabledPrefKey) == true) {
         SyncSafety.enabled = false;
       }
+      SyncSafety.catalogIdentity =
+          prefs.getBool(catalogIdentityPrefKey) ?? SyncSafety.catalogIdentity;
+      SyncSafety.changeCapture =
+          prefs.getBool(changeCapturePrefKey) ?? SyncSafety.changeCapture;
+      SyncSafety.deltaSync =
+          prefs.getBool(deltaSyncPrefKey) ?? SyncSafety.deltaSync;
     } catch (e) {
       AppLogger.warn('RemoteConfig', 'restore sync safety switch: $e');
     }
@@ -231,6 +250,27 @@ class AppRemoteConfigService {
       await prefs.setBool(syncSafetyDisabledPrefKey, disabled);
     } catch (e) {
       AppLogger.warn('RemoteConfig', 'persist sync safety switch: $e');
+    }
+  }
+
+  static const String catalogIdentityPrefKey = 'remote.catalog_identity_enabled';
+  static const String changeCapturePrefKey = 'remote.change_capture_enabled';
+  static const String deltaSyncPrefKey = 'remote.delta_sync_enabled';
+
+  /// آخر قرار من الخادم يُحفظ، فيسري بعد إعادة التشغيل دون إنترنت. فشل الجلب
+  /// لا يمر من هنا، فلا يتغير شيء بانقطاع الشبكة. الالتقاط يسري من فتح
+  /// القاعدة التالي.
+  Future<void> applySyncPlanSwitches(AppRemoteConfigData cfg) async {
+    SyncSafety.catalogIdentity = cfg.catalogIdentityEnabled;
+    SyncSafety.changeCapture = cfg.changeCaptureEnabled;
+    SyncSafety.deltaSync = cfg.deltaSyncEnabled;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(catalogIdentityPrefKey, cfg.catalogIdentityEnabled);
+      await prefs.setBool(changeCapturePrefKey, cfg.changeCaptureEnabled);
+      await prefs.setBool(deltaSyncPrefKey, cfg.deltaSyncEnabled);
+    } catch (e) {
+      AppLogger.warn('RemoteConfig', 'persist sync plan switches: $e');
     }
   }
 }

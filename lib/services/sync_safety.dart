@@ -12,6 +12,11 @@ class SyncSafety {
   /// يُقرأ عند فتح القاعدة، فتغييره يسري من الفتح التالي.
   static bool changeCapture = false;
 
+  /// المرحلة 4: إرسال التعديلات الملتقطة واستلام تعديلات الأجهزة الأخرى،
+  /// مع بقاء النسخة الكاملة كما هي. يحتاج [changeCapture]، والخادم يشغّله
+  /// لكل حساب على حدة.
+  static bool deltaSync = false;
+
   static int cashFils(Map<String, dynamic> row) {
     final fils = (row['amountFils'] as num?)?.toInt() ?? 0;
     if (fils != 0) return fils;

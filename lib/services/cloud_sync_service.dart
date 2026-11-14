@@ -20,6 +20,7 @@ import 'catalog_identity.dart';
 import 'sync_safety.dart';
 import 'sync_tables.dart';
 import 'change_capture.dart';
+import 'delta_sync_service.dart';
 import 'sync_tombstones.dart';
 import 'stock_ledger.dart';
 import 'database_helper.dart';
@@ -195,7 +196,17 @@ typedef _PullSnapshotResult = ({CloudSyncPullStatus status, _PullOutcome outcome
 ///
 /// سياسة الدمج المحلي: الأحدث يفوز؛ السحابة تحمل «آخر رفع ناجح».
 class CloudSyncService {
-  CloudSyncService._();
+  CloudSyncService._() {
+    DeltaSyncService.instance
+      ..database = (() => _dbHelper.database)
+      ..deviceId = LicenseService.instance.getDeviceId
+      ..apply = applyCapturedChanges
+      ..onSnapshotRequired = () async {
+        final user = Supabase.instance.client.auth.currentUser;
+        if (user == null) return;
+        await _pullLatestSnapshot(userId: user.id, forceImport: true);
+      };
+  }
   static final CloudSyncService instance = CloudSyncService._();
 
   static const _snapshotsTable = 'app_snapshots';
@@ -1615,6 +1626,8 @@ class CloudSyncService {
           unawaited(WebFinancialWriteGate.markSuccessfulPull());
         }
       }
+      // المرحلة 4: التعديلات قبل النسخة. فشلها لا يمس النسخة ولا نتيجتها.
+      if (!needsHydration) await _runDeltaCycle('sync');
       pushAttempted = true;
       pushSucceeded = await _pushSnapshot(
         userId: user.id,
@@ -1916,7 +1929,27 @@ class CloudSyncService {
           _debouncedDeltaFetch();
           _debouncedRealtimePull(user.id);
         },
-      ).subscribe((status, [error]) {
+      );
+      // المرحلة 4: إشارة صغيرة فيها آخر رقم فقط؛ الجهاز يسحب ما بعد رقمه.
+      if (DeltaSyncService.instance.active) {
+        channel.onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'sync_change_signals',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'user_id',
+            value: user.id,
+          ),
+          callback: (payload) {
+            final sender = payload.newRecord['sender_device_id']?.toString();
+            if (sender == deviceId) return;
+            DeltaSyncService.instance.resetBackoff();
+            _debouncedDeltaCycle();
+          },
+        );
+      }
+      channel.subscribe((status, [error]) {
         _handleRealtimeStatus(_kSyncNotificationsLabel, status, error);
       });
       _syncNotificationsChannel = channel;
@@ -1935,6 +1968,29 @@ class CloudSyncService {
           e,
         );
       }
+    }
+  }
+
+  Timer? _deltaCycleDebounce;
+
+  void _debouncedDeltaCycle() {
+    _deltaCycleDebounce?.cancel();
+    _deltaCycleDebounce = Timer(const Duration(milliseconds: 300), () {
+      unawaited(_runSyncExclusive(() => _runDeltaCycle('signal')));
+    });
+  }
+
+  /// دورة تعديلات واحدة، لا ترمي أبداً.
+  Future<void> _runDeltaCycle(String why) async {
+    if (!DeltaSyncService.instance.active) return;
+    try {
+      final r = await DeltaSyncService.instance.runCycle();
+      if (r.pushed > 0 || r.received > 0 || r.snapshotRequired) {
+        AppLogger.info('DeltaSync', '$why: $r');
+        if (r.received > 0) remoteImportGeneration.value++;
+      }
+    } catch (e, st) {
+      AppLogger.error('DeltaSync', 'cycle ($why)', e, st);
     }
   }
 
@@ -3512,10 +3568,23 @@ class CloudSyncService {
   /// نفس دمج النسخة الكاملة (`_mergeTableRows`)، داخل معاملة واحدة والالتقاط
   /// متوقف، فلا يرتد شيء. الحذف بالمفتاح نفسه. التعديلات المتتالية على جدول
   /// واحد تُدمج دفعة واحدة بترتيب وصولها.
-  Future<void> applyCapturedChanges(List<CapturedChange> changes) async {
-    if (changes.isEmpty) return;
+  ///
+  /// [cursor] مؤشر الاستلام بعد هذه الدفعة، يُكتب داخل المعاملة نفسها.
+  Future<void> applyCapturedChanges(
+    List<CapturedChange> changes, {
+    ({int lastSeq, int generation})? cursor,
+  }) async {
+    if (changes.isEmpty && cursor == null) return;
     final db = await _dbHelper.database;
     await db.transaction((txn) async {
+      if (cursor != null) {
+        await ChangeCapture.writeCursor(
+          txn,
+          lastSeq: cursor.lastSeq,
+          generation: cursor.generation,
+        );
+      }
+      if (changes.isEmpty) return;
       await ChangeCapture.setPaused(txn, true);
       if (SyncSafety.enabled) await StockLedger.setPaused(txn, true);
       final keyCols = <String, String?>{};
