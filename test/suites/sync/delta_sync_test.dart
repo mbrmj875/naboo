@@ -21,6 +21,7 @@ import 'support/multi_device_fleet.dart';
 
 class FakeDeltaServer implements DeltaBackend {
   bool enabled = true;
+  bool primary = false;
   int generation = 0;
   int lastSeq = 0;
   final changes = <Map<String, dynamic>>[];
@@ -127,6 +128,7 @@ class FakeDeltaServer implements DeltaBackend {
       'last_seq': lastSeq,
       'changes': page,
       'has_more': max < lastSeq,
+      'primary': primary,
     })) as Map<String, dynamic>;
   }
 
@@ -382,6 +384,96 @@ void main() {
     expect(await outboxSize(f['A']), 0);
     await cycle(f['B']);
     expect(await f.plates(f['B']), {'GO'});
+  }, timeout: slow);
+
+  group('phase 5: when the changes cover the full snapshot', () {
+    test('not primary on the server: the snapshot stays', () async {
+      await f.createCard(f['A'], 'P-0');
+      final r = await cycle(f['A']);
+      expect(r.primary, isFalse);
+      expect(r.coversSnapshot, isFalse);
+    }, timeout: slow);
+
+    test('primary and everything delivered: covered', () async {
+      server.primary = true;
+      await f.createCard(f['A'], 'P-1');
+      final r = await cycle(f['A']);
+      expect(r.pushed, greaterThan(0));
+      expect(r.leftInOutbox, 0);
+      expect(r.coversSnapshot, isTrue);
+    }, timeout: slow);
+
+    test('a change still waiting: not covered', () async {
+      server.primary = true;
+      server.allowed = (_) => true;
+      await f.createCard(f['A'], 'P-2');
+      server.enabled = false;
+      final r = await cycle(f['A']);
+      expect(r.leftInOutbox, greaterThan(0));
+      expect(r.coversSnapshot, isFalse);
+    }, timeout: slow);
+
+    test('restore on the server: not covered', () async {
+      server.primary = true;
+      await f.createCard(f['A'], 'P-3');
+      await cycle(f['A']);
+      server.generation++;
+      final r = await cycle(f['B']);
+      expect(r.snapshotRequired, isTrue);
+      expect(r.coversSnapshot, isFalse);
+    }, timeout: slow);
+
+    test('the full snapshot is due once a day', () async {
+      final sync = CloudSyncService.instance;
+      expect(await sync.fullSnapshotDue('u1'), isTrue);
+      final prefs = await SharedPreferences.getInstance();
+      Future<bool> due(DateTime now, Duration ago) async {
+        await prefs.setString(
+          'delta.last_full_snapshot.u1',
+          now.toUtc().subtract(ago).toIso8601String(),
+        );
+        return sync.fullSnapshotDue('u1', now: now);
+      }
+
+      final noon = DateTime(2026, 11, 14, 12);
+      final night = DateTime(2026, 11, 15, 2);
+      expect(await due(noon, const Duration(hours: 2)), isFalse);
+      expect(await due(noon, const Duration(hours: 20)), isFalse);
+      expect(await due(noon, const Duration(hours: 25)), isTrue);
+      // في الليل تكفي 12 ساعة، فتنتقل النسخة إلى الليل.
+      expect(await due(night, const Duration(hours: 13)), isTrue);
+      expect(await due(night, const Duration(hours: 5)), isFalse);
+    }, timeout: slow);
+  });
+
+  test('daily snapshot: a lost delete shows up as drift, nothing removed',
+      () async {
+    final sync = CloudSyncService.instance;
+    var db = await f.activate(f['A']);
+    final id = await OilChangeOilCatalogRepository.instance.insert(
+      brandName: 'Drift',
+      viscosity: '5W20',
+      sellPerLiterFils: 5000,
+    );
+    await f.syncDevice(f['A']);
+    await f.activate(f['B']);
+    await f.importLatest(f['B'].userId);
+    expect(sync.lastSnapshotDrift, isEmpty);
+
+    // الحذف على أ لا يصل إلى ب بالتعديلات (ضاع)، ثم تصل النسخة اليومية.
+    db = await f.activate(f['A']);
+    await db.delete('oil_change_oil_catalog', where: 'id = ?', whereArgs: [id]);
+    await db.delete(ChangeCapture.outbox);
+    await f.syncDevice(f['A']);
+    final dbB = await f.activate(f['B']);
+    await f.importLatest(f['B'].userId);
+    expect(sync.lastSnapshotDrift, {'oil_change_oil_catalog': 1});
+    expect(
+      await dbB.query('oil_change_oil_catalog',
+          where: "brandName = 'Drift'"),
+      isNotEmpty,
+      reason: 'the check only records',
+    );
   }, timeout: slow);
 
   test('switch off: no calls at all', () async {

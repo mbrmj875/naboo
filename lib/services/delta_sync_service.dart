@@ -60,10 +60,20 @@ class DeltaCycleResult {
   bool snapshotRequired = false;
   String? stoppedBy;
 
+  /// المرحلة 5: الخادم جعل التعديلات الطريق الأساسي لهذا الحساب.
+  bool primary = false;
+
+  /// ما بقي في سجل الجهاز بعد الإرسال.
+  int leftInOutbox = -1;
+
+  /// الدورة أوصلت كل شيء في الاتجاهين، فالنسخة الكاملة غير لازمة الآن.
+  bool get coversSnapshot =>
+      primary && stoppedBy == null && !snapshotRequired && leftInOutbox == 0;
+
   @override
   String toString() =>
       'pushed=$pushed received=$received rejected=$rejected '
-      'snapshot=$snapshotRequired'
+      'snapshot=$snapshotRequired primary=$primary left=$leftInOutbox'
       '${stoppedBy == null ? '' : ' stop=$stoppedBy'}';
 }
 
@@ -122,7 +132,9 @@ class DeltaSyncService {
     try {
       final db = await database();
       final me = await deviceId();
+      await ChangeCapture.ensureLateTables(db);
       await _push(db, me, r);
+      r.leftInOutbox = await ChangeCapture.pendingCount(db);
       if (r.stoppedBy == null || r.stoppedBy == 'generation_mismatch') {
         r.stoppedBy = null;
         await _pull(db, me, r);
@@ -205,6 +217,7 @@ class DeltaSyncService {
         if (_handleRefusal(res, r)) await _resync(db, res, r);
         return;
       }
+      r.primary = res['primary'] == true;
       final rows = (res['changes'] as List?) ?? const [];
       if (rows.isEmpty) return;
       var maxSeq = cursor.lastSeq;

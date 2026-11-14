@@ -91,12 +91,13 @@ class ChangeCapture {
     );
   }
 
-  /// عمود المفتاح: global_id إن وُجد، وإلا id إن كان المفتاح الأساسي وحده.
+  /// عمود المفتاح: global_id إن وُجد، وإلا المفتاح الأساسي إن كان عموداً
+  /// واحداً (`id`، أو `key` في app_settings).
   static Future<String?> keyColumn(DatabaseExecutor db, String table) async {
     final cols = await db.rawQuery('PRAGMA table_info($table)');
     if (cols.any((c) => c['name'] == 'global_id')) return 'global_id';
     final pk = cols.where((c) => ((c['pk'] as num?)?.toInt() ?? 0) > 0);
-    if (pk.length == 1 && pk.first['name'] == 'id') return 'id';
+    if (pk.length == 1) return pk.first['name'].toString();
     return null;
   }
 
@@ -119,11 +120,38 @@ class ChangeCapture {
     return {for (final r in rows) (r['name'] ?? '').toString()};
   }
 
+  /// جداول تُلتقط وليس لها مشغّل بعد: أُنشئت بعد فتح القاعدة، مثل
+  /// `sync_tombstones` عند أول مزامنة. استعلامان فقط، فيصلح لكل دورة.
+  static Future<List<String>> tablesWithoutTriggers(DatabaseExecutor db) async {
+    if (!SyncSafety.changeCapture) return const [];
+    final existing = await _existingTriggers(db);
+    final out = <String>[];
+    for (final t in await _capturedTables(db)) {
+      if (existing.any((n) => n.startsWith('$_triggerPrefix${t}__'))) continue;
+      // جدول بلا مفتاح لا يُلتقط أصلاً.
+      if (await keyColumn(db, t) == null) continue;
+      out.add(t);
+    }
+    return out;
+  }
+
+  /// يضيف مشغّلات الجداول الجديدة إن وُجدت. يُستدعى في بداية كل دورة.
+  static Future<void> ensureLateTables(DatabaseExecutor db) async {
+    final late = await tablesWithoutTriggers(db);
+    if (late.isEmpty) return;
+    await ensure(db);
+  }
+
   /// ينشئ الجداول دائماً، والمشغّلات فقط حين يكون المفتاح مشغّلاً. لا يرمي.
+  ///
+  /// جدول يأخذ مشغّله أول مرة والالتقاط يعمل من قبل في جداول أخرى: أسطره
+  /// الموجودة كُتبت دون التقاط، فتُسجَّل كلها. عند أول تشغيل للالتقاط لا
+  /// يُسجَّل شيء، لأن النسخة الكاملة هي الأساس.
   static Future<void> ensure(DatabaseExecutor db) async {
     try {
       await _ensureTables(db);
       final existing = await _existingTriggers(db);
+      final running = existing.isNotEmpty;
       // اسم المشغّل يحمل عمود المفتاح: جدول أخذ global_id لاحقاً يُعاد مشغّله.
       final wanted = <String>{};
       if (SyncSafety.changeCapture) {
@@ -146,6 +174,8 @@ class ChangeCapture {
         if (key == null) continue;
         final base = '$_triggerPrefix${table}__$key';
         if (existing.contains('${base}_d')) continue;
+        final isNew =
+            running && !existing.any((n) => n.startsWith('$_triggerPrefix${table}__'));
         String put(String ref, String op) =>
             'INSERT OR REPLACE INTO $outbox (tbl, row_key, op, changed_at) '
             "VALUES ('$table', $ref.$key, '$op', $now);";
@@ -172,6 +202,13 @@ class ChangeCapture {
           'AFTER DELETE ON $table WHEN $live AND ${has('OLD')} '
           'BEGIN ${put('OLD', 'D')} END',
         );
+        if (isNew) {
+          await db.rawInsert(
+            'INSERT OR IGNORE INTO $outbox (tbl, row_key, op, changed_at) '
+            "SELECT '$table', $key, 'U', $now FROM $table "
+            "WHERE $key IS NOT NULL AND TRIM($key) <> ''",
+          );
+        }
       }
       await trimShadow(db);
     } catch (e, st) {
@@ -192,10 +229,15 @@ class ChangeCapture {
     }
   }
 
-  static Future<void> trimShadow(DatabaseExecutor db) => db.rawDelete(
-        'DELETE FROM $outbox WHERE id <= '
-        '(SELECT MAX(id) FROM $outbox) - $shadowLimit',
-      );
+  /// في وضع الظل فقط. حين يُرسل السجل لا يُقص: سطر واحد لكل مفتاح، فلا يزيد
+  /// على عدد أسطر القاعدة، وقصّه يضيّع تعديلاً لم يصل.
+  static Future<void> trimShadow(DatabaseExecutor db) async {
+    if (SyncSafety.deltaSync) return;
+    await db.rawDelete(
+      'DELETE FROM $outbox WHERE id <= '
+      '(SELECT MAX(id) FROM $outbox) - $shadowLimit',
+    );
+  }
 
   static Future<int> pendingCount(DatabaseExecutor db) async {
     final r = await db.rawQuery('SELECT COUNT(*) AS c FROM $outbox');

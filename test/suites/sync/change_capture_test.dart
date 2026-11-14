@@ -8,6 +8,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:naboo/services/change_capture.dart';
+import 'package:naboo/services/database_helper.dart';
 import 'package:naboo/services/cloud_sync_service.dart';
 import 'package:naboo/services/sync_safety.dart';
 import 'package:naboo/services/sync_tombstones.dart';
@@ -182,6 +183,83 @@ void main() {
       (await outbox(db)).where((r) => r['op'] == 'D'),
       isEmpty,
     );
+  }, timeout: slow);
+
+  test('a table created after opening is captured from its first row',
+      () async {
+    final db = await f.activate(f['A']);
+    await db.execute(
+      'CREATE TABLE late_things (id INTEGER PRIMARY KEY, '
+      'global_id TEXT, name TEXT)',
+    );
+    await db.insert('late_things', {'global_id': 'late-1', 'name': 'a'});
+    expect(
+      await ChangeCapture.tablesWithoutTriggers(db),
+      contains('late_things'),
+    );
+    await ChangeCapture.ensureLateTables(db);
+    expect(await ChangeCapture.tablesWithoutTriggers(db), isEmpty);
+    await db.insert('late_things', {'global_id': 'late-2', 'name': 'b'});
+    final keys = (await outbox(db))
+        .where((r) => r['tbl'] == 'late_things')
+        .map((r) => r['row_key'])
+        .toSet();
+    // السطر الذي كُتب قبل المشغّل يُسجَّل أيضاً.
+    expect(keys, {'late-1', 'late-2'});
+  }, timeout: slow);
+
+  test('re-checking the staff directory with no change writes nothing',
+      () async {
+    final db = await f.activate(f['A']);
+    final now = DateTime.now().toUtc().toIso8601String();
+    await db.insert('users', {
+      'username': 'staff.probe',
+      'role': 'staff',
+      'isActive': 1,
+      'passwordHash': 'h',
+      'passwordSalt': 's',
+      'createdAt': now,
+      'updatedAt': now,
+    });
+    final helper = OilChangeTestHarness.instance.dbHelper;
+    await helper.reconcileUserDirectoryAfterCloudImport();
+    expect(await db.query('user_profiles'), isNotEmpty);
+    await db.delete(ChangeCapture.outbox);
+    await helper.reconcileUserDirectoryAfterCloudImport();
+    expect(
+      (await outbox(db)).where((r) => r['tbl'] == 'user_profiles'),
+      isEmpty,
+    );
+  }, timeout: slow);
+
+  test('a settings change is captured by its key', () async {
+    final db = await f.activate(f['A']);
+    await db.delete(ChangeCapture.outbox);
+    await db.insert(
+      'app_settings',
+      {
+        'key': 'probe.setting',
+        'value': '1',
+        'updatedAt': DateTime.now().toUtc().toIso8601String(),
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    final row = (await outbox(db)).singleWhere((r) => r['tbl'] == 'app_settings');
+    expect(row['row_key'], 'probe.setting');
+    final change = (await ChangeCapture.pending(db, limit: 100))
+        .singleWhere((c) => c.table == 'app_settings');
+    expect(change.row!['value'], '1');
+  }, timeout: slow);
+
+  test('turning capture on the first time does not record existing rows',
+      () async {
+    SyncSafety.changeCapture = false;
+    var db = await f.reopen(f['A']);
+    await f.createCard(f['A'], 'BEFORE-ON');
+    await db.delete(ChangeCapture.outbox);
+    SyncSafety.changeCapture = true;
+    db = await f.reopen(f['A']);
+    expect(await outbox(db), isEmpty);
   }, timeout: slow);
 
   test('switch off: no triggers and nothing captured', () async {

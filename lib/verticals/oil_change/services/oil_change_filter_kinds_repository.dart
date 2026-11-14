@@ -74,10 +74,12 @@ class OilChangeFilterKindsRepository {
     }
   }
 
-  /// يولد كوداً فريداً لفئة جديدة ضمن التينانت.
+  /// يولد كوداً فريداً لفئة جديدة ضمن التينانت. الجزء العشوائي يمنع أن يأخذ
+  /// جهازان فئتين مختلفتين بالكود نفسه، فالدمج يطابق الفئات بالكود.
   Future<String> _nextCustomCode(Database db, int tid) async {
     final now = DateTime.now().millisecondsSinceEpoch;
-    var code = 'f_$now';
+    final tag = CatalogIdentity.newId().replaceAll('-', '').substring(0, 8);
+    var code = 'f_${now}_$tag';
     var n = 0;
     while (true) {
       final rows = await db.rawQuery(
@@ -87,7 +89,7 @@ class OilChangeFilterKindsRepository {
       );
       if (rows.isEmpty) return code;
       n += 1;
-      code = 'f_${now}_$n';
+      code = 'f_${now}_${tag}_$n';
     }
   }
 

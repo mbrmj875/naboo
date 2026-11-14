@@ -120,6 +120,8 @@ class Fleet {
     await harness.reset();
     await harness.configureServiceOnly();
     final db = await harness.database;
+    // الأجهزة نسخ من قاعدة أساس: ما التُقط أثناء تجهيزها ليس تعديلاً من جهاز.
+    await db.execute('DELETE FROM sync_outbox');
     final base = p.join(dir.path, 'base.db');
     await File(base).parent.create(recursive: true);
     await db.execute('VACUUM INTO ?', [base]);

@@ -21,6 +21,7 @@ import 'sync_safety.dart';
 import 'sync_tables.dart';
 import 'change_capture.dart';
 import 'delta_sync_service.dart';
+import 'snapshot_drift.dart';
 import 'sync_tombstones.dart';
 import 'stock_ledger.dart';
 import 'database_helper.dart';
@@ -1627,12 +1628,29 @@ class CloudSyncService {
         }
       }
       // المرحلة 4: التعديلات قبل النسخة. فشلها لا يمس النسخة ولا نتيجتها.
-      if (!needsHydration) await _runDeltaCycle('sync');
+      final delta = needsHydration ? null : await _runDeltaCycle('sync');
+      // المرحلة 5: حساب جعله الخادم على التعديلات، والدورة أوصلت كل شيء:
+      // النسخة الكاملة مرة كل يوم فقط. أي خلل في الدورة يعيد النسخة فوراً.
+      if (!forcePush &&
+          delta != null &&
+          delta.coversSnapshot &&
+          !await fullSnapshotDue(user.id)) {
+        await refreshDevices();
+        lastError.value = null;
+        lastSyncAt.value = DateTime.now();
+        return CloudSyncRunResult(
+          pullStatus: pullStatus,
+          pullAttempted: pullAttempted,
+          pushAttempted: false,
+          pushSucceeded: true,
+        );
+      }
       pushAttempted = true;
       pushSucceeded = await _pushSnapshot(
         userId: user.id,
         forcePush: forcePush,
       );
+      if (pushSucceeded) await _markFullSnapshot(user.id);
       await refreshDevices();
       if (!pushSucceeded) {
         _auditSyncOperation(
@@ -1980,18 +1998,51 @@ class CloudSyncService {
     });
   }
 
-  /// دورة تعديلات واحدة، لا ترمي أبداً.
-  Future<void> _runDeltaCycle(String why) async {
-    if (!DeltaSyncService.instance.active) return;
+  /// دورة تعديلات واحدة، لا ترمي أبداً. null إن كانت مطفأة أو فشلت.
+  Future<DeltaCycleResult?> _runDeltaCycle(String why) async {
+    if (!DeltaSyncService.instance.active) return null;
     try {
       final r = await DeltaSyncService.instance.runCycle();
       if (r.pushed > 0 || r.received > 0 || r.snapshotRequired) {
         AppLogger.info('DeltaSync', '$why: $r');
         if (r.received > 0) remoteImportGeneration.value++;
       }
+      return r;
     } catch (e, st) {
       AppLogger.error('DeltaSync', 'cycle ($why)', e, st);
+      return null;
     }
+  }
+
+  /// المرحلة 5: أقصى مدة بين نسختين كاملتين حين تحمل التعديلات كل شيء.
+  static const fullSnapshotEvery = Duration(hours: 24);
+
+  String _prefsKeyLastFullSnapshot(String userId) =>
+      'delta.last_full_snapshot.$userId';
+
+  /// النسخة تميل إلى الليل: بعد 12 ساعة تكفي إن كانت الساعة بين 00:00 و06:00
+  /// على الجهاز، فتنتقل إلى الليل خلال يوم وتبقى فيه.
+  static const fullSnapshotNightAfter = Duration(hours: 12);
+
+  @visibleForTesting
+  Future<bool> fullSnapshotDue(String userId, {DateTime? now}) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_prefsKeyLastFullSnapshot(userId));
+    final last = raw == null ? null : DateTime.tryParse(raw);
+    if (last == null) return true;
+    final t = now ?? DateTime.now();
+    final since = t.toUtc().difference(last);
+    if (since >= fullSnapshotEvery) return true;
+    final hour = t.toLocal().hour;
+    return hour < 6 && since >= fullSnapshotNightAfter;
+  }
+
+  Future<void> _markFullSnapshot(String userId) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _prefsKeyLastFullSnapshot(userId),
+      DateTime.now().toUtc().toIso8601String(),
+    );
   }
 
   void _debouncedDeltaFetch() {
@@ -3304,7 +3355,14 @@ class CloudSyncService {
       await db.execute('PRAGMA foreign_keys = ON');
     }
     await _dbHelper.reconcileUserDirectoryAfterCloudImport();
+    // المرحلة 5: للسجل فقط، حين تحمل التعديلات البيانات بين النسخ.
+    if (DeltaSyncService.instance.active) {
+      lastSnapshotDrift = await SnapshotDrift.check(db, payload);
+    }
   }
+
+  /// نتيجة آخر فحص انحراف بعد نسخة كاملة: الجدول وعدد الأسطر الموجودة هنا فقط.
+  Map<String, int> lastSnapshotDrift = const {};
 
   /// بعد دمج اللقطة: qty = خط أساس السحابة + أثر بنود الفواتير المحلية غير الواردة في اللقطة.
   /// لا يعتمد على LWW لقيمة qty النهائية (هاتف↔ويب متزامن).
