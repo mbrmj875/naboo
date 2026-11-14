@@ -94,6 +94,10 @@ class OilChangeWhatsappStatusStore {
   Future<void> _writeLocal(OilChangeWhatsappGatewayStatus status) async {
     final repo = AppSettingsRepository.instance;
     final tenantId = await repo.getActiveTenantId();
+    // نسخة محلية لحالة يحفظها الخادم: تُقرأ كثيراً. الكتابة فقط عند التغيّر،
+    // لأن كل كتابة تُرسل تعديلاً لكل أجهزة المحل.
+    final current = await repo.getForTenant(_statusKey, tenantId: tenantId);
+    if (current?.trim() == status.name) return;
     await repo.setForTenant(
       _statusKey,
       status.name,

@@ -67,8 +67,14 @@ class DeltaCycleResult {
   int leftInOutbox = -1;
 
   /// الدورة أوصلت كل شيء في الاتجاهين، فالنسخة الكاملة غير لازمة الآن.
+  /// تعديل رفضه الخادم (جدول غير مسموح، أو سطر أكبر من الحد) لم يصل إلا في
+  /// النسخة الكاملة، فلا تُتخطى.
   bool get coversSnapshot =>
-      primary && stoppedBy == null && !snapshotRequired && leftInOutbox == 0;
+      primary &&
+      stoppedBy == null &&
+      !snapshotRequired &&
+      rejected == 0 &&
+      leftInOutbox == 0;
 
   @override
   String toString() =>

@@ -413,6 +413,16 @@ void main() {
       expect(r.coversSnapshot, isFalse);
     }, timeout: slow);
 
+    test('a change the server refused: not covered', () async {
+      server.primary = true;
+      server.allowed = (t) => t != 'service_orders';
+      await f.createCard(f['A'], 'P-4');
+      final r = await cycle(f['A']);
+      expect(r.rejected, greaterThan(0));
+      expect(r.leftInOutbox, 0);
+      expect(r.coversSnapshot, isFalse);
+    }, timeout: slow);
+
     test('restore on the server: not covered', () async {
       server.primary = true;
       await f.createCard(f['A'], 'P-3');
