@@ -1643,7 +1643,13 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
         _filterProductCatalog,
         id,
       );
-      if (entry == null || entry.kind.code != kind.code) {
+      // الرقم محلي لكل جهاز: بطاقة وصلت من جهاز آخر قد يشير رقمها لفلتر
+      // آخر هنا، فالاسم المحفوظ في البطاقة هو الحكم.
+      final savedName = (slot.name ?? '').trim().toLowerCase();
+      if (entry == null ||
+          entry.kind.code != kind.code ||
+          (savedName.isNotEmpty &&
+              entry.name.trim().toLowerCase() != savedName)) {
         slot.catalogEntryId = null;
       } else {
         slot.applyEntry(entry);

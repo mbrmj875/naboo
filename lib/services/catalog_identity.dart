@@ -151,3 +151,66 @@ class CatalogIdentity {
     }
   }
 }
+
+/// معرّف عام لسجلّي النشاط والتدقيق (المرحلة 2).
+///
+/// السجلان إضافة فقط: لا يُعدَّل سطر بعد كتابته. المعرّف نص محسوب من
+/// (الجدول، الرقم المحلي الأصلي، وقت الإنشاء، النوع)، فيحسبه كل جهاز للسطر
+/// نفسه دون تنسيق، ويبقى ثابتاً حين يأخذ السطر رقماً محلياً آخر على جهاز ثانٍ.
+/// مشغّل في القاعدة يكتبه لكل سطر جديد، فلا يحتاج كود الإضافة أي تعديل.
+class LogIdentity {
+  LogIdentity._();
+
+  static const _spec = <String, (String, String, String)>{
+    // الجدول: (البادئة، عمود الوقت، عمود النوع)
+    'activity_logs': ('al', 'createdAt', 'type'),
+    'business_audit_events': ('ba', 'created_at', 'event_type'),
+  };
+
+  static bool covers(String table) => _spec.containsKey(table);
+
+  /// المعرّف من قيم السطر كما جاءت من جهازه الأصلي، أو null إن نقصت.
+  static String? idFor(String table, Map<String, dynamic> row) {
+    final s = _spec[table];
+    if (s == null) return null;
+    final id = row['id'];
+    final at = (row[s.$2] ?? '').toString();
+    if (id == null || at.isEmpty) return null;
+    return '${s.$1}|$id|$at|${row[s.$3] ?? ''}';
+  }
+
+  static String _sqlExpr(String table, String alias) {
+    final s = _spec[table]!;
+    return "'${s.$1}|' || $alias.id || '|' || $alias.${s.$2} || '|' || "
+        "IFNULL($alias.${s.$3}, '')";
+  }
+
+  /// يضيف العمود والفهرس والمشغّل، ويملأ الأسطر القديمة. آمن للتكرار ولا يرمي.
+  static Future<void> ensure(DatabaseExecutor db) async {
+    for (final table in _spec.keys) {
+      try {
+        final cols = await db.rawQuery('PRAGMA table_info($table)');
+        if (cols.isEmpty) continue;
+        if (!cols.any((c) => c['name'] == 'global_id')) {
+          await db.execute('ALTER TABLE $table ADD COLUMN global_id TEXT');
+        }
+        await db.execute(
+          'CREATE UNIQUE INDEX IF NOT EXISTS uq_${table}_global_id '
+          'ON $table(global_id) WHERE global_id IS NOT NULL',
+        );
+        await db.execute(
+          'CREATE TRIGGER IF NOT EXISTS trg_${table}_global_id '
+          'AFTER INSERT ON $table WHEN NEW.global_id IS NULL '
+          'BEGIN UPDATE $table SET global_id = ${_sqlExpr(table, 'NEW')} '
+          'WHERE id = NEW.id; END',
+        );
+        await db.execute(
+          'UPDATE $table SET global_id = ${_sqlExpr(table, table)} '
+          "WHERE global_id IS NULL OR TRIM(global_id) = ''",
+        );
+      } catch (e, st) {
+        DbMigrationSafety.noteIgnored('LogIdentity.ensure#$table', e, st);
+      }
+    }
+  }
+}

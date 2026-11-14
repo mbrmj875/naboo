@@ -695,6 +695,7 @@ class DatabaseHelper {
     await CatalogIdentity.ensure(db);
     await ensureOilProductGradesSchema(db);
     await ensureBusinessAuditEventsTable(db);
+    await LogIdentity.ensure(db);
     await ensureOwnerDashboardQueryIndexes(db);
     await ensurePharmacyCatalogTables(db);
     await ensureRestaurantTables(db);

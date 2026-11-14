@@ -163,6 +163,61 @@ void main() {
     expect(a, b);
   }, timeout: slow);
 
+  Future<void> addLog(FleetDevice d, String title) async {
+    final db = await f.activate(d);
+    final now = DateTime.now().toIso8601String();
+    await db.insert('activity_logs', {
+      'type': 'note',
+      'title': title,
+      'createdAt': now,
+    });
+    await db.insert('business_audit_events', {
+      'tenant_id': 1,
+      'event_type': 'note',
+      'entity_id': title,
+      'created_at': now,
+    });
+    await Future<void>.delayed(const Duration(milliseconds: 3));
+  }
+
+  Future<List<String>> logs(FleetDevice d) async {
+    final db = await f.activate(d);
+    final a = (await db.rawQuery(
+      "SELECT title FROM activity_logs WHERE type = 'note' ORDER BY title",
+    )).map((r) => 'al:${r['title']}');
+    final b = (await db.rawQuery(
+      "SELECT entity_id FROM business_audit_events WHERE event_type = 'note' "
+      'ORDER BY entity_id',
+    )).map((r) => 'ba:${r['entity_id']}');
+    return [...a, ...b];
+  }
+
+  test('logs written offline on two devices all survive, once each', () async {
+    await addLog(f['A'], 'a1');
+    await addLog(f['B'], 'b1');
+    await f.converge();
+    await addLog(f['A'], 'a2');
+    await f.converge();
+    await f.converge();
+    final want = ['al:a1', 'al:a2', 'al:b1', 'ba:a1', 'ba:a2', 'ba:b1'];
+    expect(await logs(f['A']), want);
+    expect(await logs(f['B']), want);
+  }, timeout: slow);
+
+  test('new log rows get their id from the database trigger', () async {
+    final db = await f.activate(f['A']);
+    final id = await db.insert('activity_logs', {
+      'type': 'note',
+      'title': 'x',
+      'createdAt': '2026-01-01T00:00:00.000',
+    });
+    final r = await db.rawQuery(
+      'SELECT global_id FROM activity_logs WHERE id = ?',
+      [id],
+    );
+    expect(r.single['global_id'], 'al|$id|2026-01-01T00:00:00.000|note');
+  }, timeout: slow);
+
   test('switch off keeps the old merge by local number', () async {
     SyncSafety.catalogIdentity = false;
     await addOil(f['A'], 'Castrol', '5W30', 9000);

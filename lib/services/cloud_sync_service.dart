@@ -3501,6 +3501,61 @@ class CloudSyncService {
     return true;
   }
 
+  /// سجلا النشاط والتدقيق: إضافة فقط، بالمعرّف العام (المرحلة 2).
+  ///   * سطر موجود هنا بمعرّفه: لا شيء، فالسجل لا يُعدَّل.
+  ///   * سطر جديد: يُدرج برقمه إن كان فارغاً هنا، وإلا برقم جديد، فلا يكتب
+  ///     فوق سطر آخر أخذ الرقم نفسه على هذا الجهاز.
+  ///   * سطر بلا معرّف (جهاز لم يتحدث): يُحسب معرّفه من قيمه الأصلية.
+  ///   * تدقيق أقدم من 90 يوماً: لا يعود بعد أن نظّفه هذا الجهاز.
+  Future<bool> _mergeLogByGlobalId({
+    required Transaction txn,
+    required String table,
+    required Map<String, dynamic> incomingRaw,
+    required Map<String, dynamic> incoming,
+  }) async {
+    var gid = (incoming['global_id'] ?? '').toString().trim();
+    if (gid.isEmpty) gid = LogIdentity.idFor(table, incomingRaw) ?? '';
+    if (gid.isEmpty) return false;
+
+    if (table == 'business_audit_events') {
+      final at = (incomingRaw['created_at'] ?? '').toString();
+      final cutoff = DateTime.now()
+          .subtract(const Duration(days: 90))
+          .toIso8601String();
+      if (at.isNotEmpty && at.compareTo(cutoff) < 0) return true;
+    }
+
+    final known = await txn.query(
+      table,
+      columns: ['id'],
+      where: 'global_id = ?',
+      whereArgs: [gid],
+      limit: 1,
+    );
+    if (known.isNotEmpty) return true;
+
+    final row = Map<String, dynamic>.from(incoming)
+      ..remove('id')
+      ..['global_id'] = gid;
+    final id = (incoming['id'] as num?)?.toInt();
+    if (id != null) {
+      final taken = await txn.query(
+        table,
+        columns: ['id'],
+        where: 'id = ?',
+        whereArgs: [id],
+        limit: 1,
+      );
+      if (taken.isEmpty) row['id'] = id;
+    }
+    try {
+      await txn.insert(table, row);
+    } on DatabaseException catch (e) {
+      AppLogger.warn('CloudSync', 'log insert $table skipped: $e');
+    }
+    return true;
+  }
+
   /// البطاقة المحذوفة تبقى 90 يوماً ليصل حذفها إلى كل جهاز، ثم تُزال من
   /// الجهاز، فتخرج من لقطته التالية.
   static const cardTombstoneDays = 90;
@@ -4393,6 +4448,18 @@ class CloudSyncService {
           CatalogIdentity.covers(table) &&
           localCols.contains('global_id')) {
         final handled = await _mergeCatalogByGlobalId(
+          txn: txn,
+          table: table,
+          incomingRaw: incomingRaw,
+          incoming: incoming,
+        );
+        if (handled) continue;
+      }
+
+      if (SyncSafety.catalogIdentity &&
+          LogIdentity.covers(table) &&
+          localCols.contains('global_id')) {
+        final handled = await _mergeLogByGlobalId(
           txn: txn,
           table: table,
           incomingRaw: incomingRaw,
