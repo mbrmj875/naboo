@@ -18,9 +18,10 @@ import 'app_remote_config_service.dart';
 import 'sync_echo_guard.dart';
 import 'catalog_identity.dart';
 import 'sync_safety.dart';
+import 'sync_tables.dart';
+import 'change_capture.dart';
 import 'sync_tombstones.dart';
 import 'stock_ledger.dart';
-import 'local_device.dart';
 import 'database_helper.dart';
 import 'device_version_reporter.dart';
 import 'invoice_merge_policy.dart';
@@ -2013,6 +2014,7 @@ class CloudSyncService {
     // 3. Apply changes inside a safe transaction
     try {
       await db.transaction((txn) async {
+        await ChangeCapture.setPaused(txn, true);
         // Handle DELETE operations
         for (final d in deletes) {
           final entityType = d['entity_type']?.toString();
@@ -2034,6 +2036,7 @@ class CloudSyncService {
             uiNeedsRefresh = true;
           }
         }
+        await ChangeCapture.setPaused(txn, false);
       });
     } catch (e) {
       if (kDebugMode) {
@@ -3205,6 +3208,8 @@ class CloudSyncService {
                 r,
           ];
         }
+        // ما جاء من الخادم لا يُلتقط، فلا يرتد إليه (المرحلة 3).
+        await ChangeCapture.setPaused(txn, true);
         // الكمية تُحسب من الحركات بعد الدمج، فلا يكتب الدمج حركات.
         if (SyncSafety.enabled) await StockLedger.setPaused(txn, true);
         for (final table in tableNames) {
@@ -3243,6 +3248,7 @@ class CloudSyncService {
           await StockLedger.setPaused(txn, false);
         }
         await applyUserProfilesIntoUsersTransaction(txn);
+        await ChangeCapture.setPaused(txn, false);
       });
     } finally {
       await db.execute('PRAGMA foreign_keys = ON');
@@ -3499,6 +3505,63 @@ class CloudSyncService {
       AppLogger.warn('CloudSync', 'catalog update $table skipped: $e');
     }
     return true;
+  }
+
+  /// يطبّق تعديلات ملتقطة من جهاز آخر (المرحلة 3، وتستعملها المرحلة 4).
+  ///
+  /// نفس دمج النسخة الكاملة (`_mergeTableRows`)، داخل معاملة واحدة والالتقاط
+  /// متوقف، فلا يرتد شيء. الحذف بالمفتاح نفسه. التعديلات المتتالية على جدول
+  /// واحد تُدمج دفعة واحدة بترتيب وصولها.
+  Future<void> applyCapturedChanges(List<CapturedChange> changes) async {
+    if (changes.isEmpty) return;
+    final db = await _dbHelper.database;
+    await db.transaction((txn) async {
+      await ChangeCapture.setPaused(txn, true);
+      if (SyncSafety.enabled) await StockLedger.setPaused(txn, true);
+      final keyCols = <String, String?>{};
+      final tables = {
+        for (final r in await txn.rawQuery(
+          "SELECT name FROM sqlite_master WHERE type = 'table'",
+        ))
+          (r['name'] ?? '').toString(),
+      };
+      var i = 0;
+      while (i < changes.length) {
+        final c = changes[i];
+        if (!SyncTables.isCaptured(c.table) || !tables.contains(c.table)) {
+          i++;
+          continue;
+        }
+        if (c.op == 'D') {
+          final col = keyCols.containsKey(c.table)
+              ? keyCols[c.table]
+              : (keyCols[c.table] = await ChangeCapture.keyColumn(txn, c.table));
+          if (col != null) {
+            await txn.delete(
+              c.table,
+              where: '$col = ?',
+              whereArgs: [col == 'id' ? int.tryParse(c.key) ?? c.key : c.key],
+            );
+          }
+          i++;
+          continue;
+        }
+        final run = <Map<String, dynamic>>[];
+        while (i < changes.length &&
+            changes[i].table == c.table &&
+            changes[i].op == 'U') {
+          run.add(Map<String, dynamic>.from(changes[i].row!));
+          i++;
+        }
+        await _mergeTableRows(txn, c.table, run);
+      }
+      if (SyncSafety.enabled) {
+        await StockLedger.ensureOpenings(txn);
+        await StockLedger.recompute(txn);
+        await StockLedger.setPaused(txn, false);
+      }
+      await ChangeCapture.setPaused(txn, false);
+    });
   }
 
   /// سجلا النشاط والتدقيق: إضافة فقط، بالمعرّف العام (المرحلة 2).
@@ -5167,20 +5230,7 @@ class CloudSyncService {
     return list;
   }
 
-  bool _shouldSyncTable(String tableName) {
-    if (tableName.isEmpty) return false;
-    if (tableName.startsWith('sqlite_')) return false;
-    const excluded = {
-      'android_metadata',
-      'sqlite_sequence',
-      'users', // secrets في user_profiles.pinHash/pinSalt — لا نرفع users مباشرة
-      'sync_queue', // طابور المزامنة محلي لكل جهاز — لا يُرفع في اللقطة
-      'product_warehouse_stock',
-      StockLedger.ctlTable, // إيقاف المشغّل محلي لكل جهاز
-      LocalDevice.table, // معرّف الجهاز محلي، لا يُنسخ إلى جهاز آخر
-    };
-    return !excluded.contains(tableName);
-  }
+  bool _shouldSyncTable(String tableName) => SyncTables.isSynced(tableName);
 
   String _prefsKeyLastPushedTableSignatures(String userId) =>
       'sync.last_pushed_table_sigs.$userId';

@@ -8,6 +8,10 @@ class SyncSafety {
   /// مطفأ حتى تتحدث كل أجهزة المحل، ويُشغَّل ليلاً.
   static bool catalogIdentity = false;
 
+  /// المرحلة 3: التقاط التعديلات في سجل محلي (وضع الظل، لا يرسل).
+  /// يُقرأ عند فتح القاعدة، فتغييره يسري من الفتح التالي.
+  static bool changeCapture = false;
+
   static int cashFils(Map<String, dynamic> row) {
     final fils = (row['amountFils'] as num?)?.toInt() ?? 0;
     if (fils != 0) return fils;

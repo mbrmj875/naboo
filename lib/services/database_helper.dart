@@ -7,6 +7,7 @@ import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import 'package:uuid/uuid.dart';
 import 'catalog_identity.dart';
+import 'change_capture.dart';
 import 'sync_safety.dart';
 import 'sync_tombstones.dart';
 import 'stock_ledger.dart';
@@ -279,12 +280,15 @@ class DatabaseHelper {
         final rows = await txn.rawQuery(
           "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
         );
-        const keep = {'users', 'android_metadata'};
+        // الإفراغ ليس حذفاً يُرسل لبقية الأجهزة: الالتقاط متوقف أثناءه.
+        await ChangeCapture.setPaused(txn, true);
+        const keep = {'users', 'android_metadata', ChangeCapture.ctlTable};
         for (final r in rows) {
           final name = (r['name'] ?? '').toString();
           if (name.isEmpty || keep.contains(name)) continue;
           await txn.delete(name);
         }
+        await ChangeCapture.setPaused(txn, false);
       });
     } catch (e, st) {
       if (kDebugMode) {
@@ -699,6 +703,8 @@ class DatabaseHelper {
     await ensureOwnerDashboardQueryIndexes(db);
     await ensurePharmacyCatalogTables(db);
     await ensureRestaurantTables(db);
+    // آخر خطوة: المشغّلات تُبنى على الجداول والأعمدة بعد اكتمال الترقية.
+    await ChangeCapture.ensure(db);
     await _flushMigrationIssues(db);
   }
 
@@ -1053,11 +1059,12 @@ class DatabaseHelper {
         'isActive': 1,
         'createdAt': nowIso,
       }, conflictAlgorithm: ConflictAlgorithm.ignore);
-      // تنشيط صريح لـ id=1 إن وُجد معطّلاً سابقاً.
+      // تنشيط صريح لـ id=1 إن وُجد معطّلاً سابقاً. لا كتابة إن كان نشطاً، فلا
+      // يُلتقط تعديل وهمي عند كل فتح (المرحلة 3).
       await db.update(
         'tenants',
         {'isActive': 1},
-        where: 'id = ?',
+        where: 'id = ? AND isActive IS NOT 1',
         whereArgs: <Object?>[1],
       );
 
