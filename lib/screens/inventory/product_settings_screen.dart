@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../services/app_settings_repository.dart';
 import '../../services/inventory_product_settings.dart';
 import '../../services/product_repository.dart';
+import '../../theme/design_tokens.dart';
 import 'price_lists_screen.dart';
 import 'product_sku_numbering_dialog.dart';
 import 'unit_templates_settings_screen.dart';
@@ -210,27 +211,40 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
 
     final prefixCtrl = TextEditingController(text: _d.transferPrefix);
     if (!mounted) return;
+    
+    final cs = Theme.of(context).colorScheme;
+    
     await showDialog<void>(
       context: context,
       builder: (ctx) => Directionality(
         textDirection: TextDirection.rtl,
         child: AlertDialog(
-          title: const Text('إعدادات ترقيم أذون التحويل'),
+          backgroundColor: cs.surfaceContainerHighest,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.5)),
+          ),
+          title: Text('إعدادات ترقيم أذون التحويل', style: TextStyle(color: cs.onSurface)),
           content: TextField(
             controller: prefixCtrl,
             textAlign: TextAlign.right,
-            decoration: const InputDecoration(
-              labelText: 'بادئة اختيارية',
-              border: OutlineInputBorder(),
+            style: TextStyle(color: cs.onSurface),
+            decoration: _inputDec(cs, label: 'بادئة اختيارية').copyWith(
               hintText: 'مثال: TR-',
+              hintStyle: TextStyle(color: cs.onSurfaceVariant),
             ),
           ),
           actions: [
             TextButton(
+              style: TextButton.styleFrom(foregroundColor: AppColors.accentGold),
               onPressed: () => Navigator.pop(ctx),
               child: const Text('إلغاء'),
             ),
             FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: AppColors.accentGold.withValues(alpha: 0.2),
+                foregroundColor: AppColors.accentGold,
+              ),
               onPressed: () async {
                 await _patch(
                   _d.copyWith(transferPrefix: prefixCtrl.text.trim()),
@@ -248,24 +262,35 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final bg = cs.brightness == Brightness.dark
-        ? const Color(0xFF121212)
-        : const Color(0xFFF0F4F8);
 
     return Directionality(
       textDirection: TextDirection.rtl,
-      child: Scaffold(
-        backgroundColor: bg,
-        appBar: AppBar(
-          backgroundColor: const Color(0xFF1E3A5F),
-          foregroundColor: Colors.white,
-          title: const Text(
-            'إعدادات المنتجات',
-            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17),
+      child: Theme(
+        data: Theme.of(context).copyWith(
+          switchTheme: SwitchThemeData(
+            thumbColor: WidgetStateProperty.resolveWith((states) {
+              if (states.contains(WidgetState.selected)) {
+                return Colors.white;
+              }
+              return null;
+            }),
+            trackColor: WidgetStateProperty.resolveWith((states) {
+              if (states.contains(WidgetState.selected)) {
+                return AppColors.accentGold;
+              }
+              return null;
+            }),
           ),
-          leading: IconButton(
-            icon: const Icon(Icons.arrow_back_ios_new, size: 18),
-            onPressed: () => Navigator.pop(context),
+        ),
+        child: Scaffold(
+          backgroundColor: cs.surface,
+        appBar: AppBar(
+          backgroundColor: cs.surfaceContainerHighest,
+          foregroundColor: cs.onSurface,
+          iconTheme: IconThemeData(color: cs.onSurface),
+          title: Text(
+            'إعدادات المنتجات',
+            style: TextStyle(color: cs.onSurface, fontWeight: FontWeight.bold, fontSize: 17),
           ),
         ),
         body: _loading
@@ -278,9 +303,9 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
                       color: cs.surface,
                       child: TabBar(
                         isScrollable: true,
-                        labelColor: cs.primary,
+                        labelColor: AppColors.accentGold,
                         unselectedLabelColor: cs.onSurfaceVariant,
-                        indicatorColor: cs.primary,
+                        indicatorColor: AppColors.accentGold,
                         tabs: const [
                           Tab(text: 'تهيئة المنتجات'),
                           Tab(text: 'تتبع المنتجات'),
@@ -301,6 +326,7 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
                     ),
                   ],
                 ),
+              ),
               ),
       ),
     );
@@ -329,12 +355,17 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
                     controller: _nextSkuCtrl,
                     keyboardType: TextInputType.number,
                     textAlign: TextAlign.right,
-                    decoration: _outlineDec('الرقم التالي'),
+                    style: TextStyle(color: cs.onSurface),
+                    decoration: _inputDec(cs, label: 'الرقم التالي'),
                     onEditingComplete: _persist,
                   ),
                 ),
                 const SizedBox(width: 8),
                 OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.accentGold,
+                    side: const BorderSide(color: AppColors.accentGold),
+                  ),
                   onPressed: () => _openNumberingDialog(forTransfer: false),
                   icon: const Icon(Icons.settings_outlined, size: 18),
                   label: const Text('إعدادات الترقيم'),
@@ -371,29 +402,35 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
                         TextField(
                           controller: _suggestMarginCtrl,
                           textAlign: TextAlign.right,
+                          style: TextStyle(color: cs.onSurface),
                           keyboardType: const TextInputType.numberWithOptions(
                             decimal: true,
                           ),
-                          decoration: _outlineDec('هامش الربح على التكلفة (%)')
-                              .copyWith(hintText: 'مثال: 25'),
+                          decoration: _inputDec(cs, label: 'هامش الربح على التكلفة (%)')
+                              .copyWith(hintText: 'مثال: 25', hintStyle: TextStyle(color: cs.onSurfaceVariant)),
                           onSubmitted: (_) => _persistMarginSuggestFields(),
                         ),
                         const SizedBox(height: 12),
                         TextField(
                           controller: _minSellPctCtrl,
                           textAlign: TextAlign.right,
+                          style: TextStyle(color: cs.onSurface),
                           keyboardType: const TextInputType.numberWithOptions(
                             decimal: true,
                           ),
-                          decoration: _outlineDec(
-                            'أقل سعر بيع كنسبة من سعر البيع (%)',
-                          ).copyWith(hintText: '100 = مساوٍ لسعر البيع'),
+                          decoration: _inputDec(
+                            cs, label: 'أقل سعر بيع كنسبة من سعر البيع (%)',
+                          ).copyWith(hintText: '100 = مساوٍ لسعر البيع', hintStyle: TextStyle(color: cs.onSurfaceVariant)),
                           onSubmitted: (_) => _persistMarginSuggestFields(),
                         ),
                         const SizedBox(height: 8),
                         Align(
                           alignment: Alignment.centerLeft,
                           child: FilledButton.tonal(
+                            style: FilledButton.styleFrom(
+                              backgroundColor: AppColors.accentGold.withValues(alpha: 0.2),
+                              foregroundColor: AppColors.accentGold,
+                            ),
                             onPressed: _persistMarginSuggestFields,
                             child: const Text('حفظ أرقام الاقتراح'),
                           ),
@@ -417,6 +454,10 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
                 Row(
                   children: [
                     OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.accentGold,
+                        side: const BorderSide(color: AppColors.accentGold),
+                      ),
                       onPressed: () {
                         Navigator.of(context).push<void>(
                           MaterialPageRoute<void>(
@@ -448,11 +489,11 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
             child: Column(
               children: [
                 _unitRadio('base', 'الوحدة الأساسية لقالب الوحدة',
-                    'عرض المخزون بوحدة القالب الأساسية.'),
+                    'عرض المخزون بوحدة القالب الأساسية.', cs),
                 _unitRadio('sale', 'وحدة البيع',
-                    'عرض الرصيد بوحدة البيع الافتراضية.'),
+                    'عرض الرصيد بوحدة البيع الافتراضية.', cs),
                 _unitRadio('purchase', 'وحدة الشراء',
-                    'عرض الرصيد بوحدة الشراء الافتراضية.'),
+                    'عرض الرصيد بوحدة الشراء الافتراضية.', cs),
               ],
             ),
             footer:
@@ -581,7 +622,7 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
     );
   }
 
-  Widget _unitRadio(String value, String title, String sub) {
+  Widget _unitRadio(String value, String title, String sub, ColorScheme cs) {
     final sel = _d.defaultUnitView == value;
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
@@ -591,11 +632,12 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
         child: Container(
           padding: const EdgeInsets.all(10),
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.zero,
+            borderRadius: BorderRadius.circular(12),
             border: Border.all(
-              color: sel ? const Color(0xFF2563EB) : Colors.grey.shade300,
+              color: sel ? AppColors.accentGold : cs.outlineVariant,
               width: sel ? 2 : 1,
             ),
+            color: sel ? AppColors.accentGold.withValues(alpha: 0.1) : Colors.transparent,
           ),
           child: RadioListTile<String>(
             contentPadding: EdgeInsets.zero,
@@ -651,11 +693,13 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
                   'stop_all',
                   'إيقاف العمليات عند نفاد الكمية لجميع المنتجات',
                   'منع البيع أو الصرف عند وصول المخزون إلى الصفر.',
+                  cs,
                 ),
                 _negRadio(
                   'tracked_only',
                   'السماح فقط للمنتجات القابلة للتتبع بالكميات',
                   'يُسمح بالبيع السالب أو الصرف حسب سياسة الصنف.',
+                  cs,
                 ),
               ],
             ),
@@ -680,7 +724,7 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
     );
   }
 
-  Widget _negRadio(String value, String title, String sub) {
+  Widget _negRadio(String value, String title, String sub, ColorScheme cs) {
     final sel = _d.negativeStockMode == value;
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
@@ -749,12 +793,17 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
                   child: TextField(
                     controller: _nextTransferCtrl,
                     textAlign: TextAlign.right,
-                    decoration: _outlineDec('الرقم'),
+                    style: TextStyle(color: cs.onSurface),
+                    decoration: _inputDec(cs, label: 'الرقم'),
                     onEditingComplete: _persist,
                   ),
                 ),
                 const SizedBox(width: 8),
                 OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.accentGold,
+                    side: const BorderSide(color: AppColors.accentGold),
+                  ),
                   onPressed: () => _openNumberingDialog(forTransfer: true),
                   icon: const Icon(Icons.settings_outlined, size: 18),
                   label: const Text('إعدادات الترقيم'),
@@ -812,8 +861,10 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
             title: 'الحساب الفرعي الافتراضي',
             child: DropdownButtonFormField<String>(
               value: _d.subAccountLabel.isEmpty ? null : _d.subAccountLabel,
-              decoration: const InputDecoration(border: OutlineInputBorder()),
-              hint: const Text('من فضلك اختر'),
+              decoration: _inputDec(cs),
+              dropdownColor: cs.surfaceContainerHighest,
+              style: TextStyle(color: cs.onSurface),
+              hint: Text('من فضلك اختر', style: TextStyle(color: cs.onSurfaceVariant)),
               items: const [
                 DropdownMenuItem(value: '', child: Text('— بدون —')),
                 DropdownMenuItem(
@@ -835,6 +886,10 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
             child: Row(
               children: [
                 OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.accentGold,
+                    side: const BorderSide(color: AppColors.accentGold),
+                  ),
                   onPressed: () {
                     Navigator.of(context).push<void>(
                       MaterialPageRoute<void>(
@@ -849,8 +904,10 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
                 Expanded(
                   child: DropdownButtonFormField<int?>(
                     value: _d.defaultWarehouseId,
-                    decoration: const InputDecoration(border: OutlineInputBorder()),
-                    hint: const Text('اختر مستودعاً'),
+                    decoration: _inputDec(cs),
+                    dropdownColor: cs.surfaceContainerHighest,
+                    style: TextStyle(color: cs.onSurface),
+                    hint: Text('اختر مستودعاً', style: TextStyle(color: cs.onSurfaceVariant)),
                     items: [
                       const DropdownMenuItem<int?>(
                         value: null,
@@ -883,6 +940,10 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
             child: Row(
               children: [
                 OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.accentGold,
+                    side: const BorderSide(color: AppColors.accentGold),
+                  ),
                   onPressed: () {
                     Navigator.of(context).push<void>(
                       MaterialPageRoute<void>(
@@ -897,8 +958,10 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
                 Expanded(
                   child: DropdownButtonFormField<int?>(
                     value: _d.defaultPriceListId,
-                    decoration: const InputDecoration(border: OutlineInputBorder()),
-                    hint: const Text('من فضلك اختر'),
+                    decoration: _inputDec(cs),
+                    dropdownColor: cs.surfaceContainerHighest,
+                    style: TextStyle(color: cs.onSurface),
+                    hint: Text('من فضلك اختر', style: TextStyle(color: cs.onSurfaceVariant)),
                     items: [
                       const DropdownMenuItem<int?>(
                         value: null,
@@ -931,6 +994,10 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
             child: Row(
               children: [
                 OutlinedButton(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.accentGold,
+                    side: const BorderSide(color: AppColors.accentGold),
+                  ),
                   onPressed: () {
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(
@@ -946,7 +1013,9 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
                 Expanded(
                   child: DropdownButtonFormField<String>(
                     value: _d.defaultTax1,
-                    decoration: const InputDecoration(border: OutlineInputBorder()),
+                    decoration: _inputDec(cs),
+                    dropdownColor: cs.surfaceContainerHighest,
+                    style: TextStyle(color: cs.onSurface),
                     items: _taxChoices
                         .map((e) => DropdownMenuItem(value: e, child: Text(e)))
                         .toList(),
@@ -966,6 +1035,10 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
             child: Row(
               children: [
                 OutlinedButton(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.accentGold,
+                    side: const BorderSide(color: AppColors.accentGold),
+                  ),
                   onPressed: () {
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(
@@ -981,7 +1054,9 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
                 Expanded(
                   child: DropdownButtonFormField<String>(
                     value: _d.defaultTax2,
-                    decoration: const InputDecoration(border: OutlineInputBorder()),
+                    decoration: _inputDec(cs),
+                    dropdownColor: cs.surfaceContainerHighest,
+                    style: TextStyle(color: cs.onSurface),
                     items: _taxChoices
                         .map((e) => DropdownMenuItem(value: e, child: Text(e)))
                         .toList(),
@@ -1004,11 +1079,13 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
                   'sell_price',
                   'حسب سعر البيع',
                   'استخدام سعر البيع من فاتورة المبيعات.',
+                  cs,
                 ),
                 _simpleRadio(
                   'last_avg',
                   'حسب آخر متوسط للتكلفة',
                   'استخدام متوسط التكلفة عند إنشاء المرتجع.',
+                  cs,
                 ),
               ],
             ),
@@ -1021,11 +1098,11 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
             child: Column(
               children: [
                 _natureRadio(
-                    'products', 'المنتجات فقط', 'مناسب للمخزون الفعلي.'),
+                    'products', 'المنتجات فقط', 'مناسب للمخزون الفعلي.', cs),
                 _natureRadio(
-                    'services', 'الخدمات فقط', 'أنشطة تعتمد على الوقت أو المشاريع.'),
+                    'services', 'الخدمات فقط', 'أنشطة تعتمد على الوقت أو المشاريع.', cs),
                 _natureRadio('both', 'منتجات وخدمات',
-                    'دمج بين الصنفين في النظام.'),
+                    'دمج بين الصنفين في النظام.', cs),
               ],
             ),
             footer: 'يحدد التركيز الافتراضي في شاشات المخزون والفوترة.',
@@ -1035,7 +1112,7 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
     );
   }
 
-  Widget _simpleRadio(String value, String title, String sub) {
+  Widget _simpleRadio(String value, String title, String sub, ColorScheme cs) {
     final sel = _d.returnCostMethod == value;
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
@@ -1069,7 +1146,7 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
     );
   }
 
-  Widget _natureRadio(String value, String title, String sub) {
+  Widget _natureRadio(String value, String title, String sub, ColorScheme cs) {
     final sel = _d.businessNature == value;
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
@@ -1139,9 +1216,9 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: cs.surface,
-        borderRadius: BorderRadius.zero,
-        border: Border.all(color: cs.outlineVariant),
+        color: cs.surfaceContainerHighest.withValues(alpha: 0.3),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.accentGold.withValues(alpha: 0.4)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1170,11 +1247,22 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
     );
   }
 
-  InputDecoration _outlineDec(String label) {
+  InputDecoration _inputDec(ColorScheme cs, {String? label}) {
     return InputDecoration(
       labelText: label,
-      border: const OutlineInputBorder(),
+      labelStyle: TextStyle(color: AppColors.accentGold),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.5)),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: AppColors.accentGold, width: 2),
+      ),
       isDense: true,
+      filled: true,
+      fillColor: cs.surface,
     );
   }
 }

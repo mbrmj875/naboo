@@ -1,4 +1,5 @@
 import 'dart:convert';
+import '../utils/app_logger.dart';
 
 double _clampPct(double? v, double fallback) {
   if (v == null || v.isNaN) return fallback;
@@ -94,7 +95,13 @@ class LoyaltySettingsData {
     try {
       final m = jsonDecode(raw) as Map<String, dynamic>;
       return LoyaltySettingsData.fromJson(m);
-    } catch (_) {
+    } catch (e, st) {
+      AppLogger.error(
+        'LoyaltySettingsData',
+        'تعذر فك JSON إعدادات الولاء',
+        e,
+        st,
+      );
       return LoyaltySettingsData.defaults();
     }
   }

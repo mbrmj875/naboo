@@ -9,9 +9,11 @@ import '../../models/customer_debt_models.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/invoice_provider.dart';
 import '../../providers/notification_provider.dart';
+import '../../providers/shift_provider.dart';
 import '../../services/database_helper.dart';
 import '../../theme/design_tokens.dart';
 import '../../utils/sale_receipt_pdf.dart';
+import '../../utils/shift_actor_conflict_guard.dart';
 import '../../utils/customer_phone_launch.dart';
 import '../../widgets/customer_contact_bar.dart';
 import '../../widgets/invoice_detail_sheet.dart';
@@ -47,6 +49,7 @@ class _CustomerDebtDetailScreenState extends State<CustomerDebtDetailScreen> {
   List<CustomerDebtLineItem> _lines = [];
   List<CreditDebtInvoice> _invoices = [];
   double _openTotal = 0;
+  int _openTotalFils = 0;
   List<String> _contactPhones = [];
   bool _loading = true;
   String? _resolveError;
@@ -89,7 +92,9 @@ class _CustomerDebtDetailScreenState extends State<CustomerDebtDetailScreen> {
     try {
       final lines = await _db.getCustomerDebtLineItems(p);
       final inv = await _db.getCreditDebtInvoicesForParty(p);
-      final open = await _db.sumOpenCreditDebtForParty(p);
+      final openFilsFromInvoices =
+          inv.fold<int>(0, (s, x) => s + x.remainingFils);
+      final open = openFilsFromInvoices / 1000.0;
       var contactPhones = <String>[];
       final cid = p.customerId;
       if (cid != null) {
@@ -106,6 +111,7 @@ class _CustomerDebtDetailScreenState extends State<CustomerDebtDetailScreen> {
         _lines = lines;
         _invoices = inv;
         _openTotal = open;
+        _openTotalFils = openFilsFromInvoices;
         _contactPhones = contactPhones;
         _loading = false;
         _resolveError = null;
@@ -121,61 +127,47 @@ class _CustomerDebtDetailScreenState extends State<CustomerDebtDetailScreen> {
 
   Future<void> _openPayDialog() async {
     final p = _party;
-    if (p == null || _openTotal < 0.009) return;
-    final ctrl = TextEditingController(
-      text: _openTotal.toStringAsFixed(0),
-    );
+    if (p == null || _openTotalFils <= 0) return;
+    if (p.customerId == null || p.customerId! <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'لا يمكن تسديد الدين لهذا السجل لأنه غير مربوط ببطاقة عميل. اربط العميل أولاً ثم أعد المحاولة.',
+          ),
+        ),
+      );
+      return;
+    }
+    final defaultText = (_openTotalFils / 1000.0).toStringAsFixed(0);
+    final remainingLabel =
+        '${_numFmt.format(_openTotalFils / 1000.0)} د.ع';
     final submitted = await showDialog<String>(
       context: context,
-      builder: (ctx) => Directionality(
-        textDirection: TextDirection.rtl,
-        child: AlertDialog(
-          shape: const RoundedRectangleBorder(borderRadius: AppShape.none),
-          title: const Text('تسديد دين'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                'المتبقي الحالي: ${_numFmt.format(_openTotal)} د.ع',
-                style: const TextStyle(fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: ctrl,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
-                  labelText: 'المبلغ (د.ع)',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'يُوزَّع تلقائياً على الفواتير من الأقدم إلى الأحدث.',
-                style: TextStyle(fontSize: 12, color: Theme.of(ctx).hintColor),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('إلغاء'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx, ctrl.text),
-              child: const Text('تأكيد'),
-            ),
-          ],
-        ),
+      builder: (ctx) => _DebtPayAmountDialog(
+        remainingLabel: remainingLabel,
+        initialAmountText: defaultText,
       ),
     );
-    ctrl.dispose();
     if (submitted == null || !mounted) return;
     final raw = submitted.replaceAll(',', '').trim();
     final amt = double.tryParse(raw) ?? 0;
     if (amt <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('أدخل مبلغاً صالحاً')),
+      );
+      return;
+    }
+    final conflict = ShiftActorConflictGuard.evaluate(
+      sessionUserId: context.read<AuthProvider>().userId,
+      activeShift: context.read<ShiftProvider>().activeShift,
+    );
+    if (conflict.hasConflict) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'لا يمكن تسجيل تسديد الدين من هذه الجلسة: الوردية المفتوحة باسم ${conflict.shiftStaffName}.',
+          ),
+        ),
       );
       return;
     }
@@ -317,7 +309,7 @@ class _CustomerDebtDetailScreenState extends State<CustomerDebtDetailScreen> {
                   ),
                   CustomerContactBar(phones: _contactPhones),
                   _PayBar(
-                    enabled: _openTotal >= 0.009,
+                    enabled: _openTotalFils > 0 && (_party?.customerId ?? 0) > 0,
                     openTotal: _openTotal,
                     onPay: _openPayDialog,
                   ),
@@ -372,7 +364,7 @@ class _SummaryHeader extends StatelessWidget {
             style: TextStyle(
               fontSize: 28,
               fontWeight: FontWeight.w800,
-              color: openTotal >= 0.009
+              color: openTotal > 0
                   ? const Color(0xFF0EA5E9)
                   : const Color(0xFF22C55E),
             ),
@@ -600,6 +592,90 @@ class _PayBar extends StatelessWidget {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// حوار مبلغ التسديد — يملك [TextEditingController] داخلياً حتى لا يُستدعى
+/// dispose أثناء إغلاق الـ dialog (كان يسبب الشاشة الحمراء).
+class _DebtPayAmountDialog extends StatefulWidget {
+  const _DebtPayAmountDialog({
+    required this.remainingLabel,
+    required this.initialAmountText,
+  });
+
+  final String remainingLabel;
+  final String initialAmountText;
+
+  @override
+  State<_DebtPayAmountDialog> createState() => _DebtPayAmountDialogState();
+}
+
+class _DebtPayAmountDialogState extends State<_DebtPayAmountDialog> {
+  late final TextEditingController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = TextEditingController(text: widget.initialAmountText);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: AlertDialog(
+        shape: const RoundedRectangleBorder(borderRadius: AppShape.none),
+        title: const Text('تسديد دين'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'المتبقي الحالي: ${widget.remainingLabel}',
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _ctrl,
+                autofocus: true,
+                keyboardType: TextInputType.number,
+                textInputAction: TextInputAction.done,
+                onSubmitted: (v) => Navigator.pop(context, v),
+                decoration: const InputDecoration(
+                  labelText: 'المبلغ (د.ع)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'يُوزَّع تلقائياً على الفواتير من الأقدم إلى الأحدث.',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Theme.of(context).hintColor,
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, _ctrl.text),
+            child: const Text('تأكيد'),
+          ),
+        ],
       ),
     );
   }

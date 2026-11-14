@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import '../../providers/parked_sales_provider.dart';
 import '../../services/cloud_sync_service.dart';
 import '../../services/database_helper.dart';
+import '../../utils/app_logger.dart';
 import '../../theme/design_tokens.dart';
 import '../../utils/screen_layout.dart';
 import 'add_invoice_screen.dart';
@@ -47,7 +48,9 @@ class _ParkedSummary {
       final tax = double.tryParse(m['tax']?.toString() ?? '0') ?? 0;
       final discVal = sub * (discPct.clamp(0, 100) / 100);
       total = sub - discVal + tax;
-    } catch (_) {}
+    } catch (e, st) {
+      AppLogger.error('ParkedSales', 'فشل تلخيص JSON للفاتورة المعلّقة', e, st);
+    }
     return _ParkedSummary(
       title: title,
       customer: customer,
@@ -121,6 +124,7 @@ class _ParkedSalesScreenState extends State<ParkedSalesScreen> {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final bg = isDark ? AppColors.surfaceDark : AppColors.surfaceLight;
+    final primaryText = isDark ? Colors.white : AppColors.primaryDark;
     final gap = context.screenLayout.pageHorizontalGap;
 
     return Directionality(
@@ -128,7 +132,24 @@ class _ParkedSalesScreenState extends State<ParkedSalesScreen> {
       child: Scaffold(
         backgroundColor: bg,
         appBar: AppBar(
-          title: const Text('فواتير معلّقة مؤقتاً'),
+          backgroundColor: isDark ? AppColors.primary : Colors.white,
+          foregroundColor: isDark ? Colors.white : AppColors.primaryDark,
+          iconTheme: const IconThemeData(color: AppColors.accentGold),
+          actionsIconTheme: const IconThemeData(color: AppColors.accentGold),
+          title: Text(
+            'فواتير معلّقة مؤقتاً',
+            style: TextStyle(
+              fontWeight: FontWeight.w700,
+              color: isDark ? Colors.white : AppColors.primaryDark,
+            ),
+          ),
+          bottom: PreferredSize(
+            preferredSize: const Size.fromHeight(1.2),
+            child: Container(
+              height: 1.2,
+              color: AppColors.accentGold.withValues(alpha: 0.55),
+            ),
+          ),
           actions: [
             IconButton(
               icon: const Icon(Icons.refresh_rounded),
@@ -155,7 +176,12 @@ class _ParkedSalesScreenState extends State<ParkedSalesScreen> {
                       Text(
                         'من شاشة البيع اضغط «تعليق الفاتورة» لحفظ العمل الحالي وخدمة عميل آخر.',
                         textAlign: TextAlign.center,
-                        style: TextStyle(color: Theme.of(context).hintColor, height: 1.4),
+                        style: TextStyle(
+                          color: isDark
+                              ? Theme.of(context).hintColor
+                              : AppColors.primaryDark.withValues(alpha: 0.75),
+                          height: 1.4,
+                        ),
                       ),
                     ],
                   ),
@@ -177,13 +203,16 @@ class _ParkedSalesScreenState extends State<ParkedSalesScreen> {
                     margin: const EdgeInsets.only(bottom: 10),
                     elevation: 0,
                     shape: RoundedRectangleBorder(
-                      borderRadius: AppShape.none,
+                      borderRadius: BorderRadius.circular(12),
                       side: BorderSide(
-                        color: isDark ? AppColors.borderDark : AppColors.borderLight,
+                        color: AppColors.accentGold.withValues(
+                          alpha: isDark ? 0.35 : 0.3,
+                        ),
                       ),
                     ),
                     color: isDark ? AppColors.cardDark : AppColors.cardLight,
                     child: InkWell(
+                      borderRadius: BorderRadius.circular(12),
                       onTap: () => _resume(id),
                       child: Padding(
                         padding: const EdgeInsets.all(14),
@@ -195,21 +224,41 @@ class _ParkedSalesScreenState extends State<ParkedSalesScreen> {
                               children: [
                                 Text(
                                   sum.title,
-                                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 15,
+                                    color: primaryText,
+                                  ),
                                 ),
                                 if (sum.customer.isNotEmpty)
                                   Padding(
                                     padding: const EdgeInsets.only(top: 4),
-                                    child: Text(sum.customer, style: TextStyle(color: Theme.of(context).hintColor)),
+                                    child: Text(
+                                      sum.customer,
+                                      style: TextStyle(
+                                        color: isDark
+                                            ? Theme.of(context).hintColor
+                                            : AppColors.primaryDark.withValues(alpha: 0.78),
+                                      ),
+                                    ),
                                   ),
                                 const SizedBox(height: 6),
                                 Text(
                                   '${sum.lineCount} صنف · ≈ ${sum.totalApprox.toStringAsFixed(0)} د.ع',
-                                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    color: primaryText,
+                                  ),
                                 ),
                                 Text(
                                   'آخر تحديث: ${_dateFmt.format(updated)}',
-                                  style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: isDark
+                                        ? Theme.of(context).hintColor
+                                        : AppColors.primaryDark.withValues(alpha: 0.72),
+                                  ),
                                 ),
                               ],
                             );
@@ -217,7 +266,10 @@ class _ParkedSalesScreenState extends State<ParkedSalesScreen> {
                               children: [
                                 IconButton(
                                   tooltip: 'متابعة البيع',
-                                  icon: const Icon(Icons.play_arrow_rounded, color: AppColors.primary),
+                                  icon: const Icon(
+                                    Icons.play_arrow_rounded,
+                                    color: AppColors.accentGold,
+                                  ),
                                   onPressed: () => _resume(id),
                                 ),
                                 IconButton(
@@ -231,6 +283,10 @@ class _ParkedSalesScreenState extends State<ParkedSalesScreen> {
                               padding: const EdgeInsets.all(10),
                               decoration: BoxDecoration(
                                 color: AppColors.accent.withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(
+                                  color: AppColors.accentGold.withValues(alpha: 0.45),
+                                ),
                               ),
                               child: const Icon(Icons.pause_circle_filled_rounded, color: AppColors.accent, size: 28),
                             );

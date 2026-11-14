@@ -4,13 +4,16 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 
+import '../../providers/auth_provider.dart';
 import '../../providers/invoice_provider.dart';
 import '../../providers/notification_provider.dart';
+import '../../providers/shift_provider.dart';
 import '../../models/installment.dart';
 import '../../models/invoice.dart';
 import '../../services/database_helper.dart';
 import '../../theme/design_tokens.dart';
 import '../../utils/sale_receipt_pdf.dart';
+import '../../utils/shift_actor_conflict_guard.dart';
 import '../../utils/customer_phone_launch.dart';
 import '../../widgets/customer_contact_bar.dart';
 
@@ -107,6 +110,21 @@ class _InstallmentDetailsScreenState extends State<InstallmentDetailsScreen> {
   }
 
   Future<void> _recordPayment(Installment installment) async {
+    final conflict = ShiftActorConflictGuard.evaluate(
+      sessionUserId: context.read<AuthProvider>().userId,
+      activeShift: context.read<ShiftProvider>().activeShift,
+    );
+    if (conflict.hasConflict) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'لا يمكن تسجيل تسديد القسط من هذه الجلسة: الوردية المفتوحة باسم ${conflict.shiftStaffName}.',
+          ),
+        ),
+      );
+      return;
+    }
+
     final amountController =
         TextEditingController(text: installment.amount.toStringAsFixed(0));
     final payOutcome = await showDialog<RecordInstallmentPaymentResult?>(

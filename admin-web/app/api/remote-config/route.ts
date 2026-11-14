@@ -21,6 +21,7 @@ function sanitize(body: unknown): AppRemoteConfigPayload {
     update_message_ar: s("update_message_ar"),
     force_update: b("force_update"),
     update_download_url: s("update_download_url"),
+    update_download_url_windows: s("update_download_url_windows"),
     announcement_title_ar: s("announcement_title_ar"),
     announcement_body_ar: s("announcement_body_ar"),
     announcement_url: s("announcement_url"),
@@ -29,8 +30,24 @@ function sanitize(body: unknown): AppRemoteConfigPayload {
 
 export async function POST(req: Request) {
   try {
-    const raw = (await req.json()) as { config?: unknown };
+    const raw = (await req.json()) as {
+      config?: unknown;
+      confirmPhrase?: string;
+    };
     const config = sanitize(raw.config);
+    const needsConfirm =
+      config.maintenance_mode ||
+      config.force_update ||
+      config.sync_paused_globally;
+    if (needsConfirm && (raw.confirmPhrase ?? "").trim() !== "تأكيد") {
+      return NextResponse.json(
+        {
+          error:
+            "فعّل الصيانة / فرض التحديث / إيقاف المزامنة يتطلب كتابة «تأكيد»",
+        },
+        { status: 400 },
+      );
+    }
     const supabase = getSupabaseAdmin();
     const { error } = await supabase.from("app_remote_config").upsert(
       {

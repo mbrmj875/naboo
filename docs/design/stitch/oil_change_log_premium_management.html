@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+
+<html dir="rtl" lang="ar"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>سجل غيار الزيت</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<!-- Tailwind Config Verbatim -->
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "inverse-on-surface": "#f3f0f4",
+                    "on-primary-container": "#7484a5",
+                    "on-secondary-fixed-variant": "#564500",
+                    "surface-container-lowest": "#ffffff",
+                    "primary-fixed": "#d7e3ff",
+                    "on-primary-fixed-variant": "#374765",
+                    "inverse-surface": "#303033",
+                    "surface-container-low": "#f6f2f7",
+                    "on-error-container": "#93000a",
+                    "tertiary-container": "#cca825",
+                    "on-surface-variant": "#44474d",
+                    "outline-variant": "#c5c6ce",
+                    "on-surface": "#1b1b1e",
+                    "secondary": "#725c00",
+                    "primary-fixed-dim": "#b6c7eb",
+                    "primary": "#000000",
+                    "inverse-primary": "#b6c7eb",
+                    "error": "#ba1a1a",
+                    "on-tertiary-container": "#4e3e00",
+                    "outline": "#75777e",
+                    "surface-variant": "#e4e1e5",
+                    "on-primary-fixed": "#081b37",
+                    "surface-container": "#f0edf1",
+                    "primary-container": "#081b37",
+                    "tertiary-fixed-dim": "#e9c340",
+                    "error-container": "#ffdad6",
+                    "on-error": "#ffffff",
+                    "secondary-container": "#fed752",
+                    "surface-container-high": "#eae7eb",
+                    "tertiary-fixed": "#ffe082",
+                    "on-tertiary-fixed": "#231b00",
+                    "on-primary": "#ffffff",
+                    "on-secondary": "#ffffff",
+                    "on-tertiary": "#ffffff",
+                    "surface-dim": "#dcd9dd",
+                    "on-secondary-fixed": "#231b00",
+                    "secondary-fixed": "#ffe081",
+                    "background": "#fbf8fc"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.25rem",
+                    "lg": "0.5rem",
+                    "xl": "0.75rem",
+                    "full": "9999px"
+            },
+            "spacing": {
+                    "xs": "4px",
+                    "sm": "8px",
+                    "md": "12px",
+                    "gutter": "12px",
+                    "xl": "24px",
+                    "lg": "16px",
+                    "margin-mobile": "16px",
+                    "base": "4px"
+            },
+            "fontFamily": {
+                    "label-sm": ["IBM Plex Sans Arabic"],
+                    "body-lg": ["IBM Plex Sans Arabic"],
+                    "headline-lg": ["IBM Plex Sans Arabic"],
+                    "label-md": ["IBM Plex Sans Arabic"],
+                    "display-price-sm": ["IBM Plex Sans Arabic"],
+                    "headline-md": ["IBM Plex Sans Arabic"],
+                    "body-md": ["IBM Plex Sans Arabic"],
+                    "display-price": ["IBM Plex Sans Arabic"]
+            },
+            "fontSize": {
+                    "label-sm": ["10px", {"lineHeight": "14px", "fontWeight": "500"}],
+                    "body-lg": ["16px", {"lineHeight": "24px", "fontWeight": "400"}],
+                    "headline-lg": ["20px", {"lineHeight": "28px", "fontWeight": "600"}],
+                    "label-md": ["12px", {"lineHeight": "16px", "fontWeight": "500"}],
+                    "display-price-sm": ["18px", {"lineHeight": "24px", "fontWeight": "700"}],
+                    "headline-md": ["18px", {"lineHeight": "24px", "fontWeight": "600"}],
+                    "body-md": ["14px", {"lineHeight": "20px", "fontWeight": "400"}],
+                    "display-price": ["22px", {"lineHeight": "28px", "fontWeight": "700"}]
+            }
+          },
+        },
+      }
+    </script>
+<style>
+        body {
+            background-color: #fbf8fc;
+            font-family: 'IBM Plex Sans Arabic', sans-serif;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .custom-scroll-hide::-webkit-scrollbar {
+            display: none;
+        }
+        .tab-active::after {
+            content: '';
+            position: absolute;
+            bottom: -2px;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background-color: #081b37;
+            border-radius: 9999px;
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-background text-on-surface select-none">
+<!-- TopAppBar -->
+<header class="w-full top-0 sticky z-40 bg-surface dark:bg-surface-dim shadow-sm flex items-center justify-between px-margin-mobile py-md rtl">
+<div class="flex items-center gap-md">
+<div class="w-10 h-10 rounded-full overflow-hidden border-2 border-outline-variant transition-transform active:scale-95">
+<img class="w-full h-full object-cover" data-alt="A professional high-resolution close-up portrait of a friendly Middle Eastern mechanic in a clean navy blue uniform. The background is a modern, brightly lit automotive workshop with professional tools and a polished floor. The lighting is soft and cinematic, emphasizing reliability and expertise in a corporate light-mode aesthetic." src="https://lh3.googleusercontent.com/aida-public/AB6AXuDrwq5DK7uBwklri4cb1o7RgZ7N77NSeeXDpfwdRyFM9WD5VNXRtt-r9oORk0v0nLiVyEM9AENWOLhIaGQKAIoEi5wZLsbml3JZzyho3p0-NLJ50ptWB7BkPoBsJFMsPdqZCyFqGMQG5fZ23cKDQ0cud2aOCEuvoHwvYvl5-pfZn5uK_mn0EHt1kiTF58_3JRFMFU3hjVU-oRxfwlTWrgqsKqEXMIs2iag1ZSu862rFrXIMW43-IDi7zi7o7z2cxBM95qo9eiVhV6U-"/>
+</div>
+<h1 class="font-headline-md text-headline-md font-bold text-on-surface">ورشة غيار الزيت</h1>
+</div>
+<button class="w-10 h-10 flex items-center justify-center rounded-full text-on-surface hover:bg-surface-variant active:scale-95 transition-transform">
+<span class="material-symbols-outlined text-primary" data-icon="notifications">notifications</span>
+</button>
+</header>
+<main class="pb-32">
+<!-- Tabs & Search Section -->
+<div class="bg-surface px-margin-mobile pt-md pb-sm sticky top-[64px] z-30">
+<div class="flex border-b border-outline-variant mb-md">
+<button class="flex-1 py-sm font-label-md text-label-md text-on-surface relative tab-active" onclick="switchTab(this)">السجل</button>
+<button class="flex-1 py-sm font-label-md text-label-md text-on-surface-variant relative" onclick="switchTab(this)">المعلّقة</button>
+</div>
+<!-- Search Bar -->
+<div class="relative group">
+<span class="material-symbols-outlined absolute right-md top-1/2 -translate-y-1/2 text-outline" data-icon="search">search</span>
+<input class="w-full h-12 pr-11 pl-md bg-surface-container-low border-none rounded-xl font-body-md text-body-md focus:ring-2 focus:ring-primary-container transition-all" placeholder="ابحث برقم اللوحة أو اسم العميل..." type="text"/>
+</div>
+</div>
+<!-- Quick Actions -->
+<div class="px-margin-mobile py-md grid grid-cols-2 gap-md">
+<button class="flex items-center justify-center gap-sm bg-secondary-container text-on-secondary-container h-14 rounded-full font-label-md text-label-md font-bold shadow-md active:scale-95 transition-all">
+<span class="material-symbols-outlined" data-icon="add_circle">add_circle</span>
+                بطاقة غيار زيت جديدة
+            </button>
+<button class="flex items-center justify-center gap-sm bg-primary-container text-on-primary-container h-14 rounded-full font-label-md text-label-md font-bold shadow-md active:scale-95 transition-all">
+<span class="material-symbols-outlined" data-icon="chat">chat</span>
+                إرسال واتساب
+            </button>
+</div>
+<!-- Service Entries -->
+<div class="px-margin-mobile space-y-xl">
+<!-- Date Group: Today -->
+<section>
+<h3 class="font-label-md text-label-md text-outline mb-md px-xs">اليوم - ١٤ مايو ٢٠٢٤</h3>
+<div class="space-y-md">
+<!-- Card 1 -->
+<div class="bg-white rounded-xl p-md shadow-sm border border-surface-container-high transition-transform active:scale-[0.98]">
+<div class="flex justify-between items-start mb-sm">
+<div>
+<h4 class="font-headline-md text-headline-md text-on-surface">أحمد محمد جاسم</h4>
+<p class="font-body-md text-body-md text-on-surface-variant">تويوتا كامري ٢٠٢٣</p>
+</div>
+<div class="bg-surface-container-high px-sm py-xs rounded font-label-md text-label-md font-bold text-on-surface">
+                                ١٢٣٤٥ أ ب
+                            </div>
+</div>
+<div class="flex flex-wrap gap-sm mb-md">
+<span class="bg-surface-container-low text-on-surface-variant px-sm py-1 rounded-full font-label-sm text-label-sm flex items-center gap-xs">
+<span class="material-symbols-outlined text-[14px]" data-icon="oil_barrel">oil_barrel</span>
+                                Shell 5W-30
+                            </span>
+<span class="bg-surface-container-low text-on-surface-variant px-sm py-1 rounded-full font-label-sm text-label-sm flex items-center gap-xs">
+<span class="material-symbols-outlined text-[14px]" data-icon="speed">speed</span>
+                                ٤٥,٠٠٠ كم
+                            </span>
+</div>
+<div class="flex justify-between items-center pt-sm border-t border-surface-container-low">
+<div class="font-display-price-sm text-display-price-sm text-primary">٧٥,٠٠٠ د.ع</div>
+<button class="text-primary-container font-label-md text-label-md flex items-center gap-xs">
+                                التفاصيل
+                                <span class="material-symbols-outlined text-[18px]" data-icon="chevron_left">chevron_left</span>
+</button>
+</div>
+</div>
+<!-- Card 2 -->
+<div class="bg-white rounded-xl p-md shadow-sm border border-surface-container-high transition-transform active:scale-[0.98]">
+<div class="flex justify-between items-start mb-sm">
+<div>
+<h4 class="font-headline-md text-headline-md text-on-surface">عمر العبيدي</h4>
+<p class="font-body-md text-body-md text-on-surface-variant">هيونداي توسان ٢٠٢٢</p>
+</div>
+<div class="bg-surface-container-high px-sm py-xs rounded font-label-md text-label-md font-bold text-on-surface">
+                                ٨٨٧٦ بغداد
+                            </div>
+</div>
+<div class="flex flex-wrap gap-sm mb-md">
+<span class="bg-surface-container-low text-on-surface-variant px-sm py-1 rounded-full font-label-sm text-label-sm flex items-center gap-xs">
+<span class="material-symbols-outlined text-[14px]" data-icon="oil_barrel">oil_barrel</span>
+                                Mobil 1 0W-20
+                            </span>
+<span class="bg-surface-container-low text-on-surface-variant px-sm py-1 rounded-full font-label-sm text-label-sm flex items-center gap-xs">
+<span class="material-symbols-outlined text-[14px]" data-icon="speed">speed</span>
+                                ١٢,٥٠٠ كم
+                            </span>
+</div>
+<div class="flex justify-between items-center pt-sm border-t border-surface-container-low">
+<div class="font-display-price-sm text-display-price-sm text-primary">٩٠,٠٠٠ د.ع</div>
+<button class="text-primary-container font-label-md text-label-md flex items-center gap-xs">
+                                التفاصيل
+                                <span class="material-symbols-outlined text-[18px]" data-icon="chevron_left">chevron_left</span>
+</button>
+</div>
+</div>
+</div>
+</section>
+<!-- Date Group: Yesterday -->
+<section>
+<h3 class="font-label-md text-label-md text-outline mb-md px-xs">أمس - ١٣ مايو ٢٠٢٤</h3>
+<div class="space-y-md">
+<!-- Card 3 -->
+<div class="bg-white rounded-xl p-md shadow-sm border border-surface-container-high transition-transform active:scale-[0.98]">
+<div class="flex justify-between items-start mb-sm">
+<div>
+<h4 class="font-headline-md text-headline-md text-on-surface">مصطفى كريم</h4>
+<p class="font-body-md text-body-md text-on-surface-variant">كيا سبورتج ٢٠٢٠</p>
+</div>
+<div class="bg-surface-container-high px-sm py-xs rounded font-label-md text-label-md font-bold text-on-surface">
+                                ٥٤٣٢١ أ ب
+                            </div>
+</div>
+<div class="flex flex-wrap gap-sm mb-md">
+<span class="bg-surface-container-low text-on-surface-variant px-sm py-1 rounded-full font-label-sm text-label-sm flex items-center gap-xs">
+<span class="material-symbols-outlined text-[14px]" data-icon="oil_barrel">oil_barrel</span>
+                                Castrol 10W-40
+                            </span>
+<span class="bg-surface-container-low text-on-surface-variant px-sm py-1 rounded-full font-label-sm text-label-sm flex items-center gap-xs">
+<span class="material-symbols-outlined text-[14px]" data-icon="speed">speed</span>
+                                ٨٢,٠٠٠ كم
+                            </span>
+</div>
+<div class="flex justify-between items-center pt-sm border-t border-surface-container-low">
+<div class="font-display-price-sm text-display-price-sm text-primary">٥٥,٠٠٠ د.ع</div>
+<button class="text-primary-container font-label-md text-label-md flex items-center gap-xs">
+                                التفاصيل
+                                <span class="material-symbols-outlined text-[18px]" data-icon="chevron_left">chevron_left</span>
+</button>
+</div>
+</div>
+</div>
+</section>
+</div>
+</main>
+<!-- BottomNavBar -->
+<nav class="fixed bottom-4 left-4 right-4 z-50 flex justify-around items-center py-sm rtl bg-primary dark:bg-primary-container shadow-lg rounded-full w-auto">
+<!-- Sijil (Active) -->
+<a class="flex flex-col items-center justify-center bg-secondary-container text-on-secondary-container rounded-full px-4 py-1 hover:opacity-80 active:scale-90 transition-all duration-200" href="#">
+<span class="material-symbols-outlined" data-icon="history" style="font-variation-settings: 'FILL' 1;">history</span>
+<span class="font-label-md text-label-md">السجل</span>
+</a>
+<!-- Treasury -->
+<a class="flex flex-col items-center justify-center text-primary-fixed-dim hover:opacity-80 active:scale-90 transition-all duration-200" href="#">
+<span class="material-symbols-outlined" data-icon="account_balance_wallet">account_balance_wallet</span>
+<span class="font-label-md text-label-md">الخزنة</span>
+</a>
+<!-- Expenses -->
+<a class="flex flex-col items-center justify-center text-primary-fixed-dim hover:opacity-80 active:scale-90 transition-all duration-200" href="#">
+<span class="material-symbols-outlined" data-icon="payments">payments</span>
+<span class="font-label-md text-label-md">المصاريف</span>
+</a>
+<!-- Users -->
+<a class="flex flex-col items-center justify-center text-primary-fixed-dim hover:opacity-80 active:scale-90 transition-all duration-200" href="#">
+<span class="material-symbols-outlined" data-icon="group">group</span>
+<span class="font-label-md text-label-md">المستخدمين</span>
+</a>
+</nav>
+<script>
+        function switchTab(element) {
+            // Remove active style from all siblings
+            const parent = element.parentElement;
+            Array.from(parent.children).forEach(child => {
+                child.classList.remove('tab-active', 'text-on-surface');
+                child.classList.add('text-on-surface-variant');
+            });
+            // Add active style to selected
+            element.classList.add('tab-active', 'text-on-surface');
+            element.classList.remove('text-on-surface-variant');
+        }
+
+        // Add some micro-interaction to cards
+        document.querySelectorAll('.active\\:scale-\\[0\\.98\\]').forEach(card => {
+            card.addEventListener('touchstart', () => card.style.backgroundColor = '#f6f2f7');
+            card.addEventListener('touchend', () => card.style.backgroundColor = '#ffffff');
+        });
+    </script>
+</body></html>

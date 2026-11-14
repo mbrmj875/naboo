@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../providers/auth_provider.dart';
 import '../../services/license/license_token.dart';
 import '../../services/license_service.dart';
 import '../../theme/design_tokens.dart';
+import '../../utils/customer_phone_launch.dart';
 import '../../widgets/glass/glass_background.dart';
 import '../../widgets/glass/glass_surface.dart';
 import '../../widgets/secure_screen.dart';
@@ -12,6 +16,18 @@ const Color _kAccent = Color(0xFF1E3A5F);
 const Color _kGold = Color(0xFFB8860B);
 const Color _kSilver = Color(0xFF607D8B);
 const Color _kTrialTeal = Color(0xFF00897B);
+const Color _kWhatsAppGreen = Color(0xFF25D366);
+
+/// رقم واتساب الدعم — E.164 بدون + (964…).
+const String kSupportWhatsAppNumber = '9647884289711';
+
+/// بطاقات basic/pro/unlimited — legacy؛ مخفية من UI (الكود يُبقى للتوافق).
+const bool _kShowLegacyPlanCards = false;
+
+const int _kPricePerComputerMonthlyIqd = 15000;
+const int _kAnnualPaidMonths = 10;
+
+enum _PaidBillingCycle { monthly, annual }
 
 /// نصوص واضحة على بطاقات داكنة (متناسقة مع ثيم التطبيق).
 abstract class _SubPlanText {
@@ -116,8 +132,8 @@ class SubscriptionPlansScreen extends StatelessWidget {
                           const SizedBox(height: 6),
                           Text(
                             jwtMode
-                                ? 'البطاقات أدناه للمقارنة والأسعار فقط. بعد الدفع تستلم رمزاً موقّعاً (JWT) — الصقه في حقل التفعيل أسفل البطاقات مباشرة.'
-                                : 'البطاقة الأولى: تجربة تلقائية 15 يوماً (جهازان). البطاقات التالية خطط مدفوعة — بعد الدفع تُدخل المفتاح في الحقل الموحّد أسفل الصفحة.',
+                                ? 'اختر دورة الفوترة وعدد الحاسبات، ثم تواصل عبر واتساب. بعد الدفع الصق رمز التفعيل (JWT) في الحقل أدناه.'
+                                : 'البطاقة الأولى: تجربة تلقائية 15 يوماً (جهازان). اختر الخطة المدفوعة ثم تواصل عبر واتساب — بعد الدفع تُدخل المفتاح في الحقل الموحّد أسفل الصفحة.',
                             style: const TextStyle(
                               color: _SubPlanText.secondary,
                               fontSize: 13,
@@ -135,32 +151,36 @@ class SubscriptionPlansScreen extends StatelessWidget {
                             jwtMode: jwtMode,
                           ),
                           const SizedBox(height: 14),
-                          _PlanCard(
-                            plan: SubscriptionPlan.basic,
-                            isPopular: false,
-                            isCurrent: currentPlan?.key == 'basic',
-                            accentColor: _kSilver,
-                            icon: Icons.store_outlined,
-                            jwtMode: jwtMode,
-                          ),
-                          const SizedBox(height: 14),
-                          _PlanCard(
-                            plan: SubscriptionPlan.pro,
-                            isPopular: true,
-                            isCurrent: currentPlan?.key == 'pro',
-                            accentColor: _kAccent,
-                            icon: Icons.business_outlined,
-                            jwtMode: jwtMode,
-                          ),
-                          const SizedBox(height: 14),
-                          _PlanCard(
-                            plan: SubscriptionPlan.unlimited,
-                            isPopular: false,
-                            isCurrent: currentPlan?.key == 'unlimited',
-                            accentColor: _kGold,
-                            icon: Icons.all_inclusive_outlined,
-                            jwtMode: jwtMode,
-                          ),
+                          const _PaidSubscriptionBuilder(),
+                          if (_kShowLegacyPlanCards) ...[
+                            const SizedBox(height: 14),
+                            _PlanCard(
+                              plan: SubscriptionPlan.basic,
+                              isPopular: false,
+                              isCurrent: currentPlan?.key == 'basic',
+                              accentColor: _kSilver,
+                              icon: Icons.store_outlined,
+                              jwtMode: jwtMode,
+                            ),
+                            const SizedBox(height: 14),
+                            _PlanCard(
+                              plan: SubscriptionPlan.pro,
+                              isPopular: true,
+                              isCurrent: currentPlan?.key == 'pro',
+                              accentColor: _kAccent,
+                              icon: Icons.business_outlined,
+                              jwtMode: jwtMode,
+                            ),
+                            const SizedBox(height: 14),
+                            _PlanCard(
+                              plan: SubscriptionPlan.unlimited,
+                              isPopular: false,
+                              isCurrent: currentPlan?.key == 'unlimited',
+                              accentColor: _kGold,
+                              icon: Icons.all_inclusive_outlined,
+                              jwtMode: jwtMode,
+                            ),
+                          ],
                           const SizedBox(height: 24),
                           if (jwtMode)
                             const _JwtActivatePanel()
@@ -198,14 +218,14 @@ class SubscriptionPlansScreen extends StatelessWidget {
                                 const SizedBox(height: 12),
                                 Text(
                                   jwtMode
-                                      ? '١. تواصل مع فريق NaBoo عبر الطرق أدناه\n'
-                                            '٢. أكمل الدفع للخطة التي تريدها\n'
-                                            '٣. استلم رمز التفعيل الكامل (JWT) من الإدارة\n'
-                                            '٤. الصق الرمز في الحقل الموحّد أسفل بطاقات الخطط — الخطة وحد الأجهزة يُستنتجان من الرمز'
-                                      : '١. تواصل مع فريق NaBoo عبر الطرق أدناه\n'
-                                            '٢. أخبرنا بالخطة التي تريدها وأكمل الدفع\n'
+                                      ? '١. اختر شهرياً أو سنوياً وعدد الحاسبات\n'
+                                            '٢. اضغط «تواصل للاشتراك عبر واتساب» وأكمل الدفع\n'
+                                            '٣. استلم رمز التفعيل (JWT) من الإدارة\n'
+                                            '٤. الصق الرمز في حقل التفعيل أعلاه — الخطة وحد الأجهزة يُستنتجان من الرمز'
+                                      : '١. اختر شهرياً أو سنوياً وعدد الحاسبات\n'
+                                            '٢. تواصل عبر واتساب وأكمل الدفع\n'
                                             '٣. استلم مفتاح الترخيص من الإدارة\n'
-                                            '٤. الصق المفتاح في الحقل الموحّد أسفل بطاقات الخطط ثم اضغط «تفعيل المفتاح»',
+                                            '٤. الصق المفتاح في حقل التفعيل أعلاه ثم اضغط «تفعيل المفتاح»',
                                   style: const TextStyle(
                                     color: _SubPlanText.body,
                                     fontSize: 13,
@@ -254,6 +274,306 @@ class SubscriptionPlansScreen extends StatelessWidget {
           ),
         ),
       ),
+      ),
+    );
+  }
+}
+
+int _paidPriceIqd({
+  required _PaidBillingCycle cycle,
+  required int computers,
+}) {
+  final monthly = computers * _kPricePerComputerMonthlyIqd;
+  if (cycle == _PaidBillingCycle.annual) {
+    return monthly * _kAnnualPaidMonths;
+  }
+  return monthly;
+}
+
+String _computersLabelAr(int n) {
+  if (n == 1) return 'حاسوب واحد';
+  if (n == 2) return 'حاسوبان';
+  return '$n حاسبات';
+}
+
+String _devicesSummaryAr(int computers) {
+  return 'هاتف واحد + ${_computersLabelAr(computers)}';
+}
+
+String _billingCycleLabelAr(_PaidBillingCycle cycle) {
+  return cycle == _PaidBillingCycle.annual ? 'اشتراك سنوي' : 'اشتراك شهري';
+}
+
+String _pricePeriodSuffixAr(_PaidBillingCycle cycle) {
+  return cycle == _PaidBillingCycle.annual ? 'سنة' : 'شهر';
+}
+
+String _resolveSubscriptionEmail(AuthProvider auth) {
+  final supa = Supabase.instance.client.auth.currentUser?.email?.trim();
+  if (supa != null && supa.isNotEmpty) return supa;
+  return auth.email.trim();
+}
+
+String _buildWhatsAppSubscriptionMessage({
+  required String displayName,
+  required String email,
+  required _PaidBillingCycle cycle,
+  required int computers,
+  required int priceIqd,
+}) {
+  final name = displayName.trim().isEmpty ? '—' : displayName.trim();
+  final mail = email.trim().isEmpty ? '—' : email.trim();
+  final plan = _billingCycleLabelAr(cycle);
+  final period = _pricePeriodSuffixAr(cycle);
+  final devices = _devicesSummaryAr(computers);
+  final price = _formatPriceIQD(priceIqd);
+
+  return '''السلام عليكم،
+أريد الاشتراك في NaBoo ERP:
+
+👤 الاسم: $name
+📧 البريد: $mail
+📦 الخطة: $plan
+💻 عدد الحاسبات: $computers (يشمل هاتفاً واحداً)
+💰 المبلغ: $price د.ع / $period
+
+📱 الأجهزة: $devices
+
+أرجو تأكيد طريقة الدفع وتفعيل الاشتراك.
+شكراً.''';
+}
+
+class _PaidSubscriptionBuilder extends StatefulWidget {
+  const _PaidSubscriptionBuilder();
+
+  @override
+  State<_PaidSubscriptionBuilder> createState() =>
+      _PaidSubscriptionBuilderState();
+}
+
+class _PaidSubscriptionBuilderState extends State<_PaidSubscriptionBuilder> {
+  _PaidBillingCycle _cycle = _PaidBillingCycle.monthly;
+  int _computers = 1;
+
+  Future<void> _openWhatsApp(BuildContext context) async {
+    final auth = context.read<AuthProvider>();
+    final email = _resolveSubscriptionEmail(auth);
+    if (email.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'سجّل الدخول بحساب Google أولاً حتى نُرفق بريدك مع طلب الاشتراك.',
+          ),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    final price = _paidPriceIqd(cycle: _cycle, computers: _computers);
+    final message = _buildWhatsAppSubscriptionMessage(
+      displayName: auth.displayName,
+      email: email,
+      cycle: _cycle,
+      computers: _computers,
+      priceIqd: price,
+    );
+
+    await launchWhatsAppWithMessage(
+      context,
+      phone: kSupportWhatsAppNumber,
+      message: message,
+    );
+
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'بعد الدفع ستستلم رمز التفعيل — الصقه في الحقل أدناه',
+        ),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final price = _paidPriceIqd(cycle: _cycle, computers: _computers);
+    final priceFormatted = _formatPriceIQD(price);
+    final period = _pricePeriodSuffixAr(_cycle);
+
+    return GlassSurface(
+      borderRadius: const BorderRadius.all(Radius.circular(20)),
+      tintColor: Color.alphaBlend(
+        _kAccent.withOpacity(0.08),
+        AppGlass.surfaceTint,
+      ),
+      strokeColor: _kAccent.withOpacity(0.45),
+      blurSigma: 14,
+      padding: const EdgeInsets.all(22),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'اشتراك مدفوع',
+            style: TextStyle(
+              color: _SubPlanText.primary,
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'الهاتف مضمّن — كل حاسوب إضافي 15,000 د.ع/شهر',
+            style: TextStyle(
+              color: _SubPlanText.secondary,
+              fontSize: 12.5,
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            'دورة الفوترة',
+            style: TextStyle(
+              color: _SubPlanText.secondary,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 8),
+          SegmentedButton<_PaidBillingCycle>(
+            segments: const [
+              ButtonSegment(
+                value: _PaidBillingCycle.monthly,
+                label: Text('شهري'),
+              ),
+              ButtonSegment(
+                value: _PaidBillingCycle.annual,
+                label: Text('سنوي'),
+              ),
+            ],
+            selected: {_cycle},
+            onSelectionChanged: (s) {
+              setState(() => _cycle = s.first);
+            },
+            style: ButtonStyle(
+              foregroundColor: WidgetStateProperty.resolveWith((states) {
+                if (states.contains(WidgetState.selected)) {
+                  return Colors.white;
+                }
+                return _SubPlanText.body;
+              }),
+              backgroundColor: WidgetStateProperty.resolveWith((states) {
+                if (states.contains(WidgetState.selected)) {
+                  return _kAccent;
+                }
+                return AppColors.surfaceDark.withOpacity(0.55);
+              }),
+            ),
+          ),
+          if (_cycle == _PaidBillingCycle.annual) ...[
+            const SizedBox(height: 8),
+            const Text(
+              'ادفع 10 أشهر — صلاحية 12 شهراً (شهران مجاناً)',
+              style: TextStyle(
+                color: _SubPlanText.tertiary,
+                fontSize: 11.5,
+                height: 1.35,
+              ),
+            ),
+          ],
+          const SizedBox(height: 18),
+          const Text(
+            'عدد الحاسبات',
+            style: TextStyle(
+              color: _SubPlanText.secondary,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              IconButton.filled(
+                onPressed: _computers <= 1
+                    ? null
+                    : () => setState(() => _computers -= 1),
+                icon: const Icon(Icons.remove),
+                style: IconButton.styleFrom(
+                  backgroundColor: AppColors.surfaceDark.withOpacity(0.75),
+                  foregroundColor: _SubPlanText.primary,
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Text(
+                  '$_computers',
+                  style: const TextStyle(
+                    color: _SubPlanText.primary,
+                    fontSize: 28,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              IconButton.filled(
+                onPressed: () => setState(() => _computers += 1),
+                icon: const Icon(Icons.add),
+                style: IconButton.styleFrom(
+                  backgroundColor: _kAccent.withOpacity(0.85),
+                  foregroundColor: Colors.white,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
+          Divider(color: AppColors.borderDark.withOpacity(0.65)),
+          const SizedBox(height: 14),
+          Text(
+            _devicesSummaryAr(_computers),
+            style: const TextStyle(
+              color: _SubPlanText.body,
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+            ),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.baseline,
+            textBaseline: TextBaseline.alphabetic,
+            children: [
+              Text(
+                priceFormatted,
+                style: const TextStyle(
+                  color: _SubPlanText.primary,
+                  fontSize: 26,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                'د.ع / $period',
+                style: const TextStyle(
+                  color: _SubPlanText.secondary,
+                  fontSize: 13,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          FilledButton.icon(
+            onPressed: () => _openWhatsApp(context),
+            icon: const Icon(Icons.chat_rounded),
+            label: const Text('تواصل للاشتراك عبر واتساب'),
+            style: FilledButton.styleFrom(
+              backgroundColor: _kWhatsAppGreen,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+            ),
+          ),
+        ],
       ),
     );
   }

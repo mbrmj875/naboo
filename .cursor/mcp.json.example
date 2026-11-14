@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "stitch": {
+      "command": "/opt/homebrew/bin/npx",
+      "args": ["-y", "stitch-mcp-server@latest"],
+      "env": {
+        "STITCH_API_KEY": "YOUR_STITCH_API_KEY",
+        "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+      }
+    },
+    "supabase": {
+      "url": "https://mcp.supabase.com/mcp?project_ref=rkofqwcuvbzrnmelvxhz&read_only=true"
+    }
+  }
+}

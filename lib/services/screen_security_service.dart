@@ -1,5 +1,3 @@
-import 'dart:io' show Platform;
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter_windowmanager_plus/flutter_windowmanager_plus.dart';
 
@@ -25,6 +23,10 @@ abstract class ScreenSecurityService {
   /// يفعل شيئاً على المنصّات الأخرى. اختبارات الـ widgets تحقن Fake عبر
   /// [registerForTesting].
   static ScreenSecurityService instance = _DefaultScreenSecurityService();
+
+  /// تعطيل حماية الشاشة (FLAG_SECURE) عالمياً. عند false تبقى واجهة
+  /// [SecureScreen] شفافة دون تفعيل أي حاجز على Android.
+  static const bool enabled = false;
 
   /// يفعّل `FLAG_SECURE` (يمنع اللقطات والتسجيل). آمن للاستدعاء على iOS/macOS
   /// (يُهمَل بصمت).
@@ -53,7 +55,11 @@ abstract class ScreenSecurityService {
 class _DefaultScreenSecurityService implements ScreenSecurityService {
   @override
   Future<void> enable() async {
-    if (!Platform.isAndroid) return;
+    if (!ScreenSecurityService.enabled ||
+        kIsWeb ||
+        defaultTargetPlatform != TargetPlatform.android) {
+      return;
+    }
     try {
       await FlutterWindowManagerPlus.addFlags(
         FlutterWindowManagerPlus.FLAG_SECURE,
@@ -72,7 +78,11 @@ class _DefaultScreenSecurityService implements ScreenSecurityService {
 
   @override
   Future<void> disable() async {
-    if (!Platform.isAndroid) return;
+    if (!ScreenSecurityService.enabled ||
+        kIsWeb ||
+        defaultTargetPlatform != TargetPlatform.android) {
+      return;
+    }
     try {
       await FlutterWindowManagerPlus.clearFlags(
         FlutterWindowManagerPlus.FLAG_SECURE,

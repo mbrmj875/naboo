@@ -1,18 +1,18 @@
 import 'dart:async' show Timer, unawaited;
-import 'dart:io' show File;
 
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../providers/global_barcode_route_bridge.dart';
-import '../../providers/theme_provider.dart';
+import '../../widgets/product_media_image.dart';
 import '../../providers/inventory_products_provider.dart';
 import '../../services/product_repository.dart';
 import '../../services/product_variants_repository.dart';
+import '../../theme/design_tokens.dart';
 import '../../utils/iraqi_currency_format.dart';
 import '../../utils/screen_layout.dart';
+import '../../guides/guide_anchor.dart';
 import 'add_product_screen.dart';
 import 'barcode_labels_screen.dart';
 import 'inventory_settings_screen.dart';
@@ -33,7 +33,6 @@ final class _DismissShortcut extends Intent {
 // ── Design tokens ─────────────────────────────────────────────────────────────
 const _kGreen = Color(0xFF10B981);
 const _kOrange = Color(0xFFF97316);
-const _kBlue = Color(0xFF3B82F6);
 const _kNavy = Color(0xFF1E3A5F);
 const _kBg = Color(0xFFF1F5F9);
 const _kCard = Colors.white;
@@ -204,11 +203,10 @@ class _InventoryProductsScreenState extends State<InventoryProductsScreen>
     super.initState();
     _animCtrl = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 280),
+      duration: const Duration(milliseconds: 220),
     );
-    _expandAnim = CurvedAnimation(parent: _animCtrl, curve: Curves.easeInOut);
+    _expandAnim = CurvedAnimation(parent: _animCtrl, curve: Curves.easeOutCubic);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _keywordFn.requestFocus();
       final bridge = context.read<GlobalBarcodeRouteBridge>();
       _barcodeBridge = bridge;
       bridge.setBarcodePriorityHandler(this, _onGlobalBarcode);
@@ -268,38 +266,43 @@ class _InventoryProductsScreenState extends State<InventoryProductsScreen>
       _status = 'الكل';
     });
     _pushFiltersToProvider();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _keywordFn.requestFocus();
-    });
   }
 
-  bool get _isDark =>
-      Provider.of<ThemeProvider>(context, listen: false).isDarkMode;
+  bool get _isDark => Theme.of(context).brightness == Brightness.dark;
 
   @override
   Widget build(BuildContext context) {
     final layout = context.screenLayout;
-    final bg = _isDark ? const Color(0xFF0F172A) : _kBg;
-    final surface = _isDark ? const Color(0xFF1E293B) : _kCard;
+    final bg = _isDark ? AppColors.primaryDark : _kBg;
+    final surface = _isDark ? AppColors.primary : _kCard;
     final text1 = _isDark ? Colors.white : _kText1;
-    final text2 = _isDark ? Colors.white60 : _kText2;
-    final border = _isDark ? Colors.white12 : _kBorder;
+    final text2 = _isDark ? Colors.white70 : _kText2;
+    final border = _isDark ? AppGlass.stroke : _kBorder;
 
     return Directionality(
       textDirection: TextDirection.rtl,
       child: Scaffold(
         backgroundColor: bg,
         appBar: AppBar(
-          backgroundColor: _kNavy,
-          foregroundColor: Colors.white,
+          backgroundColor: bg,
+          foregroundColor: text1,
           elevation: 0,
-          title: const Text(
-            'إدارة المنتجات',
-            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17),
+          iconTheme: IconThemeData(color: text1),
+          actionsIconTheme: const IconThemeData(color: AppColors.accentGold),
+          title: GuideAnchor(
+            id: OilGuideAnchors.productListTitle,
+            child: Text(
+              'إدارة المنتجات',
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: 17,
+                color: text1,
+              ),
+            ),
           ),
           actions: [
             IconButton(
-              icon: const Icon(Icons.settings_outlined, size: 22),
+              icon: const Icon(Icons.settings_outlined, size: 22, color: AppColors.accentGold),
               tooltip: 'الإعدادات',
               onPressed: () => Navigator.push(
                 context,
@@ -310,6 +313,7 @@ class _InventoryProductsScreenState extends State<InventoryProductsScreen>
             ),
             PopupMenuButton<String>(
               tooltip: 'المزيد',
+              icon: const Icon(Icons.more_horiz_rounded, color: AppColors.accentGold),
               onSelected: (v) async {
                 if (v == 'print_barcodes') {
                   await Navigator.push<void>(
@@ -337,7 +341,9 @@ class _InventoryProductsScreenState extends State<InventoryProductsScreen>
             if (!layout.isNarrowWidth)
               Padding(
                 padding: const EdgeInsetsDirectional.only(end: 12),
-                child: ElevatedButton.icon(
+                child: GuideAnchor(
+                  id: OilGuideAnchors.productListAddCta,
+                  child: ElevatedButton.icon(
                   onPressed: () async {
                     final products = context.read<InventoryProductsProvider>();
                     final messenger = ScaffoldMessenger.of(context);
@@ -370,17 +376,37 @@ class _InventoryProductsScreenState extends State<InventoryProductsScreen>
                     style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
                   ),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: _kGreen,
+                    backgroundColor: AppColors.accentGold,
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(
                       horizontal: 14,
                       vertical: 8,
                     ),
-                    shape: const RoundedRectangleBorder(
-                      borderRadius: BorderRadius.zero,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
                     ),
                     elevation: 0,
                   ),
+                ),
+                ),
+              )
+            else
+              GuideAnchor(
+                id: OilGuideAnchors.productListAddCta,
+                child: IconButton(
+                  tooltip: 'منتج جديد',
+                  icon: const Icon(
+                    Icons.add_circle_rounded,
+                    color: AppColors.accentGold,
+                  ),
+                  onPressed: () {
+                    Navigator.push<void>(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const AddProductScreen(),
+                      ),
+                    );
+                  },
                 ),
               ),
           ],
@@ -482,7 +508,6 @@ class _InventoryProductsScreenState extends State<InventoryProductsScreen>
                             setState(() => _status = v);
                             _pushFiltersToProvider();
                           },
-                          onSearch: _advanced ? _pushFiltersToProvider : () {},
                           onClear: _clearFilters,
                           onToggleAdvanced: _toggleAdvanced,
                         ),
@@ -682,7 +707,6 @@ class _SearchCard extends StatelessWidget {
     required this.onCategoryChanged,
     required this.onBrandChanged,
     required this.onStatusChanged,
-    required this.onSearch,
     required this.onClear,
     required this.onToggleAdvanced,
   });
@@ -713,7 +737,6 @@ class _SearchCard extends StatelessWidget {
   final ValueChanged<String> onCategoryChanged;
   final ValueChanged<String> onBrandChanged;
   final ValueChanged<String> onStatusChanged;
-  final VoidCallback onSearch;
   final VoidCallback onClear;
   final VoidCallback onToggleAdvanced;
 
@@ -737,13 +760,22 @@ class _SearchCard extends StatelessWidget {
       ),
       decoration: BoxDecoration(
         color: surface,
-        borderRadius: BorderRadius.zero,
-        border: Border.all(color: border),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isDark ? AppColors.accentGold.withValues(alpha: 0.3) : AppColors.accentGold.withValues(alpha: 0.5),
+          width: 1.5,
+        ),
         boxShadow: isDark
-            ? null
+            ? [
+                BoxShadow(
+                  color: AppGlass.goldGlow,
+                  blurRadius: 12,
+                  spreadRadius: -2,
+                )
+              ]
             : [
                 BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.05),
+                  color: AppColors.accentGold.withValues(alpha: 0.1),
                   blurRadius: 8,
                   offset: const Offset(0, 2),
                 ),
@@ -753,246 +785,118 @@ class _SearchCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
-            padding: const EdgeInsetsDirectional.only(
-              start: 14,
-              end: 14,
-              top: 12,
-            ),
+            padding: const EdgeInsetsDirectional.fromSTEB(4, 6, 12, 6),
             child: Row(
-              mainAxisAlignment: MainAxisAlignment.end,
               children: [
-                Text(
-                  'بحث ومطابقة',
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.bold,
-                    color: text2,
+                Expanded(child: _keyword()),
+                IconButton(
+                  tooltip: advanced ? 'إخفاء التصفية' : 'إظهار التصفية',
+                  onPressed: onToggleAdvanced,
+                  visualDensity: VisualDensity.compact,
+                  icon: AnimatedRotation(
+                    turns: advanced ? 0.5 : 0,
+                    duration: const Duration(milliseconds: 220),
+                    curve: Curves.easeOutCubic,
+                    child: Icon(
+                      Icons.keyboard_arrow_down_rounded,
+                      color: activeFiltersCount > 0
+                          ? AppColors.accentGold
+                          : text2,
+                    ),
                   ),
                 ),
-                const SizedBox(width: 6),
-                Icon(Icons.search_rounded, size: 16, color: text2),
               ],
             ),
           ),
-          Divider(height: 16, color: border),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14),
-            child: _keyword(),
-          ),
-          const SizedBox(height: 12),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14),
-            child: LayoutBuilder(
-              builder: (_, c) {
-                final wide = c.maxWidth > 520;
-                if (wide) {
-                  return Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        child: _pickDropdownWide(
+          ClipRect(
+            child: SizeTransition(
+              sizeFactor: expandAnim,
+              axisAlignment: -1,
+              child: Padding(
+                padding: const EdgeInsetsDirectional.fromSTEB(14, 0, 14, 12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    LayoutBuilder(
+                      builder: (_, c) {
+                        final wide = c.maxWidth > 520;
+                        final categoryField = _pickDropdownWide(
                           categoryItems,
                           category,
                           'التصنيف',
                           onCategoryChanged,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: _pickDropdownWide(
+                        );
+                        final brandField = _pickDropdownWide(
                           brandItems,
                           brand,
                           'الماركة',
                           onBrandChanged,
-                        ),
-                      ),
-                    ],
-                  );
-                }
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    _pickDropdownWide(
-                            categoryItems,
-                            category,
-                            'التصنيف',
-                            onCategoryChanged,
-                          ),
-                    const SizedBox(height: 10),
-                    _pickDropdownWide(
-                            brandItems,
-                            brand,
-                            'الماركة',
-                            onBrandChanged,
-                    ),
-                  ],
-                );
-              },
-            ),
-          ),
-          const SizedBox(height: 12),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14),
-            child: _barcodeField(),
-          ),
-          const SizedBox(height: 4),
-          SizeTransition(
-            sizeFactor: expandAnim,
-            axisAlignment: -1,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Divider(height: 20, color: border, indent: 14, endIndent: 14),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 14),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      _statusDropdown(),
-                      const SizedBox(height: 10),
-                      LayoutBuilder(
-                    builder: (_, c) {
-                      final wide = c.maxWidth > 580;
-                      if (wide) {
-                        return Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                        );
+                        if (wide) {
+                          return Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(child: categoryField),
+                              const SizedBox(width: 12),
+                              Expanded(child: brandField),
+                            ],
+                          );
+                        }
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            Expanded(child: _prod()),
-                                const SizedBox(width: 12),
-                                Expanded(child: _advancedPrice()),
+                            categoryField,
+                            const SizedBox(height: 10),
+                            brandField,
                           ],
                         );
-                      }
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          _prod(),
-                          const SizedBox(height: 10),
-                          _advancedPrice(),
-                        ],
-                      );
-                    },
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 8),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsetsDirectional.only(
-              start: 14,
-              end: 14,
-              top: 4,
-              bottom: 14,
-            ),
-            child: LayoutBuilder(
-              builder: (context, c) {
-                final narrow = c.maxWidth < 560;
-                final advancedBtn = OutlinedButton.icon(
-                  onPressed: onToggleAdvanced,
-                  icon: Icon(
-                    advanced
-                        ? Icons.keyboard_arrow_up_rounded
-                        : Icons.tune_rounded,
-                    size: 15,
-                  ),
-                  label: const Text(
-                    'بحث متقدم',
-                    style: TextStyle(fontSize: 12),
-                  ),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: _kBlue,
-                    side: BorderSide(color: _kBlue.withValues(alpha: 0.4)),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 9,
+                      },
                     ),
-                    shape: const RoundedRectangleBorder(
-                      borderRadius: BorderRadius.zero,
+                    const SizedBox(height: 10),
+                    _barcodeField(),
+                    const SizedBox(height: 10),
+                    _statusDropdown(),
+                    const SizedBox(height: 10),
+                    LayoutBuilder(
+                      builder: (_, c) {
+                        final wide = c.maxWidth > 580;
+                        if (wide) {
+                          return Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(child: _prod()),
+                              const SizedBox(width: 12),
+                              Expanded(child: _advancedPrice()),
+                            ],
+                          );
+                        }
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            _prod(),
+                            const SizedBox(height: 10),
+                            _advancedPrice(),
+                          ],
+                        );
+                      },
                     ),
-                    minimumSize: Size.zero,
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                );
-                final actions = Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  alignment: WrapAlignment.end,
-                  children: [
-                    if (showClearFiltersChip)
-                      OutlinedButton(
-                        onPressed: onClear,
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: text2,
-                          side: BorderSide(color: border),
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 14,
-                            vertical: 9,
-                          ),
-                          shape: const RoundedRectangleBorder(
-                            borderRadius: BorderRadius.zero,
-                          ),
-                          minimumSize: Size.zero,
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        ),
-                        child: Text(
-                          activeFiltersCount > 0
-                              ? 'إلغاء الفلتر ($activeFiltersCount)'
-                              : 'إلغاء الفلتر',
-                          style: const TextStyle(fontSize: 12),
-                        ),
-                      ),
-                    if (advanced)
-                      ElevatedButton.icon(
-                        onPressed: onSearch,
-                        icon: const Icon(
-                          Icons.search_rounded,
-                          size: 15,
-                          color: Colors.white,
-                        ),
-                        label: const Text(
-                          'بحث',
-                          style: TextStyle(fontSize: 12, color: Colors.white),
-                        ),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: _kNavy,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 18,
-                            vertical: 9,
-                          ),
-                          shape: const RoundedRectangleBorder(
-                            borderRadius: BorderRadius.zero,
-                          ),
-                          elevation: 0,
-                          minimumSize: Size.zero,
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        ),
-                      ),
-                  ],
-                );
-                if (narrow) {
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Align(
-                        alignment: AlignmentDirectional.centerEnd,
-                        child: advancedBtn,
-                      ),
+                    if (showClearFiltersChip) ...[
                       const SizedBox(height: 8),
                       Align(
-                        alignment: AlignmentDirectional.centerEnd,
-                        child: actions,
+                        alignment: AlignmentDirectional.centerStart,
+                        child: TextButton(
+                          onPressed: onClear,
+                          child: Text(
+                            activeFiltersCount > 0
+                                ? 'إلغاء الفلتر ($activeFiltersCount)'
+                                : 'إلغاء الفلتر',
+                          ),
+                        ),
                       ),
                     ],
-                  );
-                }
-                return Row(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [advancedBtn, const Spacer(), actions],
-                );
-              },
+                  ],
+                ),
+              ),
             ),
           ),
         ],
@@ -1007,22 +911,9 @@ class _SearchCard extends StatelessWidget {
     return ValueListenableBuilder<TextEditingValue>(
       valueListenable: keyword,
       builder: (context, val, _) {
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              'البحث بكلمة مفتاحية',
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-                color: text2,
-              ),
-            ),
-            const SizedBox(height: 5),
-            SizedBox(
-              height: 40,
-              child: TextField(
+        return SizedBox(
+          height: 40,
+          child: TextField(
                 controller: keyword,
                 focusNode: keywordFn,
                 keyboardType: TextInputType.text,
@@ -1067,18 +958,16 @@ class _SearchCard extends StatelessWidget {
                     end: 8,
                   ),
                   enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.zero,
-                    borderSide: BorderSide(color: border),
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: isDark ? AppColors.accentGold.withValues(alpha: 0.1) : border),
                   ),
-                  focusedBorder: const OutlineInputBorder(
-                    borderRadius: BorderRadius.zero,
-                    borderSide: BorderSide(color: _kNavy, width: 1.5),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: const BorderSide(color: AppColors.accentGold, width: 1.5),
                   ),
                 ),
               ),
-            ),
-          ],
-        );
+            );
       },
     );
   }
@@ -1142,8 +1031,8 @@ class _SearchCard extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 10),
           decoration: BoxDecoration(
             color: fill,
-            border: Border.all(color: border),
-            borderRadius: BorderRadius.zero,
+            border: Border.all(color: isDark ? AppColors.accentGold.withValues(alpha: 0.2) : border),
+            borderRadius: BorderRadius.circular(12),
           ),
           child: DropdownButtonHideUnderline(
             child: DropdownButton<String>(
@@ -1254,12 +1143,12 @@ class _SearchCard extends StatelessWidget {
                 color: text2.withValues(alpha: 0.8),
               ),
               enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.zero,
-                borderSide: BorderSide(color: border),
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: isDark ? AppColors.accentGold.withValues(alpha: 0.2) : border),
               ),
-              focusedBorder: const OutlineInputBorder(
-                borderRadius: BorderRadius.zero,
-                borderSide: BorderSide(color: _kNavy, width: 1.5),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: AppColors.accentGold, width: 1.5),
               ),
             ),
           ),
@@ -1396,16 +1285,16 @@ class _SearchFieldCore extends StatelessWidget {
                 vertical: 10,
               ),
               border: OutlineInputBorder(
-                borderRadius: BorderRadius.zero,
-                borderSide: BorderSide(color: border),
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: isDark ? AppColors.accentGold.withValues(alpha: 0.2) : border),
               ),
               enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.zero,
-                borderSide: BorderSide(color: border),
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: isDark ? AppColors.accentGold.withValues(alpha: 0.2) : border),
               ),
-              focusedBorder: const OutlineInputBorder(
-                borderRadius: BorderRadius.zero,
-                borderSide: BorderSide(color: _kNavy, width: 1.5),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: AppColors.accentGold, width: 1.5),
               ),
             ),
           ),
@@ -1460,8 +1349,8 @@ class _SearchDropdownCore extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 10),
           decoration: BoxDecoration(
             color: fill,
-            border: Border.all(color: border),
-            borderRadius: BorderRadius.zero,
+            border: Border.all(color: isDark ? AppColors.accentGold.withValues(alpha: 0.2) : border),
+            borderRadius: BorderRadius.circular(12),
           ),
           child: DropdownButtonHideUnderline(
             child: DropdownButton<String>(
@@ -1553,8 +1442,8 @@ class _AutocompletePick extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 8),
           decoration: BoxDecoration(
             color: fill,
-            border: Border.all(color: border),
-            borderRadius: BorderRadius.zero,
+            border: Border.all(color: isDark ? AppColors.accentGold.withValues(alpha: 0.2) : border),
+            borderRadius: BorderRadius.circular(12),
           ),
           alignment: AlignmentDirectional.centerEnd,
           child: Theme(
@@ -1650,8 +1539,8 @@ class _ResultsHeader extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
         color: surface,
-        borderRadius: BorderRadius.zero,
-        border: Border.all(color: border),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: isDark ? AppColors.accentGold.withValues(alpha: 0.3) : border),
       ),
       child: LayoutBuilder(
         builder: (context, c) {
@@ -1665,11 +1554,11 @@ class _ResultsHeader extends StatelessWidget {
                 height: 32,
                 padding: const EdgeInsets.symmetric(horizontal: 10),
                 decoration: BoxDecoration(
-                  border: Border.all(color: border),
+                  border: Border.all(color: isDark ? AppColors.accentGold.withValues(alpha: 0.2) : border),
                   color: isDark
                       ? Colors.white.withValues(alpha: 0.06)
                       : const Color(0xFFF8FAFC),
-                  borderRadius: BorderRadius.zero,
+                  borderRadius: BorderRadius.circular(12),
                 ),
                 alignment: AlignmentDirectional.centerEnd,
                 child: DropdownButtonHideUnderline(
@@ -1784,8 +1673,8 @@ class _ProductCardSkeleton extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         color: surface,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: border.withValues(alpha: 0.5)),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.accentGold.withValues(alpha: 0.15)),
       ),
       child: Stack(
         children: [
@@ -2046,54 +1935,18 @@ class _InventoryProductThumb extends StatelessWidget {
   Widget build(BuildContext context) {
     final path = (product['imagePath'] as String?)?.trim();
     final urlRaw = (product['imageUrl'] as String?)?.trim();
-
-    if (!kIsWeb &&
-        path != null &&
-        path.isNotEmpty &&
-        File(path).existsSync()) {
+    final media = (path != null && path.isNotEmpty)
+        ? path
+        : (urlRaw != null && urlRaw.isNotEmpty ? urlRaw : null);
+    if (media != null) {
       return ClipRRect(
         borderRadius: _topRadius,
-        child: Image.file(
-          File(path),
+        child: ProductMediaImage(
+          pathOrUrl: media,
           fit: BoxFit.cover,
           width: double.infinity,
           height: double.infinity,
-          errorBuilder: (_, __, ___) => _placeholder(),
-        ),
-      );
-    }
-
-    final net = urlRaw != null &&
-            urlRaw.isNotEmpty &&
-            (urlRaw.startsWith('http://') || urlRaw.startsWith('https://'))
-        ? urlRaw
-        : null;
-    if (net != null) {
-      return ClipRRect(
-        borderRadius: _topRadius,
-        child: Image.network(
-          net,
-          fit: BoxFit.cover,
-          width: double.infinity,
-          height: double.infinity,
-          loadingBuilder: (context, child, progress) {
-            if (progress == null) return child;
-            return ColoredBox(
-              color: isDark
-                  ? Colors.white.withValues(alpha: 0.06)
-                  : const Color(0xFFF1F5F9),
-              child: Center(
-                child: SizedBox(
-                  width: 22,
-                  height: 22,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: iconMuted.withValues(alpha: 0.95),
-                  ),
-                ),
-              ),
-            );
-          },
+          placeholder: _placeholder(),
           errorBuilder: (_, __, ___) => _placeholder(),
         ),
       );
@@ -2363,14 +2216,21 @@ class _ProductCardState extends State<_ProductCard> {
                             ? const Color(0xFFF8FAFC)
                             : const Color(0xFFF8FAFF)))
                     : cardFill,
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: BorderRadius.circular(16),
                 border: Border.all(
                   color: _hover
-                      ? _kNavy.withValues(alpha: 0.25)
-                      : widget.border,
+                      ? AppColors.accentGold
+                      : widget.isDark ? AppColors.accentGold.withValues(alpha: 0.15) : widget.border,
                 ),
                 boxShadow: widget.isDark
-                    ? null
+                    ? (_hover
+                        ? [
+                            BoxShadow(
+                              color: AppGlass.goldGlow,
+                              blurRadius: 16,
+                            )
+                          ]
+                        : null)
                     : [
                         BoxShadow(
                           color: Colors.black.withValues(
@@ -2575,8 +2435,8 @@ class _OptionsBtn extends StatelessWidget {
       width: 34,
       height: 34,
       decoration: BoxDecoration(
-        border: Border.all(color: border),
-        borderRadius: BorderRadius.zero,
+        border: Border.all(color: isDark ? AppColors.accentGold.withValues(alpha: 0.2) : border),
+        borderRadius: BorderRadius.circular(8),
         color: isDark
             ? Colors.white.withValues(alpha: 0.05)
             : const Color(0xFFF8FAFC),

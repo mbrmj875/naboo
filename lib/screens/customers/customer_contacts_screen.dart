@@ -1,14 +1,21 @@
+import 'dart:async' show Timer, unawaited;
+import 'dart:ui' show ImageFilter;
+
 import 'package:flutter/material.dart';
-import 'dart:async' show unawaited;
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../models/customer_record.dart';
+import '../../providers/customers_provider.dart';
 import '../../services/cloud_sync_service.dart';
 import '../../services/database_helper.dart';
+import '../../theme/app_corner_style.dart';
 import '../../theme/design_tokens.dart';
+import '../../utils/customer_phone_launch.dart';
+import '../../utils/customer_validation.dart';
 import '../../utils/iraqi_currency_format.dart';
-import '../../providers/customers_provider.dart';
 import '../../utils/screen_layout.dart';
+import '../debts/customer_debt_detail_screen.dart';
 import 'customer_financial_detail_screen.dart';
 import 'customer_form_screen.dart';
 import 'customers_screen.dart';
@@ -18,17 +25,13 @@ enum _ContactSort {
   balanceDesc,
 }
 
-/// تصفية جهات الاتصال: دين/آجل مقابل أقساط.
+/// تصفية جهات الاتصال: الكل أو من عليهم دين/آجل.
 enum _ContactFilter {
-  /// عرض الجميع
   all,
-  /// فواتير آجل أو رصيد مدين — للمتابعة والاتصال بمن عليهم دين
   debtOrCreditSale,
-  /// وجود خطة تقسيط — للمتابعة والاتصال بخصوص الأقساط
-  hasInstallments,
 }
 
-/// قائمة جهات اتصال العملاء — عرض منظم من قاعدة البيانات مع ربط التعديل والتفاصيل المالية.
+/// قائمة جهات اتصال العملاء — عرض مضغوط متوافق مع باقي التطبيق.
 class CustomerContactsScreen extends StatefulWidget {
   const CustomerContactsScreen({super.key});
 
@@ -38,26 +41,24 @@ class CustomerContactsScreen extends StatefulWidget {
 
 class _CustomerContactsScreenState extends State<CustomerContactsScreen> {
   final TextEditingController _searchCtrl = TextEditingController();
-  final TextEditingController _idCtrl = TextEditingController();
+  final FocusNode _searchFocus = FocusNode();
+  Timer? _searchDebounce;
 
-  String _appliedText = '';
-  String _appliedId = '';
   _ContactFilter _filter = _ContactFilter.all;
   _ContactSort _sort = _ContactSort.nameAsc;
 
   Color get _pageBg => Theme.of(context).scaffoldBackgroundColor;
   Color get _surface => Theme.of(context).colorScheme.surface;
-  Color get _primary => Theme.of(context).colorScheme.primary;
-  Color get _onPrimary => Theme.of(context).colorScheme.onPrimary;
-  Color get _filterBg =>
-      Theme.of(context).colorScheme.surfaceContainerHighest;
   Color get _textPrimary => Theme.of(context).colorScheme.onSurface;
   Color get _textSecondary => Theme.of(context).colorScheme.onSurfaceVariant;
   Color get _outline => Theme.of(context).colorScheme.outline;
+  Color get _filterBg =>
+      Theme.of(context).colorScheme.surfaceContainerHighest;
 
   @override
   void initState() {
     super.initState();
+    _searchCtrl.addListener(_onSearchTextChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       context.read<CustomersProvider>().refresh();
@@ -66,74 +67,99 @@ class _CustomerContactsScreenState extends State<CustomerContactsScreen> {
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
+    _searchCtrl.removeListener(_onSearchTextChanged);
     _searchCtrl.dispose();
-    _idCtrl.dispose();
+    _searchFocus.dispose();
     super.dispose();
+  }
+
+  void _onSearchTextChanged() {
+    if (!mounted) return;
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 220), () {
+      if (!mounted) return;
+      _syncSearch();
+    });
+  }
+
+  void _syncSearch() {
+    unawaited(
+      context.read<CustomersProvider>().setFilters(
+            query: _searchCtrl.text,
+            idQuery: '',
+            statusArabic: 'الكل',
+            sortKey:
+                _sort == _ContactSort.balanceDesc ? 'balance_desc' : 'name_asc',
+          ),
+    );
   }
 
   List<CustomerRecord> _visible(
     List<CustomerRecord> input,
-    Map<int, ({int creditInvoices, int installmentPlans})> financeById,
+    Set<int> openDebtIds,
+    Map<
+            int,
+            ({
+              int creditInvoices,
+              int installmentPlans,
+              int openRemainingFils,
+            })>
+        financeById,
   ) {
+    final debtMode = _filter == _ContactFilter.debtOrCreditSale;
+    final q = debtMode ? _searchCtrl.text.trim().toLowerCase() : '';
     var list = input.where((c) {
-      if (!_passesContactFilter(c, financeById)) return false;
+      if (debtMode) {
+        // آجل مفتوح فقط — لا رصيد بطاقة موجب وحده.
+        final fin = financeById[c.id];
+        final hasOpen =
+            openDebtIds.contains(c.id) ||
+            (fin != null && fin.openRemainingFils > 0);
+        if (!hasOpen) return false;
+        if (q.isEmpty) return true;
+        final name = c.name.toLowerCase();
+        final phone = (c.phone ?? '').toLowerCase();
+        return name.contains(q) || phone.contains(q);
+      }
       return true;
     }).toList();
 
-    // الترتيب هنا فقط للعرض. الترتيب الأساسي يأتي من الاستعلام المصفح في [CustomersProvider].
     if (_sort == _ContactSort.balanceDesc) {
-      list.sort((a, b) => b.balance.abs().compareTo(a.balance.abs()));
+      list.sort((a, b) {
+        final fa = financeById[a.id]?.openRemainingFils ?? 0;
+        final fb = financeById[b.id]?.openRemainingFils ?? 0;
+        final da = fa > 0 ? fa / 1000.0 : a.balance.abs();
+        final db = fb > 0 ? fb / 1000.0 : b.balance.abs();
+        return db.compareTo(da);
+      });
+    } else if (debtMode) {
+      list.sort(
+        (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+      );
     }
     return list;
   }
 
-  bool _passesContactFilter(
-    CustomerRecord c,
-    Map<int, ({int creditInvoices, int installmentPlans})> financeById,
-  ) {
-    final fin = financeById[c.id] ?? (creditInvoices: 0, installmentPlans: 0);
-    switch (_filter) {
-      case _ContactFilter.all:
-        return true;
-      case _ContactFilter.debtOrCreditSale:
-        return fin.creditInvoices > 0 || c.balance > 0.01;
-      case _ContactFilter.hasInstallments:
-        return fin.installmentPlans > 0;
+  void _clearSearch() {
+    _searchCtrl.clear();
+    _syncSearch();
+  }
+
+  void _setSort(_ContactSort sort) {
+    if (_sort == sort) return;
+    setState(() => _sort = sort);
+    _syncSearch();
+  }
+
+  void _setFilter(_ContactFilter filter) {
+    if (_filter == filter) return;
+    setState(() => _filter = filter);
+    if (filter == _ContactFilter.debtOrCreditSale) {
+      unawaited(
+        context.read<CustomersProvider>().ensureDebtorsLoaded(),
+      );
     }
-  }
-
-  void _applySearch() {
-    setState(() {
-      _appliedText = _searchCtrl.text;
-      _appliedId = _idCtrl.text;
-    });
-    unawaited(
-      context.read<CustomersProvider>().setFilters(
-            query: _appliedText,
-            idQuery: _appliedId,
-            statusArabic: 'الكل',
-            sortKey: _sort == _ContactSort.balanceDesc ? 'balance_desc' : 'name_asc',
-          ),
-    );
-  }
-
-  void _clearFilters() {
-    setState(() {
-      _searchCtrl.clear();
-      _idCtrl.clear();
-      _appliedText = '';
-      _appliedId = '';
-      _filter = _ContactFilter.all;
-      _sort = _ContactSort.nameAsc;
-    });
-    unawaited(
-      context.read<CustomersProvider>().setFilters(
-            query: '',
-            idQuery: '',
-            statusArabic: 'الكل',
-            sortKey: 'name_asc',
-          ),
-    );
   }
 
   Future<void> _openEditor({CustomerRecord? customer}) async {
@@ -155,6 +181,14 @@ class _CustomerContactsScreenState extends State<CustomerContactsScreen> {
     );
   }
 
+  void _openAdvancedCustomers() {
+    Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => const CustomersScreen(),
+      ),
+    );
+  }
+
   Future<void> _confirmDelete(CustomerRecord c) async {
     final ok = await showDialog<bool>(
       context: context,
@@ -168,7 +202,7 @@ class _CustomerContactsScreenState extends State<CustomerContactsScreen> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            style: TextButton.styleFrom(foregroundColor: AppSemanticColors.danger),
             child: const Text('حذف'),
           ),
         ],
@@ -188,23 +222,33 @@ class _CustomerContactsScreenState extends State<CustomerContactsScreen> {
     }
   }
 
-  void _openAdvancedCustomers() {
+  Future<void> _dialCustomer(String? raw) async {
+    final d = CustomerValidation.normalizePhoneDigits(raw);
+    if (d == null || d.length < 7) return;
+    final uri = Uri(scheme: 'tel', path: d);
+    if (await canLaunchUrl(uri)) await launchUrl(uri);
+  }
+
+  Future<void> _openWhatsApp(String? raw) async {
+    final phone = (raw ?? '').trim();
+    if (phone.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('لا يوجد رقم هاتف لهذا العميل')),
+      );
+      return;
+    }
+    await launchCustomerWhatsApp(context, [phone]);
+  }
+
+  void _openDebtPayPage(CustomerRecord c) {
     Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
-        builder: (_) => const CustomersScreen(),
+        builder: (_) => CustomerDebtDetailScreen.fromCustomerId(
+          registeredCustomerId: c.id,
         ),
-      );
-    }
-
-  Color _statusColor(String label) {
-    switch (label) {
-      case 'مديون':
-        return const Color(0xFFFF9800);
-      case 'دائن':
-        return const Color(0xFF7E57C2);
-      default:
-        return const Color(0xFF00897B);
-    }
+      ),
+    );
   }
 
   Color _avatarColor(int id) {
@@ -219,19 +263,38 @@ class _CustomerContactsScreenState extends State<CustomerContactsScreen> {
   }
 
   AppBar _buildAppBar() {
+    final cs = Theme.of(context).colorScheme;
     return AppBar(
-      backgroundColor: _primary,
-      foregroundColor: _onPrimary,
-          elevation: 0,
+      backgroundColor: cs.surfaceContainerHighest,
+      foregroundColor: cs.onSurface,
+      elevation: 0,
       centerTitle: false,
-          title: const Text(
-            'جهات اتصال العملاء',
-            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
-          ),
+      title: Text(
+        'جهات اتصال العملاء',
+        style: TextStyle(
+          fontWeight: FontWeight.bold,
+          fontSize: 18,
+          color: cs.onSurface,
+        ),
+      ),
+      // مجموعة واحدة: إضافة عميل | إدارة العملاء | تحديث
       actions: [
         IconButton(
+          tooltip: 'عميل جديد',
+          visualDensity: VisualDensity.compact,
+          icon: const Icon(Icons.person_add_alt_1_outlined),
+          onPressed: () => unawaited(_openEditor()),
+        ),
+        IconButton(
+          tooltip: 'إدارة العملاء الكاملة',
+          visualDensity: VisualDensity.compact,
+          icon: const Icon(Icons.manage_accounts_outlined),
+          onPressed: _openAdvancedCustomers,
+        ),
+        IconButton(
+          tooltip: 'تحديث الشاشة',
+          visualDensity: VisualDensity.compact,
           icon: const Icon(Icons.refresh_rounded),
-          tooltip: 'تحديث',
           onPressed: () => context.read<CustomersProvider>().refresh(),
         ),
         const SizedBox(width: 4),
@@ -239,64 +302,206 @@ class _CustomerContactsScreenState extends State<CustomerContactsScreen> {
     );
   }
 
-  Widget _buildToolbar(int shown) {
-    final gap = ScreenLayout.of(context).pageHorizontalGap;
-    return Material(
-      color: _surface,
-      elevation: 1,
-      shadowColor: Colors.black.withValues(alpha: 0.08),
-      child: Padding(
-        padding: EdgeInsets.fromLTRB(gap, 10, gap, 10),
-        child: Row(
-            children: [
-            Expanded(
-              child: Text(
-                'المعروض: $shown',
-                style: TextStyle(fontSize: 13, color: _textSecondary),
-              ),
-            ),
-            FilledButton.icon(
-              onPressed: () => _openEditor(),
-              style: FilledButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                shape: const RoundedRectangleBorder(borderRadius: AppShape.none),
-              ),
-              icon: const Icon(Icons.person_add_alt_1_outlined, size: 20),
-                  label: const Text(
-                    'عميل جديد',
-                    style: TextStyle(fontWeight: FontWeight.w600),
+  Widget _buildSearchDock() {
+    return LayoutBuilder(
+      builder: (context, c) {
+        final isNarrow = c.maxWidth < 600;
+        final useGlassBlur = !ScreenLayout.of(context).isHandsetForLayout;
+        final ac = context.appCorners;
+        const royalGold = AppColors.accentGold;
+
+        Widget dockBody = Padding(
+          padding: const EdgeInsetsDirectional.symmetric(
+            horizontal: 4,
+            vertical: 2,
+          ),
+          child: ListenableBuilder(
+            listenable: Listenable.merge([_searchCtrl, _searchFocus]),
+            builder: (context, _) {
+              final focused = _searchFocus.hasFocus;
+              final hasText = _searchCtrl.text.trim().isNotEmpty;
+              return TextField(
+                controller: _searchCtrl,
+                focusNode: _searchFocus,
+                textInputAction: TextInputAction.search,
+                style: TextStyle(
+                  fontSize: isNarrow ? 14 : 15,
+                  color: _textPrimary,
+                  fontWeight: FontWeight.w600,
+                ),
+                decoration: InputDecoration(
+                  hintText: 'ابحث بالاسم أو الهاتف…',
+                  hintStyle: TextStyle(
+                    color: _textSecondary.withValues(alpha: 0.75),
+                    fontWeight: FontWeight.w500,
+                  ),
+                  prefixIcon: Icon(
+                    Icons.search_rounded,
+                    color: focused ? royalGold : _textSecondary,
+                  ),
+                  suffixIcon: IconButton(
+                    tooltip: hasText ? 'مسح البحث' : null,
+                    onPressed: hasText ? _clearSearch : null,
+                    icon: Icon(
+                      Icons.close_rounded,
+                      size: 20,
+                      color: hasText ? _textSecondary : Colors.transparent,
+                    ),
+                  ),
+                  filled: false,
+                  border: InputBorder.none,
+                  enabledBorder: InputBorder.none,
+                  focusedBorder: InputBorder.none,
+                  contentPadding: EdgeInsets.symmetric(
+                    horizontal: isNarrow ? 12 : 14,
+                    vertical: isNarrow ? 12 : 14,
                   ),
                 ),
-          ],
-        ),
+              );
+            },
+          ),
+        );
+
+        if (useGlassBlur) {
+          dockBody = ClipRRect(
+            borderRadius: ac.md,
+            child: BackdropFilter(
+              filter: ImageFilter.blur(
+                sigmaX: AppGlass.blurSigma * 0.75,
+                sigmaY: AppGlass.blurSigma * 0.75,
+              ),
+              child: dockBody,
+            ),
+          );
+        }
+
+        return ListenableBuilder(
+          listenable: _searchFocus,
+          builder: (context, child) {
+            final focused = _searchFocus.hasFocus;
+            return AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOutCubic,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                color: useGlassBlur
+                    ? AppGlass.surfaceTintStrong
+                    : _filterBg.withValues(alpha: 0.92),
+                border: Border.all(
+                  color:
+                      focused ? royalGold : royalGold.withValues(alpha: 0.5),
+                  width: focused ? 2.0 : 1.0,
+                ),
+              ),
+              child: child,
+            );
+          },
+          child: dockBody,
+        );
+      },
+    );
+  }
+
+  Widget _buildFilterStrip(int shown, int debtCount) {
+    return Padding(
+      padding: const EdgeInsetsDirectional.only(top: 8, bottom: 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  _filterChip(
+                    filter: _ContactFilter.all,
+                    label: 'الكل',
+                    icon: Icons.people_outline_rounded,
+                  ),
+                  const SizedBox(width: 8),
+                  _filterChip(
+                    filter: _ContactFilter.debtOrCreditSale,
+                    label: debtCount > 0
+                        ? 'عليهم دين ($debtCount)'
+                        : 'عليهم دين',
+                    icon: Icons.account_balance_wallet_outlined,
+                    tooltip: 'فواتير بيع آجل غير مسدّدة فقط.',
+                  ),
+                ],
+              ),
+            ),
+          ),
+          PopupMenuButton<_ContactSort>(
+            tooltip: 'ترتيب',
+            initialValue: _sort,
+            onSelected: _setSort,
+            itemBuilder: (_) => const [
+              PopupMenuItem(
+                value: _ContactSort.nameAsc,
+                child: Text('الاسم (أ-ي)'),
+              ),
+              PopupMenuItem(
+                value: _ContactSort.balanceDesc,
+                child: Text('حجم الرصيد'),
+              ),
+            ],
+            child: Padding(
+              padding: const EdgeInsetsDirectional.symmetric(
+                horizontal: 8,
+                vertical: 6,
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.sort_rounded, size: 20, color: _textSecondary),
+                  const SizedBox(width: 4),
+                  Text(
+                    '$shown',
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                      color: _textSecondary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _buildFilterChip({
+  Widget _filterChip({
     required _ContactFilter filter,
     required String label,
+    required IconData icon,
     String? tooltip,
   }) {
     final selected = _filter == filter;
     final chip = FilterChip(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      labelPadding: const EdgeInsets.symmetric(horizontal: 4),
+      visualDensity: VisualDensity.compact,
+      padding: const EdgeInsetsDirectional.symmetric(horizontal: 6),
+      avatar: Icon(
+        icon,
+        size: 16,
+        color: selected ? AppColors.primary : _textSecondary,
+      ),
       label: Text(
         label,
         style: TextStyle(
           fontWeight: FontWeight.w600,
-          fontSize: 13.5,
-          color: selected ? _primary : _textPrimary,
+          fontSize: 12.5,
+          color: selected ? AppColors.primary : _textPrimary,
         ),
       ),
       selected: selected,
-      onSelected: (_) => setState(() => _filter = filter),
-      selectedColor: _primary.withValues(alpha: 0.2),
-      checkmarkColor: _primary,
+      onSelected: (_) => _setFilter(filter),
+      selectedColor: AppColors.accentGold.withValues(alpha: 0.22),
       showCheckmark: false,
       side: BorderSide(
-        color: selected ? _primary : _outline.withValues(alpha: 0.55),
+        color: selected
+            ? AppColors.accentGold
+            : _outline.withValues(alpha: 0.45),
         width: selected ? 1.5 : 1,
       ),
     );
@@ -306,231 +511,29 @@ class _CustomerContactsScreenState extends State<CustomerContactsScreen> {
     return chip;
   }
 
-  /// حقول البحث والترتيب والأزرار — تطوى مع التمرير (فوق شريط التصفية الثابت).
-  Widget _buildFiltersScrollCard() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: _filterBg,
-        borderRadius: AppShape.none,
-        border: Border.all(color: _outline.withValues(alpha: 0.45)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              SizedBox(
-                width: 200,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(
-                      'ترتيب',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: _textPrimary,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10),
-                      decoration: BoxDecoration(
-                        color: _surface,
-                        borderRadius: AppShape.none,
-                        border: Border.all(
-                          color: _outline.withValues(alpha: 0.55),
-                        ),
-                      ),
-                      child: DropdownButtonHideUnderline(
-                        child: DropdownButton<_ContactSort>(
-                          isExpanded: true,
-                          value: _sort,
-                          items: const [
-                            DropdownMenuItem(
-                              value: _ContactSort.nameAsc,
-                              child: Text('الاسم (أ-ي)'),
-                            ),
-                            DropdownMenuItem(
-                              value: _ContactSort.balanceDesc,
-                              child: Text('حجم الرصيد'),
-                            ),
-                          ],
-                          onChanged: (v) {
-                            if (v != null) setState(() => _sort = v);
-                          },
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const Expanded(child: SizedBox.shrink()),
-            ],
-          ),
-          const SizedBox(height: 14),
-          LayoutBuilder(
-            builder: (context, c) {
-              final row = c.maxWidth >= 560;
-              final searchField = TextField(
-                controller: _searchCtrl,
-                onSubmitted: (_) => _applySearch(),
-                decoration: InputDecoration(
-                  labelText: 'بحث بالاسم أو الهاتف أو البريد',
-                  hintText: 'مثال: محمد، 077…، name@…',
-                  filled: true,
-                  fillColor: _surface,
-                  isDense: true,
-                  border: OutlineInputBorder(
-                    borderRadius: AppShape.none,
-                    borderSide: BorderSide(color: _outline.withValues(alpha: 0.55)),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: AppShape.none,
-                    borderSide: BorderSide(color: _outline.withValues(alpha: 0.55)),
-                  ),
-                  prefixIcon: Icon(Icons.search, color: _textSecondary, size: 22),
-                ),
-              );
-              final idField = TextField(
-                controller: _idCtrl,
-                onSubmitted: (_) => _applySearch(),
-                keyboardType: TextInputType.number,
-                decoration: InputDecoration(
-                  labelText: 'رقم المعرف / الكود',
-                  hintText: 'مثال: 12 أو 000012',
-                  filled: true,
-                  fillColor: _surface,
-                  isDense: true,
-                  border: OutlineInputBorder(
-                    borderRadius: AppShape.none,
-                    borderSide: BorderSide(color: _outline.withValues(alpha: 0.55)),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: AppShape.none,
-                    borderSide: BorderSide(color: _outline.withValues(alpha: 0.55)),
-                  ),
-                  prefixIcon: Icon(Icons.tag, color: _textSecondary, size: 22),
-                ),
-              );
-              if (row) {
-                return Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(flex: 3, child: searchField),
-                    const SizedBox(width: 12),
-                    Expanded(flex: 2, child: idField),
-                  ],
-                );
-              }
-              return Column(
-                children: [
-                  searchField,
-                  const SizedBox(height: 12),
-                  idField,
-                ],
-              );
-            },
-          ),
-          const SizedBox(height: 14),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              FilledButton.icon(
-                onPressed: _applySearch,
-                icon: const Icon(Icons.search, size: 18),
-                label: const Text('تطبيق البحث'),
-                style: FilledButton.styleFrom(
-                  shape: const RoundedRectangleBorder(borderRadius: AppShape.none),
-                ),
-              ),
-              OutlinedButton.icon(
-                onPressed: _clearFilters,
-                icon: const Icon(Icons.filter_alt_off_outlined, size: 18),
-                label: const Text('مسح التصفية'),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: _textPrimary,
-                  side: BorderSide(color: _outline),
-                  shape: const RoundedRectangleBorder(borderRadius: AppShape.none),
-                ),
-              ),
-              TextButton.icon(
-                onPressed: _openAdvancedCustomers,
-                icon: Icon(Icons.manage_accounts_outlined, color: _primary, size: 20),
-                label: Text(
-                  'إدارة العملاء الكاملة',
-                  style: TextStyle(color: _primary, fontWeight: FontWeight.w600),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// شريط التصفية (الكل / دين / أقساط) — ثابت أثناء التمرير مثل تبويبات الفواتير.
-  Widget _buildContactFilterChipsStrip() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        color: _surface,
-        border: Border(
-          bottom: BorderSide(color: _outline.withValues(alpha: 0.35)),
-        ),
-      ),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          children: [
-            _buildFilterChip(
-              filter: _ContactFilter.all,
-              label: 'الكل',
-            ),
-            const SizedBox(width: 10),
-            _buildFilterChip(
-              filter: _ContactFilter.debtOrCreditSale,
-              label: 'عليهم دين أو آجل',
-              tooltip:
-                  'فواتير بيع آجل غير مرتجعة، أو رصيد مدين على الحساب — للاتصال بخصوص الدين.',
-            ),
-            const SizedBox(width: 10),
-            _buildFilterChip(
-              filter: _ContactFilter.hasInstallments,
-              label: 'عليهم أقساط',
-              tooltip:
-                  'لديهم خطة تقسيط مسجّلة — للاتصال بخصوص الأقساط.',
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   Widget _buildEmptyState() {
-    final noData =
-        context.read<CustomersProvider>().items.isEmpty &&
-        _appliedText.trim().isEmpty &&
-        _appliedId.trim().isEmpty;
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 48, horizontal: 16),
-      decoration: BoxDecoration(
-        color: _surface,
-        borderRadius: AppShape.none,
-        border: Border.all(color: _outline.withValues(alpha: 0.35)),
-      ),
+    final noData = context.read<CustomersProvider>().items.isEmpty &&
+        _searchCtrl.text.trim().isEmpty;
+    final debtEmpty =
+        _filter == _ContactFilter.debtOrCreditSale && !noData;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 40, horizontal: 16),
       child: Column(
         children: [
-          Icon(Icons.contact_phone_outlined, size: 56, color: _textSecondary),
+          Icon(
+            debtEmpty
+                ? Icons.account_balance_wallet_outlined
+                : Icons.contact_phone_outlined,
+            size: 48,
+            color: _textSecondary,
+          ),
           const SizedBox(height: 12),
           Text(
             noData
                 ? 'لا توجد جهات اتصال بعد'
-                : 'لا توجد نتائج مطابقة. غيّر البحث أو أضف عميلاً.',
+                : debtEmpty
+                    ? 'لا يوجد عملاء عليهم دين حالياً'
+                    : 'لا توجد نتائج مطابقة. غيّر البحث أو أضف عميلاً.',
             textAlign: TextAlign.center,
             style: TextStyle(color: _textSecondary, fontSize: 15),
           ),
@@ -547,379 +550,155 @@ class _CustomerContactsScreenState extends State<CustomerContactsScreen> {
     );
   }
 
-  Widget _tableHeader(bool narrow) {
-    return Container(
-      padding: EdgeInsets.symmetric(horizontal: narrow ? 8 : 12, vertical: 12),
-      decoration: BoxDecoration(color: _filterBg),
-      child: narrow
-          ? Row(
-              children: [
-                const SizedBox(width: 44),
-        Text(
-                  'الرصيد',
-          style: TextStyle(
-            fontWeight: FontWeight.w600,
-                    fontSize: 12,
-                    color: _textPrimary,
-                  ),
-                ),
-                Expanded(
-                  child: Text(
-                    'العميل',
-                    textAlign: TextAlign.right,
-                    style: TextStyle(
-                      fontWeight: FontWeight.w700,
-                      fontSize: 13,
-                      color: _textPrimary,
-                    ),
-                  ),
-                ),
-              ],
-            )
-          : const Row(
-              children: [
-                SizedBox(width: 44),
-                SizedBox(
-                  width: 88,
-                  child: Text(
-                    'الحالة',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
-                  ),
-                ),
-                Expanded(
-                  flex: 2,
-                  child: Text(
-                    'الرصيد',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
-                  ),
-                ),
-                Expanded(
-                  flex: 2,
-                  child: Text(
-                    'البريد',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
-                  ),
-                ),
-                Expanded(
-                  flex: 2,
-                  child: Text(
-                    'الهاتف',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
-                  ),
-                ),
-                Expanded(
-                  flex: 4,
-                  child: Text(
-                    'العميل',
-                    textAlign: TextAlign.right,
-                    style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
-          ),
-        ),
-      ],
-            ),
-    );
-  }
-
-  /// شارات «آجل / تقسيط» من قاعدة البيانات — تظهر بجانب الاسم للتمييز السريع.
-  Widget _financeBadges(
-    CustomerRecord c,
-    Map<int, ({int creditInvoices, int installmentPlans})> financeById,
-  ) {
-    final fin = financeById[c.id] ?? (creditInvoices: 0, installmentPlans: 0);
-    if (fin.creditInvoices == 0 && fin.installmentPlans == 0) {
-      return const SizedBox.shrink();
-    }
-    return Padding(
-      padding: const EdgeInsets.only(top: 5),
-      child: Wrap(
-        spacing: 8,
-        runSpacing: 6,
-          children: [
-          if (fin.creditInvoices > 0)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-              decoration: BoxDecoration(
-                color: const Color(0xFFFF9800).withValues(alpha: 0.16),
-                borderRadius: AppShape.none,
-                border: Border.all(
-                  color: const Color(0xFFFF9800).withValues(alpha: 0.45),
-                ),
-              ),
-                child: Text(
-                'بيع آجل ×${fin.creditInvoices}',
-                style: const TextStyle(
-                  fontSize: 10.5,
-                  fontWeight: FontWeight.w700,
-                  color: Color(0xFFE65100),
-                ),
-              ),
-            ),
-          if (fin.installmentPlans > 0)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-              decoration: BoxDecoration(
-                color: const Color(0xFF00897B).withValues(alpha: 0.14),
-                borderRadius: AppShape.none,
-                border: Border.all(
-                  color: const Color(0xFF00897B).withValues(alpha: 0.45),
-                ),
-              ),
-              child: Text(
-                'تقسيط ×${fin.installmentPlans}',
-                style: const TextStyle(
-                  fontSize: 10.5,
-                  fontWeight: FontWeight.w700,
-                  color: Color(0xFF00695C),
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _tableRow(
-    CustomerRecord c,
-    bool narrow,
-    Map<int, ({int creditInvoices, int installmentPlans})> financeById,
-  ) {
+  Widget _contactCard(
+    CustomerRecord c, {
+    required bool showDebtAmount,
+    required int openRemainingFils,
+  }) {
     final initial = c.name.isNotEmpty ? c.name.substring(0, 1) : '?';
-    final idStr = '#${c.id.toString().padLeft(5, '0')}';
-    final phone = (c.phone?.trim().isNotEmpty == true) ? c.phone! : '—';
-    final email = (c.email?.trim().isNotEmpty == true) ? c.email! : '—';
+    final phone = (c.phone?.trim().isNotEmpty == true) ? c.phone!.trim() : null;
     final av = _avatarColor(c.id);
-    final st = c.statusLabel;
-    final bal = IraqiCurrencyFormat.formatIqd(c.balance);
+    final debtIqd = openRemainingFils > 0
+        ? openRemainingFils / 1000.0
+        : (c.balance > 0.01 ? c.balance : 0.0);
+    final debtLabel = IraqiCurrencyFormat.formatIqd(debtIqd);
 
     return Material(
       color: _surface,
+      elevation: 0.5,
+      shadowColor: Colors.black.withValues(alpha: 0.06),
       child: InkWell(
         onTap: () => _openFinancialDetail(c),
         child: Padding(
-          padding: EdgeInsets.symmetric(horizontal: narrow ? 8 : 10, vertical: 10),
-          child: narrow
-              ? Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-                    _rowMenu(c),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        Text(
-                          bal,
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w600,
-                            fontSize: 12.5,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: _statusColor(st).withValues(alpha: 0.15),
-                            borderRadius: AppShape.none,
-                          ),
-                          child: Text(
-                            st,
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
-                              color: _statusColor(st),
-                            ),
-                          ),
+          padding: const EdgeInsetsDirectional.fromSTEB(12, 10, 4, 10),
+          child: Row(
+            children: [
+              CircleAvatar(
+                radius: 20,
+                backgroundColor: av.withValues(alpha: 0.18),
+                foregroundColor: av,
+                child: Text(
+                  initial,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
                 ),
-              ],
-            ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Row(
-                        children: [
-                          CircleAvatar(
-                            radius: 20,
-                            backgroundColor: av.withValues(alpha: 0.2),
-                            foregroundColor: av,
-                            child: Text(
-                              initial,
-                              style: const TextStyle(fontWeight: FontWeight.w700),
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                                  c.name,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w600,
-                                    fontSize: 14,
-                                  ),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  idStr,
-                                  style: TextStyle(fontSize: 11.5, color: _textSecondary),
-                                ),
-                                _financeBadges(c, financeById),
-                                if (phone != '—') ...[
-                                  const SizedBox(height: 4),
-                                  Row(
-                    children: [
-                                      Icon(Icons.phone_outlined, size: 14, color: _textSecondary),
-                                      const SizedBox(width: 4),
-                                      Expanded(
-                                        child: Text(
-                        phone,
-                        style: TextStyle(
-                                            fontSize: 12.5,
-                                            color: _textSecondary,
-                                            fontWeight: FontWeight.w600,
-                        ),
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      c.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14.5,
                       ),
-                                      ),
+                    ),
+                    if (phone != null) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        phone,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          color: _textSecondary,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
                     ],
+                  ],
+                ),
+              ),
+              if (showDebtAmount)
+                Padding(
+                  padding: const EdgeInsetsDirectional.only(end: 2),
+                  child: TextButton(
+                    onPressed: () => _openDebtPayPage(c),
+                    style: TextButton.styleFrom(
+                      foregroundColor: AppSemanticColors.warning,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 6,
+                      ),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: Text(
+                      debtLabel,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 13.5,
+                      ),
+                    ),
+                  ),
+                ),
+              IconButton(
+                tooltip: 'واتساب',
+                visualDensity: VisualDensity.compact,
+                onPressed: phone == null
+                    ? null
+                    : () => unawaited(_openWhatsApp(phone)),
+                icon: Icon(
+                  Icons.chat_rounded,
+                  size: 22,
+                  color: phone == null
+                      ? _textSecondary.withValues(alpha: 0.35)
+                      : const Color(0xFF25D366),
+                ),
+              ),
+              IconButton(
+                tooltip: 'اتصال',
+                visualDensity: VisualDensity.compact,
+                onPressed: phone == null
+                    ? null
+                    : () => unawaited(_dialCustomer(phone)),
+                icon: Icon(
+                  Icons.phone_outlined,
+                  size: 20,
+                  color: phone == null
+                      ? _textSecondary.withValues(alpha: 0.35)
+                      : AppColors.accentBlue,
+                ),
+              ),
+              PopupMenuButton<String>(
+                tooltip: 'إجراءات',
+                padding: EdgeInsets.zero,
+                onSelected: (v) {
+                  if (v == 'edit') _openEditor(customer: c);
+                  if (v == 'detail') _openFinancialDetail(c);
+                  if (v == 'pay') _openDebtPayPage(c);
+                  if (v == 'delete') _confirmDelete(c);
+                },
+                itemBuilder: (_) => [
+                  const PopupMenuItem(
+                    value: 'detail',
+                    child: Text('التفاصيل المالية'),
+                  ),
+                  if (showDebtAmount)
+                    const PopupMenuItem(
+                      value: 'pay',
+                      child: Text('تسديد الدين'),
+                    ),
+                  const PopupMenuItem(
+                    value: 'edit',
+                    child: Text('تعديل البيانات'),
+                  ),
+                  const PopupMenuDivider(),
+                  const PopupMenuItem(
+                    value: 'delete',
+                    child: Text(
+                      'حذف',
+                      style: TextStyle(color: AppSemanticColors.danger),
+                    ),
                   ),
                 ],
-              ],
-            ),
+                icon: Icon(Icons.more_vert, color: _textSecondary, size: 20),
+              ),
+            ],
           ),
-        ],
-      ),
-                    ),
-                  ],
-                )
-              : Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                    _rowMenu(c),
-                    SizedBox(
-                      width: 88,
-                      child: Center(
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: _statusColor(st).withValues(alpha: 0.15),
-                            borderRadius: AppShape.none,
-                          ),
-                          child: Text(
-                            st,
-                            style: TextStyle(
-                              fontSize: 11.5,
-                              fontWeight: FontWeight.w600,
-                              color: _statusColor(st),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                      Expanded(
-                      flex: 2,
-                        child: Text(
-                        bal,
-                        textAlign: TextAlign.center,
-                          style: const TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 13,
-                          ),
-                        ),
-                      ),
-                    Expanded(
-                      flex: 2,
-                      child: Text(
-                        email,
-                        textAlign: TextAlign.center,
-                        style: TextStyle(fontSize: 12.5, color: _textSecondary),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    Expanded(
-                      flex: 2,
-                      child: Text(
-                        phone,
-                        textAlign: TextAlign.center,
-                        style: TextStyle(fontSize: 13, color: _textSecondary),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                Expanded(
-                      flex: 4,
-                      child: Row(
-                        children: [
-                          CircleAvatar(
-                            radius: 22,
-                            backgroundColor: av.withValues(alpha: 0.2),
-                            foregroundColor: av,
-                            child: Text(
-                              initial,
-                              style: const TextStyle(fontWeight: FontWeight.w700),
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                    child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                                Text(
-                                  c.name,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w600,
-                                    fontSize: 14,
-                                  ),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  idStr,
-                                  style: TextStyle(fontSize: 11.5, color: _textSecondary),
-                                ),
-                                _financeBadges(c, financeById),
-                              ],
-                            ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  ],
-                ),
-        ),
-      ),
-    );
-  }
-
-  Widget _rowMenu(CustomerRecord c) {
-    return SizedBox(
-      width: 44,
-      child: PopupMenuButton<String>(
-        tooltip: 'إجراءات',
-        shape: const RoundedRectangleBorder(borderRadius: AppShape.none),
-        onSelected: (v) {
-          if (v == 'edit') _openEditor(customer: c);
-          if (v == 'detail') _openFinancialDetail(c);
-          if (v == 'delete') _confirmDelete(c);
-        },
-        itemBuilder: (ctx) => [
-          const PopupMenuItem(value: 'detail', child: Text('التفاصيل المالية')),
-          const PopupMenuItem(value: 'edit', child: Text('تعديل البيانات')),
-          const PopupMenuDivider(),
-          const PopupMenuItem(
-            value: 'delete',
-            child: Text('حذف', style: TextStyle(color: Colors.red)),
-          ),
-        ],
-        child: Padding(
-          padding: const EdgeInsets.all(8),
-          child: Icon(Icons.more_vert, color: _textSecondary),
         ),
       ),
     );
@@ -928,13 +707,20 @@ class _CustomerContactsScreenState extends State<CustomerContactsScreen> {
   @override
   Widget build(BuildContext context) {
     return Consumer<CustomersProvider>(
-      builder: (context, prov, _) {
-        final loading = prov.isLoading && prov.items.isEmpty;
+      child: _buildSearchDock(),
+      builder: (context, prov, searchDock) {
+        final debtMode = _filter == _ContactFilter.debtOrCreditSale;
+        final loading = debtMode
+            ? (prov.isLoadingDebtors && prov.debtorItems.isEmpty)
+            : (prov.isLoading &&
+                prov.items.isEmpty &&
+                _searchCtrl.text.isEmpty);
         final financeById = prov.financeById;
-        final visible = _visible(prov.items, financeById);
-        final total = visible.length;
-
+        final openDebtIds = prov.openDebtIds;
+        final source = debtMode ? prov.debtorItems : prov.items;
+        final visible = _visible(source, openDebtIds, financeById);
         final gap = ScreenLayout.of(context).pageHorizontalGap;
+        final debtBadgeCount = openDebtIds.length;
 
         return Directionality(
           textDirection: TextDirection.rtl,
@@ -943,165 +729,83 @@ class _CustomerContactsScreenState extends State<CustomerContactsScreen> {
             appBar: _buildAppBar(),
             body: loading
                 ? const Center(child: CircularProgressIndicator())
-                : LayoutBuilder(
-                    builder: (context, constraints) {
-                      final narrow = constraints.maxWidth < 720;
-                      return NotificationListener<ScrollNotification>(
-                        onNotification: (n) {
-                          if (n.metrics.extentAfter < 360) {
-                            unawaited(prov.loadMore());
-                          }
-                          return false;
-                        },
-                        child: CustomScrollView(
-                          slivers: [
-                            SliverToBoxAdapter(
-                              child: _buildToolbar(total),
-                            ),
-                            SliverPadding(
-                              padding: EdgeInsets.fromLTRB(gap, 0, gap, 12),
-                              sliver: SliverToBoxAdapter(
-                                child: _buildFiltersScrollCard(),
-                              ),
-                            ),
-                            SliverPersistentHeader(
-                              pinned: true,
-                              delegate: _StickyContactFiltersDelegate(
-                                background: _surface,
-                                outline: _outline,
-                                child: _buildContactFilterChipsStrip(),
-                              ),
-                            ),
-                            if (total == 0)
-                              SliverPadding(
-                                padding: EdgeInsets.fromLTRB(gap, 12, gap, 24),
-                                sliver: SliverToBoxAdapter(
-                                  child: _buildEmptyState(),
-                                ),
-                              )
-                            else ...[
-                              SliverPadding(
-                                padding: EdgeInsets.fromLTRB(gap, 12, gap, 0),
-                                sliver: SliverToBoxAdapter(
-                                  child: Container(
-                                    decoration: BoxDecoration(
-                                      color: _surface,
-                                      borderRadius: AppShape.none,
-                                      border: Border.all(
-                                        color: _outline.withValues(alpha: 0.35),
-                                      ),
-                                      boxShadow: [
-                                        BoxShadow(
-                                          color: Colors.black.withValues(alpha: 0.04),
-                                          blurRadius: 8,
-                                          offset: const Offset(0, 2),
-                                        ),
-                                      ],
-                                    ),
-                                    child: Column(
-                                      children: [
-                                        _tableHeader(narrow),
-                                        const Divider(height: 1),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              SliverPadding(
-                                padding: EdgeInsets.fromLTRB(gap, 0, gap, 24),
-                                sliver: SliverList(
-                                  delegate: SliverChildBuilderDelegate(
-                                    (context, i) {
-                                      if (i >= visible.length) return null;
-                                      final c = visible[i];
-                                      return Column(
-                                        children: [
-                                          if (i > 0)
-                                            Divider(
-                                              height: 1,
-                                              color: _outline.withValues(alpha: 0.35),
-                                            ),
-                                          Container(
-                                            decoration: BoxDecoration(
-                                              color: _surface,
-                                              border: Border(
-                                                left: BorderSide(
-                                                  color: _outline.withValues(alpha: 0.35),
-                                                ),
-                                                right: BorderSide(
-                                                  color: _outline.withValues(alpha: 0.35),
-                                                ),
-                                              ),
-                                            ),
-                                            child: _tableRow(c, narrow, financeById),
-                                          ),
-                                          if (i == visible.length - 1)
-                                            Container(
-                                              height: 1,
-                                              color: _outline.withValues(alpha: 0.35),
-                                            ),
-                                        ],
-                                      );
-                                    },
-                                    childCount: visible.length,
-                                  ),
-                                ),
-                              ),
-                            ],
-                            if (prov.isLoadingMore)
-                              const SliverToBoxAdapter(
-                                child: Padding(
-                                  padding: EdgeInsets.symmetric(vertical: 16),
-                                  child: Center(child: CircularProgressIndicator()),
-                                ),
-                              ),
-                          ],
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Padding(
+                        padding: EdgeInsets.fromLTRB(gap, 10, gap, 0),
+                        child: searchDock,
+                      ),
+                      Padding(
+                        padding: EdgeInsets.symmetric(horizontal: gap),
+                        child: _buildFilterStrip(
+                          visible.length,
+                          debtBadgeCount,
                         ),
-                      );
-                    },
+                      ),
+                      Expanded(
+                        child: NotificationListener<ScrollNotification>(
+                          onNotification: (n) {
+                            if (!debtMode && n.metrics.extentAfter < 360) {
+                              unawaited(prov.loadMore());
+                            }
+                            return false;
+                          },
+                          child: CustomScrollView(
+                            keyboardDismissBehavior:
+                                ScrollViewKeyboardDismissBehavior.onDrag,
+                            slivers: [
+                              if (visible.isEmpty)
+                                SliverToBoxAdapter(child: _buildEmptyState())
+                              else
+                                SliverPadding(
+                                  padding: EdgeInsets.fromLTRB(
+                                    gap,
+                                    4,
+                                    gap,
+                                    24,
+                                  ),
+                                  sliver: SliverList(
+                                    delegate: SliverChildBuilderDelegate(
+                                      (context, i) {
+                                        final c = visible[i];
+                                        final fin = financeById[c.id];
+                                        return Padding(
+                                          padding: EdgeInsets.only(
+                                            bottom:
+                                                i == visible.length - 1 ? 0 : 8,
+                                          ),
+                                          child: _contactCard(
+                                            c,
+                                            showDebtAmount: _filter ==
+                                                _ContactFilter.debtOrCreditSale,
+                                            openRemainingFils:
+                                                fin?.openRemainingFils ?? 0,
+                                          ),
+                                        );
+                                      },
+                                      childCount: visible.length,
+                                    ),
+                                  ),
+                                ),
+                              if (prov.isLoadingMore)
+                                const SliverToBoxAdapter(
+                                  child: Padding(
+                                    padding: EdgeInsets.symmetric(vertical: 16),
+                                    child: Center(
+                                      child: CircularProgressIndicator(),
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
           ),
         );
       },
     );
-  }
-}
-
-class _StickyContactFiltersDelegate extends SliverPersistentHeaderDelegate {
-  _StickyContactFiltersDelegate({
-    required this.child,
-    required this.background,
-    required this.outline,
-  });
-
-  final Widget child;
-  final Color background;
-  final Color outline;
-
-  @override
-  double get minExtent => 60;
-
-  @override
-  double get maxExtent => 60;
-
-  @override
-  Widget build(
-    BuildContext context,
-    double shrinkOffset,
-    bool overlapsContent,
-  ) {
-    return Material(
-      color: background,
-      elevation: overlapsContent ? 2 : 0,
-      shadowColor: Colors.black.withValues(alpha: 0.1),
-      child: child,
-    );
-  }
-
-  @override
-  bool shouldRebuild(covariant _StickyContactFiltersDelegate oldDelegate) {
-    return oldDelegate.child != child ||
-        oldDelegate.background != background ||
-        oldDelegate.outline != outline;
   }
 }

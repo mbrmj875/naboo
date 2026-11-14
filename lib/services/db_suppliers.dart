@@ -297,7 +297,14 @@ extension DbSuppliers on DatabaseHelper {
           ? null
           : int.tryParse((rows.first['value'] ?? '').toString());
       if (fromSettings != null && fromSettings > 0) return fromSettings;
-    } catch (_) {}
+    } catch (e, st) {
+      AppLogger.error(
+        'DBSuppliers',
+        'فشل قراءة active_tenant_id — fallback',
+        e,
+        st,
+      );
+    }
     final parsed = _tryParseLocalTenantId(sessionTenant);
     return parsed != null && parsed > 0 ? parsed : 1;
   }
@@ -858,7 +865,7 @@ extension DbSuppliers on DatabaseHelper {
         );
       }
 
-      if (affectsCash && amount > 1e-9) {
+      if (affectsCash && (amount * 1000).round() > 0) {
         int? openShiftId;
         final ws = await txn.query(
           'work_shifts',

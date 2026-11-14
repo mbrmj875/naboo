@@ -78,6 +78,20 @@ class AppSettingsRepository {
     }
     return out;
   }
+
+  /// أي مستأجر — مفيد بعد استيراد اللقطة (قد يختلف tenantId عن النشط محلياً).
+  Future<bool> hasAnyScopedKeyValue(String key, String value) async {
+    final db = await _db;
+    await _ensureSettingsTable(db);
+    final rows = await db.query(
+      'app_settings',
+      columns: const ['key'],
+      where: 'key LIKE ? AND value = ?',
+      whereArgs: ['%:$key', value],
+      limit: 1,
+    );
+    return rows.isNotEmpty;
+  }
 }
 
 /// مفاتيح إعدادات الباركود (مخزن — قيم افتراضية في [BarcodeSettingsData.defaults]).

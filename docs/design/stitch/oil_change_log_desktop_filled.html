@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+
+<html dir="rtl" lang="ar"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>سجل غيارات الزيت | Al-Mudir ERP</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "on-error": "#ffffff",
+                    "error": "#ba1a1a",
+                    "surface-container-low": "#f6f2f7",
+                    "primary-container": "#081b37",
+                    "on-tertiary-fixed-variant": "#564500",
+                    "secondary-fixed": "#ffe081",
+                    "on-secondary-container": "#735d00",
+                    "on-error-container": "#93000a",
+                    "inverse-on-surface": "#f3f0f4",
+                    "outline": "#75777e",
+                    "surface-container-lowest": "#ffffff",
+                    "primary-fixed": "#d7e3ff",
+                    "on-primary-container": "#7484a5",
+                    "on-secondary-fixed": "#231b00",
+                    "tertiary-fixed": "#ffe082",
+                    "secondary-fixed-dim": "#e9c340",
+                    "on-secondary": "#ffffff",
+                    "primary": "#152B47", /* Navy from prompt */
+                    "inverse-surface": "#303033",
+                    "on-primary-fixed-variant": "#374765",
+                    "on-tertiary-fixed": "#231b00",
+                    "secondary-container": "#fed752",
+                    "surface-container-high": "#eae7eb",
+                    "outline-variant": "#c5c6ce",
+                    "tertiary-container": "#cca825",
+                    "surface-tint": "#4e5f7e",
+                    "primary-fixed-dim": "#b6c7eb",
+                    "error-container": "#ffdad6",
+                    "surface-variant": "#e4e1e5",
+                    "surface-bright": "#fbf8fc",
+                    "inverse-primary": "#b6c7eb",
+                    "on-surface-variant": "#44474d",
+                    "background": "#F7F4EF", /* Ivory from prompt */
+                    "surface": "#ffffff",
+                    "on-tertiary-container": "#4e3e00",
+                    "tertiary-fixed-dim": "#e9c340",
+                    "surface-container": "#f0edf1",
+                    "on-secondary-fixed-variant": "#564500",
+                    "secondary": "#C9A85C", /* Gold from prompt */
+                    "tertiary": "#725c00",
+                    "on-background": "#1b1b1e",
+                    "on-surface": "#1b1b1e",
+                    "on-primary-fixed": "#081b37",
+                    "surface-dim": "#dcd9dd",
+                    "on-primary": "#ffffff",
+                    "surface-container-highest": "#e4e1e5",
+                    "on-tertiary": "#ffffff"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.25rem",
+                    "lg": "0.5rem",
+                    "xl": "0.75rem",
+                    "full": "9999px"
+            },
+            "spacing": {
+                    "xs": "4px",
+                    "xl": "24px",
+                    "sm": "8px",
+                    "base": "4px",
+                    "margin-mobile": "16px",
+                    "gutter": "12px",
+                    "md": "12px",
+                    "lg": "16px"
+            },
+            "fontFamily": {
+                    "label-md": ["IBM Plex Sans Arabic"],
+                    "headline-lg": ["IBM Plex Sans Arabic"],
+                    "headline-md": ["IBM Plex Sans Arabic"],
+                    "body-md": ["IBM Plex Sans Arabic"],
+                    "label-sm": ["IBM Plex Sans Arabic"],
+                    "display-price": ["IBM Plex Sans Arabic"],
+                    "body-lg": ["IBM Plex Sans Arabic"],
+                    "display-price-sm": ["IBM Plex Sans Arabic"]
+            },
+            "fontSize": {
+                    "label-md": ["12px", {"lineHeight": "16px", "fontWeight": "500"}],
+                    "headline-lg": ["20px", {"lineHeight": "28px", "fontWeight": "600"}],
+                    "headline-md": ["18px", {"lineHeight": "24px", "fontWeight": "600"}],
+                    "body-md": ["14px", {"lineHeight": "20px", "fontWeight": "400"}],
+                    "label-sm": ["10px", {"lineHeight": "14px", "fontWeight": "500"}],
+                    "display-price": ["22px", {"lineHeight": "28px", "fontWeight": "700"}],
+                    "body-lg": ["16px", {"lineHeight": "24px", "fontWeight": "400"}],
+                    "display-price-sm": ["18px", {"lineHeight": "24px", "fontWeight": "700"}]
+            }
+          },
+        },
+      }
+    </script>
+<style>
+        body { font-family: 'IBM Plex Sans Arabic', sans-serif; }
+        .custom-scrollbar::-webkit-scrollbar { height: 6px; width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #C9A85C55; border-radius: 10px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #C9A85C; }
+        .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+    </style>
+</head>
+<body class="bg-background text-on-background min-h-screen flex flex-row-reverse overflow-hidden">
+<!-- Right Sidebar: Navigation Rail -->
+<aside class="fixed right-0 top-0 h-full z-50 flex flex-col p-md bg-surface-bright shadow-xl w-64 border-l border-outline-variant">
+<div class="mb-xl px-sm">
+<h1 class="font-headline-md text-headline-md font-bold text-primary">Al-Mudir ERP</h1>
+<p class="text-label-sm text-on-surface-variant">نظام إدارة الورشة</p>
+</div>
+<div class="flex flex-col gap-sm flex-1">
+<nav class="space-y-1">
+<a class="flex items-center gap-md p-md bg-secondary-container text-on-secondary-container rounded-lg font-bold transition-all duration-300" href="#">
+<span class="material-symbols-outlined">dashboard</span>
+<span class="font-body-md text-body-md">لوحة القيادة</span>
+</a>
+<a class="flex items-center gap-md p-md text-on-surface-variant hover:bg-surface-container-high rounded-lg transition-all duration-300" href="#">
+<span class="material-symbols-outlined">receipt_long</span>
+<span class="font-body-md text-body-md">السجلات</span>
+</a>
+<a class="flex items-center gap-md p-md text-on-surface-variant hover:bg-surface-container-high rounded-lg transition-all duration-300" href="#">
+<span class="material-symbols-outlined">local_shipping</span>
+<span class="font-body-md text-body-md">الموردين</span>
+</a>
+<a class="flex items-center gap-md p-md text-on-surface-variant hover:bg-surface-container-high rounded-lg transition-all duration-300" href="#">
+<span class="material-symbols-outlined">assessment</span>
+<span class="font-body-md text-body-md">التقارير</span>
+</a>
+</nav>
+</div>
+<div class="mt-auto pt-md border-t border-outline-variant flex items-center gap-md">
+<div class="w-10 h-10 rounded-full bg-primary-fixed flex items-center justify-center overflow-hidden">
+<img class="w-full h-full object-cover" data-alt="A professional headshot of a Middle Eastern business owner named Ahmed Hassan, smiling confidently in a modern office environment. He wears a sharp corporate suit. The lighting is soft and professional, reflecting a premium enterprise identity with a palette of navy and warm tones." src="https://lh3.googleusercontent.com/aida-public/AB6AXuCjoSXMs43snRIC5Cb8aaFHiGruibpLfHxnM7wa08lFkPBYHXbvEEV7CLHefGCcwfUeuhVL2rtpnD-aCLxtnQb3PUYXT8xKQkUcWNBIqfD49QjPbwtaY-ciFMEvhLzW_fmt8vTQebERdE0NZRM34T2K8sUWysPfHr0qQcedQPyE7rHnpiw1jD011m6gyB-VJqbHa8mMzRiWVJDYabfzFF-Ix3PJN7UCp2M4AL6enojAyLqO5vr-aO4zvTQIhx7kTxu6MVoeBwPy4c2-"/>
+</div>
+<div>
+<p class="font-label-md text-label-md font-bold text-on-surface">أحمد حسان</p>
+<p class="text-label-sm text-on-surface-variant">الرافدين للتجارة</p>
+</div>
+<button class="mr-auto text-on-surface-variant hover:text-primary">
+<span class="material-symbols-outlined">settings</span>
+</button>
+</div>
+</aside>
+<!-- Main Content Area -->
+<main class="flex-1 mr-64 flex flex-col h-screen overflow-hidden">
+<!-- Top Toolbar -->
+<header class="bg-surface px-xl py-lg flex flex-col gap-md shadow-sm z-10">
+<div class="flex items-center justify-between">
+<h2 class="font-headline-lg text-headline-lg font-bold text-primary">سجل غيارات الزيت</h2>
+<div class="flex items-center gap-md">
+<!-- Search Pill -->
+<div class="relative group">
+<span class="material-symbols-outlined absolute right-3 top-1/2 -translate-y-1/2 text-outline">search</span>
+<input class="pr-10 pl-4 py-2 bg-surface-container-low border-none rounded-full w-64 focus:ring-2 focus:ring-secondary transition-all font-body-md text-body-md" placeholder="بحث في السجل..." type="text"/>
+</div>
+<button class="flex items-center gap-sm px-lg py-2 border border-outline-variant text-primary rounded-full hover:bg-surface-container-low transition-all font-label-md text-label-md">
+<span class="material-symbols-outlined text-[18px]">chat</span>
+                        إرسال واتساب
+                    </button>
+<button class="flex items-center gap-sm px-lg py-2 bg-primary text-white rounded-full hover:opacity-90 shadow-md transition-all font-label-md text-label-md">
+<span class="material-symbols-outlined text-[18px]">add</span>
+                        بطاقة غيار زيت جديدة
+                    </button>
+</div>
+</div>
+<div class="flex items-center justify-between border-b border-outline-variant">
+<div class="flex gap-xl">
+<button class="pb-2 border-b-2 border-secondary text-primary font-bold font-label-md text-label-md">السجل</button>
+<button class="pb-2 border-b-2 border-transparent text-on-surface-variant hover:text-primary font-label-md text-label-md transition-all">المعلّقة</button>
+</div>
+<p class="text-label-sm text-on-surface-variant italic mb-2">بطاقة سريعة مثل النموذج الورقي — السجل أدناه مثل Excel على الشاشات العريضة</p>
+</div>
+</header>
+<!-- Data Panel Section -->
+<section class="flex-1 p-xl overflow-hidden flex flex-col">
+<div class="bg-white rounded-xl border border-secondary shadow-sm flex flex-col h-full overflow-hidden">
+<!-- Table Header Group -->
+<div class="bg-[#F7F4EF] px-lg py-sm border-b border-secondary flex items-center justify-between">
+<div class="flex items-center gap-lg">
+<span class="font-bold text-primary font-body-md text-body-md">الاثنين ٦ يوليو ٢٠٢٦</span>
+<div class="h-4 w-px bg-outline-variant"></div>
+<span class="text-secondary font-medium font-label-md text-label-md">5 بطاقة · 18.0 لتر محل</span>
+</div>
+<div class="flex gap-sm">
+<button class="p-1 hover:bg-surface-container-high rounded text-on-surface-variant transition-colors">
+<span class="material-symbols-outlined text-[20px]">filter_list</span>
+</button>
+<button class="p-1 hover:bg-surface-container-high rounded text-on-surface-variant transition-colors">
+<span class="material-symbols-outlined text-[20px]">download</span>
+</button>
+</div>
+</div>
+<!-- Spreadsheet Table -->
+<div class="flex-1 overflow-auto custom-scrollbar">
+<table class="w-full text-right border-collapse min-w-[1600px]">
+<thead class="sticky top-0 bg-white z-10">
+<tr class="border-b border-outline-variant">
+<th class="p-md font-label-md text-label-md text-on-surface-variant font-bold border-l border-outline-variant">العميل</th>
+<th class="p-md font-label-md text-label-md text-on-surface-variant font-bold border-l border-outline-variant">السيارة</th>
+<th class="p-md font-label-md text-label-md text-on-surface-variant font-bold border-l border-outline-variant">الموديل</th>
+<th class="p-md font-label-md text-label-md text-on-surface-variant font-bold border-l border-outline-variant">حجم المحرك</th>
+<th class="p-md font-label-md text-label-md text-on-surface-variant font-bold border-l border-outline-variant">رقم اللوحة</th>
+<th class="p-md font-label-md text-label-md text-on-surface-variant font-bold border-l border-outline-variant">القراءة الحالية</th>
+<th class="p-md font-label-md text-label-md text-on-surface-variant font-bold border-l border-outline-variant">القراءة القادمة</th>
+<th class="p-md font-label-md text-label-md text-on-surface-variant font-bold border-l border-outline-variant">مصدر الزيت</th>
+<th class="p-md font-label-md text-label-md text-on-surface-variant font-bold border-l border-outline-variant">نوع الزيت</th>
+<th class="p-md font-label-md text-label-md text-on-surface-variant font-bold border-l border-outline-variant">اللزوجة</th>
+<th class="p-md font-label-md text-label-md text-on-surface-variant font-bold border-l border-outline-variant">اللترات</th>
+<th class="p-md font-label-md text-label-md text-on-surface-variant font-bold border-l border-outline-variant">الفلتر</th>
+<th class="p-md font-label-md text-label-md text-on-surface-variant font-bold border-l border-outline-variant">الخدمات</th>
+<th class="p-md font-label-md text-label-md text-on-surface-variant font-bold border-l border-outline-variant">السعر</th>
+<th class="p-md font-label-md text-label-md text-on-surface-variant font-bold border-l border-outline-variant">الفني</th>
+<th class="p-md font-label-md text-label-md text-on-surface-variant font-bold border-l border-outline-variant">ملاحظات</th>
+<th class="p-md font-label-md text-label-md text-on-surface-variant font-bold sticky left-0 bg-white">تفاصيل</th>
+</tr>
+</thead>
+<tbody class="font-body-md text-body-md">
+<!-- Row 1 -->
+<tr class="border-b border-outline-variant hover:bg-surface-container-low transition-colors group">
+<td class="p-md border-l border-outline-variant font-medium">محمد جاسم العبيدي</td>
+<td class="p-md border-l border-outline-variant">تويوتا كورولا</td>
+<td class="p-md border-l border-outline-variant">٢٠٢٣</td>
+<td class="p-md border-l border-outline-variant">1.8L</td>
+<td class="p-md border-l border-outline-variant">بغداد - ٤٤٥٢١ أ</td>
+<td class="p-md border-l border-outline-variant">٤٥,٢٠٠ كم</td>
+<td class="p-md border-l border-outline-variant text-error font-bold">٥٠,٢٠٠ كم</td>
+<td class="p-md border-l border-outline-variant">محل</td>
+<td class="p-md border-l border-outline-variant">Shell Helix Ultra</td>
+<td class="p-md border-l border-outline-variant">5W-30</td>
+<td class="p-md border-l border-outline-variant">٤.٢ لتر</td>
+<td class="p-md border-l border-outline-variant">أصلي</td>
+<td class="p-md border-l border-outline-variant text-on-surface-variant text-[12px]">غسيل محرك، فحص هواء</td>
+<td class="p-md border-l border-outline-variant font-bold text-secondary">٤٥,٠٠٠ د.ع</td>
+<td class="p-md border-l border-outline-variant">كرار علي</td>
+<td class="p-md border-l border-outline-variant text-on-surface-variant italic">تبديل ماسحات زجاج</td>
+<td class="p-md sticky left-0 bg-white group-hover:bg-surface-container-low">
+<button class="text-secondary hover:scale-110 transition-transform">
+<span class="material-symbols-outlined">visibility</span>
+</button>
+</td>
+</tr>
+<!-- Row 2 (Hover State Style) -->
+<tr class="border-b border-outline-variant bg-[#F7F4EF] transition-colors group">
+<td class="p-md border-l border-outline-variant font-medium">سرمد كاظم</td>
+<td class="p-md border-l border-outline-variant">هيونداي إلنترا</td>
+<td class="p-md border-l border-outline-variant">٢٠٢١</td>
+<td class="p-md border-l border-outline-variant">2.0L</td>
+<td class="p-md border-l border-outline-variant">أربيل - ٩٩٠١١ ج</td>
+<td class="p-md border-l border-outline-variant">٦٨,٠٠٠ كم</td>
+<td class="p-md border-l border-outline-variant text-error font-bold">٧٣,٠٠٠ كم</td>
+<td class="p-md border-l border-outline-variant">خارجي</td>
+<td class="p-md border-l border-outline-variant">Castrol Edge</td>
+<td class="p-md border-l border-outline-variant">5W-40</td>
+<td class="p-md border-l border-outline-variant">٤.٠ لتر</td>
+<td class="p-md border-l border-outline-variant">تجاري A</td>
+<td class="p-md border-l border-outline-variant text-on-surface-variant text-[12px]">فحص البطارية</td>
+<td class="p-md border-l border-outline-variant font-bold text-secondary">٣٥,٠٠٠ د.ع</td>
+<td class="p-md border-l border-outline-variant">ياسر حسين</td>
+<td class="p-md border-l border-outline-variant text-on-surface-variant italic">-</td>
+<td class="p-md sticky left-0 bg-[#F7F4EF]">
+<button class="text-secondary hover:scale-110 transition-transform">
+<span class="material-symbols-outlined">visibility</span>
+</button>
+</td>
+</tr>
+<!-- Row 3 -->
+<tr class="border-b border-outline-variant hover:bg-surface-container-low transition-colors group">
+<td class="p-md border-l border-outline-variant font-medium">علي مرتضى</td>
+<td class="p-md border-l border-outline-variant">كيا سبورتاج</td>
+<td class="p-md border-l border-outline-variant">٢٠٢٤</td>
+<td class="p-md border-l border-outline-variant">1.6T</td>
+<td class="p-md border-l border-outline-variant">بابل - ١٢٣٠٠ د</td>
+<td class="p-md border-l border-outline-variant">١٢,٥٠٠ كم</td>
+<td class="p-md border-l border-outline-variant text-error font-bold">١٧,٥٠٠ كم</td>
+<td class="p-md border-l border-outline-variant">محل</td>
+<td class="p-md border-l border-outline-variant">Mobil 1</td>
+<td class="p-md border-l border-outline-variant">0W-20</td>
+<td class="p-md border-l border-outline-variant">٤.٨ لتر</td>
+<td class="p-md border-l border-outline-variant">أصلي</td>
+<td class="p-md border-l border-outline-variant text-on-surface-variant text-[12px]">تغيير فلتر الهواء</td>
+<td class="p-md border-l border-outline-variant font-bold text-secondary">٦٠,٠٠٠ د.ع</td>
+<td class="p-md border-l border-outline-variant">كرار علي</td>
+<td class="p-md border-l border-outline-variant text-on-surface-variant italic">السيارة جديدة جداً</td>
+<td class="p-md sticky left-0 bg-white group-hover:bg-surface-container-low">
+<button class="text-secondary hover:scale-110 transition-transform">
+<span class="material-symbols-outlined">visibility</span>
+</button>
+</td>
+</tr>
+<!-- Row 4 -->
+<tr class="border-b border-outline-variant bg-surface-container-lowest hover:bg-surface-container-low transition-colors group">
+<td class="p-md border-l border-outline-variant font-medium">مصطفى الهاشمي</td>
+<td class="p-md border-l border-outline-variant">نيسان باترول</td>
+<td class="p-md border-l border-outline-variant">٢٠١٨</td>
+<td class="p-md border-l border-outline-variant">5.6L V8</td>
+<td class="p-md border-l border-outline-variant">نجف - ٨٨٧٢ هـ</td>
+<td class="p-md border-l border-outline-variant">١٤٥,٠٠٠ كم</td>
+<td class="p-md border-l border-outline-variant text-error font-bold">١٥٠,٠٠٠ كم</td>
+<td class="p-md border-l border-outline-variant">محل</td>
+<td class="p-md border-l border-outline-variant">ZIC X9</td>
+<td class="p-md border-l border-outline-variant">5W-30</td>
+<td class="p-md border-l border-outline-variant">٦.٥ لتر</td>
+<td class="p-md border-l border-outline-variant">أصلي</td>
+<td class="p-md border-l border-outline-variant text-on-surface-variant text-[12px]">فحص دهن الكير</td>
+<td class="p-md border-l border-outline-variant font-bold text-secondary">٨٥,٠٠٠ د.ع</td>
+<td class="p-md border-l border-outline-variant">ياسر حسين</td>
+<td class="p-md border-l border-outline-variant text-on-surface-variant italic">يحتاج تبديل بلكات قريباً</td>
+<td class="p-md sticky left-0 bg-white group-hover:bg-surface-container-low">
+<button class="text-secondary hover:scale-110 transition-transform">
+<span class="material-symbols-outlined">visibility</span>
+</button>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+<!-- Footer Stats -->
+<div class="px-xl py-md bg-white border-t border-outline-variant flex items-center justify-between font-label-md text-label-md text-on-surface-variant">
+<div class="flex gap-xl">
+<span>إجمالي اليوم: <strong>225,000 د.ع</strong></span>
+<span>عدد العمليات: <strong>4</strong></span>
+<span>زيت مستهلك: <strong>19.5 لتر</strong></span>
+</div>
+<div class="flex items-center gap-sm">
+<button class="p-2 hover:bg-surface-container-high rounded transition-colors"><span class="material-symbols-outlined">chevron_right</span></button>
+<span class="px-md">صفحة 1 من 12</span>
+<button class="p-2 hover:bg-surface-container-high rounded transition-colors"><span class="material-symbols-outlined">chevron_left</span></button>
+</div>
+</div>
+</div>
+</section>
+</main>
+<!-- Interactive Layer: Simple Tooltip Logic -->
+<script>
+        document.querySelectorAll('tbody tr').forEach(row => {
+            row.addEventListener('click', function() {
+                // Remove active state from others
+                document.querySelectorAll('tbody tr').forEach(r => r.classList.remove('bg-secondary-container/20'));
+                // Set active
+                this.classList.add('bg-secondary-container/20');
+            });
+        });
+    </script>
+</body></html>

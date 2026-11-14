@@ -8,5 +8,8 @@
 	<true/>
 	<key>com.apple.security.print</key>
 	<true/>
+	<!-- إملاء الصوت (speech_to_text) داخل بطاقة غيار الزيت -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
 </dict>
 </plist>

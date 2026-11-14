@@ -83,3 +83,48 @@ extension CustomerDebtPartyFromSummary on CustomerDebtSummary {
     );
   }
 }
+
+/// فاتورة دين آجل مفتوحة غير مربوطة ببطاقة عميل (`customerId` فارغ).
+class UnlinkedCreditDebtInvoice {
+  const UnlinkedCreditDebtInvoice({
+    required this.invoiceId,
+    required this.customerName,
+    required this.remaining,
+    required this.date,
+    required this.normalizedName,
+  });
+
+  final int invoiceId;
+  final String customerName;
+  final double remaining;
+  final DateTime date;
+  final String normalizedName;
+}
+
+/// عميل مرشّح عند تكرار الاسم في جدول العملاء.
+class AmbiguousDebtCustomerMatch {
+  const AmbiguousDebtCustomerMatch({
+    required this.customerId,
+    required this.name,
+  });
+
+  final int customerId;
+  final String name;
+}
+
+/// اسم يطابق أكثر من عميل مسجّل — لا يُسمح بالربط التلقائي.
+class AmbiguousDebtCustomerName {
+  const AmbiguousDebtCustomerName({
+    required this.normalizedName,
+    required this.sampleName,
+    required this.matchingCustomerCount,
+    required this.openInvoiceCount,
+    this.matchingCustomers = const [],
+  });
+
+  final String normalizedName;
+  final String sampleName;
+  final int matchingCustomerCount;
+  final int openInvoiceCount;
+  final List<AmbiguousDebtCustomerMatch> matchingCustomers;
+}

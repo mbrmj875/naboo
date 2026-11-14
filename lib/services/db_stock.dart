@@ -21,6 +21,46 @@ extension DbStock on DatabaseHelper {
     );
   }
 
+  Future<double> getProductWarehouseQty({
+    required int productId,
+    required int warehouseId,
+    int tenantId = 1,
+  }) async {
+    final db = await database;
+    final rows = await db.query(
+      'product_warehouse_stock',
+      columns: ['qty'],
+      where: 'tenantId = ? AND productId = ? AND warehouseId = ?',
+      whereArgs: [tenantId, productId, warehouseId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return 0;
+    return (rows.first['qty'] as num?)?.toDouble() ?? 0;
+  }
+
+  Future<List<Map<String, dynamic>>> listOilVolumeProducts({
+    int tenantId = 1,
+    int limit = 300,
+  }) async {
+    final db = await database;
+    return db.rawQuery(
+      '''
+      SELECT id, name, sellPrice, buyPrice, IFNULL(stockBaseKind, 0) AS stockBaseKind
+      FROM products
+      WHERE tenantId = ?
+        AND isActive = 1
+        AND IFNULL(isService, 0) = 0
+        AND IFNULL(trackInventory, 1) != 0
+        AND IFNULL(stockBaseKind, 0) = 3
+        AND IFNULL(variantKind, 0) NOT IN (2, 3)
+        AND (parentProductId IS NULL OR parentProductId <= 0)
+      ORDER BY name COLLATE NOCASE
+      LIMIT ?
+      ''',
+      [tenantId, limit],
+    );
+  }
+
   Future<List<Map<String, dynamic>>> listWarehousesActive({
     int tenantId = 1,
   }) async {
@@ -70,6 +110,7 @@ extension DbStock on DatabaseHelper {
       'createdAt': DateTime.now().toIso8601String(),
     });
     CloudSyncService.instance.scheduleSyncSoon();
+    MarketplaceCatalogSyncService.instance.scheduleSyncSoon();
     return id;
   }
 
@@ -100,7 +141,8 @@ extension DbStock on DatabaseHelper {
     final db = await database;
     return db.rawQuery(
       '''
-      SELECT id, name, barcode, sellPrice, buyPrice AS purchasePrice
+      SELECT id, name, barcode, sellPrice, buyPrice AS purchasePrice,
+             IFNULL(stockBaseKind, 0) AS stockBaseKind
       FROM products
       WHERE isActive = 1
         AND tenantId = ?
@@ -136,7 +178,15 @@ extension DbStock on DatabaseHelper {
     String? sourceName,
     int? sourceRefId,
     String? notes,
-    required List<({int productId, double qty, double unitPrice})> lines,
+    required List<
+        ({
+          int productId,
+          double qty,
+          double unitPrice,
+          double? enteredQty,
+          double? unitFactor,
+          String? unitLabel,
+        })> lines,
   }) async {
     if (lines.isEmpty) {
       return (ok: false, message: 'لا توجد بنود بكمية صالحة', voucherId: null);
@@ -182,9 +232,10 @@ extension DbStock on DatabaseHelper {
             throw StateError('منتج غير موجود #${L.productId}');
           }
           final track = ((prow.first['trackInventory'] as int?) ?? 1) != 0;
+          // قراءة الرصيد والمتوسط داخل المعاملة قبل أي تحديث (WAC).
           final beforeRows = await txn.query(
             'product_warehouse_stock',
-            columns: ['qty'],
+            columns: ['qty', 'avgCostFils'],
             where: 'productId = ? AND warehouseId = ?',
             whereArgs: [L.productId, warehouseToId],
             limit: 1,
@@ -192,8 +243,20 @@ extension DbStock on DatabaseHelper {
           final before = beforeRows.isEmpty
               ? 0.0
               : (beforeRows.first['qty'] as num).toDouble();
+          final beforeAvgFils = beforeRows.isEmpty
+              ? 0
+              : (beforeRows.first['avgCostFils'] as num?)?.toInt() ?? 0;
+          final inboundCostFils = IqdMoney.toFils(L.unitPrice);
+          final newAvgFils = computeWacFils(
+            beforeQtyBase: before,
+            beforeAvgFils: beforeAvgFils,
+            inboundQtyBase: L.qty,
+            inboundCostPerBaseFils: inboundCostFils,
+          );
           final after = before + L.qty;
           final tot = L.qty * L.unitPrice;
+          final entered = L.enteredQty;
+          final factor = L.unitFactor;
           await txn.insert('stock_voucher_items', {
             'tenantId': tenantId,
             'voucherId': vId,
@@ -203,6 +266,11 @@ extension DbStock on DatabaseHelper {
             'total': tot,
             'stockBefore': before,
             'stockAfter': after,
+            if (entered != null) 'enteredQty': entered,
+            if (factor != null) 'unitFactor': factor,
+            if (L.unitLabel != null && L.unitLabel!.trim().isNotEmpty)
+              'unitLabel': L.unitLabel!.trim(),
+            'baseQty': L.qty,
           });
           await txn.insert(
             'product_warehouse_stock',
@@ -211,6 +279,7 @@ extension DbStock on DatabaseHelper {
               'productId': L.productId,
               'warehouseId': warehouseToId,
               'qty': after,
+              'avgCostFils': newAvgFils,
               'updatedAt': nowIso,
             },
             conflictAlgorithm: ConflictAlgorithm.replace,
@@ -234,6 +303,18 @@ extension DbStock on DatabaseHelper {
         return vId;
       });
       CloudSyncService.instance.scheduleSyncSoon();
+      MarketplaceCatalogSyncService.instance.scheduleSyncSoon();
+      await BusinessAuditLogService.instance.record(
+        eventType: 'stock_voucher_posted',
+        entityType: 'stock_voucher',
+        entityId: '$vid',
+        newValueJson: jsonEncode({'voucherType': 'in', 'lineCount': lines.length}),
+        tenantId: tenantId,
+      );
+      OwnerCommandCenterRefreshBridge.instance.invalidateSections([
+        OwnerSectionIds.inventoryShortages,
+        OwnerSectionIds.inventoryValue,
+      ]);
       return (ok: true, message: '', voucherId: vid);
     } catch (e) {
       return (ok: false, message: 'تعذّر الحفظ: $e', voucherId: null);
@@ -358,6 +439,18 @@ extension DbStock on DatabaseHelper {
         return vId;
       });
       CloudSyncService.instance.scheduleSyncSoon();
+      MarketplaceCatalogSyncService.instance.scheduleSyncSoon();
+      await BusinessAuditLogService.instance.record(
+        eventType: 'stock_voucher_posted',
+        entityType: 'stock_voucher',
+        entityId: '$vid',
+        newValueJson: jsonEncode({'voucherType': 'out', 'lineCount': lines.length}),
+        tenantId: tenantId,
+      );
+      OwnerCommandCenterRefreshBridge.instance.invalidateSections([
+        OwnerSectionIds.inventoryShortages,
+        OwnerSectionIds.inventoryValue,
+      ]);
       return (ok: true, message: '', voucherId: vid);
     } catch (e) {
       return (ok: false, message: '$e', voucherId: null);
@@ -506,6 +599,18 @@ extension DbStock on DatabaseHelper {
         return vId;
       });
       CloudSyncService.instance.scheduleSyncSoon();
+      MarketplaceCatalogSyncService.instance.scheduleSyncSoon();
+      await BusinessAuditLogService.instance.record(
+        eventType: 'stock_voucher_posted',
+        entityType: 'stock_voucher',
+        entityId: '$vid',
+        newValueJson: jsonEncode({'voucherType': 'transfer', 'lineCount': lines.length}),
+        tenantId: tenantId,
+      );
+      OwnerCommandCenterRefreshBridge.instance.invalidateSections([
+        OwnerSectionIds.inventoryShortages,
+        OwnerSectionIds.inventoryValue,
+      ]);
       return (ok: true, message: '', voucherId: vid);
     } catch (e) {
       return (ok: false, message: '$e', voucherId: null);
@@ -616,6 +721,7 @@ extension DbStock on DatabaseHelper {
     });
     if (linked) {
       CloudSyncService.instance.scheduleSyncSoon();
+      MarketplaceCatalogSyncService.instance.scheduleSyncSoon();
     }
     return linked;
   }
@@ -634,6 +740,7 @@ extension DbStock on DatabaseHelper {
     );
     if (n > 0) {
       CloudSyncService.instance.scheduleSyncSoon();
+      MarketplaceCatalogSyncService.instance.scheduleSyncSoon();
     }
     return n > 0;
   }

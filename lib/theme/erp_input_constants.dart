@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 abstract final class ErpInputConstants {
   ErpInputConstants._();
 
-  static const BorderRadius borderRadius = BorderRadius.all(Radius.circular(8));
+  static const BorderRadius borderRadius = BorderRadius.all(Radius.circular(12));
 
   static const EdgeInsetsGeometry contentPadding =
       EdgeInsetsDirectional.symmetric(horizontal: 14, vertical: 10);

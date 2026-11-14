@@ -1,27 +1,33 @@
+import 'dart:async';
 import 'dart:math' as math;
+import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../platform/web_pwa_install.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/notification_provider.dart';
 import '../../providers/theme_provider.dart';
-import '../../providers/idle_timeout_provider.dart';
 import '../../providers/ui_feedback_settings_provider.dart';
-import '../../screens/license/subscription_plans_screen.dart';
-import '../../services/cloud_sync_service.dart';
+import '../../providers/print_settings_provider.dart';
+import '../../models/print_settings_data.dart';
+import '../../services/effective_store_branding.dart';
 import '../../services/license_service.dart';
-import '../../services/mac_style_settings_prefs.dart';
-import '../../widgets/mac_style_settings_panel.dart';
 import '../../navigation/content_navigation.dart';
 import '../../theme/app_corner_style.dart';
 import '../../utils/screen_layout.dart';
 import '../../widgets/secure_screen.dart';
+import '../../widgets/web_pwa_install_banner.dart';
 import '../invoices/sale_pos_settings_screen.dart';
 import '../onboarding/business_setup_wizard_screen.dart';
 import '../printing/printing_screen.dart';
 import 'dashboard_layout_settings_screen.dart';
 import 'market_pos_import_screen.dart';
+import 'account_subscription_screen.dart';
+import 'store_info_screen.dart';
+import 'sync_queue_health_screen.dart';
 
 const _kTeal = Color(0xFF0D9488);
 const _kAmber = Color(0xFFF59E0B);
@@ -33,45 +39,55 @@ AppBar _settingsAppBar(
   String title, {
   List<Widget>? actions,
 }) {
-  final cs = Theme.of(context).colorScheme;
+  final dark = Theme.of(context).brightness == Brightness.dark;
+  final bg = dark ? const Color(0xFF0F172A) : Colors.white;
+  final titleColor = dark ? const Color(0xFFD4AF37) : const Color(0xFF1E3A5F);
+  final iconColor = dark ? const Color(0xFFD4AF37) : const Color(0xFF1E3A5F);
+
   return AppBar(
-    backgroundColor: cs.primary,
-    foregroundColor: cs.onPrimary,
+    backgroundColor: bg,
+    foregroundColor: titleColor,
     surfaceTintColor: Colors.transparent,
     elevation: 0,
     scrolledUnderElevation: 0,
     title: Text(
       title,
       style: TextStyle(
-        fontWeight: FontWeight.bold,
-        fontSize: 18,
-        color: cs.onPrimary,
+        fontWeight: FontWeight.w800,
+        fontSize: 17,
+        color: titleColor,
       ),
     ),
-    iconTheme: IconThemeData(color: cs.onPrimary),
-    actionsIconTheme: IconThemeData(color: cs.onPrimary),
+    iconTheme: IconThemeData(color: iconColor, size: 22),
+    actionsIconTheme: IconThemeData(color: const Color(0xFFD4AF37), size: 22),
+    bottom: PreferredSize(
+      preferredSize: const Size.fromHeight(1),
+      child: Container(
+        height: 1,
+        color: const Color(0xFFD4AF37).withValues(alpha: 0.35),
+      ),
+    ),
     actions: actions,
   );
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
 class SettingsScreen extends StatelessWidget {
-  const SettingsScreen({super.key, this.showAppBar = true});
-
-  /// عند `false` يُعرض المحتوى فقط (مثلاً داخل نافذة منبثقة بشريط عنوان خارجي).
-  final bool showAppBar;
+  const SettingsScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final cs = Theme.of(context).colorScheme;
+    final auth = context.watch<AuthProvider>();
+    final isOwner = auth.isOwner;
 
     return SecureScreen(
       child: Directionality(
       textDirection: TextDirection.rtl,
       child: Scaffold(
         backgroundColor: cs.surface,
-        appBar: showAppBar ? _settingsAppBar(context, 'الإعدادات') : null,
+        appBar: _settingsAppBar(context, 'الإعدادات'),
         body: LayoutBuilder(
           builder: (context, constraints) {
             /// يمنع كسر [ListTile] عند عرض أقل من ~72 (مثلاً أثناء أنيميشن التصغير).
@@ -98,18 +114,74 @@ class SettingsScreen extends StatelessWidget {
                             title: 'المتجر والحساب',
                             isDark: isDark,
                             items: [
-                              _SettingItem(
-                                icon: Icons.store_rounded,
-                                iconColor: cs.primary,
-                                title: 'بيانات المتجر',
-                                subtitle: 'الاسم، العنوان، الشعار، الفرع',
-                                onTap: () => _goTo(
-                                  context,
-                                  const _StoreInfoScreen(),
-                                  routeId: AppContentRoutes.settingsStoreInfo,
-                                  breadcrumbTitle: 'بيانات المتجر',
+                              if (kIsWeb && WebPwaInstall.isWebSupported)
+                                _SettingItem(
+                                  icon: Icons.add_to_home_screen_rounded,
+                                  iconColor: const Color(0xFF071A36),
+                                  title: 'تثبيت نابو على الشاشة الرئيسية',
+                                  subtitle: WebPwaInstall.isStandalone()
+                                      ? 'التطبيق مثبّت — يفتح بدون شريط المتصفح'
+                                      : 'أيقونة مثل التطبيق على هاتفك أو جهازك',
+                                  onTap: () {
+                                    if (WebPwaInstall.isStandalone()) {
+                                      ScaffoldMessenger.of(context)
+                                          .showSnackBar(
+                                        const SnackBar(
+                                          content: Text(
+                                            'نابو مثبّت مسبقاً على هذا الجهاز.',
+                                          ),
+                                        ),
+                                      );
+                                      return;
+                                    }
+                                    WebPwaInstall.clearBannerDismiss();
+                                    showModalBottomSheet<void>(
+                                      context: context,
+                                      showDragHandle: true,
+                                      builder: (ctx) => const SafeArea(
+                                        child: SingleChildScrollView(
+                                          child: WebPwaInstallBanner(
+                                            compact: false,
+                                            margin: EdgeInsetsDirectional.all(
+                                              8,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                  },
                                 ),
-                              ),
+                              if (isOwner)
+                                _SettingItem(
+                                  icon: Icons.store_rounded,
+                                  iconColor: cs.primary,
+                                  title: 'بيانات المتجر',
+                                  subtitle:
+                                      'الاسم، العنوان، وأرقام الهاتف للإيصال',
+                                  onTap: () => _goTo(
+                                    context,
+                                    const StoreInfoScreen(),
+                                    routeId: AppContentRoutes.settingsStoreInfo,
+                                    breadcrumbTitle: 'بيانات المتجر',
+                                  ),
+                                )
+                              else
+                                _SettingItem(
+                                  icon: Icons.storefront_rounded,
+                                  iconColor: cs.primary,
+                                  title: 'بيانات فرعي',
+                                  subtitle:
+                                      'اسم فرعك وشعارك وهاتفك — لواتساب والإيصال',
+                                  onTap: () => _goTo(
+                                    context,
+                                    const StoreInfoScreen(
+                                      scope: StoreInfoScope.myBranch,
+                                    ),
+                                    routeId:
+                                        AppContentRoutes.settingsMyBranchInfo,
+                                    breadcrumbTitle: 'بيانات فرعي',
+                                  ),
+                                ),
                               _SettingItem(
                                 icon: Icons.receipt_long_rounded,
                                 iconColor: _kTeal,
@@ -178,9 +250,6 @@ class SettingsScreen extends StatelessWidget {
                               ),
                               _CompactSnackNotificationsTile(isDark: isDark),
                               _ThemeToggleTile(isDark: isDark),
-                              if (!context.screenLayout.isPhoneVariant)
-                                _MacStyleSettingsPanelTile(isDark: isDark),
-                              _IdleTimeoutTile(isDark: isDark),
                               _SettingItem(
                                 icon: Icons.language_rounded,
                                 iconColor: _kTeal,
@@ -240,6 +309,21 @@ class SettingsScreen extends StatelessWidget {
                                   breadcrumbTitle: 'استيراد مواد وأسعار',
                                 ),
                               ),
+                              _SettingItem(
+                                icon: Icons.sync_problem_rounded,
+                                iconColor: _kRed,
+                                title: 'حالة المزامنة والعمليات العالقة',
+                                subtitle:
+                                    'مراقبة pending/failed/dead وإعادة المحاولة',
+                                onTap: () => _goTo(
+                                  context,
+                                  const SyncQueueHealthScreen(),
+                                  routeId:
+                                      AppContentRoutes.settingsSyncQueueHealth,
+                                  breadcrumbTitle:
+                                      'حالة المزامنة والعمليات العالقة',
+                                ),
+                              ),
                             ],
                           ),
                           const SizedBox(height: 14),
@@ -247,21 +331,25 @@ class SettingsScreen extends StatelessWidget {
                             title: 'الاشتراك والدعم',
                             isDark: isDark,
                             items: [
-                              _SettingItem(
-                                icon: Icons.star_rounded,
-                                iconColor: _kAmber,
-                                title: 'خطة الاشتراك',
-                                subtitle:
-                                    'الحساب، الأجهزة، والمزامنة التلقائية',
-                                trailing:
-                                    const _SubscriptionPlanTrailingBadge(),
-                                onTap: () => _goTo(
-                                  context,
-                                  const _AccountSubscriptionScreen(),
-                                  routeId: AppContentRoutes
-                                      .settingsSubscriptionAccount,
-                                  breadcrumbTitle: 'خطة الاشتراك والحساب',
-                                ),
+                              ListenableBuilder(
+                                listenable: LicenseService.instance,
+                                builder: (context, _) {
+                                  return _SettingItem(
+                                    icon: Icons.star_rounded,
+                                    iconColor: _kAmber,
+                                    title: 'خطة الاشتراك',
+                                    subtitle: _subscriptionRowSubtitle(
+                                      LicenseService.instance.state,
+                                    ),
+                                    onTap: () => _goTo(
+                                      context,
+                                      const AccountSubscriptionScreen(),
+                                      routeId: AppContentRoutes
+                                          .settingsSubscriptionAccount,
+                                      breadcrumbTitle: 'خطة الاشتراك والحساب',
+                                    ),
+                                  );
+                                },
                               ),
                               _SettingItem(
                                 icon: Icons.help_rounded,
@@ -335,17 +423,122 @@ class SettingsScreen extends StatelessWidget {
 }
 
 // ── بطاقة الشركة ──────────────────────────────────────────────────────────────
-class _CompanyCard extends StatelessWidget {
+class _CompanyCard extends StatefulWidget {
   const _CompanyCard();
+
+  @override
+  State<_CompanyCard> createState() => _CompanyCardState();
+}
+
+class _CompanyCardState extends State<_CompanyCard> {
+  PrintSettingsData? _effective;
+  bool _loading = true;
+  int? _loadedForUserId;
+  String _loadedForGlobalId = '';
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_reload());
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final auth = context.watch<AuthProvider>();
+    final uid = auth.userId;
+    final gid = auth.userGlobalId;
+    if (uid != _loadedForUserId || gid != _loadedForGlobalId) {
+      unawaited(_reload());
+    }
+  }
+
+  Future<void> _reload() async {
+    final auth = context.read<AuthProvider>();
+    final base = context.read<PrintSettingsProvider>().data;
+    final uid = auth.userId;
+    final gid = auth.userGlobalId;
+    // بطاقة الإعدادات: لا نعرض متجر المالك فوق موظف لم يعبّئ بياناته بعد.
+    final resolved = await EffectiveStoreBranding.resolve(
+      isOwner: auth.isOwner,
+      userGlobalId: gid,
+      userId: uid,
+      base: base,
+      fallbackToWorkspace: auth.isOwner,
+    );
+    if (!mounted) return;
+    setState(() {
+      _effective = resolved;
+      _loading = false;
+      _loadedForUserId = uid;
+      _loadedForGlobalId = gid;
+    });
+  }
+
+  static String _storeName(PrintSettingsData p, {required bool isOwner}) {
+    final n = p.storeTitleLine.trim();
+    if (n.isNotEmpty) return n;
+    return isOwner ? 'اسم المتجر' : 'بيانات فرعي';
+  }
+
+  static String _storeSubtitle(PrintSettingsData p, {required bool isOwner}) {
+    final addr = p.storeAddress.trim();
+    final phones = p.storePhones
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList();
+    if (addr.isNotEmpty && phones.isNotEmpty) {
+      return '$addr · ${phones.join(' · ')}';
+    }
+    if (addr.isNotEmpty) return addr;
+    if (phones.isNotEmpty) return phones.join(' · ');
+    return isOwner
+        ? 'اضغط التعديل لإضافة العنوان والهاتف'
+        : 'اضغط لإدخال اسم فرعك وشعارك وهاتفك';
+  }
+
+  Future<void> _openStoreInfo() async {
+    final isOwner = context.read<AuthProvider>().isOwner;
+    await Navigator.push<void>(
+      context,
+      FastContentPageRoute(
+        settings: RouteSettings(
+          name: isOwner
+              ? AppContentRoutes.settingsStoreInfo
+              : AppContentRoutes.settingsMyBranchInfo,
+          arguments: BreadcrumbMeta(
+            isOwner ? 'بيانات المتجر' : 'بيانات فرعي',
+          ),
+        ),
+        builder: (_) => StoreInfoScreen(
+          scope: isOwner
+              ? StoreInfoScope.workspace
+              : StoreInfoScope.myBranch,
+        ),
+      ),
+    );
+    if (!mounted) return;
+    await context.read<PrintSettingsProvider>().load();
+    await _reload();
+  }
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final ac = context.appCorners;
     final gap = ScreenLayout.of(context).pageHorizontalGap;
+    final isOwner = context.watch<AuthProvider>().isOwner;
+    final store = _effective ??
+        context.watch<PrintSettingsProvider>().data;
+    final name = _loading
+        ? '…'
+        : _storeName(store, isOwner: isOwner);
+    final subtitle = _loading
+        ? ''
+        : _storeSubtitle(store, isOwner: isOwner);
+
     return GestureDetector(
       onLongPress: () {
-        // مدخل مخفي لأدوات الاختبار (Dev only screen will block in release anyway).
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('فتح أدوات الاختبار…'),
@@ -354,6 +547,7 @@ class _CompanyCard extends StatelessWidget {
         );
         Navigator.of(context, rootNavigator: true).pushNamed('/dev/stress');
       },
+      onTap: () => unawaited(_openStoreInfo()),
       child: Container(
         padding: EdgeInsets.symmetric(horizontal: gap, vertical: 16),
         decoration: BoxDecoration(
@@ -376,67 +570,118 @@ class _CompanyCard extends StatelessWidget {
         ),
         child: Row(
           children: [
-            // الشعار
-            Container(
-              width: 60,
-              height: 60,
-              decoration: BoxDecoration(
-                color: cs.onPrimary.withValues(alpha: 0.18),
-                borderRadius: ac.md,
-              ),
-              child: Icon(Icons.store_rounded, color: cs.onPrimary, size: 30),
+            _CompanyLogoAvatar(
+              logoBytes: store.hasStoreLogo ? store.storeLogoBytes : null,
+              isOwner: isOwner,
+              colorScheme: cs,
+              borderRadius: ac.md,
             ),
             const SizedBox(width: 14),
-            // بيانات الشركة
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'متجر البصرة',
+                    name,
                     style: TextStyle(
                       color: cs.onPrimary,
                       fontWeight: FontWeight.bold,
                       fontSize: 17,
                     ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'البصرة، العراق',
+                    subtitle,
                     style: TextStyle(
                       color: cs.onPrimary.withValues(alpha: 0.82),
                       fontSize: 13,
                     ),
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
                   ),
                   const SizedBox(height: 8),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 4,
-                    ),
-                    decoration: BoxDecoration(
-                      color: cs.onPrimary.withValues(alpha: 0.18),
-                      borderRadius: ac.sm,
-                    ),
-                    child: Text(
-                      'نسخة تجريبية',
-                      style: TextStyle(
-                        color: cs.onPrimary,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
+                  ListenableBuilder(
+                    listenable: LicenseService.instance,
+                    builder: (context, _) {
+                      return Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: cs.onPrimary.withValues(alpha: 0.18),
+                          borderRadius: ac.sm,
+                        ),
+                        child: Text(
+                          _subscriptionTypeAr(LicenseService.instance.state),
+                          style: TextStyle(
+                            color: cs.onPrimary,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      );
+                    },
                   ),
                 ],
               ),
             ),
             IconButton(
+              tooltip: isOwner
+                  ? 'تعديل بيانات المتجر'
+                  : 'تعديل بيانات فرعي',
               icon: Icon(Icons.edit_rounded, color: cs.onPrimary),
-              onPressed: () {},
+              onPressed: () => unawaited(_openStoreInfo()),
             ),
           ],
         ),
       ),
+    );
+  }
+}
+
+class _CompanyLogoAvatar extends StatelessWidget {
+  const _CompanyLogoAvatar({
+    required this.logoBytes,
+    required this.isOwner,
+    required this.colorScheme,
+    required this.borderRadius,
+  });
+
+  final Uint8List? logoBytes;
+  final bool isOwner;
+  final ColorScheme colorScheme;
+  final BorderRadius borderRadius;
+
+  @override
+  Widget build(BuildContext context) {
+    final bytes = logoBytes;
+    return Container(
+      width: 60,
+      height: 60,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: colorScheme.onPrimary.withValues(alpha: 0.18),
+        borderRadius: borderRadius,
+      ),
+      child: bytes != null && bytes.isNotEmpty
+          ? Image.memory(
+              bytes,
+              fit: BoxFit.cover,
+              gaplessPlayback: true,
+              errorBuilder: (_, __, ___) => Icon(
+                isOwner ? Icons.store_rounded : Icons.storefront_rounded,
+                color: colorScheme.onPrimary,
+                size: 30,
+              ),
+            )
+          : Icon(
+              isOwner ? Icons.store_rounded : Icons.storefront_rounded,
+              color: colorScheme.onPrimary,
+              size: 30,
+            ),
     );
   }
 }
@@ -509,62 +754,51 @@ class _SettingsGroup extends StatelessWidget {
   }
 }
 
-/// شارة بجانب «خطة الاشتراك» في الإعدادات — تتبع [LicenseService] وليست نصاً ثابتاً («تجريبية»).
-class _SubscriptionPlanTrailingBadge extends StatelessWidget {
-  const _SubscriptionPlanTrailingBadge();
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final ac = context.appCorners;
-    return ListenableBuilder(
-      listenable: LicenseService.instance,
-      builder: (context, _) {
-        final s = LicenseService.instance.state;
-        late final String label;
-        late final Color fg;
-        late final Color bg;
-        if (s.status == LicenseStatus.active) {
-          label = s.plan?.nameAr ?? 'مفعّل';
-          fg = cs.primary;
-          bg = cs.primary.withValues(alpha: 0.12);
-        } else if (s.status == LicenseStatus.trial) {
-          label = 'تجريبية';
-          fg = cs.tertiary;
-          bg = cs.tertiary.withValues(alpha: 0.22);
-        } else if (s.status == LicenseStatus.expired ||
-            s.status == LicenseStatus.suspended) {
-          label = 'غير نشط';
-          fg = _kRed;
-          bg = _kRed.withValues(alpha: 0.12);
-        } else if (s.status == LicenseStatus.offline) {
-          label = 'غير متصّل';
-          fg = Colors.orange.shade800;
-          bg = Colors.orange.withValues(alpha: 0.18);
-        } else if (s.status == LicenseStatus.checking) {
-          label = '…';
-          fg = Colors.grey.shade700;
-          bg = Colors.grey.withValues(alpha: 0.2);
-        } else {
-          label = 'بدون ترخيص';
-          fg = Colors.grey.shade700;
-          bg = Colors.grey.withValues(alpha: 0.2);
-        }
-        return Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-          decoration: BoxDecoration(color: bg, borderRadius: ac.sm),
-          child: Text(
-            label,
-            style: TextStyle(
-              color: fg,
-              fontSize: 11,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-        );
-      },
-    );
+/// نوع الخطة باختصار، للشارة تحت بيانات المتجر.
+String _subscriptionTypeAr(LicenseState s) {
+  switch (s.status) {
+    case LicenseStatus.active:
+      final plan = s.plan;
+      if (plan == null) return 'مفعّل';
+      return switch (plan.key) {
+        'monthly' => 'اشتراك شهري',
+        'annual' => 'اشتراك سنوي',
+        'lifetime' => 'مدى الحياة',
+        'trial' => 'التجربة المجانية',
+        _ => _planNameWithoutExtra(plan.nameAr),
+      };
+    case LicenseStatus.trial:
+      return 'التجربة المجانية';
+    case LicenseStatus.expired:
+    case LicenseStatus.suspended:
+      return 'غير نشط';
+    case LicenseStatus.offline:
+      return 'غير متصّل';
+    case LicenseStatus.checking:
+      return '…';
+    case LicenseStatus.restricted:
+    case LicenseStatus.pendingLock:
+      return 'غير نشط';
+    case LicenseStatus.none:
+      return 'بدون ترخيص';
   }
+}
+
+/// سطر واحد متصل: نوع الخطة ثم الأجهزة المشمولة.
+String _subscriptionRowSubtitle(LicenseState s) {
+  final type = _subscriptionTypeAr(s);
+  final devices = s.plan?.devicesLabel.trim() ?? '';
+  if (devices.isEmpty) return type;
+  if (s.status == LicenseStatus.active || s.status == LicenseStatus.trial) {
+    return '$type — $devices';
+  }
+  return type;
+}
+
+String _planNameWithoutExtra(String nameAr) {
+  final cut = nameAr.indexOf(' (');
+  if (cut <= 0) return nameAr;
+  return nameAr.substring(0, cut);
 }
 
 // ── عنصر الإعداد ──────────────────────────────────────────────────────────────
@@ -602,6 +836,7 @@ class _SettingItem extends StatelessWidget {
       ),
       title: Text(
         title,
+        textAlign: TextAlign.start,
         style: TextStyle(
           fontWeight: FontWeight.w600,
           fontSize: 14,
@@ -610,6 +845,9 @@ class _SettingItem extends StatelessWidget {
       ),
       subtitle: Text(
         subtitle,
+        textAlign: TextAlign.start,
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
         style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
       ),
       trailing:
@@ -620,79 +858,6 @@ class _SettingItem extends StatelessWidget {
             size: 20,
           ),
       onTap: onTap,
-    );
-  }
-}
-
-// ── مدة وضع السكون ────────────────────────────────────────────────────────────
-class _IdleTimeoutTile extends StatelessWidget {
-  final bool isDark;
-  const _IdleTimeoutTile({required this.isDark});
-
-  @override
-  Widget build(BuildContext context) {
-    return Consumer<IdleTimeoutProvider>(
-      builder: (context, idle, _) {
-        return ListTile(
-          contentPadding: const EdgeInsets.symmetric(
-            horizontal: 14,
-            vertical: 4,
-          ),
-          leading: Container(
-            width: 38,
-            height: 38,
-            decoration: BoxDecoration(
-              color: _kTeal.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.zero,
-            ),
-            child: const Icon(
-              Icons.nights_stay_rounded,
-              color: _kTeal,
-              size: 20,
-            ),
-          ),
-          title: const Text(
-            'وضع السكون',
-            style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
-          ),
-          subtitle: Text(
-            'بعد عدم النشاط: ${idle.currentLabel}',
-            style: const TextStyle(fontSize: 12, color: Colors.grey),
-          ),
-          trailing: PopupMenuButton<int>(
-            initialValue: idle.minutes,
-            onSelected: (m) =>
-                context.read<IdleTimeoutProvider>().setMinutes(m),
-            itemBuilder: (ctx) => IdleTimeoutProvider.options
-                .map(
-                  (m) => PopupMenuItem<int>(
-                    value: m,
-                    child: Text(IdleTimeoutProvider.labelForMinutes(m)),
-                  ),
-                )
-                .toList(),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 4),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    idle.currentLabel,
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: isDark ? Colors.white70 : Colors.grey.shade700,
-                    ),
-                  ),
-                  Icon(
-                    Icons.arrow_drop_down_rounded,
-                    color: Colors.grey.shade600,
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
     );
   }
 }
@@ -745,79 +910,6 @@ class _CompactSnackNotificationsTile extends StatelessWidget {
   }
 }
 
-class _MacStyleSettingsPanelTile extends StatefulWidget {
-  final bool isDark;
-  const _MacStyleSettingsPanelTile({required this.isDark});
-
-  @override
-  State<_MacStyleSettingsPanelTile> createState() =>
-      _MacStyleSettingsPanelTileState();
-}
-
-class _MacStyleSettingsPanelTileState
-    extends State<_MacStyleSettingsPanelTile> {
-  bool? _enabled;
-
-  @override
-  void initState() {
-    super.initState();
-    MacStyleSettingsPrefs.isMacStylePanelEnabled().then((v) {
-      if (mounted) setState(() => _enabled = v);
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = widget.isDark;
-    final cs = Theme.of(context).colorScheme;
-    final ac = context.appCorners;
-    if (_enabled == null) {
-      return const SizedBox(height: 52);
-    }
-    final on = _enabled!;
-    return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
-      leading: Container(
-        width: 38,
-        height: 38,
-        decoration: BoxDecoration(
-          color: cs.primary.withValues(alpha: 0.12),
-          borderRadius: ac.sm,
-        ),
-        child: Icon(
-          on ? Icons.picture_in_picture_alt_rounded : Icons.view_agenda_rounded,
-          color: cs.primary,
-          size: 20,
-        ),
-      ),
-      title: const Text(
-        'النافذة العائمة (macOS)',
-        style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
-      ),
-      subtitle: Text(
-        on
-            ? 'يمكن فتح عدة نوافذ معاً؛ التصغير الأصفر يضع بلاطة أسفل الشاشة بأيقونة كل صفحة — عطّلها لفتحها داخل المحتوى'
-            : 'تُفتح هذه الشاشات داخل المحتوى. فعّل الخيار لاستخدام النوافذ العائمة والبلاطات',
-        style: TextStyle(
-          fontSize: 12,
-          color: isDark ? Colors.white70 : Colors.grey.shade700,
-          height: 1.35,
-        ),
-      ),
-      trailing: Switch(
-        value: on,
-        onChanged: (v) async {
-          setState(() => _enabled = v);
-          await MacStyleSettingsPrefs.setMacStylePanelEnabled(v);
-          if (!v && context.mounted) {
-            dismissMacFloatingOverlayIfAny();
-          }
-        },
-      ),
-    );
-  }
-}
-
 class _ThemeToggleTile extends StatelessWidget {
   final bool isDark;
   const _ThemeToggleTile({required this.isDark});
@@ -856,628 +948,8 @@ class _ThemeToggleTile extends StatelessWidget {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// ── الحساب والاشتراك ─────────────────────────────────────────────────────────
-// ═════════════════════════════════════════════════════════════════════════════
-
-class _AccountSubscriptionScreen extends StatefulWidget {
-  const _AccountSubscriptionScreen();
-
-  @override
-  State<_AccountSubscriptionScreen> createState() =>
-      _AccountSubscriptionScreenState();
-}
-
-class _AccountSubscriptionScreenState
-    extends State<_AccountSubscriptionScreen> {
-  bool _busy = false;
-  String? _message;
-  String? _currentDeviceId;
-
-  @override
-  void initState() {
-    super.initState();
-    LicenseService.instance.getDeviceId().then((id) {
-      if (!mounted) return;
-      setState(() => _currentDeviceId = id);
-    });
-    _refresh();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      LicenseService.instance.checkLicense(forceRemote: true);
-    });
-  }
-
-  Future<void> _refresh() async {
-    if (!mounted) return;
-    setState(() => _busy = true);
-    try {
-      await CloudSyncService.instance.refreshDevices();
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  Future<void> _syncNow() async {
-    if (!mounted) return;
-    setState(() {
-      _busy = true;
-      _message = null;
-    });
-    await CloudSyncService.instance.syncNow(
-      forcePull: true,
-      forcePush: true,
-      forceImportOnPull: true,
-    );
-    await LicenseService.instance.checkLicense(forceRemote: true);
-    final err = CloudSyncService.instance.lastError.value;
-    if (!mounted) return;
-    setState(() {
-      _busy = false;
-      _message = err ?? 'تمت المزامنة بنجاح';
-    });
-  }
-
-  Future<void> _approveDevice(AccountDevice d) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => Directionality(
-        textDirection: TextDirection.rtl,
-        child: AlertDialog(
-          title: const Text('السماح بالعودة'),
-          content: Text(
-            'هل تسمح لجهاز «${d.deviceName}» بتسجيل الدخول مرة أخرى؟',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('إلغاء'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('موافقة'),
-            ),
-          ],
-        ),
-      ),
-    );
-    if (ok != true) return;
-    if (!mounted) return;
-    setState(() {
-      _busy = true;
-      _message = null;
-    });
-    final err = await CloudSyncService.instance.approveDeviceAccess(d.deviceId);
-    if (!mounted) return;
-    setState(() {
-      _busy = false;
-      _message = err ?? 'تم السماح للجهاز بالعودة';
-    });
-  }
-
-  Future<void> _removeDevice(AccountDevice d) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => Directionality(
-        textDirection: TextDirection.rtl,
-        child: AlertDialog(
-          title: const Text('فصل الجهاز'),
-          content: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  'الجهاز: ${d.deviceName}',
-                  style: const TextStyle(fontWeight: FontWeight.w600),
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  'سيتم إنهاء الجلسة على ذلك الجهاز فورًا (إن كان متصلاً)، ولن يستطيع '
-                  'تسجيل الدخول حتى تضغط «السماح بالعودة» من هنا.',
-                  style: TextStyle(color: Colors.grey.shade800, height: 1.45),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('إلغاء'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              style: FilledButton.styleFrom(backgroundColor: _kRed),
-              child: const Text('فصل الآن'),
-            ),
-          ],
-        ),
-      ),
-    );
-    if (ok != true) return;
-    if (!mounted) return;
-
-    setState(() {
-      _busy = true;
-      _message = null;
-    });
-    final err = await CloudSyncService.instance.removeDevice(d.deviceId);
-    if (!mounted) return;
-    setState(() {
-      _busy = false;
-      _message = err ?? 'تم فصل الجهاز بنجاح';
-    });
-  }
-
-  String _fmtDate(DateTime? d) {
-    if (d == null) return '—';
-    return '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year} ${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
-  }
-
-  /// الحد الفعلي من الترخيص / JWT وليس وصف البطاقة التسويقي للخطة.
-  String _effectiveDeviceCapLabel(LicenseState lic) {
-    switch (lic.status) {
-      case LicenseStatus.none:
-      case LicenseStatus.checking:
-        return '—';
-      default:
-        break;
-    }
-    if (lic.maxDevices == 0) return 'غير محدود';
-    return '${lic.maxDevices} أجهزة';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final auth = context.watch<AuthProvider>();
-    return Directionality(
-      textDirection: TextDirection.rtl,
-      child: Scaffold(
-        backgroundColor: Theme.of(context).colorScheme.surface,
-        appBar: _settingsAppBar(context, 'الحساب والاشتراك'),
-        body: ListenableBuilder(
-          listenable: LicenseService.instance,
-          builder: (context, _) {
-            final lic = LicenseService.instance.state;
-            final displayPlan = lic.plan;
-            final gap = ScreenLayout.of(context).pageHorizontalGap;
-            return ListView(
-              padding: EdgeInsets.symmetric(horizontal: gap, vertical: 16),
-              children: [
-                _SectionCard(
-                  isDark: Theme.of(context).brightness == Brightness.dark,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'بيانات الحساب',
-                        style: TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                      const SizedBox(height: 10),
-                      Text('المستخدم: ${auth.displayName}'),
-                      const SizedBox(height: 6),
-                      Text('البريد: ${auth.email.isEmpty ? '—' : auth.email}'),
-                      const SizedBox(height: 6),
-                      Text('الخطة الحالية: ${displayPlan?.nameAr ?? '—'}'),
-                      const SizedBox(height: 6),
-                      Text('حد الأجهزة: ${_effectiveDeviceCapLabel(lic)}'),
-                      if (lic.status == LicenseStatus.active ||
-                          lic.status == LicenseStatus.trial) ...[
-                        const SizedBox(height: 6),
-                        Text(
-                          'الأجهزة المسجّلة: ${lic.devicesInfo}',
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: Colors.grey.shade700,
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-                if (lic.status == LicenseStatus.trial &&
-                    lic.trialEndsAt != null) ...[
-                  const SizedBox(height: 12),
-                  _SectionCard(
-                    isDark: Theme.of(context).brightness == Brightness.dark,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'التجربة المجانية',
-                          style: TextStyle(fontWeight: FontWeight.bold),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'الأيام المتبقية: ${lic.daysLeft ?? 0} من 15',
-                          style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          'تنتهي في: ${_fmtDate(lic.trialEndsAt)}',
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: Colors.grey.shade700,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-                if (lic.status == LicenseStatus.active) ...[
-                  const SizedBox(height: 12),
-                  _SectionCard(
-                    isDark: Theme.of(context).brightness == Brightness.dark,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'الاشتراك',
-                          style: TextStyle(fontWeight: FontWeight.bold),
-                        ),
-                        const SizedBox(height: 8),
-                        if (lic.expiresAt != null) ...[
-                          Text(
-                            'ينتهي الاشتراك في: ${_fmtDate(lic.expiresAt)}',
-                            style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          if (lic.daysLeft != null) ...[
-                            const SizedBox(height: 6),
-                            Text(
-                              'متبقٍ تقريباً: ${lic.daysLeft} يوماً',
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: Colors.grey.shade700,
-                              ),
-                            ),
-                          ],
-                        ] else
-                          const Text(
-                            'اشتراك مفعّل بلا تاريخ انتهاء محدد في السحابة.',
-                            style: TextStyle(fontSize: 14),
-                          ),
-                      ],
-                    ),
-                  ),
-                ],
-                const SizedBox(height: 12),
-                _SectionCard(
-                  isDark: Theme.of(context).brightness == Brightness.dark,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          const Text(
-                            'الأجهزة المرتبطة بالحساب',
-                            style: TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                          const Spacer(),
-                          IconButton(
-                            onPressed: _busy ? null : _refresh,
-                            icon: const Icon(Icons.refresh),
-                            tooltip: 'تحديث',
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      ValueListenableBuilder<List<AccountDevice>>(
-                        valueListenable: CloudSyncService.instance.devices,
-                        builder: (context, list, _) {
-                          if (_busy && list.isEmpty) {
-                            return const Padding(
-                              padding: EdgeInsets.symmetric(vertical: 16),
-                              child: Center(child: CircularProgressIndicator()),
-                            );
-                          }
-                          if (list.isEmpty) {
-                            return const Text('لا توجد أجهزة مسجّلة بعد.');
-                          }
-                          return Column(
-                            children: list.map((d) {
-                              final isCurrent = d.deviceId == _currentDeviceId;
-                              return ListTile(
-                                contentPadding: EdgeInsets.zero,
-                                leading: const Icon(
-                                  Icons.devices_other_outlined,
-                                ),
-                                title: Text(d.deviceName),
-                                subtitle: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      '${d.platform} • آخر نشاط: ${_fmtDate(d.lastSeenAt)}',
-                                    ),
-                                    if (d.isRevoked)
-                                      Padding(
-                                        padding: const EdgeInsets.only(top: 4),
-                                        child: Text(
-                                          'مفصول — لا يمكنه الدخول حتى الموافقة',
-                                          style: TextStyle(
-                                            fontSize: 12,
-                                            color: _kRed.withValues(alpha: 0.9),
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                        ),
-                                      ),
-                                  ],
-                                ),
-                                trailing: isCurrent
-                                    ? Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 8,
-                                          vertical: 4,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: _kTeal.withValues(alpha: 0.12),
-                                          borderRadius: BorderRadius.circular(
-                                            8,
-                                          ),
-                                        ),
-                                        child: const Text(
-                                          'هذا الجهاز',
-                                          style: TextStyle(
-                                            color: _kTeal,
-                                            fontSize: 11,
-                                            fontWeight: FontWeight.w700,
-                                          ),
-                                        ),
-                                      )
-                                    : d.isRevoked
-                                    ? TextButton(
-                                        onPressed: _busy
-                                            ? null
-                                            : () => _approveDevice(d),
-                                        child: const Text('سماح بالعودة'),
-                                      )
-                                    : IconButton(
-                                        tooltip: 'فصل الجهاز',
-                                        onPressed: _busy
-                                            ? null
-                                            : () => _removeDevice(d),
-                                        icon: const Icon(
-                                          Icons.link_off_rounded,
-                                          color: _kRed,
-                                        ),
-                                      ),
-                              );
-                            }).toList(),
-                          );
-                        },
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 12),
-                _SectionCard(
-                  isDark: Theme.of(context).brightness == Brightness.dark,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'المزامنة التلقائية',
-                        style: TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'تُرفع من كل جهاز نسخة كاملة من قاعدة البيانات؛ الأحدث في السحابة هي التي تُستورد على الجهاز الآخر بعد «مزامنة الآن» أو خلال نحو دقيقة. ليست لحظية لكل إدخال. يجب تنفيذ ملف SQL للمزامنة في Supabase، والإنترنت مفعّل.',
-                        style: TextStyle(
-                          fontSize: 12,
-                          height: 1.35,
-                          color: Colors.grey.shade700,
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      ValueListenableBuilder<String?>(
-                        valueListenable: CloudSyncService.instance.lastError,
-                        builder: (context, err, _) {
-                          if (err == null || err.isEmpty) {
-                            return const SizedBox.shrink();
-                          }
-                          return Padding(
-                            padding: const EdgeInsets.only(bottom: 10),
-                            child: Text(
-                              err,
-                              style: const TextStyle(
-                                fontSize: 12,
-                                height: 1.35,
-                                color: _kRed,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          );
-                        },
-                      ),
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton.icon(
-                          onPressed: _busy ? null : _syncNow,
-                          icon: const Icon(Icons.sync),
-                          label: const Text('مزامنة الآن'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Theme.of(
-                              context,
-                            ).colorScheme.primary,
-                            foregroundColor: Theme.of(
-                              context,
-                            ).colorScheme.onPrimary,
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'آخر مزامنة: ${_fmtDate(CloudSyncService.instance.lastSyncAt.value)}',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey,
-                        ),
-                      ),
-                      if (_message != null) ...[
-                        const SizedBox(height: 6),
-                        Text(
-                          _message!,
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: _message == 'تمت المزامنة بنجاح'
-                                ? Colors.green
-                                : _kRed,
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: () {
-                      Navigator.push<void>(
-                        context,
-                        FastContentPageRoute(
-                          settings: const RouteSettings(
-                            name: AppContentRoutes.subscriptionPlans,
-                            arguments: BreadcrumbMeta('خطط الاشتراك'),
-                          ),
-                          builder: (_) =>
-                              SubscriptionPlansScreen(currentPlan: displayPlan),
-                        ),
-                      );
-                    },
-                    icon: const Icon(Icons.upgrade_outlined),
-                    label: const Text('عرض خطط الاشتراك'),
-                  ),
-                ),
-              ],
-            );
-          },
-        ),
-      ),
-    );
-  }
-}
-
-// ═════════════════════════════════════════════════════════════════════════════
 // ── شاشات فرعية للإعدادات ─────────────────────────────────────────────────────
 // ═════════════════════════════════════════════════════════════════════════════
-
-/// إعدادات المتجر
-class _StoreInfoScreen extends StatefulWidget {
-  const _StoreInfoScreen();
-  @override
-  State<_StoreInfoScreen> createState() => _StoreInfoScreenState();
-}
-
-class _StoreInfoScreenState extends State<_StoreInfoScreen> {
-  final _name = TextEditingController(text: 'متجر البصرة');
-  final _address = TextEditingController(text: 'البصرة، العراق');
-  final _phone = TextEditingController(text: '07xxxxxxxxx');
-  final _taxNo = TextEditingController();
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Directionality(
-      textDirection: TextDirection.rtl,
-      child: Scaffold(
-        backgroundColor: cs.surface,
-        appBar: _settingsAppBar(
-          context,
-          'بيانات المتجر',
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.pop(context);
-              },
-              style: TextButton.styleFrom(foregroundColor: cs.onPrimary),
-              child: const Text(
-                'حفظ',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
-          ],
-        ),
-        body: SingleChildScrollView(
-          padding: EdgeInsets.symmetric(
-            horizontal: ScreenLayout.of(context).pageHorizontalGap,
-            vertical: 16,
-          ),
-          child: Column(
-            children: [
-              // شعار المتجر
-              Center(
-                child: Stack(
-                  children: [
-                    Container(
-                      width: 90,
-                      height: 90,
-                      decoration: BoxDecoration(
-                        color: cs.primary.withValues(alpha: 0.12),
-                        shape: BoxShape.circle,
-                      ),
-                      child: Icon(
-                        Icons.store_rounded,
-                        size: 44,
-                        color: cs.primary,
-                      ),
-                    ),
-                    PositionedDirectional(
-                      bottom: 0,
-                      start: 0,
-                      child: Container(
-                        width: 28,
-                        height: 28,
-                        decoration: BoxDecoration(
-                          color: cs.primary,
-                          shape: BoxShape.circle,
-                        ),
-                        child: Icon(
-                          Icons.camera_alt_rounded,
-                          size: 16,
-                          color: cs.onPrimary,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 24),
-              _Field(
-                controller: _name,
-                label: 'اسم المتجر',
-                icon: Icons.store_rounded,
-              ),
-              const SizedBox(height: 14),
-              _Field(
-                controller: _address,
-                label: 'العنوان',
-                icon: Icons.location_on_rounded,
-              ),
-              const SizedBox(height: 14),
-              _Field(
-                controller: _phone,
-                label: 'رقم الهاتف',
-                icon: Icons.phone_rounded,
-                keyboard: TextInputType.phone,
-              ),
-              const SizedBox(height: 14),
-              _Field(
-                controller: _taxNo,
-                label: 'الرقم الضريبي',
-                icon: Icons.numbers_rounded,
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
 
 /// إعدادات الفواتير
 class _InvoiceSettingsScreen extends StatefulWidget {
@@ -1509,7 +981,9 @@ class _InvoiceSettingsScreenState extends State<_InvoiceSettingsScreen> {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
-              style: TextButton.styleFrom(foregroundColor: cs.onPrimary),
+              style: TextButton.styleFrom(
+                foregroundColor: const Color(0xFFD4AF37),
+              ),
               child: const Text(
                 'حفظ',
                 style: TextStyle(fontWeight: FontWeight.bold),

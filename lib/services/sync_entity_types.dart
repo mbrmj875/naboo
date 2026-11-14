@@ -13,5 +13,29 @@ class SyncEntityTypes {
   // خدمات + تذاكر صيانة
   static const serviceOrder = 'service_order';
   static const serviceOrderItem = 'service_order_item';
+
+  /// جدول SQLite المحلي المقابل لـ [entityType] (لإعادة تطبيق الطابور فوق اللقطة).
+  static String? sqliteTableFor(String entityType) {
+    switch (entityType) {
+      case cashLedger:
+        return 'cash_ledger';
+      case workShift:
+        return 'work_shifts';
+      case expense:
+        return 'expenses';
+      case customer:
+        return 'customers';
+      case supplier:
+        return 'suppliers';
+      case productVariant:
+        return 'product_variants';
+      case serviceOrder:
+        return 'service_orders';
+      case serviceOrderItem:
+        return 'service_order_items';
+      default:
+        return null;
+    }
+  }
 }
 

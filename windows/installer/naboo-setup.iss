@@ -27,15 +27,22 @@ AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
-DefaultDirName={autopf}\{#MyAppName}
+DefaultDirName={localappdata}\Programs\{#MyAppName}
 DefaultGroupName={#MyAppName}
+; تثبيت بأبسط مسار: افتح الملف → Install → انتهى (بدون صفحات اختيار)
+DisableWelcomePage=yes
+DisableDirPage=yes
 DisableProgramGroupPage=yes
+DisableReadyPage=yes
+CloseApplications=yes
+RestartApplications=yes
+UsePreviousAppDir=yes
 OutputBaseFilename={#OutputBaseFilename}
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
+; بدون مسؤول: مجلد المستخدم + مكتبات VC بجانب naboo.exe
 PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=dialog
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 ; مسار نسبي من موقع هذا الملف (windows\installer\) — لا يستخدم جذر المشروع
@@ -55,9 +62,14 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "{#BuildSrc}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon
+
+[Registry]
+Root: HKCU; Subkey: "Software\Classes\io.supabase.naboo"; ValueType: string; ValueName: ""; ValueData: "URL:NABOO"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\io.supabase.naboo"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
+Root: HKCU; Subkey: "Software\Classes\io.supabase.naboo\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
 

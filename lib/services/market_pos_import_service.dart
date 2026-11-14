@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
 import 'package:flutter/services.dart' show rootBundle;
@@ -46,25 +46,21 @@ class MarketPosImportService {
     );
     final dbBytes = const GZipDecoder().decodeBytes(gzipBytes);
 
-    // نكتب الملف داخل مسار قواعد البيانات الذي يستخدمه sqflite —
-    // هذا يضمن نجاح الفتح على macOS وكل المنصات حتى مع وجود sandbox.
+    // نكتب عبر واجهة sqflite (تعمل على الموبايل والويب WASM) دون dart:io.
     final dbDirPath = await getDatabasesPath();
-    final dbDir = Directory(dbDirPath);
-    if (!await dbDir.exists()) {
-      await dbDir.create(recursive: true);
-    }
     final tmpPath = p.join(
       dbDirPath,
       'market_pos_seed_${DateTime.now().millisecondsSinceEpoch}.db',
     );
-    final tmpFile = File(tmpPath);
-    await tmpFile.parent.create(recursive: true);
-    await tmpFile.writeAsBytes(dbBytes, flush: true);
+    await databaseFactory.writeDatabaseBytes(
+      tmpPath,
+      Uint8List.fromList(dbBytes),
+    );
     try {
       return await importFromMarketPosDb(sourceDbPath: tmpPath);
     } finally {
       try {
-        await tmpFile.delete();
+        await databaseFactory.deleteDatabase(tmpPath);
       } catch (_) {}
     }
   }

@@ -34,6 +34,8 @@ Future<void> ensureWorkShiftsGlobalIdSchema(Database db) async {
   await addColumn('global_id', 'TEXT');
   await addColumn('updatedAt', 'TEXT');
   await addColumn('tenantId', 'INTEGER NOT NULL DEFAULT 1');
+  // البند 4.3: الجهاز الذي فتح الوردية. فارغ للورديات القديمة.
+  await addColumn('device_id', 'TEXT');
 
   Future<bool> colExists(String name) async {
     final rows = await db.rawQuery('PRAGMA table_info(work_shifts)');
@@ -95,6 +97,27 @@ Future<void> ensureWorkShiftsGlobalIdSchema(Database db) async {
 class DbShiftsSqlOps {
   DbShiftsSqlOps._();
 
+  /// يُزيل أرقاماً بادئة من أسماء مزامنة خاطئة (مثل «1ali» → «ali»).
+  static String normalizeStaffPresenceKey(String name) {
+    final s = name.trim().toLowerCase();
+    if (s.isEmpty) return s;
+    return s.replaceFirst(RegExp(r'^\d+'), '');
+  }
+
+  /// يطابق المستأجر النشط أو ورديات قديمة أُدخلت بـ tenantId = userId بالخطأ.
+  static const tenantScopeWhere = '''
+(
+  tenantId = ?
+  OR NOT EXISTS (SELECT 1 FROM tenants t WHERE t.id = tenantId)
+)
+''';
+
+  static const openShiftWhere = '''
+(closedAt IS NULL OR TRIM(IFNULL(closedAt, '')) = '')
+AND deleted_at IS NULL
+AND $tenantScopeWhere
+''';
+
   static Future<Map<String, dynamic>?> getWorkShiftById(
     DatabaseExecutor db,
     int tenantId,
@@ -111,12 +134,41 @@ class DbShiftsSqlOps {
 
   static Future<Map<String, dynamic>?> getOpenWorkShift(
     DatabaseExecutor db,
-    int tenantId,
-  ) async {
+    int tenantId, {
+    String? deviceId,
+  }) async {
     final rows = await db.query(
       'work_shifts',
-      where: 'closedAt IS NULL AND tenantId = ? AND deleted_at IS NULL',
-      whereArgs: [tenantId],
+      where: deviceId == null
+          ? openShiftWhere
+          : '$openShiftWhere AND ${LocalDevice.shiftWhere}',
+      whereArgs: [tenantId, if (deviceId != null) deviceId],
+      orderBy: 'datetime(openedAt) DESC, id DESC',
+      limit: 1,
+    );
+    return rows.isEmpty ? null : rows.first;
+  }
+
+  /// وردية مفتوحة لموظف محدد — يدعم أكثر من وردية نشطة في نفس المتجر.
+  static Future<Map<String, dynamic>?> getOpenWorkShiftForStaff(
+    DatabaseExecutor db,
+    int tenantId,
+    int shiftStaffUserId, {
+    String? deviceId,
+  }) async {
+    if (shiftStaffUserId <= 0) return null;
+    final rows = await db.query(
+      'work_shifts',
+      where: deviceId == null
+          ? '$openShiftWhere AND shiftStaffUserId = ?'
+          : '$openShiftWhere AND shiftStaffUserId = ? '
+              'AND ${LocalDevice.shiftWhere}',
+      whereArgs: [
+        tenantId,
+        shiftStaffUserId,
+        if (deviceId != null) deviceId,
+      ],
+      orderBy: 'datetime(openedAt) DESC, id DESC',
       limit: 1,
     );
     return rows.isEmpty ? null : rows.first;
@@ -302,6 +354,20 @@ class DbShiftsSqlOps {
     );
   }
 
+  /// تحديث وردية بالمعرّف فقط — بعد إصلاح tenantId اليتيم.
+  static Future<int> updateWorkShiftById(
+    DatabaseExecutor txn,
+    int shiftId,
+    Map<String, dynamic> values,
+  ) {
+    return txn.update(
+      'work_shifts',
+      values,
+      where: 'id = ? AND deleted_at IS NULL',
+      whereArgs: [shiftId],
+    );
+  }
+
   /// Soft-deletes a `work_shifts` row by stamping `deleted_at`. Cross-tenant
   /// or already-deleted rows return 0 rows affected.
   static Future<int> softDeleteWorkShift(
@@ -321,36 +387,214 @@ class DbShiftsSqlOps {
 
 extension DbShifts on DatabaseHelper {
   Future<int> _activeTenantIdForShifts(Database db, String sessionTenant) async {
-    try {
-      final rows = await db.query(
-        'app_settings',
-        columns: ['value'],
-        where: 'key = ?',
-        whereArgs: ['_system.active_tenant_id'],
-        limit: 1,
-      );
-      final fromSettings = rows.isEmpty
-          ? null
-          : int.tryParse((rows.first['value'] ?? '').toString());
-      if (fromSettings != null && fromSettings > 0) return fromSettings;
-    } catch (_) {}
-    final parsed = _tryParseLocalTenantId(sessionTenant);
-    return parsed != null && parsed > 0 ? parsed : 1;
+    return _resolveActiveTenantIdForLocalDb(db);
   }
 
   Future<Map<String, dynamic>?> getWorkShiftById(int id) async {
     final db = await database;
-    final sessionTenant = TenantContext.instance.requireTenantId();
-    final tid = await _activeTenantIdForShifts(db, sessionTenant);
-    return DbShiftsSqlOps.getWorkShiftById(db, tid, id);
+    final rows = await db.query(
+      'work_shifts',
+      where: 'id = ? AND deleted_at IS NULL',
+      whereArgs: [id],
+      limit: 1,
+    );
+    return rows.isEmpty ? null : rows.first;
   }
 
-  /// وردية مفتوحة (إن وُجدت) — closedAt فارغ.
-  Future<Map<String, dynamic>?> getOpenWorkShift() async {
+  /// يغلق ورديات مفتوحة مكررة لنفس الموظف — يبقي الأحدث فقط.
+  Future<void> closeDuplicateOpenShiftsForStaff({
+    required int shiftStaffUserId,
+    int? keepShiftId,
+  }) async {
+    if (shiftStaffUserId <= 0) return;
     final db = await database;
     final sessionTenant = TenantContext.instance.requireTenantId();
     final tid = await _activeTenantIdForShifts(db, sessionTenant);
-    return DbShiftsSqlOps.getOpenWorkShift(db, tid);
+    final nowIso = DateTime.now().toUtc().toIso8601String();
+    final rows = await db.query(
+      'work_shifts',
+      columns: const ['id', 'shiftStaffName'],
+      where: '${DbShiftsSqlOps.openShiftWhere} AND shiftStaffUserId = ? '
+          'AND ${LocalDevice.shiftWhere}',
+      whereArgs: [tid, shiftStaffUserId, await LocalDevice.id(db)],
+      orderBy: 'datetime(openedAt) DESC, id DESC',
+    );
+    if (rows.length <= 1) return;
+    final keep = keepShiftId ?? (rows.first['id'] as int);
+    for (final r in rows) {
+      final id = r['id'] as int?;
+      if (id == null || id == keep) continue;
+      await db.update(
+        'work_shifts',
+        {'closedAt': nowIso, 'updatedAt': nowIso, 'tenantId': tid},
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+    }
+  }
+
+  /// يُغلق ورديات مفتوحة مكررة لنفس الهوية (معرّف أو اسم مُطبّع) ويبقي الأحدث.
+  Future<void> repairDuplicateOpenShifts() async {
+    final db = await database;
+    final sessionTenant = TenantContext.instance.requireTenantId();
+    final tid = await _activeTenantIdForShifts(db, sessionTenant);
+    final rows = await db.rawQuery(
+      '''
+      SELECT ws.id, ws.shiftStaffUserId, ws.openedAt,
+        CASE
+          WHEN TRIM(COALESCE(u.displayName, '')) != '' THEN TRIM(u.displayName)
+          WHEN TRIM(COALESCE(u.username, '')) != '' THEN TRIM(u.username)
+          ELSE TRIM(ws.shiftStaffName)
+        END AS staffName
+      FROM work_shifts ws
+      LEFT JOIN users u ON u.id = ws.shiftStaffUserId
+      WHERE ${DbShiftsSqlOps.openShiftWhere.replaceAll('tenantId', 'ws.tenantId').replaceAll('closedAt', 'ws.closedAt').replaceAll('deleted_at', 'ws.deleted_at')}
+        AND ${LocalDevice.shiftWhere.replaceAll('device_id', 'ws.device_id')}
+      ORDER BY datetime(ws.openedAt) DESC, ws.id DESC
+      ''',
+      [tid, await LocalDevice.id(db)],
+    );
+    if (rows.length <= 1) return;
+    final nowIso = DateTime.now().toUtc().toIso8601String();
+    final keepIds = <int>{};
+    final seenKeys = <String>{};
+    for (final row in rows) {
+      final staffId = (row['shiftStaffUserId'] as num?)?.toInt() ?? 0;
+      final name = (row['staffName'] as String?)?.trim() ?? '';
+      final norm = DbShiftsSqlOps.normalizeStaffPresenceKey(name);
+      final key = staffId > 0 ? 'id:$staffId' : 'name:$norm';
+      if (norm.isNotEmpty && seenKeys.contains('name:$norm')) {
+        continue;
+      }
+      if (seenKeys.contains(key)) continue;
+      seenKeys.add(key);
+      if (norm.isNotEmpty) seenKeys.add('name:$norm');
+      final id = (row['id'] as num?)?.toInt();
+      if (id != null && id > 0) keepIds.add(id);
+    }
+    for (final row in rows) {
+      final id = (row['id'] as num?)?.toInt();
+      if (id == null || id <= 0 || keepIds.contains(id)) continue;
+      await db.update(
+        'work_shifts',
+        {'closedAt': nowIso, 'updatedAt': nowIso, 'tenantId': tid},
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+    }
+  }
+
+  /// يغلق كل الورديات المفتوحة المرتبطة بموظف (معرّف + أسماء مُطبّعة).
+  Future<void> _closeAllOpenShiftsForStaffPresence({
+    required Database db,
+    required int tid,
+    required int staffUserId,
+    String? shiftStaffName,
+  }) async {
+    final nameKeys = <String>{};
+    if (staffUserId > 0) {
+      final userRows = await db.query(
+        'users',
+        columns: const ['username', 'displayName'],
+        where: 'id = ?',
+        whereArgs: [staffUserId],
+        limit: 1,
+      );
+      if (userRows.isNotEmpty) {
+        for (final col in ['username', 'displayName']) {
+          final raw = (userRows.first[col] as String?)?.trim() ?? '';
+          if (raw.isEmpty) continue;
+          nameKeys.add(raw.toLowerCase());
+          final norm = DbShiftsSqlOps.normalizeStaffPresenceKey(raw);
+          if (norm.isNotEmpty) nameKeys.add(norm);
+        }
+      }
+    }
+    final stored = (shiftStaffName ?? '').trim();
+    if (stored.isNotEmpty) {
+      nameKeys.add(stored.toLowerCase());
+      final norm = DbShiftsSqlOps.normalizeStaffPresenceKey(stored);
+      if (norm.isNotEmpty) nameKeys.add(norm);
+    }
+
+    final openRows = await db.query(
+      'work_shifts',
+      columns: const ['id', 'shiftStaffName', 'shiftStaffUserId'],
+      where: '${DbShiftsSqlOps.openShiftWhere} AND ${LocalDevice.shiftWhere}',
+      whereArgs: [tid, await LocalDevice.id(db)],
+    );
+    final nowIso = DateTime.now().toUtc().toIso8601String();
+    for (final row in openRows) {
+      final id = (row['id'] as num?)?.toInt();
+      if (id == null || id <= 0) continue;
+      final rowStaffId = (row['shiftStaffUserId'] as num?)?.toInt() ?? 0;
+      final rowName = (row['shiftStaffName'] as String?)?.trim() ?? '';
+      final rowNorm = DbShiftsSqlOps.normalizeStaffPresenceKey(rowName);
+      final matchesId = staffUserId > 0 && rowStaffId == staffUserId;
+      final matchesName = nameKeys.contains(rowName.toLowerCase()) ||
+          (rowNorm.isNotEmpty && nameKeys.contains(rowNorm));
+      if (!matchesId && !matchesName) continue;
+      await db.update(
+        'work_shifts',
+        {'closedAt': nowIso, 'updatedAt': nowIso, 'tenantId': tid},
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+    }
+  }
+
+  /// وردية مفتوحة (إن وُجدت) — closedAt فارغ.
+  ///
+  /// لا يعتمد على [TenantContext.requireTenantId] — بعد [lockSession] قد يكون
+  /// UUID السحابي غير مضبوط رغم بقاء المستأجر المحلي في `app_settings`.
+  Future<Map<String, dynamic>?> getOpenWorkShift() async {
+    final db = await database;
+    final tid = await _resolveActiveTenantIdForLocalDb(db);
+    final deviceId = await LocalDevice.id(db);
+    return _claimLegacyShift(
+      db,
+      await DbShiftsSqlOps.getOpenWorkShift(db, tid, deviceId: deviceId),
+      deviceId,
+    );
+  }
+
+  /// وردية قديمة مفتوحة بلا جهاز (قبل التحديث) تُنسب إلى أول جهاز يستعملها،
+  /// فلا يراها جهاز آخر كورديته ولا يغلقها كمكررة. تصل النسبة إلى الأجهزة
+  /// الأخرى في اللقطة.
+  Future<Map<String, dynamic>?> _claimLegacyShift(
+    Database db,
+    Map<String, dynamic>? row,
+    String deviceId,
+  ) async {
+    if (row == null) return null;
+    final current = (row['device_id'] ?? '').toString().trim();
+    final id = (row['id'] as num?)?.toInt();
+    if (current.isNotEmpty || id == null) return row;
+    final nowIso = DateTime.now().toUtc().toIso8601String();
+    await db.update(
+      'work_shifts',
+      {'device_id': deviceId, 'updatedAt': nowIso},
+      where: "id = ? AND (device_id IS NULL OR TRIM(device_id) = '')",
+      whereArgs: [id],
+    );
+    return {...row, 'device_id': deviceId, 'updatedAt': nowIso};
+  }
+
+  /// وردية مفتوحة لموظف الوردية المحدد.
+  Future<Map<String, dynamic>?> getOpenWorkShiftForStaff(int shiftStaffUserId) async {
+    final db = await database;
+    final tid = await _resolveActiveTenantIdForLocalDb(db);
+    final deviceId = await LocalDevice.id(db);
+    return _claimLegacyShift(
+      db,
+      await DbShiftsSqlOps.getOpenWorkShiftForStaff(
+        db,
+        tid,
+        shiftStaffUserId,
+        deviceId: deviceId,
+      ),
+      deviceId,
+    );
   }
 
   /// فتح وردية جديدة.
@@ -369,11 +613,35 @@ extension DbShifts on DatabaseHelper {
     await ensureCashLedgerGlobalIdSchema(db);
     await ensureWorkShiftsGlobalIdSchema(db);
     final nowIso = DateTime.now().toUtc().toIso8601String();
+
+    final deviceId = await LocalDevice.id(db);
+    final existing = await _claimLegacyShift(
+      db,
+      await DbShiftsSqlOps.getOpenWorkShiftForStaff(
+        db,
+        tid,
+        shiftStaffUserId,
+        deviceId: deviceId,
+      ),
+      deviceId,
+    );
+    if (existing != null) {
+      final existingId = (existing['id'] as num?)?.toInt();
+      if (existingId != null && existingId > 0) {
+        await closeDuplicateOpenShiftsForStaff(
+          shiftStaffUserId: shiftStaffUserId,
+          keepShiftId: existingId,
+        );
+        return existingId;
+      }
+    }
+
     final globalId = const Uuid().v4();
 
     final shiftPayload = {
       'global_id': globalId,
       'tenantId': tid,
+      'device_id': deviceId,
       'sessionUserId': sessionUserId,
       'shiftStaffUserId': shiftStaffUserId,
       'openedAt': nowIso,
@@ -427,7 +695,9 @@ extension DbShifts on DatabaseHelper {
       }
       return id;
     });
-    CloudSyncService.instance.scheduleSyncSoon();
+    CloudSyncService.instance.scheduleShiftPresencePushSoon();
+    OwnerCommandCenterRefreshBridge.instance
+        .invalidateSection(OwnerSectionIds.openShifts);
     return id;
   }
 
@@ -449,18 +719,33 @@ extension DbShifts on DatabaseHelper {
       throw ArgumentError('المبلغ المسحوب أكبر من المبلغ في الصندوق');
     }
 
-    // Tenant-scoped fetch — a cross-tenant or soft-deleted shiftId silently
-    // no-ops, matching the pre-existing "shift not found" semantics.
     final wsRows = await db.query(
       'work_shifts',
-      where: 'id = ? AND tenantId = ? AND deleted_at IS NULL',
-      whereArgs: [shiftId, tid],
+      where: 'id = ? AND deleted_at IS NULL',
+      whereArgs: [shiftId],
+      limit: 1,
     );
-    if (wsRows.isEmpty) return;
-    final wsGlobalId = wsRows.first['global_id'] as String?;
+    if (wsRows.isEmpty) {
+      throw StateError('الوردية غير موجودة أو أُغلقت مسبقاً');
+    }
+    final wsRow = Map<String, dynamic>.from(wsRows.first);
+    final rowTenant = (wsRow['tenantId'] as num?)?.toInt() ?? 0;
+    if (rowTenant != tid) {
+      wsRow['tenantId'] = tid;
+    }
+    final wsGlobalId = wsRow['global_id'] as String?;
+    final staffUserId = (wsRow['shiftStaffUserId'] as num?)?.toInt() ?? 0;
 
     await db.transaction((txn) async {
       final nowIso = DateTime.now().toUtc().toIso8601String();
+      if (rowTenant != tid) {
+        await txn.update(
+          'work_shifts',
+          {'tenantId': tid, 'updatedAt': nowIso},
+          where: 'id = ?',
+          whereArgs: [shiftId],
+        );
+      }
       if (withdrawnAmount > 0) {
         final cashGlobalId = const Uuid().v4();
         final cashPayload = {
@@ -493,13 +778,20 @@ extension DbShifts on DatabaseHelper {
         'withdrawnAtClose': withdrawnAmount,
         'declaredCashInBoxAtClose': declaredCashInBox,
         'updatedAt': nowIso,
+        'tenantId': tid,
       };
 
-      await DbShiftsSqlOps.updateWorkShift(txn, tid, shiftId, updatedPayload);
+      final updated = await DbShiftsSqlOps.updateWorkShiftById(
+        txn,
+        shiftId,
+        updatedPayload,
+      );
+      if (updated == 0) {
+        throw StateError('تعذّر إغلاق الوردية');
+      }
 
       if (wsGlobalId != null) {
-        final fullRow = Map<String, dynamic>.from(wsRows.first)
-          ..addAll(updatedPayload);
+        final fullRow = Map<String, dynamic>.from(wsRow)..addAll(updatedPayload);
         await SyncQueueService.instance.enqueueMutation(
           txn,
           entityType: 'work_shift',
@@ -509,7 +801,19 @@ extension DbShifts on DatabaseHelper {
         );
       }
     });
-    CloudSyncService.instance.scheduleSyncSoon();
+
+    if (staffUserId > 0 || (wsRow['shiftStaffName'] as String?)?.trim().isNotEmpty == true) {
+      await _closeAllOpenShiftsForStaffPresence(
+        db: db,
+        tid: tid,
+        staffUserId: staffUserId,
+        shiftStaffName: wsRow['shiftStaffName'] as String?,
+      );
+    }
+    await repairDuplicateOpenShifts();
+    CloudSyncService.instance.scheduleShiftPresencePushSoon();
+    OwnerCommandCenterRefreshBridge.instance
+        .invalidateSection(OwnerSectionIds.openShifts);
   }
 
   /// عدد فواتير البيع وعدد المرتجعات المرتبطة بوردية محددة.

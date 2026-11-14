@@ -45,9 +45,13 @@ Uri _customerTelUri(String raw) {
   return Uri.parse('tel:+$d');
 }
 
-Uri _customerWhatsAppUri(String raw) {
+Uri customerWhatsAppUri(String raw, {String? message}) {
   final d = customerPhoneDigitsForLinks(raw);
-  return Uri.parse('https://wa.me/$d');
+  if (d.isEmpty) return Uri.parse('https://wa.me/');
+  final base = Uri.parse('https://wa.me/$d');
+  final text = message?.trim();
+  if (text == null || text.isEmpty) return base;
+  return base.replace(queryParameters: {'text': text});
 }
 
 Future<void> _launchUri(BuildContext context, Uri uri) async {
@@ -83,15 +87,27 @@ Future<void> launchCustomerDial(
 
 Future<void> launchCustomerWhatsApp(
   BuildContext context,
-  List<String> phones,
-) async {
+  List<String> phones, {
+  String? message,
+}) async {
   final chosen = await _resolvePhoneChoice(
     context,
     phones: phones,
     title: 'اختر الرقم للواتساب',
   );
   if (chosen == null || !context.mounted) return;
-  await _launchUri(context, _customerWhatsAppUri(chosen));
+  await launchWhatsAppWithMessage(context, phone: chosen, message: message);
+}
+
+/// يفتح واتساب برسالة جاهزة (يتطلب ضغطة «إرسال» من المستخدم).
+Future<void> launchWhatsAppWithMessage(
+  BuildContext context, {
+  required String phone,
+  String? message,
+}) async {
+  final trimmed = phone.trim();
+  if (trimmed.isEmpty) return;
+  await _launchUri(context, customerWhatsAppUri(trimmed, message: message));
 }
 
 Future<String?> _resolvePhoneChoice(

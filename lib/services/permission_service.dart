@@ -53,6 +53,13 @@ abstract class PermissionKeys {
   // ── إعدادات عامة ──
   static const settingsApp = 'settings.app';
 
+  // ── لوحة المالk v3 (KPI granularity) ──
+  static const ownerDashboardView = 'owner.dashboard.view';
+  static const ownerKpiFinancial = 'owner.kpi.financial';
+  static const ownerKpiOperations = 'owner.kpi.operations';
+  static const ownerKpiDebts = 'owner.kpi.debts';
+  static const ownerKpiInventory = 'owner.kpi.inventory';
+
   static const List<String> allKeys = [
     appDashboard,
     customersView,
@@ -82,6 +89,11 @@ abstract class PermissionKeys {
     shiftsAccess,
     absencesAccess,
     settingsApp,
+    ownerDashboardView,
+    ownerKpiFinancial,
+    ownerKpiOperations,
+    ownerKpiDebts,
+    ownerKpiInventory,
   ];
 }
 
@@ -111,16 +123,23 @@ class PermissionService {
   int get _tenantId => _tenant.activeTenantId;
 
   Set<String> _defaultsForRole(String roleKey) {
-    if (roleKey == 'admin') return _adminAll;
+    if (roleKey == 'owner' || roleKey == 'admin') return _adminAll;
     return _staffDefault;
   }
 
-  /// عند وجود وردية مفتوحة مع [shiftStaffUserId]، تُحتسب الصلاحيات لمستخدم الوردية لا لمستخدم تسجيل الدخول فقط.
+  /// الافتراضي الآمن: تُحتسب الصلاحيات لمستخدم الجلسة الحالي (actor).
+  ///
+  /// عند الحاجة لتوافق سلوكي قديم فقط، يمكن تمرير [useShiftOwnerAsSubject]
+  /// ليتم احتساب الصلاحيات على صاحب الوردية المفتوحة.
   Future<({int? userId, String roleKey})> resolveEffectivePermissionSubject({
     required int? sessionUserId,
     required String sessionRoleKey,
     Map<String, dynamic>? activeShift,
+    bool useShiftOwnerAsSubject = false,
   }) async {
+    if (!useShiftOwnerAsSubject) {
+      return (userId: sessionUserId, roleKey: sessionRoleKey);
+    }
     final raw = activeShift?['shiftStaffUserId'];
     int? sid;
     if (raw is int) {
@@ -143,11 +162,13 @@ class PermissionService {
     required String sessionRoleKey,
     Map<String, dynamic>? activeShift,
     required String permissionKey,
+    bool useShiftOwnerAsSubject = false,
   }) async {
     final sub = await resolveEffectivePermissionSubject(
       sessionUserId: sessionUserId,
       sessionRoleKey: sessionRoleKey,
       activeShift: activeShift,
+      useShiftOwnerAsSubject: useShiftOwnerAsSubject,
     );
     return can(
       userId: sub.userId,
@@ -197,7 +218,7 @@ class PermissionService {
     required int userId,
     required String roleKey,
   }) async {
-    if (roleKey == 'admin') {
+    if (roleKey == 'owner' || roleKey == 'admin') {
       return {for (final k in PermissionKeys.allKeys) k: true};
     }
     final db = await _dbHelper.database;
@@ -226,6 +247,37 @@ class PermissionService {
     return {for (final k in PermissionKeys.allKeys) k: d.contains(k)};
   }
 
+  /// مالك/مدير أو موظف «كامل التخصيص» (كل مفاتيح [PermissionKeys.allKeys] مفعّلة).
+  Future<bool> hasElevatedAccess({
+    required int? userId,
+    required String roleKey,
+  }) async {
+    final rk = roleKey.trim().toLowerCase();
+    if (rk == 'owner' || rk == 'admin') return true;
+    if (userId == null || userId <= 0) return false;
+    final map = await getUserPermissionMapForEdit(
+      userId: userId,
+      roleKey: roleKey,
+    );
+    if (map.isEmpty) return false;
+    return PermissionKeys.allKeys.every((k) => map[k] == true);
+  }
+
+  Future<bool> hasElevatedAccessForSession({
+    required int? sessionUserId,
+    required String sessionRoleKey,
+    Map<String, dynamic>? activeShift,
+    bool useShiftOwnerAsSubject = false,
+  }) async {
+    final sub = await resolveEffectivePermissionSubject(
+      sessionUserId: sessionUserId,
+      sessionRoleKey: sessionRoleKey,
+      activeShift: activeShift,
+      useShiftOwnerAsSubject: useShiftOwnerAsSubject,
+    );
+    return hasElevatedAccess(userId: sub.userId, roleKey: sub.roleKey);
+  }
+
   Future<void> clearUserPermissionOverrides(int userId) async {
     final db = await _dbHelper.database;
     await db.delete(
@@ -250,17 +302,13 @@ class PermissionService {
     );
     final now = DateTime.now().toIso8601String();
     for (final e in permissions.entries) {
-      batch.insert(
-        'user_permissions',
-        {
-          'tenantId': tid,
-          'userId': userId,
-          'permissionKey': e.key,
-          'isAllowed': e.value ? 1 : 0,
-          'updatedAt': now,
-        },
-        conflictAlgorithm: ConflictAlgorithm.replace,
-      );
+      batch.insert('user_permissions', {
+        'tenantId': tid,
+        'userId': userId,
+        'permissionKey': e.key,
+        'isAllowed': e.value ? 1 : 0,
+        'updatedAt': now,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
     }
     await batch.commit(noResult: true);
   }

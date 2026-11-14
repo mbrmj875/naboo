@@ -4,6 +4,7 @@ import 'package:flutter/widgets.dart';
 import 'package:provider/provider.dart';
 
 import '../navigation/app_root_navigator_key.dart';
+import '../utils/app_logger.dart';
 import 'auth_provider.dart';
 
 /// جسر يُسجَّل من [HomeScreen] لتوجيه مسح الباركود (HID) إلى منطق البيع/إضافة المنتج
@@ -60,7 +61,14 @@ class GlobalBarcodeRouteBridge {
     if (p != null) {
       try {
         if (await p(scanned)) return;
-      } catch (_) {}
+      } catch (e, st) {
+        AppLogger.error(
+          'GlobalBarcodeBridge',
+          'فشل معالج أولوية الباركود',
+          e,
+          st,
+        );
+      }
     }
     final h = _handler;
     if (h != null) {

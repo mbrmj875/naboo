@@ -1,6 +1,8 @@
 part of 'database_helper.dart';
 
 // ── خطط التقسيط والأقساط ─────────────────────────────────────────────────
+int _installmentToFils(double value) => (value * 1000).round();
+double _installmentFromFils(int fils) => fils / 1000.0;
 
 extension DbInstallments on DatabaseHelper {
   Future<int> _activeTenantIdForInstallments(Database db) async {
@@ -37,6 +39,9 @@ extension DbInstallments on DatabaseHelper {
       if (r.isNotEmpty) customerGlobalId = r.first['global_id'] as String?;
     }
 
+    final totalAmountFils = _installmentToFils(plan.totalAmount);
+    final paidAmountFils = _installmentToFils(plan.paidAmount);
+
     final planId = await db.insert('installment_plans', {
       'tenantId': tid,
       'global_id': planGlobalId,
@@ -47,7 +52,9 @@ extension DbInstallments on DatabaseHelper {
       'customerName': plan.customerName,
       'customerId': plan.customerId,
       'totalAmount': plan.totalAmount,
+      'totalAmountFils': totalAmountFils,
       'paidAmount': plan.paidAmount,
+      'paidAmountFils': paidAmountFils,
       'numberOfInstallments': plan.numberOfInstallments,
       'interestPct': plan.interestPct,
       'interestAmount': plan.interestAmount,
@@ -65,6 +72,7 @@ extension DbInstallments on DatabaseHelper {
         'planId': inst.planId,
         'dueDate': inst.dueDate.toIso8601String(),
         'amount': inst.amount,
+        'amountFils': _installmentToFils(inst.amount),
         'paid': inst.paid ? 1 : 0,
         'paidDate': inst.paidDate?.toIso8601String(),
       });
@@ -115,8 +123,10 @@ extension DbInstallments on DatabaseHelper {
     }
 
     final nm = customerName.trim().isEmpty ? 'عميل' : customerName.trim();
-    final remaining = totalAmount - paidAmount;
-    if (remaining <= 1e-6) {
+    final totalAmountFils = _installmentToFils(totalAmount);
+    final paidAmountFils = _installmentToFils(paidAmount);
+    final remainingFils = totalAmountFils - paidAmountFils;
+    if (remainingFils <= 0) {
       final plan = InstallmentPlan(
         invoiceId: invoiceId,
         customerName: nm,
@@ -185,7 +195,7 @@ extension DbInstallments on DatabaseHelper {
     }) async {
       final placeholders = List.filled(types.length, '?').join(',');
       final extra = deliveryPartialOnly
-          ? 'AND (i.total - IFNULL(i.advancePayment, 0)) > 0.01'
+          ? 'AND ${MoneySql.invoiceOpenRemainingFilsOf('i')} > 0'
           : '';
       final rows = await conn.rawQuery('''
 SELECT i.id AS invoiceId, i.customerName, i.customerId, i.total AS totalAmount,
@@ -445,7 +455,8 @@ WHERE i.type IN ($placeholders)
     required int originalInvoiceId,
     required double returnDocumentTotal,
   }) async {
-    if (returnDocumentTotal <= 0) return;
+    final returnDocumentFils = _installmentToFils(returnDocumentTotal);
+    if (returnDocumentFils <= 0) return;
     final db = await database;
     final tid = await _activeTenantIdForInstallments(db);
     final rows = await db.query(
@@ -456,9 +467,11 @@ WHERE i.type IN ($placeholders)
     );
     if (rows.isEmpty) return;
     final planId = rows.first['id'] as int;
-    final totalAmount = (rows.first['totalAmount'] as num).toDouble();
-    var newTotal = totalAmount - returnDocumentTotal;
-    if (newTotal < 0) newTotal = 0;
+    final totalAmountFils = _installmentToFils(
+      (rows.first['totalAmount'] as num).toDouble(),
+    );
+    var newTotalFils = totalAmountFils - returnDocumentFils;
+    if (newTotalFils < 0) newTotalFils = 0;
     final rowInv = rows.first['invoiceId'] as int?;
     final invId = (rowInv != null && rowInv > 0) ? rowInv : originalInvoiceId;
 
@@ -466,7 +479,7 @@ WHERE i.type IN ($placeholders)
       await txn.update(
         'installment_plans',
         {
-          'totalAmount': newTotal,
+          'totalAmount': _installmentFromFils(newTotalFils),
           'updatedAt': DateTime.now().toUtc().toIso8601String(),
         },
         where: 'id = ? AND tenantId = ?',
@@ -540,13 +553,15 @@ WHERE i.type IN ($placeholders)
       if (ir['paid'] == 1) {
         return const RecordInstallmentPaymentResult(success: false);
       }
-      final due = (ir['amount'] as num).toDouble();
+      final dueFils = _installmentToFils((ir['amount'] as num).toDouble());
       final planId = ir['planId'] as int;
-      final toPay = paidAmount > 0 ? paidAmount : due;
-      if (toPay + 1e-6 < due) {
+      final requestedFils = _installmentToFils(paidAmount);
+      final toPayFils = requestedFils > 0 ? requestedFils : dueFils;
+      if (toPayFils < dueFils) {
         return const RecordInstallmentPaymentResult(success: false);
       }
-      final applied = toPay > due ? due : toPay;
+      final appliedFils = toPayFils > dueFils ? dueFils : toPayFils;
+      final applied = _installmentFromFils(appliedFils);
 
       final plans = await txn.query(
         'installment_plans',

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 
 import '../utils/staff_identity_qr.dart';
+import '../theme/design_tokens.dart';
 
 /// بطاقة هوية موظف (وجه واحد): QR فقط + بيانات نصية (بدون باركود خطّي).
 class EmployeeIdCard extends StatelessWidget {
@@ -49,7 +50,7 @@ class EmployeeIdCard extends StatelessWidget {
     final qrPayload = StaffIdentityQr.encode(userId: id, pin: pin);
 
     final h = compact ? width * 0.52 : width * 0.58;
-    final border = Theme.of(context).colorScheme.outline.withValues(alpha: 0.5);
+    final border = AppColors.accentGold.withValues(alpha: 0.5);
 
     return Directionality(
       textDirection: TextDirection.rtl,
@@ -80,7 +81,7 @@ class EmployeeIdCard extends StatelessWidget {
                     style: TextStyle(
                       fontSize: compact ? 13 : 15,
                       fontWeight: FontWeight.w900,
-                      color: Colors.blueGrey.shade900,
+                      color: AppColors.accentGold,
                     ),
                   ),
                 ),
@@ -115,7 +116,7 @@ class EmployeeIdCard extends StatelessWidget {
                     fontSize: 13,
                     fontWeight: FontWeight.w800,
                     letterSpacing: 1.2,
-                    color: Colors.teal.shade900,
+                    color: AppColors.accentGold,
                   ),
                 ),
               ),
@@ -152,7 +153,7 @@ class EmployeeIdCard extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, size: compact ? 15 : 17, color: Colors.blueGrey.shade600),
+          Icon(icon, size: compact ? 15 : 17, color: AppColors.accentGold),
           const SizedBox(width: 8),
           Expanded(
             child: Column(

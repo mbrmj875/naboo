@@ -1,13 +1,19 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart' hide TextDirection;
+import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:math' as math;
 import 'dart:async' show Timer, unawaited;
 
 import '../../models/invoice.dart';
+import '../../providers/business_features_provider.dart';
 import '../../services/reports_repository.dart';
+import '../../services/business_setup_settings.dart';
+import '../../verticals/_contract/vertical_manifest.dart';
+import '../../verticals/_contract/vertical_registry.dart';
 import '../../services/cloud_sync_service.dart';
 import '../../theme/app_corner_style.dart';
 import '../../theme/design_tokens.dart';
@@ -41,7 +47,7 @@ EdgeInsetsDirectional _reportPanelOuterPadding(BuildContext context) {
 }
 
 /// مركز التقارير — فترات زمنية وتحليلات من قاعدة البيانات.
-/// [initialSection] فهرس القسم (0…7)؛ يُفتح من البند الفرعي تحت «التقارير» في الشريط الرئيسي.
+/// [initialSection] فهرس القسم (0…9)؛ يُفتح من البند الفرعي تحت «التقارير» في الشريط الرئيسي.
 class ReportsScreen extends StatefulWidget {
   const ReportsScreen({super.key, this.initialSection = 0});
 
@@ -72,6 +78,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
   DateTime _from = DateTime.now().subtract(const Duration(days: 30));
   DateTime _to = DateTime.now();
   ReportsSnapshot? _data;
+  Object? _verticalReportData;
   bool _loading = true;
   String? _error;
   int _defaultRangeDays = 30;
@@ -128,7 +135,38 @@ class _ReportsScreenState extends State<ReportsScreen> {
       icon: Icons.tune_rounded,
       subtitle: 'فترة افتراضية وتفضيلات',
     ),
+    _ReportsSection(
+      id: 8,
+      label: 'غيار الزيت',
+      icon: Icons.oil_barrel_outlined,
+      subtitle: 'غيارات، مخزون، وإيراد',
+    ),
+    _ReportsSection(
+      id: 9,
+      label: 'تقارير الصيدلية',
+      icon: Icons.medication_liquid_rounded,
+      subtitle: 'مخزون، مبيعات، مالي، موردين',
+    ),
   ];
+
+  static const int _oilReportsSectionId = 8;
+  static const int _pharmacyReportsSectionId = 9;
+
+  VerticalManifest? get _oilReportsManifest =>
+      VerticalRegistry.instance.manifestFor(BusinessVertical.oilChange);
+
+  VerticalManifest? get _pharmacyReportsManifest =>
+      VerticalRegistry.instance.manifestFor(BusinessVertical.pharmacy);
+
+  bool _isVerticalReportSection(int sectionId) =>
+      sectionId == _oilReportsSectionId ||
+      sectionId == _pharmacyReportsSectionId;
+
+  VerticalManifest? _manifestForVerticalSection(int sectionId) {
+    if (sectionId == _oilReportsSectionId) return _oilReportsManifest;
+    if (sectionId == _pharmacyReportsSectionId) return _pharmacyReportsManifest;
+    return null;
+  }
 
   @override
   void initState() {
@@ -172,6 +210,36 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
   Future<void> _reload() async {
     final gen = ++_reloadGeneration;
+    if (_isVerticalReportSection(_section)) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+      try {
+        final manifest = _manifestForVerticalSection(_section);
+        final verticalData = manifest == null
+            ? null
+            : await manifest.loadReportSectionSnapshot(
+                _section,
+                ReportDateRange(from: _from, to: _to),
+              );
+        if (!mounted) return;
+        if (gen != _reloadGeneration) return;
+        setState(() {
+          _verticalReportData = verticalData;
+          _loading = false;
+        });
+      } catch (e) {
+        if (!mounted) return;
+        if (gen != _reloadGeneration) return;
+        setState(() {
+          _error = e.toString();
+          _loading = false;
+        });
+      }
+      return;
+    }
+
     final key = _rangeCacheKey(_from, _to);
     final cached = _cache[key];
     if (cached != null) {
@@ -233,6 +301,32 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final features = context.watch<BusinessFeaturesProvider>();
+    final visibleSections = _sections.where((s) {
+      if (s.id == 4 && !features.data.enableInstallments) return false;
+      if (s.id == _oilReportsSectionId && !features.data.enableOilChange) {
+        return false;
+      }
+      if (s.id == _pharmacyReportsSectionId &&
+          features.data.businessVertical != BusinessVertical.pharmacy) {
+        return false;
+      }
+      if (s.id == 3 && !features.data.enableDebts) return false;
+      return true;
+    }).toList();
+
+    if (!visibleSections.any((s) => s.id == _section) &&
+        visibleSections.isNotEmpty) {
+      final fallbackId = visibleSections.first.id;
+      SchedulerBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (!visibleSections.any((s) => s.id == _section)) {
+          setState(() => _section = fallbackId);
+          _scheduleReload();
+        }
+      });
+    }
+
     final cs = Theme.of(context).colorScheme;
     final pageBg = cs.surfaceContainerLowest;
 
@@ -248,9 +342,12 @@ class _ReportsScreenState extends State<ReportsScreen> {
               _DateStrip(
                 from: _from,
                 to: _to,
-                sections: _sections,
+                sections: visibleSections,
                 selectedSection: _section,
-                onSectionChanged: (idx) => setState(() => _section = idx),
+                onSectionChanged: (idx) {
+                  setState(() => _section = idx);
+                  _scheduleReload();
+                },
                 onRefresh: _loading ? null : _refreshFromServer,
                 onChanged: _setRange,
               ),
@@ -269,6 +366,19 @@ class _ReportsScreenState extends State<ReportsScreen> {
   }
 
   Widget _buildSectionContent() {
+    if (_isVerticalReportSection(_section)) {
+      final manifest = _manifestForVerticalSection(_section);
+      final panel = manifest?.buildReportSectionPanel(
+        _section,
+        _verticalReportData,
+      );
+      if (panel != null) return panel;
+      if (_section == _pharmacyReportsSectionId) {
+        return const Center(child: Text('لا توجد بيانات لتقارير الصيدلية'));
+      }
+      return const Center(child: Text('لا توجد بيانات لغيار الزيت'));
+    }
+
     final d = _data;
     if (d == null) {
       return const Center(child: Text('لا توجد بيانات'));
@@ -304,6 +414,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
             await _reload();
           },
         );
+      case 8:
+        return const SizedBox.shrink();
       default:
         return const SizedBox.shrink();
     }
@@ -365,9 +477,9 @@ class _ReportsSideRailState extends State<_ReportsSideRail> {
               padding: const EdgeInsets.fromLTRB(14, 16, 14, 10),
               child: DecoratedBox(
                 decoration: BoxDecoration(
-                  color: cs.primaryContainer.withValues(alpha: 0.60),
+                  color: AppColors.accentGold.withValues(alpha: 0.1),
                   borderRadius: ac.md,
-                  border: Border.all(color: cs.primary.withValues(alpha: 0.18)),
+                  border: Border.all(color: AppColors.accentGold.withValues(alpha: 0.18)),
                 ),
                 child: Padding(
                   padding: const EdgeInsets.symmetric(
@@ -376,9 +488,9 @@ class _ReportsSideRailState extends State<_ReportsSideRail> {
                   ),
                   child: Row(
                     children: [
-                      Icon(
+                      const Icon(
                         Icons.dashboard_customize_rounded,
-                        color: cs.primary,
+                        color: AppColors.accentGold,
                         size: 18,
                       ),
                       const SizedBox(width: 8),
@@ -418,8 +530,8 @@ class _ReportsSideRailState extends State<_ReportsSideRail> {
                           gradient: sel
                               ? LinearGradient(
                                   colors: [
-                                    cs.primary.withValues(alpha: 0.90),
-                                    cs.primary.withValues(alpha: 0.72),
+                                    AppColors.accentGold.withValues(alpha: 0.90),
+                                    AppColors.accentGold.withValues(alpha: 0.72),
                                   ],
                                 )
                               : null,
@@ -432,9 +544,9 @@ class _ReportsSideRailState extends State<_ReportsSideRail> {
                               : cs.surface,
                           border: Border.all(
                             color: sel
-                                ? cs.primary.withValues(alpha: 0.25)
+                                ? AppColors.accentGold.withValues(alpha: 0.25)
                                 : hovered
-                                ? cs.primary.withValues(alpha: 0.18)
+                                ? AppColors.accentGold.withValues(alpha: 0.18)
                                 : cs.outlineVariant.withValues(alpha: 0.35),
                           ),
                           boxShadow: active
@@ -542,6 +654,7 @@ class _ReportsSideRailState extends State<_ReportsSideRail> {
                                               content: Text(s.subtitle),
                                               actions: [
                                                 TextButton(
+                                                  style: TextButton.styleFrom(foregroundColor: AppColors.accentGold),
                                                   onPressed: () =>
                                                       Navigator.of(ctx).pop(),
                                                   child: const Text('حسنًا'),
@@ -631,7 +744,10 @@ class _DateStrip extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final ac = context.appCorners;
-    final current = sections[selectedSection];
+    final current = sections.firstWhere(
+      (s) => s.id == selectedSection,
+      orElse: () => sections.first,
+    );
     final gap = ScreenLayout.of(context).pageHorizontalGap;
     final narrow =
         ScreenLayout.of(context).isNarrowWidth ||
@@ -660,7 +776,7 @@ class _DateStrip extends StatelessWidget {
               value: s.id,
               child: Row(
                 children: [
-                  Icon(s.icon, size: 18, color: cs.primary),
+                  Icon(s.icon, size: 18, color: AppColors.accentGold),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Column(
@@ -681,7 +797,11 @@ class _DateStrip extends StatelessWidget {
                     ),
                   ),
                   if (s.id == selectedSection)
-                    Icon(Icons.check_rounded, size: 16, color: cs.primary),
+                    const Icon(
+                      Icons.check_rounded,
+                      size: 16,
+                      color: AppColors.accentGold,
+                    ),
                 ],
               ),
             ),
@@ -712,6 +832,24 @@ class _DateStrip extends StatelessWidget {
     Widget narrowTopRow() {
       return Row(
         children: [
+          if (Navigator.canPop(context))
+            Padding(
+              padding: const EdgeInsetsDirectional.only(end: 4),
+              child: IconButton(
+                tooltip: 'رجوع',
+                icon: const Icon(Icons.arrow_back),
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+            )
+          else
+            Padding(
+              padding: const EdgeInsetsDirectional.only(end: 4),
+              child: IconButton(
+                tooltip: 'الرئيسية',
+                icon: const Icon(Icons.home_rounded),
+                onPressed: () => Navigator.of(context, rootNavigator: true).pushReplacementNamed('/home'),
+              ),
+            ),
           sectionMenu(compact: true),
           const SizedBox(width: 6),
           Expanded(
@@ -724,7 +862,11 @@ class _DateStrip extends StatelessWidget {
             tooltip: 'تحديث البيانات',
             visualDensity: VisualDensity.compact,
             onPressed: onRefresh,
-            icon: const Icon(Icons.refresh_rounded, size: 18),
+            icon: const Icon(
+              Icons.refresh_rounded,
+              size: 18,
+              color: AppColors.accentGold,
+            ),
           ),
         ],
       );
@@ -733,6 +875,24 @@ class _DateStrip extends StatelessWidget {
     Widget wideTopRow() {
       return Row(
         children: [
+          if (Navigator.canPop(context))
+            Padding(
+              padding: const EdgeInsetsDirectional.only(end: 8),
+              child: IconButton(
+                tooltip: 'رجوع',
+                icon: const Icon(Icons.arrow_back),
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+            )
+          else
+            Padding(
+              padding: const EdgeInsetsDirectional.only(end: 8),
+              child: IconButton(
+                tooltip: 'الرئيسية',
+                icon: const Icon(Icons.home_rounded),
+                onPressed: () => Navigator.of(context, rootNavigator: true).pushReplacementNamed('/home'),
+              ),
+            ),
           sectionMenu(compact: false),
           const SizedBox(width: 8),
           rangeButton(compact: false),
@@ -741,7 +901,11 @@ class _DateStrip extends StatelessWidget {
             tooltip: 'تحديث البيانات',
             visualDensity: VisualDensity.compact,
             onPressed: onRefresh,
-            icon: const Icon(Icons.refresh_rounded, size: 18),
+            icon: const Icon(
+              Icons.refresh_rounded,
+              size: 18,
+              color: AppColors.accentGold,
+            ),
           ),
           Expanded(
             child: Text(
@@ -867,7 +1031,7 @@ class _TopSlimMenuButton extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 18, color: cs.primary),
+            Icon(icon, size: 18, color: AppColors.accentGold),
             const SizedBox(width: 2),
             Icon(
               Icons.keyboard_arrow_down_rounded,
@@ -888,7 +1052,7 @@ class _TopSlimMenuButton extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 16, color: cs.primary),
+          Icon(icon, size: 16, color: AppColors.accentGold),
           const SizedBox(width: 6),
           Text(
             label,
@@ -987,10 +1151,10 @@ class _FigmaLikeRangeDialogState extends State<_FigmaLikeRangeDialog> {
                     vertical: 7,
                   ),
                   decoration: BoxDecoration(
-                    color: cs.primaryContainer.withValues(alpha: 0.5),
+                    color: AppColors.accentGold.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(10),
                     border: Border.all(
-                      color: cs.primary.withValues(alpha: 0.22),
+                      color: AppColors.accentGold.withValues(alpha: 0.22),
                     ),
                   ),
                   child: Row(
@@ -998,17 +1162,17 @@ class _FigmaLikeRangeDialogState extends State<_FigmaLikeRangeDialog> {
                     children: [
                       Text(
                         rangeLabel,
-                        style: TextStyle(
-                          color: cs.primary,
+                        style: const TextStyle(
+                          color: AppColors.accentGold,
                           fontWeight: FontWeight.w700,
                           fontSize: 13,
                         ),
                       ),
                       const SizedBox(width: 4),
-                      Icon(
+                      const Icon(
                         Icons.keyboard_arrow_down_rounded,
                         size: 16,
-                        color: cs.primary,
+                        color: AppColors.accentGold,
                       ),
                     ],
                   ),
@@ -1067,6 +1231,7 @@ class _FigmaLikeRangeDialogState extends State<_FigmaLikeRangeDialog> {
                       Align(
                         alignment: AlignmentDirectional.centerStart,
                         child: TextButton(
+                          style: TextButton.styleFrom(foregroundColor: AppColors.accentGold),
                           onPressed: () =>
                               _applyQuickPreset(_RangeQuickPreset.reset),
                           child: const Text('إعادة ضبط'),
@@ -1167,9 +1332,9 @@ class _FigmaLikeRangeDialogState extends State<_FigmaLikeRangeDialog> {
                                 child: Container(
                                   decoration: BoxDecoration(
                                     color: boundary
-                                        ? cs.primary
+                                        ? AppColors.accentGold
                                         : inRange
-                                        ? cs.primary.withValues(alpha: 0.24)
+                                        ? AppColors.accentGold.withValues(alpha: 0.24)
                                         : Colors.transparent,
                                     borderRadius: BorderRadius.circular(10),
                                   ),
@@ -1178,7 +1343,7 @@ class _FigmaLikeRangeDialogState extends State<_FigmaLikeRangeDialog> {
                                       _toEnglishDigits('${day.day}'),
                                       style: TextStyle(
                                         color: boundary
-                                            ? cs.onPrimary
+                                            ? Colors.black87
                                             : !selectable
                                             ? cs.onSurfaceVariant.withValues(
                                                 alpha: 0.25,
@@ -1211,11 +1376,16 @@ class _FigmaLikeRangeDialogState extends State<_FigmaLikeRangeDialog> {
             child: Row(
               children: [
                 TextButton(
+                  style: TextButton.styleFrom(foregroundColor: AppColors.accentGold),
                   onPressed: () => Navigator.of(context).pop(),
                   child: const Text('إلغاء'),
                 ),
                 const Spacer(),
                 FilledButton(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppColors.accentGold,
+                    foregroundColor: Colors.black87,
+                  ),
                   onPressed: () {
                     final start = _start.isBefore(_end) ? _start : _end;
                     final end = _end.isAfter(_start) ? _end : _start;
@@ -1333,7 +1503,6 @@ class _QuickPresetTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(8),
@@ -1343,10 +1512,10 @@ class _QuickPresetTile extends StatelessWidget {
           alignment: AlignmentDirectional.centerStart,
           child: Text(
             label,
-            style: TextStyle(
+            style: const TextStyle(
               fontSize: 12.5,
               fontWeight: FontWeight.w600,
-              color: cs.onSurface,
+              color: AppColors.accentGold,
             ),
           ),
         ),
@@ -1363,11 +1532,16 @@ class _PanelDashboard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final netApprox = data.salesNet - data.returnsTotal;
-    final netAfterExpenses = netApprox - data.expensesTotal;
-    final maxDay = data.dailySales.fold<double>(
+    final salesNetFils = data.salesNetFils;
+    final returnsTotalFils = data.returnsTotalFils;
+    final expensesTotalFils = data.expensesTotalFils;
+    final netApproxFils = salesNetFils - returnsTotalFils;
+    final netAfterExpensesFils = netApproxFils - expensesTotalFils;
+    final netApprox = netApproxFils / 1000.0;
+    final netAfterExpenses = netAfterExpensesFils / 1000.0;
+    final maxDayFils = data.dailySales.fold<int>(
       1,
-      (a, b) => b.amount > a ? b.amount : a,
+      (a, b) => b.amountFils > a ? b.amountFils : a,
     );
 
     return SingleChildScrollView(
@@ -1379,13 +1553,13 @@ class _PanelDashboard extends StatelessWidget {
             children: [
               _KpiCard(
                 title: 'صافي مبيعات الفترة',
-                value: '${_numFmt.format(data.salesNet)} د.ع',
+                value: '${_numFmt.format(salesNetFils / 1000.0)} د.ع',
                 icon: Icons.trending_up_rounded,
                 color: const Color(0xFF2563EB),
               ),
               _KpiCard(
                 title: 'إجمالي المرتجعات',
-                value: '${_numFmt.format(data.returnsTotal)} د.ع',
+                value: '${_numFmt.format(returnsTotalFils / 1000.0)} د.ع',
                 icon: Icons.undo_rounded,
                 color: const Color(0xFFDC2626),
               ),
@@ -1397,7 +1571,7 @@ class _PanelDashboard extends StatelessWidget {
               ),
               _KpiCard(
                 title: 'إجمالي المصروفات',
-                value: '${_numFmt.format(data.expensesTotal)} د.ع',
+                value: '${_numFmt.format(expensesTotalFils / 1000.0)} د.ع',
                 icon: Icons.payments_outlined,
                 color: const Color(0xFF0F766E),
               ),
@@ -1421,7 +1595,7 @@ class _PanelDashboard extends StatelessWidget {
           _AnalyticsCard(
             title: 'مبيعات يومية ضمن الفترة',
             subtitle: 'مخطط أعمدة — يوضح اتجاه المبيعات بين تاريخي الفترة',
-            child: _DailyBars(points: data.dailySales, maxY: maxDay),
+            child: _DailyBars(points: data.dailySales, maxYFils: maxDayFils),
           ),
           const SizedBox(height: 18),
           _CategoryGaugesCard(
@@ -1432,17 +1606,17 @@ class _PanelDashboard extends StatelessWidget {
             items: [
               _GaugeItem(
                 label: 'صافي المبيعات',
-                value: data.salesNet,
+                value: salesNetFils / 1000.0,
                 color: const Color(0xFF2563EB),
               ),
               _GaugeItem(
                 label: 'المرتجعات',
-                value: data.returnsTotal,
+                value: returnsTotalFils / 1000.0,
                 color: const Color(0xFFDC2626),
               ),
               _GaugeItem(
                 label: 'المصروفات',
-                value: data.expensesTotal,
+                value: expensesTotalFils / 1000.0,
                 color: const Color(0xFF0F766E),
               ),
               _GaugeItem(
@@ -1464,22 +1638,26 @@ class _PanelDashboard extends StatelessWidget {
               }
               final dates = datesSet.where((e) => e.isNotEmpty).toList()
                 ..sort();
-              final salesMap = {
-                for (final d in data.dailySales) d.dayLabel: d.amount,
+              final salesMapFils = {
+                for (final d in data.dailySales) d.dayLabel: d.amountFils,
               };
-              final expensesMap = {
-                for (final d in data.dailyExpenses) d.dayLabel: d.amount,
+              final expensesMapFils = {
+                for (final d in data.dailyExpenses) d.dayLabel: d.amountFils,
               };
               final series = <_AreaSeries>[
                 _AreaSeries(
                   name: 'مبيعات',
                   color: const Color(0xFF2563EB),
-                  values: [for (final d in dates) salesMap[d] ?? 0.0],
+                  values: [
+                    for (final d in dates) (salesMapFils[d] ?? 0) / 1000.0,
+                  ],
                 ),
                 _AreaSeries(
                   name: 'مصروفات',
                   color: const Color(0xFF0F766E),
-                  values: [for (final d in dates) expensesMap[d] ?? 0.0],
+                  values: [
+                    for (final d in dates) (expensesMapFils[d] ?? 0) / 1000.0,
+                  ],
                 ),
               ];
               return _StackedAreaCard(
@@ -1500,7 +1678,7 @@ class _PanelDashboard extends StatelessWidget {
               rows: data.topCustomers.take(8).map((e) {
                 return [
                   e.name,
-                  '${_numFmt.format(e.amount)} د.ع',
+                  '${_numFmt.format(e.amountFils / 1000.0)} د.ع',
                   '${e.count ?? '—'}',
                 ];
               }).toList(),
@@ -1530,38 +1708,39 @@ class _PanelSales extends StatelessWidget {
       InvoiceType.delivery,
     ];
 
-    final typeTotals = <InvoiceType, double>{for (final t in salesTypes) t: 0};
-    data.salesByType.forEach((typeIdx, sum) {
+    final typeTotalsFils = <InvoiceType, int>{for (final t in salesTypes) t: 0};
+    data.salesByTypeFils.forEach((typeIdx, sumFils) {
       if (typeIdx >= 0 && typeIdx < InvoiceType.values.length) {
         final t = InvoiceType.values[typeIdx];
-        if (typeTotals.containsKey(t)) typeTotals[t] = sum;
+        if (typeTotalsFils.containsKey(t)) typeTotalsFils[t] = sumFils;
       }
     });
 
     final list =
-        typeTotals.entries
-            .map((e) => _SalesTypeRow(type: e.key, total: e.value))
+        typeTotalsFils.entries
+            .map((e) => _SalesTypeRow(type: e.key, totalFils: e.value))
             .toList()
-          ..sort((a, b) => b.total.compareTo(a.total));
+          ..sort((a, b) => b.totalFils.compareTo(a.totalFils));
 
-    final salesTotal = list.fold<double>(0, (s, r) => s + r.total);
-    final netApprox = data.salesNet - data.returnsTotal;
+    final salesTotalFils = list.fold<int>(0, (s, r) => s + r.totalFils);
+    final salesTotal = salesTotalFils / 1000.0;
+    final netApproxFils = data.salesNetFils - data.returnsTotalFils;
 
     // بطاقات KPI الأربعة محولة إلى مخطط بيتزا موحّد بالقيم المالية.
     final kpiPie = <_PieSlice>[
       _PieSlice(
         label: 'مبيعات (غير مرتجع)',
-        value: math.max(0, data.salesNet),
+        value: math.max(0, data.salesNetFils) / 1000.0,
         color: const Color(0xFF2563EB),
       ),
       _PieSlice(
         label: 'مرتجعات',
-        value: math.max(0, data.returnsTotal),
+        value: math.max(0, data.returnsTotalFils) / 1000.0,
         color: const Color(0xFFDC2626),
       ),
       _PieSlice(
         label: 'صافي تقريبي',
-        value: math.max(0, netApprox),
+        value: math.max(0, netApproxFils) / 1000.0,
         color: const Color(0xFF059669),
       ),
     ];
@@ -1627,7 +1806,7 @@ class _PanelSales extends StatelessWidget {
                         for (final r in list)
                           _PieSlice(
                             label: _invoiceTypeLabel(r.type),
-                            value: r.total,
+                            value: r.totalFils / 1000.0,
                             color: _invoiceTypeAccentColor(r.type, cs),
                           ),
                       ],
@@ -1644,7 +1823,7 @@ class _PanelSales extends StatelessWidget {
               for (final r in list)
                 _GaugeItem(
                   label: _invoiceTypeLabel(r.type),
-                  value: r.total,
+                  value: r.totalFils / 1000.0,
                   color: _invoiceTypeAccentColor(r.type, cs),
                 ),
             ],
@@ -1659,12 +1838,12 @@ class _PanelSales extends StatelessWidget {
               final dates = datesSet.where((e) => e.isNotEmpty).toList()
                 ..sort();
               // بناء السلاسل بنفس ترتيب "list" (أكبر نوع أولًا).
-              final byKey = <int, Map<String, double>>{};
+              final byKeyFils = <int, Map<String, int>>{};
               for (final d in data.dailySalesByType) {
-                byKey.putIfAbsent(
+                byKeyFils.putIfAbsent(
                   d.typeIdx,
-                  () => <String, double>{},
-                )[d.dayLabel] = d.amount;
+                  () => <String, int>{},
+                )[d.dayLabel] = d.amountFils;
               }
               final series = <_AreaSeries>[
                 for (final r in list)
@@ -1672,7 +1851,8 @@ class _PanelSales extends StatelessWidget {
                     name: _invoiceTypeLabel(r.type),
                     color: _invoiceTypeAccentColor(r.type, cs),
                     values: [
-                      for (final d in dates) (byKey[r.type.index]?[d] ?? 0.0),
+                      for (final d in dates)
+                        (byKeyFils[r.type.index]?[d] ?? 0) / 1000.0,
                     ],
                   ),
               ];
@@ -1724,18 +1904,20 @@ Color _invoiceTypeAccentColor(InvoiceType t, ColorScheme cs) {
 }
 
 class _SalesTypeRow {
-  const _SalesTypeRow({required this.type, required this.total});
+  const _SalesTypeRow({required this.type, required this.totalFils});
   final InvoiceType type;
-  final double total;
+  final int totalFils;
 
   @override
   bool operator ==(Object other) {
     return identical(this, other) ||
-        (other is _SalesTypeRow && other.type == type && other.total == total);
+        (other is _SalesTypeRow &&
+            other.type == type &&
+            other.totalFils == totalFils);
   }
 
   @override
-  int get hashCode => Object.hash(type, total);
+  int get hashCode => Object.hash(type, totalFils);
 }
 
 class _SalesByTypeTable extends StatefulWidget {
@@ -1791,7 +1973,9 @@ class _SalesByTypeTableState extends State<_SalesByTypeTable> {
     _sortAscending = ascending;
     _rows.sort(
       (a, b) =>
-          ascending ? a.total.compareTo(b.total) : b.total.compareTo(a.total),
+          ascending
+              ? a.totalFils.compareTo(b.totalFils)
+              : b.totalFils.compareTo(a.totalFils),
     );
     if (notify) setState(() {});
   }
@@ -1831,7 +2015,7 @@ class _SalesByTypeTableState extends State<_SalesByTypeTable> {
                   sortColumnIndex: _sortColumnIndex,
                   rowsPerPage: rowsPerPage,
                   headingRowColor: WidgetStateProperty.all(
-                    cs.primaryContainer.withValues(alpha: 0.35),
+                    AppColors.accentGold.withValues(alpha: 0.15),
                   ),
                   columns: [
                     DataColumn(
@@ -1862,11 +2046,11 @@ class _SalesByTypeDataSource extends DataTableSource {
   }
 
   List<_SalesTypeRow> _rows = const <_SalesTypeRow>[];
-  double _sum = 0.0;
+  int _sumFils = 0;
 
   void updateRows(List<_SalesTypeRow> rows, {bool notify = true}) {
     _rows = List<_SalesTypeRow>.unmodifiable(rows);
-    _sum = _rows.fold(0.0, (s, r) => s + r.total);
+    _sumFils = _rows.fold(0, (s, r) => s + r.totalFils);
     if (notify) notifyListeners();
   }
 
@@ -1874,12 +2058,12 @@ class _SalesByTypeDataSource extends DataTableSource {
   DataRow? getRow(int index) {
     if (index < 0 || index >= _rows.length) return null;
     final r = _rows[index];
-    final pct = _sum <= 0 ? 0.0 : (r.total / _sum) * 100;
+    final pct = _sumFils <= 0 ? 0.0 : (r.totalFils / _sumFils) * 100;
     return DataRow.byIndex(
       index: index,
       cells: [
         DataCell(Text(_invoiceTypeLabel(r.type))),
-        DataCell(Text('${_numFmt.format(r.total)} د.ع')),
+        DataCell(Text('${_numFmt.format(r.totalFils / 1000.0)} د.ع')),
         DataCell(Text(_formatSharePercent(pct))),
       ],
     );
@@ -2186,7 +2370,7 @@ class _PanelCustomers extends StatelessWidget {
 
     // ترتيب تنازلي حسب الإجمالي (topCustomers أصلاً مرتبة، نتأكد فقط).
     final sorted = [...data.topCustomers]
-      ..sort((a, b) => b.amount.compareTo(a.amount));
+      ..sort((a, b) => b.amountFils.compareTo(a.amountFils));
 
     // شرائح البيتزا: أعلى 6 + "آخرون".
     final slices = <_PieSlice>[];
@@ -2194,7 +2378,7 @@ class _PanelCustomers extends StatelessWidget {
       final topN = sorted.take(6).toList();
       for (var i = 0; i < topN.length; i++) {
         final c = topN[i];
-        final v = math.max(0.0, c.amount);
+        final v = math.max(0, c.amountFils) / 1000.0;
         if (v > 0) {
           slices.add(
             _PieSlice(
@@ -2208,10 +2392,14 @@ class _PanelCustomers extends StatelessWidget {
       if (sorted.length > 6) {
         final rest = sorted
             .skip(6)
-            .fold<double>(0, (s, e) => s + math.max(0.0, e.amount));
+            .fold<int>(0, (s, e) => s + math.max(0, e.amountFils));
         if (rest > 0) {
           slices.add(
-            _PieSlice(label: 'آخرون', value: rest, color: cs.outlineVariant),
+            _PieSlice(
+              label: 'آخرون',
+              value: rest / 1000.0,
+              color: cs.outlineVariant,
+            ),
           );
         }
       }
@@ -2255,7 +2443,7 @@ class _PanelCustomers extends StatelessWidget {
                   .map(
                     (e) => [
                       e.name,
-                      '${_numFmt.format(e.amount)} د.ع',
+                      '${_numFmt.format(e.amountFils / 1000.0)} د.ع',
                       '${e.count ?? '—'}',
                     ],
                   )
@@ -2281,7 +2469,8 @@ class _PanelDebts extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final total = data.debtors.fold<double>(0, (s, e) => s + e.balance);
+    final totalFils = data.debtors.fold<int>(0, (s, e) => s + e.balanceFils);
+    final total = totalFils / 1000.0;
     return SingleChildScrollView(
       padding: _reportPanelOuterPadding(context),
       child: Column(
@@ -2336,6 +2525,9 @@ class _PanelInstallments extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final t = data.installmentTotals;
+    final totalDue = t.totalDueFils / 1000.0;
+    final totalPaid = t.totalPaidFils / 1000.0;
+    final totalRemaining = t.totalRemainingFils / 1000.0;
     return SingleChildScrollView(
       padding: _reportPanelOuterPadding(context),
       child: Column(
@@ -2351,14 +2543,14 @@ class _PanelInstallments extends StatelessWidget {
               ),
               _KpiCard(
                 title: 'إجمالي قيمة الخطط',
-                value: '${_numFmt.format(t.totalDue)} د.ع',
+                value: '${_numFmt.format(totalDue)} د.ع',
                 icon: Icons.payments_rounded,
                 color: const Color(0xFF2563EB),
               ),
               _KpiCard(
                 title: 'المدفوع / المتبقي',
                 value:
-                    '${_numFmt.format(t.totalPaid)} / ${_numFmt.format(t.totalRemaining)}',
+                    '${_numFmt.format(totalPaid)} / ${_numFmt.format(totalRemaining)}',
                 icon: Icons.pie_chart_outline_rounded,
                 color: const Color(0xFF059669),
               ),
@@ -2381,9 +2573,9 @@ class _PanelInstallments extends StatelessWidget {
                     (p) => [
                       '#${p.planId}',
                       p.customerName,
-                      '${_numFmt.format(p.totalAmount)} د.ع',
-                      '${_numFmt.format(p.paidAmount)} د.ع',
-                      '${_numFmt.format(p.remaining)} د.ع',
+                      '${_numFmt.format(p.totalAmountFils / 1000.0)} د.ع',
+                      '${_numFmt.format(p.paidAmountFils / 1000.0)} د.ع',
+                      '${_numFmt.format(p.remainingFils / 1000.0)} د.ع',
                     ],
                   )
                   .toList(),
@@ -2415,7 +2607,7 @@ class _PanelStaff extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
 
     final sorted = [...data.staffSales]
-      ..sort((a, b) => b.salesTotal.compareTo(a.salesTotal));
+      ..sort((a, b) => b.salesTotalFils.compareTo(a.salesTotalFils));
 
     // شرائح البيتزا: أعلى 6 + "آخرون".
     final slices = <_PieSlice>[];
@@ -2423,7 +2615,7 @@ class _PanelStaff extends StatelessWidget {
       final topN = sorted.take(6).toList();
       for (var i = 0; i < topN.length; i++) {
         final s = topN[i];
-        final v = math.max(0.0, s.salesTotal);
+        final v = math.max(0, s.salesTotalFils) / 1000.0;
         if (v > 0) {
           slices.add(
             _PieSlice(
@@ -2437,10 +2629,14 @@ class _PanelStaff extends StatelessWidget {
       if (sorted.length > 6) {
         final rest = sorted
             .skip(6)
-            .fold<double>(0, (sum, e) => sum + math.max(0.0, e.salesTotal));
+            .fold<int>(0, (sum, e) => sum + math.max(0, e.salesTotalFils));
         if (rest > 0) {
           slices.add(
-            _PieSlice(label: 'آخرون', value: rest, color: cs.outlineVariant),
+            _PieSlice(
+              label: 'آخرون',
+              value: rest / 1000.0,
+              color: cs.outlineVariant,
+            ),
           );
         }
       }
@@ -2494,12 +2690,12 @@ class _PanelStaff extends StatelessWidget {
               final dates = datesSet.where((e) => e.isNotEmpty).toList()
                 ..sort();
 
-              final byLabel = <String, Map<String, double>>{};
+              final byLabelFils = <String, Map<String, int>>{};
               for (final d in data.dailySalesByStaff) {
-                byLabel.putIfAbsent(
+                byLabelFils.putIfAbsent(
                   d.label,
-                  () => <String, double>{},
-                )[d.dayLabel] = d.amount;
+                  () => <String, int>{},
+                )[d.dayLabel] = d.amountFils;
               }
 
               // نستخدم نفس أعلى الموظفين الظاهرين في البيتزا (بدون "آخرون") كبناء للسلاسل.
@@ -2514,7 +2710,8 @@ class _PanelStaff extends StatelessWidget {
                     name: topLabels[i],
                     color: _palette[i % _palette.length],
                     values: [
-                      for (final d in dates) (byLabel[topLabels[i]]?[d] ?? 0.0),
+                      for (final d in dates)
+                        (byLabelFils[topLabels[i]]?[d] ?? 0) / 1000.0,
                     ],
                   ),
               ];
@@ -2538,7 +2735,7 @@ class _PanelStaff extends StatelessWidget {
                     (s) => [
                       s.staffLabel,
                       '${s.invoiceCount}',
-                      '${_numFmt.format(s.salesTotal)} د.ع',
+                      '${_numFmt.format(s.salesTotalFils / 1000.0)} د.ع',
                     ],
                   )
                   .toList(),
@@ -2559,15 +2756,20 @@ class _PanelAnalytics extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ms = data.marginStats;
+    final revenueNet = ms.revenueNetFils / 1000.0;
+    final cost = ms.costFils / 1000.0;
+    final grossMargin = ms.grossMarginFils / 1000.0;
+    final expenses = ms.expensesFils / 1000.0;
+    final netProfit = ms.netProfitFils / 1000.0;
 
     final marginPctTxt = ms.marginPct == null
         ? '—'
         : '${ms.marginPct!.toStringAsFixed(1)}%';
 
-    final netColor = ms.netProfit >= 0
+    final netColor = ms.netProfitFils >= 0
         ? const Color(0xFF059669)
         : const Color(0xFFDC2626);
-    final grossColor = ms.grossMargin >= 0
+    final grossColor = ms.grossMarginFils >= 0
         ? const Color(0xFF059669)
         : const Color(0xFFDC2626);
 
@@ -2581,19 +2783,19 @@ class _PanelAnalytics extends StatelessWidget {
             children: [
               _KpiCard(
                 title: 'إيراد الفترة',
-                value: '${_numFmt.format(ms.revenueNet)} د.ع',
+                value: '${_numFmt.format(revenueNet)} د.ع',
                 icon: Icons.sell_rounded,
                 color: const Color(0xFF2563EB),
               ),
               _KpiCard(
                 title: 'تكلفة البضاعة المباعة (COGS)',
-                value: '${_numFmt.format(ms.cost)} د.ع',
+                value: '${_numFmt.format(cost)} د.ع',
                 icon: Icons.inventory_2_rounded,
                 color: const Color(0xFF8E3CF7),
               ),
               _KpiCard(
                 title: 'الهامش الإجمالي',
-                value: '${_numFmt.format(ms.grossMargin)} د.ع',
+                value: '${_numFmt.format(grossMargin)} د.ع',
                 icon: Icons.trending_up_rounded,
                 color: grossColor,
               ),
@@ -2605,13 +2807,13 @@ class _PanelAnalytics extends StatelessWidget {
               ),
               _KpiCard(
                 title: 'إجمالي المصروفات',
-                value: '${_numFmt.format(ms.expenses)} د.ع',
+                value: '${_numFmt.format(expenses)} د.ع',
                 icon: Icons.receipt_long_rounded,
                 color: const Color(0xFFDC2626),
               ),
               _KpiCard(
                 title: 'الصافي (هامش − مصروفات)',
-                value: '${_numFmt.format(ms.netProfit)} د.ع',
+                value: '${_numFmt.format(netProfit)} د.ع',
                 icon: Icons.savings_rounded,
                 color: netColor,
               ),
@@ -2622,16 +2824,16 @@ class _PanelAnalytics extends StatelessWidget {
           _CategoryGaugesCard(
             title: 'تركيب الإيراد: تكلفة + هامش',
             subtitle: 'Gauges — توزيع نسبي يوضح أين تذهب كل وحدة إيراد',
-            total: ms.revenueNet <= 0 ? 1 : ms.revenueNet,
+            total: ms.revenueNetFils <= 0 ? 1 : revenueNet,
             items: [
               _GaugeItem(
                 label: 'تكلفة',
-                value: math.max(0.0, ms.cost),
+                value: math.max(0, ms.costFils) / 1000.0,
                 color: const Color(0xFF8E3CF7),
               ),
               _GaugeItem(
                 label: 'هامش',
-                value: math.max(0.0, ms.grossMargin),
+                value: math.max(0, ms.grossMarginFils) / 1000.0,
                 color: const Color(0xFF059669),
               ),
             ],
@@ -2650,19 +2852,22 @@ class _PanelAnalytics extends StatelessWidget {
                   name: 'تكلفة',
                   color: const Color(0xFF8E3CF7),
                   values: [
-                    for (final d in data.dailyMargin) math.max(0.0, d.cost),
+                    for (final d in data.dailyMargin)
+                      math.max(0, d.costFils) / 1000.0,
                   ],
                 ),
                 _AreaSeries(
                   name: 'هامش',
                   color: const Color(0xFF059669),
                   values: [
-                    for (final d in data.dailyMargin) math.max(0.0, d.margin),
+                    for (final d in data.dailyMargin)
+                      math.max(0, d.marginFils) / 1000.0,
                   ],
                 ),
               ];
               final expensesByDay = <String, double>{
-                for (final e in data.dailyExpenses) e.dayLabel: e.amount,
+                for (final e in data.dailyExpenses)
+                  e.dayLabel: e.amountFils / 1000.0,
               };
               if (expensesByDay.isNotEmpty) {
                 series.add(
@@ -2688,7 +2893,7 @@ class _PanelAnalytics extends StatelessWidget {
           Builder(
             builder: (context) {
               final sorted = [...data.productMargins]
-                ..sort((a, b) => b.margin.compareTo(a.margin));
+                ..sort((a, b) => b.marginFils.compareTo(a.marginFils));
               final top = sorted.take(10).toList();
               final bottom = sorted.reversed.take(10).toList();
               return Column(
@@ -2717,9 +2922,9 @@ class _PanelAnalytics extends StatelessWidget {
                                   (r) => [
                                     r.name,
                                     _numFmt.format(r.qty),
-                                    '${_numFmt.format(r.revenue)} د.ع',
-                                    '${_numFmt.format(r.cost)} د.ع',
-                                    '${_numFmt.format(r.margin)} د.ع',
+                                    '${_numFmt.format(r.revenueFils / 1000.0)} د.ع',
+                                    '${_numFmt.format(r.costFils / 1000.0)} د.ع',
+                                    '${_numFmt.format(r.marginFils / 1000.0)} د.ع',
                                     r.marginPct == null
                                         ? '—'
                                         : '${r.marginPct!.toStringAsFixed(1)}%',
@@ -2752,9 +2957,9 @@ class _PanelAnalytics extends StatelessWidget {
                                   (r) => [
                                     r.name,
                                     _numFmt.format(r.qty),
-                                    '${_numFmt.format(r.revenue)} د.ع',
-                                    '${_numFmt.format(r.cost)} د.ع',
-                                    '${_numFmt.format(r.margin)} د.ع',
+                                    '${_numFmt.format(r.revenueFils / 1000.0)} د.ع',
+                                    '${_numFmt.format(r.costFils / 1000.0)} د.ع',
+                                    '${_numFmt.format(r.marginFils / 1000.0)} د.ع',
                                     r.marginPct == null
                                         ? '—'
                                         : '${r.marginPct!.toStringAsFixed(1)}%',
@@ -2778,7 +2983,7 @@ class _PanelAnalytics extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 _BulletLine(
-                  'خصومات ولاء على الفواتير: ${_numFmt.format(data.loyaltyRedeemedInRange)} د.ع',
+                  'خصومات ولاء على الفواتير: ${_numFmt.format(data.loyaltyRedeemedInRangeFils / 1000.0)} د.ع',
                 ),
                 _BulletLine(
                   'نقاط ممنوحة (مجموع النقاط المسجّلة على الفواتير): ${_numFmt.format(data.loyaltyEarnedInRange)}',
@@ -2825,7 +3030,7 @@ class _PanelAnalytics extends StatelessWidget {
                     (p) => [
                       p.name,
                       _numFmt.format(p.qty),
-                      '${_numFmt.format(p.revenue)} د.ع',
+                      '${_numFmt.format(p.revenueFils / 1000.0)} د.ع',
                     ],
                   )
                   .toList(),
@@ -3114,8 +3319,12 @@ class _AnalyticsCard extends StatelessWidget {
       borderRadius: ac.lg,
       child: Ink(
         decoration: BoxDecoration(
-          borderRadius: ac.lg,
-          border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.65)),
+          color: cs.surfaceContainerHighest.withValues(alpha: 0.3),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: AppColors.accentGold.withValues(alpha: 0.5),
+            width: 1.0,
+          ),
           boxShadow: [
             BoxShadow(
               color: cs.shadow.withValues(alpha: 0.07),
@@ -3132,10 +3341,10 @@ class _AnalyticsCard extends StatelessWidget {
               if (title != null) ...[
                 Text(
                   title!,
-                  style: TextStyle(
+                  style: const TextStyle(
                     fontSize: 15,
                     fontWeight: FontWeight.w800,
-                    color: cs.onSurface,
+                    color: AppColors.accentGold,
                   ),
                 ),
                 if (subtitle != null) ...[
@@ -3307,9 +3516,12 @@ class _KpiCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: cs.surface,
-        borderRadius: ac.md,
-        border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.65)),
+        color: cs.surfaceContainerHighest.withValues(alpha: 0.3),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: AppColors.accentGold.withValues(alpha: 0.5),
+          width: 1.0,
+        ),
         boxShadow: [
           BoxShadow(
             color: cs.shadow.withValues(alpha: 0.06),
@@ -3358,10 +3570,10 @@ class _KpiCard extends StatelessWidget {
 }
 
 class _DailyBars extends StatelessWidget {
-  const _DailyBars({required this.points, required this.maxY});
+  const _DailyBars({required this.points, required this.maxYFils});
 
   final List<DailySalesPoint> points;
-  final double maxY;
+  final int maxYFils;
 
   @override
   Widget build(BuildContext context) {
@@ -3379,7 +3591,7 @@ class _DailyBars extends StatelessWidget {
       );
     }
     final maxH = 120.0;
-    final barColor = Color.lerp(cs.primary, cs.secondary, 0.35)!;
+    final barColor = Color.lerp(AppColors.accentGold, cs.secondary, 0.35)!;
     return SizedBox(
       height: 168,
       child: ListView.separated(
@@ -3390,12 +3602,13 @@ class _DailyBars extends StatelessWidget {
         separatorBuilder: (_, _) => const SizedBox(width: 6),
         itemBuilder: (context, i) {
           final p = points[i];
-          final h = maxY <= 0 ? 0.0 : (p.amount / maxY) * maxH;
+          final h = maxYFils <= 0 ? 0.0 : (p.amountFils / maxYFils) * maxH;
           return Column(
             mainAxisAlignment: MainAxisAlignment.end,
             children: [
               Tooltip(
-                message: '${p.dayLabel}\n${_numFmt.format(p.amount)} د.ع',
+                message:
+                    '${p.dayLabel}\n${_numFmt.format(p.amountFils / 1000.0)} د.ع',
                 child: Container(
                   width: 11,
                   height: h.clamp(4, maxH),
@@ -3438,7 +3651,7 @@ class _SimpleTable extends StatelessWidget {
         scrollDirection: Axis.horizontal,
         child: DataTable(
           headingRowColor: WidgetStateProperty.all(
-            cs.primaryContainer.withValues(alpha: 0.35),
+            AppColors.accentGold.withValues(alpha: 0.15),
           ),
           dataRowMinHeight: 40,
           columns: [

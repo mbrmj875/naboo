@@ -1,5 +1,8 @@
 # Project-level configuration.
 cmake_minimum_required(VERSION 3.14)
+# firebase_cpp_sdk (وإضافات قديمة) قد تطلب CMake < 3.5؛ CMake الحديث يرفض ذلك
+# بدون هذا المتغير — مطلوب لبناء ويندوز على GitHub Actions.
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "" FORCE)
 project(naboo LANGUAGES CXX)
 
 # The name of the executable created for the application. Change this to change
@@ -31,6 +34,9 @@ set(CMAKE_CXX_FLAGS_PROFILE "${CMAKE_CXX_FLAGS_RELEASE}")
 
 # Use Unicode for all projects.
 add_definitions(-DUNICODE -D_UNICODE)
+# MSVC 18+ يرفض <experimental/coroutine> المستخدم في بعض إضافات ويندوز
+# (audioplayers / local_notifications) ما لم نكتم التحذير مؤقتاً.
+add_definitions(-D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)
 
 # Compilation settings that should be applied to most targets.
 #

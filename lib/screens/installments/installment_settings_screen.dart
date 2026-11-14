@@ -28,14 +28,15 @@ class _InstallmentSettingsScreenState extends State<InstallmentSettingsScreen> {
   final _interval = TextEditingController();
   final _saleDefInterest = TextEditingController();
 
+  bool get _isDark => Theme.of(context).brightness == Brightness.dark;
   Color get _pageBg => Theme.of(context).scaffoldBackgroundColor;
   Color get _surface => Theme.of(context).colorScheme.surface;
-  Color get _primary => Theme.of(context).colorScheme.primary;
-  Color get _onPrimary => Theme.of(context).colorScheme.onPrimary;
   Color get _filterBg => Theme.of(context).colorScheme.surfaceContainerHighest;
-  Color get _textPrimary => Theme.of(context).colorScheme.onSurface;
-  Color get _textSecondary => Theme.of(context).colorScheme.onSurfaceVariant;
-  Color get _outline => Theme.of(context).colorScheme.outline;
+  Color get _textPrimary =>
+      _isDark ? Theme.of(context).colorScheme.onSurface : AppColors.primaryDark;
+  Color get _textSecondary => _isDark
+      ? Theme.of(context).colorScheme.onSurfaceVariant
+      : AppColors.primaryDark.withValues(alpha: 0.75);
 
   InputDecoration _fieldDecoration({
     required String label,
@@ -45,23 +46,29 @@ class _InstallmentSettingsScreenState extends State<InstallmentSettingsScreen> {
   }) {
     return InputDecoration(
       labelText: label,
+      labelStyle: TextStyle(color: _textSecondary),
       helperText: helper,
+      helperStyle: TextStyle(color: _textSecondary),
       helperMaxLines: helperMaxLines ?? 2,
       filled: true,
       fillColor: _filterBg,
       isDense: true,
       prefixIcon: prefixIcon,
       border: OutlineInputBorder(
-        borderRadius: AppShape.none,
-        borderSide: BorderSide(color: _outline.withValues(alpha: 0.55)),
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(
+          color: AppColors.accentGold.withValues(alpha: _isDark ? 0.4 : 0.28),
+        ),
       ),
       enabledBorder: OutlineInputBorder(
-        borderRadius: AppShape.none,
-        borderSide: BorderSide(color: _outline.withValues(alpha: 0.55)),
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(
+          color: AppColors.accentGold.withValues(alpha: _isDark ? 0.4 : 0.28),
+        ),
       ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: AppShape.none,
-        borderSide: BorderSide(color: _primary, width: 1.5),
+      focusedBorder: const OutlineInputBorder(
+        borderRadius: BorderRadius.all(Radius.circular(12)),
+        borderSide: BorderSide(color: AppColors.accentGold, width: 1.4),
       ),
     );
   }
@@ -145,14 +152,29 @@ class _InstallmentSettingsScreenState extends State<InstallmentSettingsScreen> {
   }
 
   PreferredSizeWidget _buildAppBar() {
+    final appBarBg = _isDark ? AppColors.primary : Colors.white;
+    final appBarFg = _isDark ? Colors.white : AppColors.primaryDark;
     return AppBar(
-      backgroundColor: _primary,
-      foregroundColor: _onPrimary,
+      backgroundColor: appBarBg,
+      foregroundColor: appBarFg,
+      iconTheme: const IconThemeData(color: AppColors.accentGold),
+      actionsIconTheme: const IconThemeData(color: AppColors.accentGold),
       elevation: 0,
       centerTitle: false,
-      title: const Text(
+      title: Text(
         'إعدادات تقسيط',
-        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+        style: TextStyle(
+          fontWeight: FontWeight.bold,
+          fontSize: 18,
+          color: appBarFg,
+        ),
+      ),
+      bottom: PreferredSize(
+        preferredSize: const Size.fromHeight(1.2),
+        child: Container(
+          height: 1.2,
+          color: AppColors.accentGold.withValues(alpha: 0.55),
+        ),
       ),
       actions: [
         IconButton(
@@ -169,14 +191,16 @@ class _InstallmentSettingsScreenState extends State<InstallmentSettingsScreen> {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: _primary.withValues(alpha: 0.1),
-        borderRadius: AppShape.none,
-        border: Border.all(color: _primary.withValues(alpha: 0.28)),
+        color: AppColors.accentGold.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: AppColors.accentGold.withValues(alpha: _isDark ? 0.35 : 0.3),
+        ),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(Icons.info_outline_rounded, color: _primary, size: 26),
+          const Icon(Icons.info_outline_rounded, color: AppColors.accentGold, size: 26),
           const SizedBox(width: 12),
           Expanded(
             child: Text(
@@ -202,8 +226,10 @@ class _InstallmentSettingsScreenState extends State<InstallmentSettingsScreen> {
     return Container(
       decoration: BoxDecoration(
         color: _surface,
-        borderRadius: AppShape.none,
-        border: Border.all(color: _outline.withValues(alpha: 0.35)),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: AppColors.accentGold.withValues(alpha: _isDark ? 0.35 : 0.3),
+        ),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.04),
@@ -226,7 +252,7 @@ class _InstallmentSettingsScreenState extends State<InstallmentSettingsScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 if (icon != null) ...[
-                  Icon(icon, color: _primary, size: 24),
+                  Icon(icon, color: AppColors.accentGold, size: 24),
                   const SizedBox(width: 12),
                 ],
                 Expanded(
@@ -258,7 +284,10 @@ class _InstallmentSettingsScreenState extends State<InstallmentSettingsScreen> {
               ],
             ),
           ),
-          Divider(height: 1, color: _outline.withValues(alpha: 0.28)),
+          Divider(
+            height: 1,
+            color: AppColors.accentGold.withValues(alpha: _isDark ? 0.25 : 0.2),
+          ),
           Padding(
             padding: const EdgeInsets.all(16),
             child: Column(
@@ -281,7 +310,11 @@ class _InstallmentSettingsScreenState extends State<InstallmentSettingsScreen> {
       contentPadding: EdgeInsets.zero,
       title: Text(
         title,
-        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+        style: TextStyle(
+          fontWeight: FontWeight.w700,
+          fontSize: 14,
+          color: _textPrimary,
+        ),
       ),
       subtitle: Padding(
         padding: const EdgeInsets.only(top: 6),
@@ -291,40 +324,21 @@ class _InstallmentSettingsScreenState extends State<InstallmentSettingsScreen> {
         ),
       ),
       value: value,
-      activeThumbColor: _onPrimary,
-      activeTrackColor: _primary.withValues(alpha: 0.55),
+      activeThumbColor: AppColors.accentGold,
       onChanged: onChanged,
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_loading) {
-      return Directionality(
-        textDirection: TextDirection.rtl,
-        child: Scaffold(
-          backgroundColor: _pageBg,
-          body: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              _buildAppBar(),
-              const Expanded(child: Center(child: CircularProgressIndicator())),
-            ],
-          ),
-        ),
-      );
-    }
-
     return Directionality(
       textDirection: TextDirection.rtl,
       child: Scaffold(
         backgroundColor: _pageBg,
-        body: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            _buildAppBar(),
-            Expanded(
-              child: SingleChildScrollView(
+        appBar: _buildAppBar(),
+        body: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : SingleChildScrollView(
                 padding: const EdgeInsets.fromLTRB(12, 12, 12, 28),
                 child: Center(
                   child: ConstrainedBox(
@@ -517,14 +531,14 @@ class _InstallmentSettingsScreenState extends State<InstallmentSettingsScreen> {
                             ),
                           ),
                           style: FilledButton.styleFrom(
-                            backgroundColor: _primary,
-                            foregroundColor: _onPrimary,
+                            backgroundColor: AppColors.accentGold,
+                            foregroundColor: AppColors.primaryDark,
                             padding: const EdgeInsets.symmetric(
                               horizontal: 24,
                               vertical: 14,
                             ),
-                            shape: const RoundedRectangleBorder(
-                              borderRadius: AppShape.none,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
                             ),
                           ),
                         ),
@@ -534,9 +548,6 @@ class _InstallmentSettingsScreenState extends State<InstallmentSettingsScreen> {
                   ),
                 ),
               ),
-            ),
-          ],
-        ),
       ),
     );
   }

@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+
+<html dir="rtl" lang="ar"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Al-Mudir ERP - Expenses Ledger</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@100;200;300;400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "surface-container-highest": "#e4e1e5",
+                    "on-background": "#1b1b1e",
+                    "secondary-container": "#fed752",
+                    "surface-bright": "#fbf8fc",
+                    "surface": "#fbf8fc",
+                    "secondary-fixed-dim": "#e9c340",
+                    "on-error": "#ffffff",
+                    "on-tertiary-fixed-variant": "#564500",
+                    "surface-tint": "#4e5f7e",
+                    "tertiary": "#725c00",
+                    "on-secondary-container": "#735d00",
+                    "surface-dim": "#dcd9dd",
+                    "on-secondary-fixed": "#231b00",
+                    "on-tertiary": "#ffffff",
+                    "background": "#fbf8fc",
+                    "secondary-fixed": "#ffe081",
+                    "tertiary-fixed": "#ffe082",
+                    "surface-container-high": "#eae7eb",
+                    "on-secondary": "#ffffff",
+                    "on-tertiary-fixed": "#231b00",
+                    "on-primary": "#ffffff",
+                    "on-surface-variant": "#44474d",
+                    "tertiary-container": "#cca825",
+                    "inverse-primary": "#b6c7eb",
+                    "primary-fixed-dim": "#b6c7eb",
+                    "primary": "#000000",
+                    "secondary": "#725c00",
+                    "outline-variant": "#c5c6ce",
+                    "on-surface": "#1b1b1e",
+                    "on-secondary-fixed-variant": "#564500",
+                    "on-primary-container": "#7484a5",
+                    "inverse-on-surface": "#f3f0f4",
+                    "surface-container-low": "#f6f2f7",
+                    "on-error-container": "#93000a",
+                    "on-primary-fixed-variant": "#374765",
+                    "inverse-surface": "#303033",
+                    "surface-container-lowest": "#ffffff",
+                    "primary-fixed": "#d7e3ff",
+                    "primary-container": "#081b37",
+                    "surface-container": "#f0edf1",
+                    "on-primary-fixed": "#081b37",
+                    "surface-variant": "#e4e1e5",
+                    "error-container": "#ffdad6",
+                    "tertiary-fixed-dim": "#e9c340",
+                    "on-tertiary-container": "#4e3e00",
+                    "error": "#ba1a1a",
+                    "outline": "#75777e"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.25rem",
+                    "lg": "0.5rem",
+                    "xl": "0.75rem",
+                    "full": "9999px"
+            },
+            "spacing": {
+                    "base": "4px",
+                    "xs": "4px",
+                    "sm": "8px",
+                    "md": "12px",
+                    "gutter": "12px",
+                    "margin-mobile": "16px",
+                    "xl": "24px",
+                    "lg": "16px"
+            },
+            "fontFamily": {
+                    "body-md": ["IBM Plex Sans Arabic"],
+                    "display-price": ["IBM Plex Sans Arabic"],
+                    "headline-md": ["IBM Plex Sans Arabic"],
+                    "label-md": ["IBM Plex Sans Arabic"],
+                    "display-price-sm": ["IBM Plex Sans Arabic"],
+                    "label-sm": ["IBM Plex Sans Arabic"],
+                    "body-lg": ["IBM Plex Sans Arabic"],
+                    "headline-lg": ["IBM Plex Sans Arabic"]
+            },
+            "fontSize": {
+                    "body-md": ["14px", {"lineHeight": "20px", "fontWeight": "400"}],
+                    "display-price": ["22px", {"lineHeight": "28px", "fontWeight": "700"}],
+                    "headline-md": ["18px", {"lineHeight": "24px", "fontWeight": "600"}],
+                    "label-md": ["12px", {"lineHeight": "16px", "fontWeight": "500"}],
+                    "display-price-sm": ["18px", {"lineHeight": "24px", "fontWeight": "700"}],
+                    "label-sm": ["10px", {"lineHeight": "14px", "fontWeight": "500"}],
+                    "body-lg": ["16px", {"lineHeight": "24px", "fontWeight": "400"}],
+                    "headline-lg": ["20px", {"lineHeight": "28px", "fontWeight": "600"}]
+            }
+          },
+        },
+      }
+    </script>
+<style>
+        body {
+            font-family: 'IBM Plex Sans Arabic', sans-serif;
+            background-color: #fbf8fc;
+            color: #1b1b1e;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+            display: inline-block;
+            vertical-align: middle;
+        }
+        .hide-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .hide-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+        .safe-bottom {
+            padding-bottom: calc(88px + env(safe-area-inset-bottom));
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-background min-h-screen flex flex-col overflow-x-hidden">
+<!-- Top App Bar -->
+<header class="bg-surface sticky top-0 z-[60] w-full h-16 flex items-center justify-between px-margin-mobile">
+<div class="flex items-center gap-4">
+<button class="w-10 h-10 flex items-center justify-center rounded-full hover:bg-surface-container-low transition-colors text-on-surface">
+<span class="material-symbols-outlined">add</span>
+</button>
+</div>
+<h1 class="font-headline-lg text-headline-lg font-bold text-primary">المصروفات</h1>
+<button class="w-10 h-10 flex items-center justify-center rounded-full hover:bg-surface-container-low transition-colors text-on-surface">
+<span class="material-symbols-outlined">arrow_forward</span>
+</button>
+</header>
+<!-- Tabs -->
+<nav class="bg-surface flex w-full border-b border-outline-variant sticky top-16 z-50">
+<button class="flex-1 py-3 font-label-md text-label-md transition-colors relative flex justify-center items-center text-on-surface-variant">
+            تحليلات
+        </button>
+<button class="flex-1 py-3 font-label-md text-label-md transition-colors relative flex justify-center items-center text-primary border-b-2 border-secondary-container font-bold">
+            السجل
+        </button>
+</nav>
+<main class="flex-1 overflow-y-auto safe-bottom">
+<!-- KPI Carousel (RTL) -->
+<section class="mt-lg px-margin-mobile">
+<div class="flex overflow-x-auto gap-md hide-scrollbar pb-xs">
+<!-- Card 2 (This Month) -->
+<div class="min-w-[280px] bg-primary-container p-lg rounded-xl shadow-sm text-on-primary-container flex flex-col gap-sm">
+<span class="font-label-md text-label-md text-primary-fixed opacity-80">مصروف هذا الشهر</span>
+<span class="font-display-price text-display-price text-secondary-container">4,500,000 د.ع</span>
+<div class="flex items-center gap-xs mt-xs">
+<span class="material-symbols-outlined text-sm">trending_up</span>
+<span class="font-label-sm text-label-sm">أعلى بـ 12% من الشهر الماضي</span>
+</div>
+</div>
+<!-- Card 1 (Today) -->
+<div class="min-w-[280px] bg-surface-container-highest p-lg rounded-xl shadow-sm flex flex-col gap-sm">
+<span class="font-label-md text-label-md text-on-surface-variant">مصروف اليوم</span>
+<span class="font-display-price text-display-price text-primary">250,000 د.ع</span>
+<div class="flex items-center gap-xs mt-xs text-secondary">
+<span class="material-symbols-outlined text-sm">event</span>
+<span class="font-label-sm text-label-sm">تم تسجيل 3 عمليات</span>
+</div>
+</div>
+</div>
+</section>
+<!-- Sticky Filter Strip -->
+<div class="sticky top-[112px] bg-background/95 backdrop-blur-sm z-40 py-md px-margin-mobile flex gap-sm overflow-x-auto hide-scrollbar">
+<button class="flex items-center gap-xs px-md py-xs bg-surface-container-high rounded-full border border-outline-variant whitespace-nowrap">
+<span class="font-label-md text-label-md">📅 هذا الشهر</span>
+</button>
+<button class="flex items-center gap-xs px-md py-xs bg-surface-container-high rounded-full border border-outline-variant whitespace-nowrap">
+<span class="font-label-md text-label-md">كل الفئات ▾</span>
+</button>
+<button class="flex items-center gap-xs px-md py-xs bg-surface-container-high rounded-full border border-outline-variant whitespace-nowrap">
+<span class="font-label-md text-label-md">الكل ▾</span>
+</button>
+</div>
+<!-- Total Compact Strip -->
+<div class="mx-margin-mobile mb-md bg-secondary-container/20 border border-secondary-container p-md rounded-lg flex justify-between items-center">
+<span class="font-headline-md text-headline-md text-on-secondary-container font-bold">1,450,000 د.ع</span>
+<span class="font-label-md text-label-md text-on-secondary-container opacity-80">إجمالي الفترة</span>
+</div>
+<!-- Expense List -->
+<section class="px-margin-mobile space-y-sm">
+<!-- Row 1 -->
+<div class="bg-surface-container-lowest p-md rounded-xl flex items-center justify-between border border-surface-variant hover:bg-surface-container-low transition-colors cursor-pointer">
+<div class="flex items-center gap-md">
+<div class="w-3 h-3 rounded-full bg-error"></div>
+<div class="flex flex-col">
+<span class="font-body-lg text-body-lg font-bold text-on-surface">فاتورة كهرباء</span>
+<span class="font-label-sm text-label-sm text-on-surface-variant">12 Dec - مرافق</span>
+</div>
+</div>
+<span class="font-display-price-sm text-display-price-sm text-primary">45,000 د.ع</span>
+</div>
+<!-- Row 2 -->
+<div class="bg-surface-container-lowest p-md rounded-xl flex items-center justify-between border border-surface-variant hover:bg-surface-container-low transition-colors cursor-pointer">
+<div class="flex items-center gap-md">
+<div class="w-3 h-3 rounded-full bg-secondary"></div>
+<div class="flex flex-col">
+<span class="font-body-lg text-body-lg font-bold text-on-surface">رواتب الموظفين</span>
+<span class="font-label-sm text-label-sm text-on-surface-variant">10 Dec - رواتب</span>
+</div>
+</div>
+<span class="font-display-price-sm text-display-price-sm text-primary">850,000 د.ع</span>
+</div>
+<!-- Row 3 -->
+<div class="bg-surface-container-lowest p-md rounded-xl flex items-center justify-between border border-surface-variant hover:bg-surface-container-low transition-colors cursor-pointer">
+<div class="flex items-center gap-md">
+<div class="w-3 h-3 rounded-full bg-tertiary"></div>
+<div class="flex flex-col">
+<span class="font-body-lg text-body-lg font-bold text-on-surface">شراء مواد خام</span>
+<span class="font-label-sm text-label-sm text-on-surface-variant">08 Dec - مخزون</span>
+</div>
+</div>
+<span class="font-display-price-sm text-display-price-sm text-primary">320,000 د.ع</span>
+</div>
+<!-- Row 4 -->
+<div class="bg-surface-container-lowest p-md rounded-xl flex items-center justify-between border border-surface-variant hover:bg-surface-container-low transition-colors cursor-pointer">
+<div class="flex items-center gap-md">
+<div class="w-3 h-3 rounded-full bg-primary-fixed-dim"></div>
+<div class="flex flex-col">
+<span class="font-body-lg text-body-lg font-bold text-on-surface">صيانة سيارة التوصيل</span>
+<span class="font-label-sm text-label-sm text-on-surface-variant">05 Dec - صيانة</span>
+</div>
+</div>
+<span class="font-display-price-sm text-display-price-sm text-primary">75,000 د.ع</span>
+</div>
+<!-- Row 5 -->
+<div class="bg-surface-container-lowest p-md rounded-xl flex items-center justify-between border border-surface-variant hover:bg-surface-container-low transition-colors cursor-pointer">
+<div class="flex items-center gap-md">
+<div class="w-3 h-3 rounded-full bg-secondary-container"></div>
+<div class="flex flex-col">
+<span class="font-body-lg text-body-lg font-bold text-on-surface">اشتراك إنترنت</span>
+<span class="font-label-sm text-label-sm text-on-surface-variant">01 Dec - مرافق</span>
+</div>
+</div>
+<span class="font-display-price-sm text-display-price-sm text-primary">60,000 د.ع</span>
+</div>
+<!-- Row 6 -->
+<div class="bg-surface-container-lowest p-md rounded-xl flex items-center justify-between border border-surface-variant hover:bg-surface-container-low transition-colors cursor-pointer">
+<div class="flex items-center gap-md">
+<div class="w-3 h-3 rounded-full bg-outline"></div>
+<div class="flex flex-col">
+<span class="font-body-lg text-body-lg font-bold text-on-surface">ضيافة مكتب</span>
+<span class="font-label-sm text-label-sm text-on-surface-variant">30 Nov - متنوعة</span>
+</div>
+</div>
+<span class="font-display-price-sm text-display-price-sm text-primary">100,000 د.ع</span>
+</div>
+</section>
+</main>
+<!-- Extended FAB -->
+<button class="fixed bottom-24 left-margin-mobile flex items-center gap-sm px-lg h-14 bg-secondary-container text-on-secondary-container shadow-xl rounded-full z-50 active:scale-95 transition-transform">
+<span class="material-symbols-outlined">add</span>
+<span class="font-body-lg font-bold">إضافة مصروف</span>
+</button>
+<!-- Bottom Navigation Bar -->
+<nav class="fixed bottom-0 w-full z-50 flex justify-around items-center px-4 py-2 bg-primary-container text-on-primary-container shadow-sm">
+<button class="flex flex-col items-center justify-center text-on-primary-container hover:opacity-80 transition-opacity">
+<span class="material-symbols-outlined">more_horiz</span>
+<span class="font-label-sm text-label-sm">المزيد</span>
+</button>
+<button class="flex flex-col items-center justify-center text-on-primary-container hover:opacity-80 transition-opacity">
+<span class="material-symbols-outlined">inventory_2</span>
+<span class="font-label-sm text-label-sm">المخزن</span>
+</button>
+<button class="flex flex-col items-center justify-center text-on-primary-container hover:opacity-80 transition-opacity">
+<span class="material-symbols-outlined">analytics</span>
+<span class="font-label-sm text-label-sm">تحليلات</span>
+</button>
+<button class="flex flex-col items-center justify-center bg-secondary-container text-on-secondary-container rounded-full px-4 py-1 scale-95 active:scale-90 transition-transform">
+<span class="material-symbols-outlined">menu_book</span>
+<span class="font-label-sm text-label-sm">السجل</span>
+</button>
+</nav>
+<script>
+        // Simple micro-interaction for list items
+        document.querySelectorAll('.cursor-pointer').forEach(item => {
+            item.addEventListener('click', () => {
+                item.style.transform = 'scale(0.98)';
+                setTimeout(() => {
+                    item.style.transform = 'scale(1)';
+                }, 100);
+            });
+        });
+
+        // Horizontal swipe behavior indicator (prevent browser default pull-to-refresh if swiping horizontal)
+        const carousel = document.querySelector('.hide-scrollbar');
+        let isDown = false;
+        let startX;
+        let scrollLeft;
+
+        carousel.addEventListener('mousedown', (e) => {
+            isDown = true;
+            startX = e.pageX - carousel.offsetLeft;
+            scrollLeft = carousel.scrollLeft;
+        });
+        carousel.addEventListener('mouseleave', () => isDown = false);
+        carousel.addEventListener('mouseup', () => isDown = false);
+        carousel.addEventListener('mousemove', (e) => {
+            if (!isDown) return;
+            e.preventDefault();
+            const x = e.pageX - carousel.offsetLeft;
+            const walk = (x - startX) * 2;
+            carousel.scrollLeft = scrollLeft - walk;
+        });
+    </script>
+</body></html>

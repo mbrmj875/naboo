@@ -44,7 +44,10 @@ export async function POST(req: Request) {
     let expires_at: string | null = null;
     const months =
       body.months_valid != null ? Number(body.months_valid) : null;
-    if (
+    if (plan === "lifetime") {
+      // مدى الحياة: بدون تاريخ انتهاء
+      expires_at = null;
+    } else if (
       status === "active" &&
       months != null &&
       Number.isFinite(months) &&

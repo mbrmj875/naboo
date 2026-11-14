@@ -2,6 +2,7 @@
 
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState, FormEvent } from "react";
+import { safeAdminNextPath } from "@/lib/safe-next-path";
 
 function LoginForm() {
   const router = useRouter();
@@ -25,7 +26,7 @@ function LoginForm() {
         setError(data.error ?? "فشل الدخول");
         return;
       }
-      const next = search.get("next") || "/";
+      const next = safeAdminNextPath(search.get("next"));
       router.replace(next);
       router.refresh();
     } catch {

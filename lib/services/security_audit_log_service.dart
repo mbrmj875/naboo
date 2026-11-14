@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../utils/app_logger.dart';
 import 'license_service.dart';
 
 class SecurityAuditLogEvent {
@@ -151,8 +152,13 @@ class SecurityAuditLogService {
       // Best-effort insert. If network fails, we drop (no sensitive local logs).
       await Supabase.instance.client.from(_table).insert(rows);
       _lastFlushAt = DateTime.now();
-    } catch (_) {
-      // Drop silently (no retries to avoid loops).
+    } catch (e, st) {
+      AppLogger.error(
+        'SecurityAudit',
+        'تجاهل دفعة سجل أمان (best-effort)',
+        e,
+        st,
+      );
     } finally {
       _flushing = false;
     }

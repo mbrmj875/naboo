@@ -10,6 +10,7 @@ class CustomerRecord {
     required this.balance,
     required this.loyaltyPoints,
     this.purchaseTotalApprox = 0,
+    this.priceListId,
     this.createdAt,
     this.updatedAt,
   });
@@ -24,6 +25,8 @@ class CustomerRecord {
   final int loyaltyPoints;
   /// مجموع تقريبي لفواتير البيع الرئيسية (غير مرتجعة)؛ يُحمّل من الاستعلام المجمّع عند وجود عمودها.
   final double purchaseTotalApprox;
+  /// قائمة الأسعار المخصصة للعميل (اختياري). إذا كانت `null` يطبَّق هرم الأسعار العام.
+  final int? priceListId;
   final DateTime? createdAt;
   final DateTime? updatedAt;
 
@@ -58,6 +61,7 @@ class CustomerRecord {
           (row['purchaseTotal'] as num?)?.toDouble() ??
           (row['purchaseTotalApprox'] as num?)?.toDouble() ??
           0,
+      priceListId: (row['priceListId'] as num?)?.toInt(),
       createdAt: parseDt(row['createdAt']),
       updatedAt: parseDt(row['updatedAt']),
     );

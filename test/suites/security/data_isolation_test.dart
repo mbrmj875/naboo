@@ -338,7 +338,7 @@ void main() {
           sandbox.db,
           _t1, // wrong tenant
           t2InvoiceId,
-          500.0,
+          500,
         );
         expect(affected, 0,
             reason: 'cross-tenant UPDATE must affect 0 rows');
@@ -358,7 +358,7 @@ void main() {
           sandbox.db,
           _t2,
           t2InvoiceId,
-          400.0,
+          400,
         );
         expect(ok, 1);
       },

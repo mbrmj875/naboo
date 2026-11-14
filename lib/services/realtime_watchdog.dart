@@ -114,7 +114,9 @@ class RealtimeWatchdog {
       final label = entry.key;
       final h = entry.value;
       if (h.pendingReconnect != null) continue;
-      final age = now.difference(h.lastHealthyAt);
+      // قناة مشترَك فيها بدون أحداث ≠ معطّلة — لا نُعيد الاتصال إلا بعد خطأ سابق.
+    if (h.consecutiveErrors == 0) continue;
+    final age = now.difference(h.lastHealthyAt);
       if (age > _unhealthyAfter) {
         if (kDebugMode) {
           AppLogger.warn(
@@ -128,8 +130,9 @@ class RealtimeWatchdog {
     }
   }
 
-  /// يبدأ المسح الدوري. آمن للاستدعاء أكثر من مرة (يُعاد البدء).
+  /// يبدأ المسح الدوري. آمن للاستدعاء أكثر من مرة — لا يُعاد البدء إن كان نشطاً.
   void start() {
+    if (_periodicTimer?.isActive == true) return;
     _periodicTimer?.cancel();
     _periodicTimer = Timer.periodic(_checkInterval, (_) => tick());
     if (kDebugMode) {

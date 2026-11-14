@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+
+<html dir="rtl" lang="ar"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "on-primary": "#ffffff",
+                    "error": "#ba1a1a",
+                    "tertiary-container": "#cca825",
+                    "surface-dim": "#dcd9dd",
+                    "outline-variant": "#c5c6ce",
+                    "surface-variant": "#e4e1e5",
+                    "on-secondary": "#ffffff",
+                    "on-tertiary-container": "#4e3e00",
+                    "primary-fixed": "#d7e3ff",
+                    "on-surface": "#1b1b1e",
+                    "on-tertiary": "#ffffff",
+                    "background": "#fbf8fc",
+                    "primary-fixed-dim": "#b6c7eb",
+                    "on-background": "#1b1b1e",
+                    "surface-container-low": "#f6f2f7",
+                    "primary-container": "#081b37",
+                    "on-primary-fixed-variant": "#374765",
+                    "secondary-fixed-dim": "#e9c340",
+                    "on-primary-fixed": "#081b37",
+                    "on-error": "#ffffff",
+                    "inverse-surface": "#303033",
+                    "surface-container-highest": "#e4e1e5",
+                    "on-secondary-fixed": "#231b00",
+                    "surface-container": "#f0edf1",
+                    "tertiary": "#725c00",
+                    "on-primary-container": "#7484a5",
+                    "inverse-on-surface": "#f3f0f4",
+                    "surface": "#fbf8fc",
+                    "primary": "#000000",
+                    "on-secondary-container": "#735d00",
+                    "surface-container-lowest": "#ffffff",
+                    "surface-container-high": "#eae7eb",
+                    "on-surface-variant": "#44474d",
+                    "on-tertiary-fixed-variant": "#564500",
+                    "surface-bright": "#fbf8fc",
+                    "surface-tint": "#4e5f7e",
+                    "secondary-fixed": "#ffe081",
+                    "secondary": "#725c00",
+                    "on-tertiary-fixed": "#231b00",
+                    "tertiary-fixed-dim": "#e9c340",
+                    "secondary-container": "#fed752",
+                    "tertiary-fixed": "#ffe082",
+                    "error-container": "#ffdad6",
+                    "on-error-container": "#93000a",
+                    "inverse-primary": "#b6c7eb",
+                    "outline": "#75777e",
+                    "on-secondary-fixed-variant": "#564500"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.25rem",
+                    "lg": "0.5rem",
+                    "xl": "0.75rem",
+                    "full": "9999px"
+            },
+            "spacing": {
+                    "xl": "24px",
+                    "md": "12px",
+                    "base": "4px",
+                    "xs": "4px",
+                    "margin-mobile": "16px",
+                    "gutter": "12px",
+                    "sm": "8px",
+                    "lg": "16px"
+            },
+            "fontFamily": {
+                    "headline-lg": ["IBM Plex Sans Arabic"],
+                    "label-md": ["IBM Plex Sans Arabic"],
+                    "headline-md": ["IBM Plex Sans Arabic"],
+                    "body-lg": ["IBM Plex Sans Arabic"],
+                    "display-price-sm": ["IBM Plex Sans Arabic"],
+                    "label-sm": ["IBM Plex Sans Arabic"],
+                    "display-price": ["IBM Plex Sans Arabic"],
+                    "body-md": ["IBM Plex Sans Arabic"]
+            },
+            "fontSize": {
+                    "headline-lg": ["20px", {"lineHeight": "28px", "fontWeight": "600"}],
+                    "label-md": ["12px", {"lineHeight": "16px", "fontWeight": "500"}],
+                    "headline-md": ["18px", {"lineHeight": "24px", "fontWeight": "600"}],
+                    "body-lg": ["16px", {"lineHeight": "24px", "fontWeight": "400"}],
+                    "display-price-sm": ["18px", {"lineHeight": "24px", "fontWeight": "700"}],
+                    "label-sm": ["10px", {"lineHeight": "14px", "fontWeight": "500"}],
+                    "display-price": ["22px", {"lineHeight": "28px", "fontWeight": "700"}],
+                    "body-md": ["14px", {"lineHeight": "20px", "fontWeight": "400"}]
+            }
+          },
+        },
+      }
+    </script>
+<style>
+        body {
+            font-family: 'IBM Plex Sans Arabic', sans-serif;
+            background-color: #fbf8fc;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .scroll-hide::-webkit-scrollbar {
+            display: none;
+        }
+        .scroll-hide {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+        .selection-active {
+            background-color: #f0f4f9;
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-background text-on-surface flex flex-col h-screen overflow-hidden">
+<!-- Header Section -->
+<header class="bg-surface sticky top-0 z-50 px-margin-mobile pt-lg pb-md shadow-sm">
+<div class="flex justify-between items-start mb-base">
+<div>
+<h1 class="font-headline-md text-headline-md text-primary-container">حملة واتساب — سجل الغيارات</h1>
+<div class="flex items-center gap-base mt-xs">
+<span class="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span>
+<span class="font-label-md text-label-md text-on-surface-variant">واتساب المحل متصل</span>
+</div>
+</div>
+<button class="p-base hover:bg-surface-variant rounded-full transition-colors active:scale-90">
+<span class="material-symbols-outlined text-on-surface-variant">close</span>
+</button>
+</div>
+</header>
+<!-- Content Area (Scrollable) -->
+<main class="flex-1 overflow-y-auto scroll-hide pb-32">
+<!-- Search & Filters -->
+<section class="px-margin-mobile mt-lg space-y-md">
+<div class="relative flex items-center">
+<span class="material-symbols-outlined absolute right-3 text-outline">search</span>
+<input class="w-full pr-10 pl-4 py-3 bg-surface-container-low border-none rounded-full text-body-md focus:ring-2 focus:ring-secondary-container transition-all" placeholder="ابحث بالاسم، الموديل، أو حجم المحرك..." type="text"/>
+</div>
+<div class="flex gap-sm overflow-x-auto scroll-hide pb-base">
+<button class="shrink-0 px-lg py-sm rounded-full bg-primary-container text-on-primary font-label-md text-label-md border border-primary-container">آخر 90 يوم</button>
+<button class="shrink-0 px-lg py-sm rounded-full bg-surface-container-lowest text-on-surface-variant font-label-md text-label-md border border-outline-variant">لديه هاتف فقط</button>
+<button class="shrink-0 px-lg py-sm rounded-full bg-surface-container-lowest text-on-surface-variant font-label-md text-label-md border border-outline-variant">زيارات متكررة</button>
+<button class="shrink-0 px-lg py-sm rounded-full bg-surface-container-lowest text-on-surface-variant font-label-md text-label-md border border-outline-variant">الموديل 2020+</button>
+</div>
+</section>
+<!-- Selection Control -->
+<section class="bg-surface-container-low mt-lg px-margin-mobile py-md flex items-center justify-between">
+<div class="flex items-center gap-md">
+<input checked="" class="w-5 h-5 rounded border-outline-variant text-primary-container focus:ring-primary-container" type="checkbox"/>
+<span class="font-body-md text-body-md text-on-surface">تحديد الكل (120)</span>
+</div>
+<div class="flex items-center gap-md">
+<span class="bg-secondary-container text-on-secondary-container px-3 py-1 rounded-full font-label-md text-label-md font-bold">تم تحديد 8</span>
+<button class="text-tertiary font-label-md text-label-md hover:underline">إلغاء التحديد</button>
+</div>
+</section>
+<!-- Customer List -->
+<section class="divide-y divide-surface-variant">
+<!-- Row 1 Checked -->
+<div class="px-margin-mobile py-lg flex gap-md bg-white">
+<input checked="" class="mt-1 w-5 h-5 rounded border-outline-variant text-primary-container focus:ring-primary-container" type="checkbox"/>
+<div class="flex-1 min-w-0">
+<div class="flex justify-between items-start">
+<h3 class="font-headline-md text-headline-md text-on-surface truncate">أحمد محمد جاسم</h3>
+<span class="shrink-0 font-label-sm text-label-sm px-2 py-0.5 bg-surface-container-highest text-on-surface-variant rounded">آخر زيارة: 12/05/2026</span>
+</div>
+<p class="font-body-md text-body-md text-on-surface-variant mt-xs">تويوتا كامري 2019 · 2.4L · 07801234567</p>
+</div>
+</div>
+<!-- Row 2 Checked -->
+<div class="px-margin-mobile py-lg flex gap-md bg-white">
+<input checked="" class="mt-1 w-5 h-5 rounded border-outline-variant text-primary-container focus:ring-primary-container" type="checkbox"/>
+<div class="flex-1 min-w-0">
+<div class="flex justify-between items-start">
+<h3 class="font-headline-md text-headline-md text-on-surface truncate">عمر العبيدي</h3>
+<span class="shrink-0 font-label-sm text-label-sm px-2 py-0.5 bg-surface-container-highest text-on-surface-variant rounded">آخر زيارة: 08/06/2026</span>
+</div>
+<p class="font-body-md text-body-md text-on-surface-variant mt-xs">هيونداي توسان 2022 · 2.0L · 07712345678</p>
+</div>
+</div>
+<!-- Row 3 Unchecked -->
+<div class="px-margin-mobile py-lg flex gap-md bg-surface-container-lowest">
+<input class="mt-1 w-5 h-5 rounded border-outline-variant text-primary-container focus:ring-primary-container" type="checkbox"/>
+<div class="flex-1 min-w-0">
+<div class="flex justify-between items-start">
+<h3 class="font-headline-md text-headline-md text-on-surface truncate">مصطفى كريم</h3>
+<span class="shrink-0 font-label-sm text-label-sm px-2 py-0.5 bg-surface-container-highest text-on-surface-variant rounded">آخر زيارة: 15/04/2026</span>
+</div>
+<p class="font-body-md text-body-md text-on-surface-variant mt-xs">كيا سبورتج 2020 · 1.6T · 07501234567</p>
+</div>
+</div>
+<!-- Row 4 Disabled -->
+<div class="px-margin-mobile py-lg flex gap-md bg-surface-container-low opacity-60">
+<input class="mt-1 w-5 h-5 rounded border-outline-variant text-outline-variant cursor-not-allowed" disabled="" type="checkbox"/>
+<div class="flex-1 min-w-0">
+<div class="flex justify-between items-start">
+<h3 class="font-headline-md text-headline-md text-on-surface-variant truncate">زيد الفارس</h3>
+<span class="shrink-0 font-label-sm text-label-sm px-2 py-0.5 bg-error-container text-on-error-container rounded">بدون رقم</span>
+</div>
+<p class="font-body-md text-body-md text-on-surface-variant mt-xs">نيسان باترول · 5.6L · بدون رقم</p>
+</div>
+</div>
+<!-- Row 5 Checked -->
+<div class="px-margin-mobile py-lg flex gap-md bg-white">
+<input checked="" class="mt-1 w-5 h-5 rounded border-outline-variant text-primary-container focus:ring-primary-container" type="checkbox"/>
+<div class="flex-1 min-w-0">
+<div class="flex justify-between items-start">
+<h3 class="font-headline-md text-headline-md text-on-surface truncate">باقر علي كاظم</h3>
+<span class="shrink-0 font-label-sm text-label-sm px-2 py-0.5 bg-surface-container-highest text-on-surface-variant rounded">آخر زيارة: 20/05/2026</span>
+</div>
+<p class="font-body-md text-body-md text-on-surface-variant mt-xs">هيونداي إلنترا 2021 · 1.8L · 07901234567</p>
+</div>
+</div>
+</section>
+<!-- Message Composer Card -->
+<section class="mx-margin-mobile mt-xl p-lg bg-white rounded-xl shadow-sm border border-surface-variant">
+<label class="block font-headline-md text-headline-md text-primary-container mb-md">نص الرسالة</label>
+<div class="relative">
+<textarea class="w-full bg-surface-container-low border-none rounded-lg p-md text-body-md text-on-surface focus:ring-1 focus:ring-secondary-container resize-none" rows="4">مرحباً {الاسم}، نود تذكيركم بموعد غيار الزيت القادم لسيارتكم {السيارة}. آخر زيارة كانت في {آخر_زيارة}. نتشرف بزيارتكم في {المحل}.</textarea>
+<div class="absolute bottom-2 left-3 font-label-sm text-label-sm text-on-surface-variant">342 / 1000 حرف</div>
+</div>
+<div class="mt-md flex flex-wrap gap-xs">
+<button class="px-sm py-1 bg-secondary-container/20 text-on-secondary-container border border-secondary-container/30 rounded font-label-md text-label-md transition-colors hover:bg-secondary-container/40">{الاسم}</button>
+<button class="px-sm py-1 bg-secondary-container/20 text-on-secondary-container border border-secondary-container/30 rounded font-label-md text-label-md transition-colors hover:bg-secondary-container/40">{السيارة}</button>
+<button class="px-sm py-1 bg-secondary-container/20 text-on-secondary-container border border-secondary-container/30 rounded font-label-md text-label-md transition-colors hover:bg-secondary-container/40">{آخر_زيارة}</button>
+<button class="px-sm py-1 bg-secondary-container/20 text-on-secondary-container border border-secondary-container/30 rounded font-label-md text-label-md transition-colors hover:bg-secondary-container/40">{المحل}</button>
+</div>
+</section>
+<!-- Campaign Settings Card -->
+<section class="mx-margin-mobile mt-lg p-lg bg-primary-container rounded-xl shadow-lg border border-primary text-on-primary">
+<div class="flex items-center gap-sm mb-lg">
+<span class="material-symbols-outlined text-secondary-container">settings</span>
+<h3 class="font-headline-md text-headline-md text-secondary-fixed">إعدادات الحملة</h3>
+</div>
+<div class="space-y-lg">
+<!-- Message Max -->
+<div class="flex items-center justify-between">
+<span class="font-body-md text-body-md opacity-90">الحد الأقصى للرسائل</span>
+<div class="flex items-center bg-white/10 rounded-lg overflow-hidden">
+<button class="p-2 hover:bg-white/10"><span class="material-symbols-outlined text-headline-md">remove</span></button>
+<span class="px-4 font-display-price-sm text-display-price-sm">100</span>
+<button class="p-2 hover:bg-white/10"><span class="material-symbols-outlined text-headline-md">add</span></button>
+</div>
+</div>
+<!-- Interval -->
+<div class="flex items-center justify-between">
+<span class="font-body-md text-body-md opacity-90">فاصل بين كل رسالة</span>
+<div class="flex items-center gap-xs bg-white/10 px-lg py-sm rounded-lg">
+<span class="material-symbols-outlined text-label-md text-secondary-fixed">schedule</span>
+<span class="font-label-md text-label-md">30 ثانية</span>
+</div>
+</div>
+<!-- Auto Pause -->
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-xs">
+<span class="font-body-md text-body-md opacity-90">استراحة تلقائية</span>
+<span class="material-symbols-outlined text-label-md opacity-50 cursor-help" title="تساعد في حماية رقم الواتساب من الحظر">info</span>
+</div>
+<div class="flex items-center gap-md">
+<span class="font-label-md text-label-md opacity-80">5 دقائق بعد كل 25 رسالة</span>
+<div class="w-10 h-5 bg-secondary-container rounded-full relative shadow-inner cursor-pointer">
+<div class="absolute right-1 top-1 w-3 h-3 bg-primary-container rounded-full transition-all"></div>
+</div>
+</div>
+</div>
+<!-- Estimated Time -->
+<div class="mt-lg pt-lg border-t border-white/10 flex justify-center">
+<div class="bg-secondary-container text-on-secondary-container px-xl py-sm rounded-full font-label-md text-label-md flex items-center gap-xs">
+<span class="material-symbols-outlined text-headline-md">timer</span>
+<span>الوقت التقريبي: ~4 د 30 ث</span>
+</div>
+</div>
+</div>
+</section>
+</main>
+<!-- Sticky Bottom Bar -->
+<footer class="fixed bottom-0 left-0 right-0 bg-white border-t border-surface-variant p-lg space-y-md z-[60] shadow-[0_-4px_12px_rgba(0,0,0,0.05)]">
+<div class="flex gap-md">
+<button class="shrink-0 w-1/4 py-3 rounded-full border border-outline-variant font-headline-md text-headline-md text-primary-container hover:bg-surface-container-low transition-all active:scale-95">معاينة</button>
+<button class="flex-1 py-3 bg-secondary-container text-on-secondary-container rounded-full font-headline-md text-headline-md flex items-center justify-center gap-md shadow-md hover:brightness-95 transition-all active:scale-[0.98]">
+<div class="flex items-center gap-xs">
+<svg class="w-6 h-6 fill-current" viewbox="0 0 24 24">
+<path d="M12.04 2c-5.46 0-9.91 4.45-9.91 9.91 0 1.75.46 3.45 1.32 4.95L2.05 22l5.25-1.38c1.45.79 3.08 1.21 4.74 1.21 5.46 0 9.91-4.45 9.91-9.91 0-2.65-1.03-5.14-2.9-7.01A9.816 9.816 0 0012.04 2m.01 1.67c2.2 0 4.26.86 5.82 2.42a8.225 8.225 0 012.41 5.83c0 4.54-3.7 8.23-8.24 8.23-1.48 0-2.93-.39-4.19-1.14l-.3-.17-3.12.82.83-3.04-.19-.3a8.132 8.132 0 01-1.26-4.38c.01-4.54 3.7-8.24 8.24-8.24m-3.61 4.75c-.2-.45-.4-.45-.59-.45-.15 0-.32 0-.49.17-.17.17-.64.63-.64 1.53 0 .9.65 1.77.74 1.89.09.12 1.27 1.94 3.09 2.73 1.51.66 1.82.53 2.15.5.33-.03 1.06-.43 1.21-.85.15-.42.15-.79.1-.85-.05-.06-.17-.1-.37-.2-.2-.1-1.21-.6-1.4-.66-.19-.07-.32-.1-.46.1-.14.2-.55.69-.67.84-.12.14-.24.16-.44.06-.2-.1-.83-.31-1.59-.98-.59-.52-.98-1.17-1.1-1.36-.12-.2-.01-.3.09-.4.09-.09.2-.23.3-.35.1-.12.13-.2.2-.33.07-.14.03-.26-.02-.36-.05-.1-.46-1.11-.63-1.53z"></path>
+</svg>
+<span>إرسال إلى 8 عملاء</span>
+</div>
+</button>
+</div>
+<p class="text-center font-label-sm text-label-sm text-on-surface-variant opacity-70">رسالة واحدة لكل عميل — بدون تكرار</p>
+</footer>
+<script>
+        // Micro-interaction for list item toggle (visual feedback only)
+        document.querySelectorAll('input[type="checkbox"]').forEach(checkbox => {
+            checkbox.addEventListener('change', function() {
+                const row = this.closest('.px-margin-mobile');
+                if (this.checked) {
+                    row.classList.add('selection-active');
+                    row.classList.remove('bg-surface-container-lowest');
+                } else {
+                    row.classList.remove('selection-active');
+                    if (row.classList.contains('divide-y')) row.classList.add('bg-surface-container-lowest');
+                }
+            });
+        });
+
+        // Toggle effect
+        const toggle = document.querySelector('.w-10.h-5');
+        toggle.addEventListener('click', () => {
+            const circle = toggle.querySelector('.w-3.h-3');
+            if (circle.style.right === '1.75rem') {
+                circle.style.right = '0.25rem';
+                toggle.classList.replace('bg-outline-variant', 'bg-secondary-container');
+            } else {
+                circle.style.right = '1.75rem';
+                toggle.classList.replace('bg-secondary-container', 'bg-outline-variant');
+            }
+        });
+    </script>
+</body></html>

@@ -5,8 +5,10 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/auth_provider.dart';
+import '../providers/business_features_provider.dart';
 import '../services/database_helper.dart';
 import '../screens/debts/customer_debt_detail_screen.dart';
+import '../utils/app_logger.dart';
 import '../utils/customer_debt_deep_link.dart';
 import '../utils/invoice_deep_link.dart';
 import 'invoice_detail_sheet.dart';
@@ -44,15 +46,20 @@ class _InvoiceDeepLinkListenerState extends State<InvoiceDeepLinkListener> {
           if (mounted) _tryOpen(initial);
         });
       }
-    } catch (_) {}
+    } catch (e, st) {
+      AppLogger.error('DeepLink', 'فشل getInitialLink للفاتورة', e, st);
+    }
     _sub = _appLinks.uriLinkStream.listen((uri) {
       if (mounted) _tryOpen(uri);
     });
   }
 
   void _tryOpen(Uri uri) {
+    final features = context.read<BusinessFeaturesProvider>();
+
     final customerId = CustomerDebtDeepLink.parseCustomerId(uri);
     if (customerId != null && customerId > 0) {
+      if (!features.data.enableDebts) return;
       if (!context.read<AuthProvider>().isLoggedIn) return;
       final now = DateTime.now();
       if (_lastOpenedCustomerId == customerId &&
@@ -76,6 +83,7 @@ class _InvoiceDeepLinkListenerState extends State<InvoiceDeepLinkListener> {
 
     final id = InvoiceDeepLink.parseInvoiceId(uri);
     if (id == null || id <= 0) return;
+    if (!features.data.enablePos) return;
     if (!context.read<AuthProvider>().isLoggedIn) return;
     final now = DateTime.now();
     if (_lastOpenedId == id &&

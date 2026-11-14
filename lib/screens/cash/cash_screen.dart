@@ -2,11 +2,15 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' hide TextDirection;
+import 'package:provider/provider.dart';
 
+import '../../providers/auth_provider.dart';
+import '../../providers/shift_provider.dart';
 import '../../services/database_helper.dart';
 import '../../services/cloud_sync_service.dart';
 import '../../theme/design_tokens.dart';
 import '../../utils/iraqi_currency_format.dart';
+import '../../utils/shift_actor_conflict_guard.dart';
 import '../../utils/screen_layout.dart';
 import '../../widgets/invoice_detail_sheet.dart';
 
@@ -657,6 +661,24 @@ class _CashScreenState extends State<CashScreen>
   }
 
   Future<void> _addTransaction({required bool initialIncome}) async {
+    final auth = context.read<AuthProvider>();
+    final activeShift = context.read<ShiftProvider>().activeShift;
+    final conflict = ShiftActorConflictGuard.evaluate(
+      sessionUserId: auth.userId,
+      activeShift: activeShift,
+    );
+    if (conflict.hasConflict) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'لا يمكن إضافة حركة صندوق من هذه الجلسة: الوردية المفتوحة باسم ${conflict.shiftStaffName}.',
+          ),
+        ),
+      );
+      return;
+    }
+
     await showModalBottomSheet<void>(
       context: context,
       backgroundColor: Colors.transparent,
@@ -668,6 +690,7 @@ class _CashScreenState extends State<CashScreen>
             amount: tx.amount,
             description: tx.description,
             transactionType: tx.amount >= 0 ? 'manual_in' : 'manual_out',
+            actorUserId: context.read<AuthProvider>().userId,
           );
           if (!mounted) return;
           Navigator.pop(context);
@@ -689,18 +712,26 @@ class _CashScreenState extends State<CashScreen>
     final cs = Theme.of(context).colorScheme;
     final bg = Theme.of(context).scaffoldBackgroundColor;
     final surface = cs.surface;
+    final auth = context.watch<AuthProvider>();
+    final activeShift = context.watch<ShiftProvider>().activeShift;
+    final conflict = ShiftActorConflictGuard.evaluate(
+      sessionUserId: auth.userId,
+      activeShift: activeShift,
+    );
+    final hasShiftConflict = conflict.hasConflict;
+    final shiftStaffName = conflict.shiftStaffName;
     final appBar = AppBar(
-      backgroundColor: cs.primary,
-      foregroundColor: cs.onPrimary,
+      backgroundColor: cs.surfaceContainerHighest,
+      foregroundColor: cs.onSurface,
       elevation: 0,
       centerTitle: false,
-      title: const Text(
+      title: Text(
         'الصندوق',
-        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: cs.onSurface),
       ),
       actions: [
         IconButton(
-          icon: const Icon(Icons.refresh_rounded),
+          icon: Icon(Icons.refresh_rounded, color: cs.onSurface),
           tooltip: 'تحديث',
           onPressed: _loading ? null : _refreshFromServer,
         ),
@@ -735,9 +766,12 @@ class _CashScreenState extends State<CashScreen>
                     totalIn: _totalIn,
                     totalOut: _totalOut,
                   ),
+                  if (hasShiftConflict)
+                    _ShiftConflictBanner(shiftStaffName: shiftStaffName),
                   _QuickActions(
                     onDeposit: () => _addTransaction(initialIncome: true),
                     onWithdraw: () => _addTransaction(initialIncome: false),
+                    enabled: !hasShiftConflict,
                   ),
                 ],
               ),
@@ -775,16 +809,6 @@ class _CashScreenState extends State<CashScreen>
             ],
           ),
         ),
-        floatingActionButton: FloatingActionButton.extended(
-          onPressed: () => _addTransaction(initialIncome: true),
-          backgroundColor: cs.primary,
-          foregroundColor: cs.onPrimary,
-          icon: Icon(Icons.add_rounded, color: cs.onPrimary),
-          label: Text(
-            'قيد يدوي',
-            style: TextStyle(color: cs.onPrimary, fontWeight: FontWeight.bold),
-          ),
-        ),
       ),
     );
   }
@@ -796,9 +820,9 @@ class _CashScreenState extends State<CashScreen>
         controller: _tabs,
         onTap: (_) => setState(() {}),
         isScrollable: true,
-        labelColor: cs.secondary,
+        labelColor: AppColors.accentGold,
         unselectedLabelColor: cs.onSurfaceVariant,
-        indicatorColor: cs.secondary,
+        indicatorColor: AppColors.accentGold,
         indicatorWeight: 3,
         labelStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
         unselectedLabelStyle: const TextStyle(
@@ -863,39 +887,27 @@ class _BalanceCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final p = cs.primary;
-    final pDeep = Color.lerp(p, Colors.black, 0.22) ?? p;
     final gap = ScreenLayout.of(context).pageHorizontalGap;
 
     return Container(
       margin: EdgeInsets.symmetric(horizontal: gap, vertical: 14),
       padding: EdgeInsets.symmetric(horizontal: gap, vertical: 20),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [p, pDeep],
-          begin: Alignment.topRight,
-          end: Alignment.bottomLeft,
-        ),
-        borderRadius: AppShape.none,
-        boxShadow: [
-          BoxShadow(
-            color: p.withValues(alpha: 0.35),
-            blurRadius: 16,
-            offset: const Offset(0, 6),
-          ),
-        ],
+        color: cs.surfaceContainerHighest.withValues(alpha: 0.3),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.accentGold.withValues(alpha: 0.5)),
       ),
       child: Column(
         children: [
-          const Text(
+          Text(
             'الرصيد الحالي',
-            style: TextStyle(color: Colors.white70, fontSize: 13),
+            style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13),
           ),
           const SizedBox(height: 6),
           Text(
             '${_numFmt.format(balance)} د.ع',
-            style: const TextStyle(
-              color: Colors.white,
+            style: TextStyle(
+              color: cs.onSurface,
               fontSize: 32,
               fontWeight: FontWeight.bold,
             ),
@@ -905,7 +917,7 @@ class _BalanceCard extends StatelessWidget {
             'مجموع وارد الصندوق من المبيعات النقدية والمقدمات وتسديد الأقساط والإيداع اليدوي — دون إجمالي الفواتير الآجلة بدون مقدم',
             textAlign: TextAlign.center,
             style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.75),
+              color: cs.onSurfaceVariant.withValues(alpha: 0.8),
               fontSize: 11,
               height: 1.35,
             ),
@@ -921,7 +933,7 @@ class _BalanceCard extends StatelessWidget {
                   icon: Icons.south_west_rounded,
                 ),
               ),
-              Container(width: 1, height: 40, color: Colors.white24),
+              Container(width: 1, height: 40, color: AppColors.accentGold.withValues(alpha: 0.2)),
               Expanded(
                 child: _MiniStat(
                   label: 'الصادر',
@@ -960,7 +972,7 @@ class _MiniStat extends StatelessWidget {
             const SizedBox(width: 4),
             Text(
               label,
-              style: const TextStyle(color: Colors.white70, fontSize: 12),
+              style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant, fontSize: 12),
             ),
           ],
         ),
@@ -982,7 +994,12 @@ class _MiniStat extends StatelessWidget {
 class _QuickActions extends StatelessWidget {
   final VoidCallback onDeposit;
   final VoidCallback onWithdraw;
-  const _QuickActions({required this.onDeposit, required this.onWithdraw});
+  final bool enabled;
+  const _QuickActions({
+    required this.onDeposit,
+    required this.onWithdraw,
+    this.enabled = true,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -998,7 +1015,7 @@ class _QuickActions extends StatelessWidget {
               icon: Icons.add_circle_rounded,
               color: const Color(0xFF22C55E),
               label: 'إيداع',
-              onTap: onDeposit,
+              onTap: enabled ? onDeposit : null,
             ),
           ),
           const SizedBox(width: 16),
@@ -1007,7 +1024,7 @@ class _QuickActions extends StatelessWidget {
               icon: Icons.remove_circle_rounded,
               color: const Color(0xFFEF4444),
               label: 'سحب',
-              onTap: onWithdraw,
+              onTap: enabled ? onWithdraw : null,
             ),
           ),
         ],
@@ -1020,7 +1037,7 @@ class _QBtn extends StatelessWidget {
   final IconData icon;
   final Color color;
   final String label;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
   const _QBtn({
     required this.icon,
     required this.color,
@@ -1031,8 +1048,15 @@ class _QBtn extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: color.withValues(alpha: 0.1),
+      color: onTap == null
+          ? color.withValues(alpha: 0.05)
+          : color.withValues(alpha: 0.1),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.5)),
+      ),
       child: InkWell(
+        borderRadius: BorderRadius.circular(12),
         onTap: onTap,
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 12),
@@ -1044,7 +1068,7 @@ class _QBtn extends StatelessWidget {
               Text(
                 label,
                 style: TextStyle(
-                  color: color,
+                  color: onTap == null ? color.withValues(alpha: 0.55) : color,
                   fontWeight: FontWeight.bold,
                   fontSize: 14,
                 ),
@@ -1052,6 +1076,48 @@ class _QBtn extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _ShiftConflictBanner extends StatelessWidget {
+  const _ShiftConflictBanner({required this.shiftStaffName});
+
+  final String shiftStaffName;
+
+  @override
+  Widget build(BuildContext context) {
+    final gap = ScreenLayout.of(context).pageHorizontalGap;
+    return Container(
+      margin: EdgeInsets.symmetric(horizontal: gap, vertical: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFEF2F2),
+        border: Border.all(color: const Color(0xFFFCA5A5)),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(
+            Icons.warning_amber_rounded,
+            color: Color(0xFFB91C1C),
+            size: 20,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'تنبيه تعارض وردية: الجلسة الحالية لا تطابق صاحب الوردية المفتوحة ($shiftStaffName). تم تعطيل الإيداع/السحب لحماية العهدة.',
+              style: const TextStyle(
+                color: Color(0xFF7F1D1D),
+                fontWeight: FontWeight.w700,
+                fontSize: 12.5,
+                height: 1.35,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1085,6 +1151,8 @@ class _CashTx {
 
   /// وردية مرتبطة بالحركة (من الفاتورة أو من وصف فتح/إغلاق الوردية).
   final int? workShiftId;
+  final String? actorName;
+  final String? shiftOwnerName;
 
   const _CashTx({
     this.ledgerId,
@@ -1094,6 +1162,8 @@ class _CashTx {
     required this.amount,
     required this.date,
     this.workShiftId,
+    this.actorName,
+    this.shiftOwnerName,
   });
 
   factory _CashTx.fromRow(
@@ -1106,6 +1176,12 @@ class _CashTx {
     int? wid = _ledgerShiftIdFromRow(r);
     wid ??= iid != null ? invoiceShiftById[iid] : null;
     wid ??= _shiftIdFromCashDescription(r['description']?.toString() ?? '');
+    final actorDisplay = (r['actorDisplayName'] as String?)?.trim() ?? '';
+    final actorUsername = (r['actorUsername'] as String?)?.trim() ?? '';
+    final shiftOwnerDisplay =
+        (r['shiftOwnerDisplayName'] as String?)?.trim() ?? '';
+    final shiftOwnerUsername =
+        (r['shiftOwnerUsername'] as String?)?.trim() ?? '';
     return _CashTx(
       ledgerId: r['id'] as int?,
       transactionType: r['transactionType']?.toString() ?? '',
@@ -1114,6 +1190,12 @@ class _CashTx {
       amount: amt,
       date: DateTime.tryParse(created ?? '') ?? DateTime.now(),
       workShiftId: wid,
+      actorName: actorDisplay.isNotEmpty
+          ? actorDisplay
+          : (actorUsername.isNotEmpty ? actorUsername : null),
+      shiftOwnerName: shiftOwnerDisplay.isNotEmpty
+          ? shiftOwnerDisplay
+          : (shiftOwnerUsername.isNotEmpty ? shiftOwnerUsername : null),
     );
   }
 
@@ -1271,8 +1353,9 @@ class _CashShiftSectionHeader extends StatelessWidget {
             margin: const EdgeInsets.only(bottom: 8, top: 4),
             padding: EdgeInsets.symmetric(horizontal: gap, vertical: 10),
             decoration: BoxDecoration(
-              color: headerBg,
-              border: Border.all(color: headerBorder),
+              color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppColors.accentGold.withValues(alpha: 0.5)),
             ),
             child: Row(
               children: [
@@ -1341,8 +1424,9 @@ class _CashShiftSectionHeader extends StatelessWidget {
           margin: const EdgeInsets.only(bottom: 8, top: 4),
           padding: EdgeInsets.symmetric(horizontal: gap, vertical: 12),
           decoration: BoxDecoration(
-            color: headerBg,
-            border: Border.all(color: headerBorder),
+            color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: AppColors.accentGold.withValues(alpha: 0.5)),
           ),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1533,11 +1617,9 @@ class _TxCard extends StatelessWidget {
           margin: const EdgeInsets.only(bottom: 10),
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            border: Border.all(
-              color: Theme.of(
-                context,
-              ).colorScheme.outline.withValues(alpha: 0.4),
-            ),
+            color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: AppColors.accentGold.withValues(alpha: 0.5)),
           ),
           child: Row(
             children: [
@@ -1559,6 +1641,19 @@ class _TxCard extends StatelessWidget {
                         fontSize: 13,
                       ),
                     ),
+                    if ((tx.actorName ?? '').isNotEmpty ||
+                        (tx.shiftOwnerName ?? '').isNotEmpty) ...[
+                      const SizedBox(height: 3),
+                      Text(
+                        'المنفّذ: ${tx.actorName ?? '—'} · صاحب الوردية: ${tx.shiftOwnerName ?? '—'}',
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: Colors.grey,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
                     const SizedBox(height: 4),
                     Wrap(
                       spacing: 6,

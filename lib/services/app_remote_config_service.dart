@@ -2,7 +2,11 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+
+import '../utils/app_logger.dart';
+import 'sync_safety.dart';
 
 /// إعدادات من جدول [app_remote_config] (صف واحد id=1).
 /// تُقرأ بدون تسجيل دخول (سياسة RLS للجميع SELECT).
@@ -17,9 +21,15 @@ class AppRemoteConfigData {
     required this.updateMessageAr,
     required this.forceUpdate,
     required this.updateDownloadUrl,
+    required this.updateDownloadUrlWindows,
     required this.announcementTitleAr,
     required this.announcementBodyAr,
     required this.announcementUrl,
+    this.oilShellDisabled = false,
+    this.syncSafetyDisabled = false,
+    this.catalogIdentityEnabled = false,
+    this.changeCaptureEnabled = false,
+    this.deltaSyncEnabled = false,
   });
 
   final bool maintenanceMode;
@@ -30,11 +40,26 @@ class AppRemoteConfigData {
   final String latestVersion;
   final String updateMessageAr;
   final bool forceUpdate;
+  /// رابط APK للأندرويد (والافتراضي إن لم يُحدَّد ويندوز).
   final String updateDownloadUrl;
+  /// رابط مُثبّت ويندوز (.exe) — إن وُجد يُستخدم على الحاسوب فقط.
+  final String updateDownloadUrlWindows;
   /// إعلان عام (أي مناسبة) — يُعرض عند تغيير النص/العنوان/الرابط.
   final String announcementTitleAr;
   final String announcementBodyAr;
   final String announcementUrl;
+
+  /// مفتاح رجوع: يعيد موظف الزيت إلى الرئيسية المشتركة عند أول تشغيل متصل.
+  final bool oilShellDisabled;
+
+  /// مفتاح إيقاف إصلاحات المزامنة ([SyncSafety]) لكل الأجهزة دون إصدار.
+  final bool syncSafetyDisabled;
+
+  /// خطة المزامنة، المراحل 2 و3 و4: تُشغَّل ليلاً لكل الأجهزة دون إصدار.
+  /// الإرسال والاستلام يحتاجان أيضاً تشغيل الحساب على الخادم.
+  final bool catalogIdentityEnabled;
+  final bool changeCaptureEnabled;
+  final bool deltaSyncEnabled;
 
   static const AppRemoteConfigData fallback = AppRemoteConfigData(
     maintenanceMode: false,
@@ -46,10 +71,18 @@ class AppRemoteConfigData {
     updateMessageAr: '',
     forceUpdate: false,
     updateDownloadUrl: '',
+    updateDownloadUrlWindows: '',
     announcementTitleAr: '',
     announcementBodyAr: '',
     announcementUrl: '',
   );
+
+  /// رابط التحميل المناسب للمنصة الحالية.
+  /// ويندوز لا يسقط إلى APK الأندرويد إذا غاب رابط الـ setup.
+  String downloadUrlForPlatform({required bool isWindows}) {
+    if (isWindows) return updateDownloadUrlWindows;
+    return updateDownloadUrl;
+  }
 
   /// بصمة المحتوى: عند تغييرك للنص في اللوحة تتغير تلقائياً فيظهر الإعلان من جديد.
   String get announcementContentDigest {
@@ -77,9 +110,15 @@ class AppRemoteConfigData {
       updateMessageAr: s('update_message_ar'),
       forceUpdate: b('force_update'),
       updateDownloadUrl: s('update_download_url'),
+      updateDownloadUrlWindows: s('update_download_url_windows'),
       announcementTitleAr: s('announcement_title_ar'),
       announcementBodyAr: s('announcement_body_ar'),
       announcementUrl: s('announcement_url'),
+      oilShellDisabled: b('oil_shell_disabled'),
+      syncSafetyDisabled: b('sync_safety_disabled'),
+      catalogIdentityEnabled: b('catalog_identity_enabled'),
+      changeCaptureEnabled: b('change_capture_enabled'),
+      deltaSyncEnabled: b('delta_sync_enabled'),
     );
   }
 }
@@ -93,10 +132,22 @@ class AppRemoteConfigService {
 
   AppRemoteConfigData get current => _cached;
 
+  /// تطبيع رقم الإصدار: يتجاهل لاحقة البناء (`2.2.27+250` → `2.2.27`)
+  /// وأي بادئة غير رقمية.
+  static String normalizeVersion(String raw) {
+    var v = raw.trim();
+    final plus = v.indexOf('+');
+    if (plus >= 0) v = v.substring(0, plus);
+    final dash = v.indexOf('-');
+    if (dash >= 0) v = v.substring(0, dash);
+    return v.trim();
+  }
+
   /// مقارنة إصدارات بسيطة major.minor.patch (أرقام فقط).
+  /// تُرجع سالباً إذا [a] < [b]، وصفر إذا تساويا، وموجباً إذا [a] > [b].
   static int compareVersions(String a, String b) {
     List<int> parts(String v) {
-      return v
+      return normalizeVersion(v)
           .split('.')
           .map((e) => int.tryParse(e.trim()) ?? 0)
           .toList();
@@ -104,7 +155,8 @@ class AppRemoteConfigService {
 
     final pa = parts(a);
     final pb = parts(b);
-    for (var i = 0; i < 3; i++) {
+    final n = pa.length > pb.length ? pa.length : pb.length;
+    for (var i = 0; i < n; i++) {
       final x = i < pa.length ? pa[i] : 0;
       final y = i < pb.length ? pb[i] : 0;
       if (x != y) return x.compareTo(y);
@@ -112,9 +164,21 @@ class AppRemoteConfigService {
     return 0;
   }
 
+  /// هل نسخة الجهاز أقل من [latestVersion] على السيرفر؟
+  /// إذا كان [latestVersion] فارغاً أو `0.0.0` (fallback) لا يُطلب تحديث.
+  static bool isUpdateAvailable({
+    required String installedVersion,
+    required String latestVersion,
+  }) {
+    final latest = normalizeVersion(latestVersion);
+    if (latest.isEmpty || latest == '0.0.0') return false;
+    return compareVersions(installedVersion, latest) < 0;
+  }
+
   /// يجلب الإعدادات ويخزّن نسخة في الذاكرة.
   /// [force] يتجاهل التخزين المؤقت القصير.
   Future<AppRemoteConfigData> refresh({bool force = false}) async {
+    await _restoreSyncSafetySwitchOnce();
     if (!force &&
         _lastFetch != null &&
         DateTime.now().difference(_lastFetch!) < const Duration(minutes: 2)) {
@@ -135,16 +199,78 @@ class AppRemoteConfigService {
         final raw = row['config'];
         if (raw is Map<String, dynamic>) {
           _cached = AppRemoteConfigData.fromJson(raw);
+          await applySyncSafetySwitch(disabled: _cached.syncSafetyDisabled);
+          await applySyncPlanSwitches(_cached);
         } else {
           _cached = AppRemoteConfigData.fallback;
         }
       }
-    } catch (_) {
-      // بدون شبكة أو الجدول غير منشأ: لا نكسر التطبيق.
+    } catch (e, st) {
+      AppLogger.error(
+        'RemoteConfig',
+        'تعذّر جلب الإعدادات السحابية — استخدام fallback',
+        e,
+        st,
+      );
       _cached = AppRemoteConfigData.fallback;
     }
 
     _lastFetch = DateTime.now();
     return _cached;
+  }
+
+  static const String syncSafetyDisabledPrefKey = 'remote.sync_safety_disabled';
+  bool _syncSafetyRestored = false;
+
+  /// آخر قرار من الخادم يبقى بعد إعادة التشغيل دون إنترنت. فشل الجلب لا
+  /// يغيّره، فلا يعود الإصلاح للعمل لمجرد انقطاع الشبكة.
+  Future<void> _restoreSyncSafetySwitchOnce() async {
+    if (_syncSafetyRestored) return;
+    _syncSafetyRestored = true;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (prefs.getBool(syncSafetyDisabledPrefKey) == true) {
+        SyncSafety.enabled = false;
+      }
+      SyncSafety.catalogIdentity =
+          prefs.getBool(catalogIdentityPrefKey) ?? SyncSafety.catalogIdentity;
+      SyncSafety.changeCapture =
+          prefs.getBool(changeCapturePrefKey) ?? SyncSafety.changeCapture;
+      SyncSafety.deltaSync =
+          prefs.getBool(deltaSyncPrefKey) ?? SyncSafety.deltaSync;
+    } catch (e) {
+      AppLogger.warn('RemoteConfig', 'restore sync safety switch: $e');
+    }
+  }
+
+  Future<void> applySyncSafetySwitch({required bool disabled}) async {
+    SyncSafety.enabled = !disabled;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(syncSafetyDisabledPrefKey, disabled);
+    } catch (e) {
+      AppLogger.warn('RemoteConfig', 'persist sync safety switch: $e');
+    }
+  }
+
+  static const String catalogIdentityPrefKey = 'remote.catalog_identity_enabled';
+  static const String changeCapturePrefKey = 'remote.change_capture_enabled';
+  static const String deltaSyncPrefKey = 'remote.delta_sync_enabled';
+
+  /// آخر قرار من الخادم يُحفظ، فيسري بعد إعادة التشغيل دون إنترنت. فشل الجلب
+  /// لا يمر من هنا، فلا يتغير شيء بانقطاع الشبكة. الالتقاط يسري من فتح
+  /// القاعدة التالي.
+  Future<void> applySyncPlanSwitches(AppRemoteConfigData cfg) async {
+    SyncSafety.catalogIdentity = cfg.catalogIdentityEnabled;
+    SyncSafety.changeCapture = cfg.changeCaptureEnabled;
+    SyncSafety.deltaSync = cfg.deltaSyncEnabled;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(catalogIdentityPrefKey, cfg.catalogIdentityEnabled);
+      await prefs.setBool(changeCapturePrefKey, cfg.changeCaptureEnabled);
+      await prefs.setBool(deltaSyncPrefKey, cfg.deltaSyncEnabled);
+    } catch (e) {
+      AppLogger.warn('RemoteConfig', 'persist sync plan switches: $e');
+    }
   }
 }

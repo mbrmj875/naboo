@@ -1,0 +1,52 @@
+# نسخة تجربة لويندوز من فرع windows-trial فقط: تُبنى وتوضع للتحميل في صفحة البناء.
+# لا إصدار، ولا تحديث يصل للمحلات. الاسم والمجلد ورابط الدخول مختلفة، فلا تختلط
+# بنابو المثبت على الحاسوب.
+name: Windows trial build (no release)
+
+on:
+  push:
+    branches: [windows-trial]
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.41.6
+          cache: true
+
+      - name: Separate trial identity
+        shell: pwsh
+        run: |
+          $rc = 'windows\runner\Runner.rc'
+          (Get-Content $rc -Raw) -replace '"naboo" "\\0"', '"naboo-trial" "\0"' | Set-Content $rc -NoNewline
+          $main = 'windows\runner\main.cpp'
+          (Get-Content $main -Raw) -replace 'io\.supabase\.naboo', 'io.supabase.naboo-trial' -replace 'L"naboo"', 'L"naboo-trial"' | Set-Content $main -NoNewline
+          $cm = 'windows\CMakeLists.txt'
+          (Get-Content $cm -Raw) -replace 'set\(BINARY_NAME "naboo"\)', 'set(BINARY_NAME "naboo-trial")' | Set-Content $cm -NoNewline
+          Select-String -Path $rc -Pattern 'ProductName'
+          Select-String -Path $main -Pattern 'naboo'
+          Select-String -Path $cm -Pattern 'BINARY_NAME'
+
+      - name: Enable Windows desktop
+        run: flutter config --enable-windows-desktop
+
+      - run: flutter pub get
+
+      - name: Build Windows release
+        env:
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+        run: flutter build windows --release --dart-define=SUPABASE_URL="${{ secrets.SUPABASE_URL }}" --dart-define=SUPABASE_ANON_KEY="${{ secrets.SUPABASE_ANON_KEY }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: naboo-windows-trial
+          path: build/windows/x64/runner/Release
+          retention-days: 14

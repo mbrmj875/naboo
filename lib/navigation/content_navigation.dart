@@ -1,4 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
+import '../providers/business_features_provider.dart';
+import '../services/business_setup_settings.dart';
+import '../theme/design_tokens.dart';
+import '../verticals/_contract/vertical_manifest.dart';
+import '../verticals/_contract/vertical_registry.dart';
+import '../widgets/glass/glass_surface.dart';
 
 /// عنصر واحد في شريط فتات الخبز.
 class BreadcrumbSegment {
@@ -10,8 +18,10 @@ class BreadcrumbSegment {
 /// عنوان يظهر في شريط فتات الخبز.
 class BreadcrumbMeta {
   final String title;
-  const BreadcrumbMeta(this.title);
+  final String? parentOverride;
+  const BreadcrumbMeta(this.title, {this.parentOverride});
 }
+
 
 /// معرّف ثابت لكل شاشة داخل مسار المحتوى (للتسلسل ومنع التكرار).
 abstract class AppContentRoutes {
@@ -20,6 +30,7 @@ abstract class AppContentRoutes {
   static const addInvoice = 'app_add_invoice';
   static const parkedSales = 'app_parked_sales';
   static const salePosSettings = 'app_sale_pos_settings';
+  static const onlineOrders = 'app_online_orders';
   static const customers = 'app_customers';
   /// نفس [customers] مع فتح حوار إضافة عميل عند الدخول (من القائمة الجانبية).
   static const customersAdd = 'app_customers_add';
@@ -46,18 +57,23 @@ abstract class AppContentRoutes {
   static const cash = 'app_cash';
   static const expenses = 'app_expenses';
   static const users = 'app_users';
+  static const userForm = 'app_user_form';
   static const staffShiftsWeek = 'app_staff_shifts_week';
   static const employeeIdentity = 'app_employee_identity';
+  /// لوحة صاحب العمل (جذر `/home` عندما يكون الدور owner).
+  static const ownerDashboard = 'app_owner_dashboard';
   static const printing = 'app_printing';
   static const settings = 'app_settings';
   /// شاشات تُفتح من داخل [SettingsScreen] — لفتات الخبز (لا تُستخدم للقائمة الرئيسية).
   static const settingsStoreInfo = 'app_settings_store_info';
+  static const settingsMyBranchInfo = 'app_settings_my_branch_info';
   static const settingsInvoice = 'app_settings_invoice';
   static const settingsSalePosAppearance = 'app_settings_sale_pos_appearance';
   static const settingsNotifications = 'app_settings_notifications';
   static const settingsPrintingInline = 'app_settings_printing_inline';
   static const settingsDashboardLayout = 'app_settings_dashboard_layout';
   static const settingsRestore = 'app_settings_restore';
+  static const settingsSyncQueueHealth = 'app_settings_sync_queue_health';
   static const settingsSubscriptionAccount = 'app_settings_subscription_account';
   static const settingsBusinessFeatures = 'app_settings_business_features';
   static const subscriptionPlans = 'app_subscription_plans';
@@ -72,10 +88,43 @@ abstract class AppContentRoutes {
   static const servicesCatalog = 'app_services_catalog';
   static const serviceOrdersHub = 'app_service_orders_hub';
   static const serviceOrdersCreate = 'app_service_orders_create';
+  static const oilChangeHub = 'app_oil_change_hub';
+  static const oilChangeCreate = 'app_oil_change_create';
+  static const oilChangeEditPrefix = 'app_oil_change_edit_';
+  static const oilServicesLog = 'app_oil_services_log';
+  static const oilChangeServices = 'app_oil_change_services';
+  static const oilChangeServiceCreate = 'app_oil_change_service_create';
+  static const oilChangeServiceEditPrefix = 'app_oil_change_service_edit_';
+  static const oilWhatsappConnect = 'app_oil_whatsapp_connect';
+  static const oilInvoices = 'app_oil_invoices';
+  static const oilDirectSale = 'app_oil_direct_sale';
+  static const carWashCreate = 'app_car_wash_create';
+  static const carWashServices = 'app_car_wash_services';
+  static const pharmacyInvoices = 'app_pharmacy_invoices';
+  static const pharmacyInvoiceDetailPrefix = 'app_pharmacy_invoice_detail_';
+
+  // ── Restaurant ────────────────────────────────────────────────────────────
+  static const restaurantFloor = 'app_restaurant_floor';
+  static const restaurantMenu = 'app_restaurant_menu';
+  static const restaurantRecipes = 'app_restaurant_recipes';
+  static const restaurantKds = 'app_restaurant_kds';
+  static const restaurantCashier = 'app_restaurant_cashier';
+  static const restaurantMenuTheme = 'app_restaurant_menu_theme';
+
+  static String pharmacyInvoiceDetailId(int invoiceId) =>
+      '$pharmacyInvoiceDetailPrefix$invoiceId';
+
+  /// مسار فريد لكل بطاقة — يمنع فتح «بطاقة جديدة» عند التعديل.
+  static String oilChangeEditId(int orderId) => '$oilChangeEditPrefix$orderId';
+
+  static String oilChangeServiceEditId(int serviceId) =>
+      '$oilChangeServiceEditPrefix$serviceId';
 }
 
-/// مسار محتوى بانتقال أسرع من [MaterialPageRoute] الافتراضي (~300ms) —
-/// يحافظ على [PageTransitionsTheme] (مثل CupertinoSlide) من الثيم.
+/// مسار محتوى بانتقال موحّد: Fade + Slide خفيف (250ms / 220ms).
+///
+/// يحترم [MediaQuery.disableAnimationsOf] (إمكانية الوصول).
+/// لا يغيّر حركات الشيتات / الـ overlays / AnimatedSize داخل الشاشات.
 class FastContentPageRoute<T> extends MaterialPageRoute<T> {
   FastContentPageRoute({
     required super.builder,
@@ -85,14 +134,393 @@ class FastContentPageRoute<T> extends MaterialPageRoute<T> {
     super.maintainState,
   });
 
-  static const Duration _kForward = Duration(milliseconds: 185);
-  static const Duration _kReverse = Duration(milliseconds: 165);
+  /// ضمن نطاق 220–280ms المتفق عليه لسلاسة الهواتف.
+  static const Duration kForward = Duration(milliseconds: 90);
+  static const Duration kReverse = Duration(milliseconds: 80);
 
   @override
-  Duration get transitionDuration => _kForward;
+  Duration get transitionDuration => kForward;
 
   @override
-  Duration get reverseTransitionDuration => _kReverse;
+  Duration get reverseTransitionDuration => kReverse;
+
+  @override
+  Widget buildTransitions(
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+    Widget child,
+  ) {
+    if (MediaQuery.maybeOf(context)?.disableAnimations ?? false) {
+      return child;
+    }
+    final curved = CurvedAnimation(
+      parent: animation,
+      curve: Curves.easeOutCubic,
+      reverseCurve: Curves.easeInCubic,
+    );
+    final rtl = Directionality.of(context) == TextDirection.rtl;
+    // انزلاق خفيف من جهة البداية (يمين في RTL).
+    final begin = Offset(rtl ? 0.08 : -0.08, 0);
+    return FadeTransition(
+      opacity: curved,
+      child: SlideTransition(
+        position: Tween<Offset>(begin: begin, end: Offset.zero).animate(curved),
+        child: child,
+      ),
+    );
+  }
+}
+
+/// ميزة بوابة الميزات المرتبطة بمسار المحتوى.
+enum FeatureGateId {
+  installments,
+  debts,
+  pos,
+  oilChange,
+  repairServices,
+  customers,
+  loyalty,
+  restaurant,
+}
+
+/// مسارات لا تُحظر أبداً (إعدادات النظام / تفعيل الميزات).
+const Set<String> _featureGateExemptRouteIds = {
+  AppContentRoutes.home,
+  AppContentRoutes.settings,
+  AppContentRoutes.settingsBusinessFeatures,
+  AppContentRoutes.settingsStoreInfo,
+  AppContentRoutes.settingsMyBranchInfo,
+  AppContentRoutes.settingsNotifications,
+  AppContentRoutes.settingsPrintingInline,
+  AppContentRoutes.settingsDashboardLayout,
+  AppContentRoutes.settingsRestore,
+  AppContentRoutes.settingsSyncQueueHealth,
+  AppContentRoutes.settingsSubscriptionAccount,
+  AppContentRoutes.subscriptionPlans,
+};
+
+/// مطابقة مسارات كاملة → ميزة (Spec v1.0.2).
+const Map<FeatureGateId, List<String>> featureRouteMapping = {
+  FeatureGateId.installments: [
+    AppContentRoutes.installments,
+    AppContentRoutes.installmentSettings,
+  ],
+  FeatureGateId.debts: [
+    AppContentRoutes.debts,
+    AppContentRoutes.debtSettings,
+  ],
+  FeatureGateId.pos: [
+    AppContentRoutes.invoices,
+    AppContentRoutes.addInvoice,
+    AppContentRoutes.parkedSales,
+    AppContentRoutes.salePosSettings,
+    AppContentRoutes.onlineOrders,
+    AppContentRoutes.settingsSalePosAppearance,
+    AppContentRoutes.settingsInvoice,
+    AppContentRoutes.pharmacyInvoices,
+  ],
+  FeatureGateId.oilChange: [
+    AppContentRoutes.oilServicesLog,
+    AppContentRoutes.oilChangeServices,
+    AppContentRoutes.oilChangeHub,
+    AppContentRoutes.oilChangeCreate,
+    AppContentRoutes.oilInvoices,
+    AppContentRoutes.oilDirectSale,
+    AppContentRoutes.oilWhatsappConnect,
+    AppContentRoutes.carWashCreate,
+    AppContentRoutes.carWashServices,
+  ],
+  FeatureGateId.repairServices: [
+    AppContentRoutes.servicesHub,
+    AppContentRoutes.serviceOrdersHub,
+    AppContentRoutes.servicesCatalog,
+    AppContentRoutes.serviceOrdersCreate,
+    AppContentRoutes.servicesAdd,
+  ],
+  FeatureGateId.customers: [
+    AppContentRoutes.customers,
+    AppContentRoutes.customerContacts,
+    AppContentRoutes.customersAdd,
+  ],
+  FeatureGateId.loyalty: [
+    AppContentRoutes.loyaltySettings,
+    AppContentRoutes.loyaltyLedger,
+  ],
+  FeatureGateId.restaurant: [
+    AppContentRoutes.restaurantFloor,
+    AppContentRoutes.restaurantMenu,
+    AppContentRoutes.restaurantRecipes,
+    AppContentRoutes.restaurantKds,
+    AppContentRoutes.restaurantCashier,
+    AppContentRoutes.restaurantMenuTheme,
+  ],
+};
+
+/// مطابقة بادئة المسار → ميزة.
+const Map<FeatureGateId, List<String>> featurePrefixMapping = {
+  FeatureGateId.oilChange: [
+    AppContentRoutes.oilChangeEditPrefix,
+    AppContentRoutes.oilChangeServiceEditPrefix,
+  ],
+  FeatureGateId.repairServices: [
+    'app_service_order_edit_',
+  ],
+  FeatureGateId.pos: [
+    'app_process_return_',
+    AppContentRoutes.pharmacyInvoiceDetailPrefix,
+  ],
+};
+
+/// هل المسار محظور وفق [BusinessSetupSettingsData]؟
+bool isContentRouteBlocked(
+  String routeId,
+  BusinessSetupSettingsData data,
+) {
+  if (_featureGateExemptRouteIds.contains(routeId)) return false;
+
+  if (routeId.startsWith(AppContentRoutes.reportsPrefix)) {
+    final section =
+        routeId.substring(AppContentRoutes.reportsPrefix.length).trim();
+    if (section == '4') return !data.enableInstallments;
+    for (final manifest in _verticalManifestsForGuards()) {
+      for (final spec in manifest.reportSections) {
+        if ('${spec.sectionId}' == section) {
+          return !_isBusinessFeatureEnabled(spec.requiredFeatureKey, data);
+        }
+      }
+    }
+    return false;
+  }
+
+  final feature = _featureGateIdForRoute(routeId);
+  if (feature != null && !_isFeatureGateEnabled(feature, data)) {
+    return true;
+  }
+
+  for (final manifest in _verticalManifestsForGuards()) {
+    if (_manifestGuardsRoute(manifest, routeId) &&
+        !_isManifestVerticalEnabled(manifest, data)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+Iterable<VerticalManifest> _verticalManifestsForGuards() sync* {
+  final seen = <String>{};
+  for (final id in [
+    BusinessVertical.oilChange,
+    BusinessVertical.pharmacy,
+    VerticalRegistry.instance.activeVerticalId,
+  ]) {
+    final manifest = VerticalRegistry.instance.manifestFor(id);
+    if (manifest != null && seen.add(manifest.id)) {
+      yield manifest;
+    }
+  }
+}
+
+bool _manifestGuardsRoute(VerticalManifest manifest, String routeId) {
+  if (manifest.routeGuardExact.contains(routeId)) return true;
+  for (final prefix in manifest.routeGuardPrefixes) {
+    if (routeId.startsWith(prefix)) return true;
+  }
+  return false;
+}
+
+bool _isManifestVerticalEnabled(
+  VerticalManifest manifest,
+  BusinessSetupSettingsData data,
+) {
+  switch (manifest.id) {
+    case BusinessVertical.oilChange:
+      return data.enableOilChange;
+    default:
+      return manifest.id == data.businessVertical;
+  }
+}
+
+bool _isBusinessFeatureEnabled(
+  String featureKey,
+  BusinessSetupSettingsData data,
+) {
+  switch (featureKey) {
+    case BusinessSetupKeys.enableOilChange:
+      return data.enableOilChange;
+    case BusinessSetupKeys.enableInstallments:
+      return data.enableInstallments;
+    case BusinessSetupKeys.enableDebts:
+      return data.enableDebts;
+    case BusinessSetupKeys.enablePos:
+      return data.enablePos;
+    case BusinessSetupKeys.enableRepairServices:
+      return data.enableRepairServices;
+    case BusinessSetupKeys.enableCustomers:
+      return data.enableCustomers;
+    case BusinessSetupKeys.enableLoyalty:
+      return data.enableLoyalty;
+    case BusinessSetupKeys.enableRestaurantTables:
+    case BusinessSetupKeys.enableRestaurantKds:
+    case BusinessSetupKeys.enableRestaurantQrMenu:
+    case BusinessSetupKeys.enableRestaurantRecipes:
+    case BusinessSetupKeys.enableRestaurantPublicLink:
+    case BusinessSetupKeys.enableRestaurantHubLan:
+    case BusinessSetupKeys.enableRestaurantMenuTheme:
+    case BusinessSetupKeys.enableRestaurantMultiImages:
+      return data.enableRestaurantOs;
+    case BusinessSetupKeys.enableRestaurantBilingualMenu:
+      return data.enableRestaurantBilingualMenu;
+    default:
+      return true;
+  }
+}
+
+FeatureGateId? _featureGateIdForRoute(String routeId) {
+  for (final entry in featureRouteMapping.entries) {
+    if (entry.value.contains(routeId)) return entry.key;
+  }
+  for (final entry in featurePrefixMapping.entries) {
+    for (final prefix in entry.value) {
+      if (routeId.startsWith(prefix)) return entry.key;
+    }
+  }
+  return null;
+}
+
+bool _isFeatureGateEnabled(FeatureGateId id, BusinessSetupSettingsData data) {
+  switch (id) {
+    case FeatureGateId.installments:
+      return data.enableInstallments;
+    case FeatureGateId.debts:
+      return data.enableDebts;
+    case FeatureGateId.pos:
+      return data.enablePos;
+    case FeatureGateId.oilChange:
+      return data.enableOilChange;
+    case FeatureGateId.repairServices:
+      return data.enableRepairServices;
+    case FeatureGateId.customers:
+      return data.enableCustomers;
+    case FeatureGateId.loyalty:
+      return data.enableLoyalty;
+    case FeatureGateId.restaurant:
+      return data.enableRestaurantOs;
+  }
+}
+
+/// حارس مسار المحتوى — الطبقة ب (Feature Gate Spec).
+class FeatureRouteGuard extends StatelessWidget {
+  const FeatureRouteGuard({
+    super.key,
+    required this.routeId,
+    required this.child,
+  });
+
+  final String routeId;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final features = Provider.of<BusinessFeaturesProvider>(context);
+
+    if (!features.isLoaded) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(32),
+          child: CircularProgressIndicator(),
+        ),
+      );
+    }
+
+    if (isContentRouteBlocked(routeId, features.data)) {
+      return FeatureDisabledScreen(routeId: routeId);
+    }
+
+    return child;
+  }
+}
+
+/// شاشة حظر موحّدة عند محاولة فتح ميزة معطّلة.
+class FeatureDisabledScreen extends StatelessWidget {
+  const FeatureDisabledScreen({super.key, required this.routeId});
+
+  final String routeId;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Scaffold(
+      body: Container(
+        width: double.infinity,
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: AlignmentDirectional.topCenter,
+            end: AlignmentDirectional.bottomCenter,
+            colors: [
+              cs.surface,
+              cs.surfaceContainerHighest.withValues(alpha: 0.45),
+            ],
+          ),
+        ),
+        child: SafeArea(
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsetsDirectional.all(24),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 420),
+                child: GlassSurface(
+                  padding: const EdgeInsetsDirectional.all(22),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.lock_outline_rounded,
+                        size: 48,
+                        color: AppColors.accentGold.withValues(alpha: 0.9),
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        'الميزة غير مفعّلة',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w800,
+                          color: cs.onSurface,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        'هذه الميزة غير مفعلة في باقة نشاطك الحالي. '
+                        'يمكنك تفعيلها بالانتقال إلى الإعدادات ← ميزات المتجر.',
+                        style: TextStyle(
+                          fontSize: 14,
+                          height: 1.5,
+                          color: cs.onSurfaceVariant,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 20),
+                      FilledButton.icon(
+                        onPressed: () {
+                          if (Navigator.of(context).canPop()) {
+                            Navigator.of(context).pop();
+                          }
+                        },
+                        icon: const Icon(Icons.arrow_back_rounded),
+                        label: const Text('العودة'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// مسار Material مع اسم للتعرّف عليه في [Navigator.popUntil] وفتات الخبز.
@@ -100,15 +528,20 @@ FastContentPageRoute<T> contentMaterialRoute<T>({
   required String routeId,
   required String breadcrumbTitle,
   required WidgetBuilder builder,
+  String? parentOverride,
 }) {
   return FastContentPageRoute(
     settings: RouteSettings(
       name: routeId,
-      arguments: BreadcrumbMeta(breadcrumbTitle),
+      arguments: BreadcrumbMeta(breadcrumbTitle, parentOverride: parentOverride),
     ),
-    builder: builder,
+    builder: (context) => FeatureRouteGuard(
+      routeId: routeId,
+      child: builder(context),
+    ),
   );
 }
+
 
 /// يُرجع true إذا أصبحت الشاشة الحالية هي نفس [routeId] (لم نحتج [Navigator.push]).
 bool popUntilContentRoute(NavigatorState nav, String routeId) {
@@ -126,6 +559,78 @@ bool popUntilContentRoute(NavigatorState nav, String routeId) {
     return false;
   });
   return stoppedAtMatch;
+}
+
+/// اسم المسار في أعلى المكدس دون إزالته.
+String? peekTopContentRouteId(NavigatorState nav) {
+  String? top;
+  nav.popUntil((route) {
+    final n = route.settings.name;
+    top = n is String ? n : null;
+    return true;
+  });
+  return top;
+}
+
+/// يتتبّع مكدس [Navigator] فعلياً — [Navigator.popUntil] لا يستطيع فحص ما تحت
+/// الأعلى دون إزالته، وشريط فتات الخبز يحتاج معرفة هل الخطوة مفتوحة أصلاً.
+class ContentRouteStackObserver extends NavigatorObserver {
+  final List<Route<dynamic>> _stack = <Route<dynamic>>[];
+
+  int get depth => _stack.length;
+
+  bool containsRouteId(String routeId) =>
+      _stack.any((route) => route.settings.name == routeId);
+
+  /// أعلى مسار له اسم — المسارات بلا اسم (حوارات، صفحات قديمة) لا تملك خطوة.
+  Route<dynamic>? get topNamedRoute {
+    for (final route in _stack.reversed) {
+      if (route.settings.name is String) return route;
+    }
+    return null;
+  }
+
+  /// يرجع خطوة خطوة حتى [routeId]، ويتوقف إن منعت شاشة الخروج (مسودة غير محفوظة).
+  Future<bool> popBackTo(String routeId) async {
+    final nav = navigator;
+    if (nav == null || !containsRouteId(routeId)) return false;
+    while (_stack.isNotEmpty) {
+      final top = _stack.last;
+      if (top.settings.name == routeId) return true;
+      await nav.maybePop();
+      if (_stack.isEmpty || identical(_stack.last, top)) return false;
+    }
+    return false;
+  }
+
+  @override
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    _stack.add(route);
+  }
+
+  @override
+  void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    _stack.remove(route);
+  }
+
+  @override
+  void didRemove(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    _stack.remove(route);
+  }
+
+  @override
+  void didReplace({Route<dynamic>? newRoute, Route<dynamic>? oldRoute}) {
+    final index = oldRoute == null ? -1 : _stack.indexOf(oldRoute);
+    if (newRoute == null) {
+      if (index >= 0) _stack.removeAt(index);
+      return;
+    }
+    if (index >= 0) {
+      _stack[index] = newRoute;
+    } else {
+      _stack.add(newRoute);
+    }
+  }
 }
 
 // ── عناوين فتات الخبز الاحتياطية (عند غياب [BreadcrumbMeta]) ─────────────────
@@ -155,8 +660,12 @@ String breadcrumbFallbackTitleForRouteId(String id) {
       return 'معلّقة مؤقتاً';
     case AppContentRoutes.salePosSettings:
       return 'إعدادات نقطة البيع';
+    case AppContentRoutes.onlineOrders:
+      return 'طلبات Market';
     case AppContentRoutes.customers:
       return 'العملاء';
+    case AppContentRoutes.customersAdd:
+      return 'إضافة عميل جديد';
     case AppContentRoutes.customerContacts:
       return 'جهات اتصال العملاء';
     case AppContentRoutes.loyaltySettings:
@@ -201,16 +710,22 @@ String breadcrumbFallbackTitleForRouteId(String id) {
       return 'المصروفات';
     case AppContentRoutes.users:
       return 'المستخدمون';
+    case AppContentRoutes.userForm:
+      return 'مستخدم جديد';
     case AppContentRoutes.staffShiftsWeek:
       return 'ورديات الموظفين';
     case AppContentRoutes.employeeIdentity:
       return 'هويات الموظفين';
+    case AppContentRoutes.ownerDashboard:
+      return 'لوحة المالك';
     case AppContentRoutes.printing:
       return 'الطباعة';
     case AppContentRoutes.settings:
       return 'الإعدادات';
     case AppContentRoutes.settingsStoreInfo:
       return 'بيانات المتجر';
+    case AppContentRoutes.settingsMyBranchInfo:
+      return 'بيانات فرعي';
     case AppContentRoutes.settingsInvoice:
       return 'إعدادات الفواتير';
     case AppContentRoutes.settingsSalePosAppearance:
@@ -221,6 +736,10 @@ String breadcrumbFallbackTitleForRouteId(String id) {
       return 'إعدادات الطباعة';
     case AppContentRoutes.settingsDashboardLayout:
       return 'تخصيص الشاشة الرئيسية';
+    case AppContentRoutes.settingsRestore:
+      return 'استيراد مواد وأسعار';
+    case AppContentRoutes.settingsSyncQueueHealth:
+      return 'حالة المزامنة والعمليات العالقة';
     case AppContentRoutes.settingsSubscriptionAccount:
       return 'خطة الاشتراك والحساب';
     case AppContentRoutes.settingsBusinessFeatures:
@@ -237,7 +756,50 @@ String breadcrumbFallbackTitleForRouteId(String id) {
       return 'طلبات الصيانة وتذاكر العمل';
     case AppContentRoutes.serviceOrdersCreate:
       return 'تذكرة صيانة جديدة';
+    case AppContentRoutes.oilChangeHub:
+    case AppContentRoutes.oilServicesLog:
+      return 'سجل غيارات الزيت';
+    case AppContentRoutes.oilChangeServices:
+      return 'خدمات وأسعار غيار الزيت';
+    case AppContentRoutes.oilChangeServiceCreate:
+      return 'إضافة خدمة غيار زيت';
+    case AppContentRoutes.oilChangeCreate:
+      return 'بطاقة غيار زيت جديدة';
+    case AppContentRoutes.oilWhatsappConnect:
+      return 'ربط واتساب المحل';
+    case AppContentRoutes.carWashCreate:
+      return 'بطاقة غسيل سيارة';
+    case AppContentRoutes.carWashServices:
+      return 'أنواع الغسيل وأسعارها';
+    case AppContentRoutes.oilInvoices:
+      return 'فواتير غيار الزيت';
+    case AppContentRoutes.oilDirectSale:
+      return 'بيع مباشر';
+    case AppContentRoutes.pharmacyInvoices:
+      return 'فواتير الصيدلية';
+    case AppContentRoutes.restaurantFloor:
+      return 'ترتيب القاعة';
+    case AppContentRoutes.restaurantMenu:
+      return 'المنيو';
+    case AppContentRoutes.restaurantRecipes:
+      return 'وصفات الأطباق';
+    case AppContentRoutes.restaurantKds:
+      return 'شاشة المطبخ';
+    case AppContentRoutes.restaurantCashier:
+      return 'كاشير المطعم';
+    case AppContentRoutes.restaurantMenuTheme:
+      return 'تصميم المنيو';
     default:
+      if (id.startsWith(AppContentRoutes.pharmacyInvoiceDetailPrefix)) {
+        final n = id.replaceFirst(AppContentRoutes.pharmacyInvoiceDetailPrefix, '');
+        return 'فاتورة صيدلية #$n';
+      }
+      if (id.startsWith(AppContentRoutes.oilChangeServiceEditPrefix)) {
+        return 'تعديل خدمة غيار زيت';
+      }
+      if (id.startsWith(AppContentRoutes.oilChangeEditPrefix)) {
+        return 'تعديل بطاقة غيار زيت';
+      }
       break;
   }
   if (id.startsWith(AppContentRoutes.reportsPrefix)) {
@@ -251,6 +813,7 @@ String breadcrumbFallbackTitleForRouteId(String id) {
       '5': 'التقارير — الموظفون',
       '6': 'التقارير — تحليل وهامش',
       '7': 'التقارير — إعدادات',
+      '8': 'التقارير — غيار الزيت',
     };
     return labels[tail] ?? 'التقارير — $tail';
   }
@@ -272,7 +835,10 @@ IconData breadcrumbIconForRouteId(String id) {
       return Icons.receipt_long_rounded;
     case AppContentRoutes.salePosSettings:
       return Icons.storefront_rounded;
+    case AppContentRoutes.onlineOrders:
+      return Icons.shopping_bag_outlined;
     case AppContentRoutes.customers:
+    case AppContentRoutes.customersAdd:
     case AppContentRoutes.customerContacts:
       return Icons.people_alt_rounded;
     case AppContentRoutes.loyaltySettings:
@@ -301,6 +867,7 @@ IconData breadcrumbIconForRouteId(String id) {
     case AppContentRoutes.expenses:
       return Icons.payments_rounded;
     case AppContentRoutes.users:
+    case AppContentRoutes.userForm:
     case AppContentRoutes.staffShiftsWeek:
     case AppContentRoutes.employeeIdentity:
       return Icons.manage_accounts_rounded;
@@ -310,6 +877,8 @@ IconData breadcrumbIconForRouteId(String id) {
       return Icons.settings_rounded;
     case AppContentRoutes.settingsStoreInfo:
       return Icons.store_rounded;
+    case AppContentRoutes.settingsMyBranchInfo:
+      return Icons.storefront_rounded;
     case AppContentRoutes.settingsInvoice:
       return Icons.receipt_long_rounded;
     case AppContentRoutes.settingsSalePosAppearance:
@@ -320,6 +889,10 @@ IconData breadcrumbIconForRouteId(String id) {
       return Icons.print_rounded;
     case AppContentRoutes.settingsDashboardLayout:
       return Icons.dashboard_customize_rounded;
+    case AppContentRoutes.settingsRestore:
+      return Icons.restore_rounded;
+    case AppContentRoutes.settingsSyncQueueHealth:
+      return Icons.sync_problem_rounded;
     case AppContentRoutes.settingsSubscriptionAccount:
       return Icons.star_rounded;
     case AppContentRoutes.settingsBusinessFeatures:
@@ -333,7 +906,37 @@ IconData breadcrumbIconForRouteId(String id) {
     case AppContentRoutes.serviceOrdersHub:
     case AppContentRoutes.serviceOrdersCreate:
       return Icons.assignment_rounded;
+    case AppContentRoutes.oilChangeHub:
+    case AppContentRoutes.oilChangeCreate:
+    case AppContentRoutes.oilServicesLog:
+    case AppContentRoutes.oilChangeServices:
+    case AppContentRoutes.oilChangeServiceCreate:
+    case AppContentRoutes.oilInvoices:
+    case AppContentRoutes.oilDirectSale:
+    case AppContentRoutes.oilWhatsappConnect:
+      return Icons.opacity_rounded;
+    case AppContentRoutes.carWashCreate:
+    case AppContentRoutes.carWashServices:
+      return Icons.local_car_wash_rounded;
+    case AppContentRoutes.pharmacyInvoices:
+      return Icons.medication_liquid_rounded;
+    case AppContentRoutes.restaurantFloor:
+    case AppContentRoutes.restaurantMenu:
+    case AppContentRoutes.restaurantRecipes:
+    case AppContentRoutes.restaurantKds:
+    case AppContentRoutes.restaurantCashier:
+    case AppContentRoutes.restaurantMenuTheme:
+      return Icons.restaurant_menu_rounded;
     default:
+      if (id.startsWith(AppContentRoutes.pharmacyInvoiceDetailPrefix)) {
+        return Icons.receipt_long_rounded;
+      }
+      if (id.startsWith(AppContentRoutes.oilChangeServiceEditPrefix)) {
+        return Icons.edit_rounded;
+      }
+      if (id.startsWith(AppContentRoutes.oilChangeEditPrefix)) {
+        return Icons.edit_rounded;
+      }
       if (id.startsWith(AppContentRoutes.reportsPrefix)) {
         return Icons.bar_chart_rounded;
       }
@@ -343,3 +946,156 @@ IconData breadcrumbIconForRouteId(String id) {
       return Icons.layers_rounded;
   }
 }
+
+// ── خريطة العلاقات الأبوية ومحرك الاستدلال الهيكلي (Spec v1.1.0) ───────────────
+
+/// خريطة العلاقات الأبوية الثابتة في النظام لتأسيس الملاحة الهيكلية الشجرية.
+const Map<String, String> routeParentMapping = {
+  // POS / Invoices
+  AppContentRoutes.invoices: AppContentRoutes.home,
+  AppContentRoutes.addInvoice: AppContentRoutes.invoices,
+  AppContentRoutes.parkedSales: AppContentRoutes.invoices,
+  AppContentRoutes.salePosSettings: AppContentRoutes.invoices,
+  AppContentRoutes.onlineOrders: AppContentRoutes.home,
+
+  // Customers & Loyalty
+  AppContentRoutes.customers: AppContentRoutes.home,
+  AppContentRoutes.customersAdd: AppContentRoutes.customers,
+  AppContentRoutes.customerContacts: AppContentRoutes.customers,
+  AppContentRoutes.loyaltySettings: AppContentRoutes.customers,
+  AppContentRoutes.loyaltyLedger: AppContentRoutes.customers,
+
+  // Debts & Installments
+  AppContentRoutes.debts: AppContentRoutes.home,
+  AppContentRoutes.debtSettings: AppContentRoutes.debts,
+  AppContentRoutes.installments: AppContentRoutes.home,
+  AppContentRoutes.installmentSettings: AppContentRoutes.installments,
+
+  // Inventory
+  AppContentRoutes.inventory: AppContentRoutes.home,
+  AppContentRoutes.inventoryProducts: AppContentRoutes.inventory,
+  AppContentRoutes.addProduct: AppContentRoutes.inventoryProducts,
+  AppContentRoutes.quickUpdateProducts: AppContentRoutes.inventoryProducts,
+  AppContentRoutes.inventoryManagement: AppContentRoutes.inventory,
+  AppContentRoutes.inventoryWarehouses: AppContentRoutes.inventory,
+  AppContentRoutes.inventoryPriceLists: AppContentRoutes.inventory,
+  AppContentRoutes.inventoryStocktaking: AppContentRoutes.inventory,
+  AppContentRoutes.inventoryPurchaseOrders: AppContentRoutes.inventory,
+  AppContentRoutes.inventoryAnalytics: AppContentRoutes.inventory,
+  AppContentRoutes.inventorySettings: AppContentRoutes.inventory,
+  AppContentRoutes.inventoryBarcodeLabels: AppContentRoutes.inventoryProducts,
+
+  // Cash / Expenses
+  AppContentRoutes.cash: AppContentRoutes.home,
+  AppContentRoutes.expenses: AppContentRoutes.home,
+
+  // Users & Printing
+  AppContentRoutes.users: AppContentRoutes.home,
+  AppContentRoutes.userForm: AppContentRoutes.users,
+  AppContentRoutes.staffShiftsWeek: AppContentRoutes.users,
+  AppContentRoutes.employeeIdentity: AppContentRoutes.users,
+  AppContentRoutes.printing: AppContentRoutes.home,
+
+  // Settings
+  AppContentRoutes.settings: AppContentRoutes.home,
+  AppContentRoutes.settingsStoreInfo: AppContentRoutes.settings,
+  AppContentRoutes.settingsMyBranchInfo: AppContentRoutes.settings,
+  AppContentRoutes.settingsInvoice: AppContentRoutes.settings,
+  AppContentRoutes.settingsSalePosAppearance: AppContentRoutes.settings,
+  AppContentRoutes.settingsNotifications: AppContentRoutes.settings,
+  AppContentRoutes.settingsPrintingInline: AppContentRoutes.settings,
+  AppContentRoutes.settingsDashboardLayout: AppContentRoutes.settings,
+  AppContentRoutes.settingsRestore: AppContentRoutes.settings,
+  AppContentRoutes.settingsSyncQueueHealth: AppContentRoutes.settings,
+  AppContentRoutes.settingsSubscriptionAccount: AppContentRoutes.settings,
+  AppContentRoutes.settingsBusinessFeatures: AppContentRoutes.settings,
+  AppContentRoutes.subscriptionPlans: AppContentRoutes.settingsSubscriptionAccount,
+
+  // Technical Services & Maintenance
+  AppContentRoutes.servicesHub: AppContentRoutes.home,
+  AppContentRoutes.servicesCatalog: AppContentRoutes.servicesHub,
+  AppContentRoutes.servicesAdd: AppContentRoutes.servicesHub,
+  AppContentRoutes.serviceOrdersHub: AppContentRoutes.servicesHub,
+  AppContentRoutes.serviceOrdersCreate: AppContentRoutes.serviceOrdersHub,
+
+  // Oil Change — المسار المفتوح فعلياً هو oilServicesLog؛ oilChangeHub اسم بديل له.
+  AppContentRoutes.oilChangeHub: AppContentRoutes.home,
+  AppContentRoutes.oilServicesLog: AppContentRoutes.home,
+  AppContentRoutes.oilChangeServices: AppContentRoutes.oilServicesLog,
+  AppContentRoutes.oilChangeServiceCreate: AppContentRoutes.oilChangeServices,
+  AppContentRoutes.oilChangeCreate: AppContentRoutes.oilServicesLog,
+  AppContentRoutes.oilWhatsappConnect: AppContentRoutes.oilServicesLog,
+  AppContentRoutes.oilInvoices: AppContentRoutes.oilServicesLog,
+  AppContentRoutes.oilDirectSale: AppContentRoutes.oilServicesLog,
+  AppContentRoutes.carWashCreate: AppContentRoutes.home,
+  AppContentRoutes.carWashServices: AppContentRoutes.carWashCreate,
+  AppContentRoutes.pharmacyInvoices: AppContentRoutes.invoices,
+
+  // Restaurant
+  AppContentRoutes.restaurantFloor: AppContentRoutes.home,
+  AppContentRoutes.restaurantMenu: AppContentRoutes.home,
+  AppContentRoutes.restaurantRecipes: AppContentRoutes.restaurantMenu,
+  AppContentRoutes.restaurantKds: AppContentRoutes.home,
+  AppContentRoutes.restaurantCashier: AppContentRoutes.home,
+  AppContentRoutes.restaurantMenuTheme: AppContentRoutes.restaurantMenu,
+};
+
+/// يستدل على معرف الصفحة الأبوية منطقياً، مع مراعاة بادئات الشاشات ذات المعاملات الديناميكية.
+String? getParentRouteId(String routeId) {
+  if (routeParentMapping.containsKey(routeId)) {
+    return routeParentMapping[routeId];
+  }
+  if (routeId.startsWith(AppContentRoutes.pharmacyInvoiceDetailPrefix)) {
+    return AppContentRoutes.pharmacyInvoices;
+  }
+  if (routeId.startsWith(AppContentRoutes.oilChangeEditPrefix)) {
+    return AppContentRoutes.oilServicesLog;
+  }
+  if (routeId.startsWith(AppContentRoutes.oilChangeServiceEditPrefix)) {
+    return AppContentRoutes.oilChangeServices;
+  }
+  if (routeId.startsWith(AppContentRoutes.reportsPrefix)) {
+    return AppContentRoutes.home;
+  }
+  if (routeId.startsWith('${AppContentRoutes.debts}_customer_')) {
+    return AppContentRoutes.debts;
+  }
+  if (routeId.startsWith('app_process_return_')) {
+    return AppContentRoutes.invoices;
+  }
+  if (routeId.startsWith('app_service_order_edit_')) {
+    return AppContentRoutes.serviceOrdersHub;
+  }
+  return null;
+}
+
+/// يقوم محرك الاستدلال الصاعد ببناء مسار فتات الخبز الكامل من الشاشة النشطة صعوداً حتى الرئيسية.
+List<BreadcrumbSegment> buildBreadcrumbTrail(
+  String currentRouteId,
+  String currentTitle,
+  String? parentOverride,
+) {
+  final trail = <BreadcrumbSegment>[];
+  trail.add(BreadcrumbSegment(id: currentRouteId, title: currentTitle));
+
+  final seen = <String>{currentRouteId};
+  String? nextId = parentOverride ?? getParentRouteId(currentRouteId);
+  if (nextId == currentRouteId) nextId = getParentRouteId(currentRouteId);
+
+  // صعود شجري متين يتفادى التكرار والدوائر
+  while (nextId != null && nextId != AppContentRoutes.home && seen.add(nextId)) {
+    trail.add(BreadcrumbSegment(
+      id: nextId,
+      title: breadcrumbFallbackTitleForRouteId(nextId),
+    ));
+    nextId = getParentRouteId(nextId);
+  }
+
+  // إضافة الرئيسية دائماً في بداية المطاف
+  if (currentRouteId != AppContentRoutes.home) {
+    trail.add(const BreadcrumbSegment(id: AppContentRoutes.home, title: 'الرئيسية'));
+  }
+
+  return trail.reversed.toList();
+}
+

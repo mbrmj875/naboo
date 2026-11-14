@@ -1,11 +1,12 @@
-import 'package:flutter/material.dart';
 import '../models/invoice.dart';
 import '../services/cloud_sync_service.dart';
 import '../services/database_helper.dart';
 import '../services/license_service.dart';
+import '../services/marketplace/marketplace_catalog_sync_service.dart';
 import '../utils/invoice_validation.dart';
+import 'invoice_list_controller.dart';
 
-class InvoiceProvider extends ChangeNotifier {
+class InvoiceProvider extends InvoiceListController {
   static const int _pageSize = 120;
 
   final List<Invoice> _invoices = [];
@@ -114,6 +115,7 @@ class InvoiceProvider extends ChangeNotifier {
     await refresh();
     // لا تربط مسار البيع بالشبكة: جدولة رفع قريب فقط.
     CloudSyncService.instance.scheduleSyncSoon();
+    MarketplaceCatalogSyncService.instance.scheduleSyncSoon();
     return id;
   }
 }

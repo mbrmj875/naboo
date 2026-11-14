@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 
 import '../../services/database_helper.dart';
+import '../../theme/design_tokens.dart';
 
 /// سجل حركات نقاط الولاء (جميع العملاء أو حسب التصفية لاحقاً).
 class LoyaltyLedgerScreen extends StatefulWidget {
@@ -60,9 +61,28 @@ class _LoyaltyLedgerScreenState extends State<LoyaltyLedgerScreen> {
   @override
   Widget build(BuildContext context) {
     final df = DateFormat('yyyy/MM/dd HH:mm', 'en');
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final primaryText = isDark ? Colors.white : AppColors.primaryDark;
+    final secondaryText = isDark
+        ? Theme.of(context).colorScheme.onSurfaceVariant
+        : AppColors.primaryDark.withValues(alpha: 0.75);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('سجل نقاط الولاء'),
+        backgroundColor: isDark ? AppColors.primary : Colors.white,
+        foregroundColor: primaryText,
+        iconTheme: const IconThemeData(color: AppColors.accentGold),
+        actionsIconTheme: const IconThemeData(color: AppColors.accentGold),
+        title: Text(
+          'سجل نقاط الولاء',
+          style: TextStyle(fontWeight: FontWeight.w700, color: primaryText),
+        ),
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(1.2),
+          child: Container(
+            height: 1.2,
+            color: AppColors.accentGold.withValues(alpha: 0.55),
+          ),
+        ),
         actions: [
           IconButton(
             onPressed: _loading ? null : _load,
@@ -78,13 +98,13 @@ class _LoyaltyLedgerScreenState extends State<LoyaltyLedgerScreen> {
                   child: Text(
                     'لا توجد حركات بعد — فعّل الولاء من الإعدادات وسجّل مبيعات مرتبطة بعملاء.',
                     textAlign: TextAlign.center,
-                    style: TextStyle(color: Colors.grey.shade600),
+                    style: TextStyle(color: secondaryText),
                   ),
                 )
               : ListView.separated(
                   padding: const EdgeInsets.all(12),
                   itemCount: _rows.length,
-                  separatorBuilder: (_, _) => const Divider(height: 1),
+                  separatorBuilder: (_, _) => const SizedBox(height: 8),
                   itemBuilder: (context, i) {
                     final r = _rows[i];
                     final cid = r['customerId'] as int? ?? 0;
@@ -97,48 +117,63 @@ class _LoyaltyLedgerScreenState extends State<LoyaltyLedgerScreen> {
                     try {
                       dt = DateTime.parse(created);
                     } catch (_) {}
-                    return ListTile(
-                      leading: CircleAvatar(
-                        backgroundColor: pts >= 0
-                            ? Colors.teal.shade100
-                            : Colors.orange.shade100,
-                        child: Icon(
-                          pts >= 0 ? Icons.add_rounded : Icons.remove_rounded,
-                          color: pts >= 0
-                              ? Colors.teal.shade800
-                              : Colors.orange.shade800,
-                          size: 20,
+                    return Container(
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: AppColors.accentGold.withValues(
+                            alpha: isDark ? 0.35 : 0.3,
+                          ),
                         ),
                       ),
-                      title: Text(
-                        name,
-                        style: const TextStyle(fontWeight: FontWeight.w600),
-                      ),
-                      subtitle: Text(
-                        '${_kindLabel(r['kind'] as String?)} · $note\n'
-                        '${dt != null ? df.format(dt) : created}',
-                        style: const TextStyle(fontSize: 12),
-                      ),
-                      isThreeLine: true,
-                      trailing: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          Text(
-                            '${pts >= 0 ? '+' : ''}$pts',
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              color: pts >= 0 ? Colors.teal : Colors.deepOrange,
-                            ),
+                      child: ListTile(
+                        leading: CircleAvatar(
+                          backgroundColor: pts >= 0
+                              ? AppColors.accentGold.withValues(alpha: 0.2)
+                              : Colors.orange.shade100,
+                          child: Icon(
+                            pts >= 0 ? Icons.add_rounded : Icons.remove_rounded,
+                            color: pts >= 0
+                                ? AppColors.accentGold
+                                : Colors.orange.shade800,
+                            size: 20,
                           ),
-                          Text(
-                            'رصيد $bal',
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: Colors.grey.shade600,
-                            ),
+                        ),
+                        title: Text(
+                          name,
+                          style: TextStyle(
+                            fontWeight: FontWeight.w700,
+                            color: primaryText,
                           ),
-                        ],
+                        ),
+                        subtitle: Text(
+                          '${_kindLabel(r['kind'] as String?)} · $note\n'
+                          '${dt != null ? df.format(dt) : created}',
+                          style: TextStyle(fontSize: 12, color: secondaryText),
+                        ),
+                        isThreeLine: true,
+                        trailing: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Text(
+                              '${pts >= 0 ? '+' : ''}$pts',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: pts >= 0
+                                    ? AppColors.accentGold
+                                    : Colors.deepOrange,
+                              ),
+                            ),
+                            Text(
+                              'رصيد $bal',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: secondaryText,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     );
                   },
