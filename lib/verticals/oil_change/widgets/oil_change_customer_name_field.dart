@@ -144,8 +144,10 @@ class _OilChangeCustomerNameFieldState
         limit: _maxSuggestions,
       );
     }
-    final rows =
-        await DatabaseHelper().searchCustomers(query, limit: _maxSuggestions);
+    final rows = await DatabaseHelper().searchCustomers(
+      query,
+      limit: _maxSuggestions,
+    );
     return [
       for (final r in rows)
         CustomerRecord.fromMap(Map<String, dynamic>.from(r)),
@@ -245,51 +247,56 @@ class _OilChangeCustomerNameFieldState
           onFieldSubmitted: (_) => widget.focusNode.unfocus(),
         ),
         if (_showOptions && _options.isNotEmpty)
-          Padding(
-            padding: const EdgeInsetsDirectional.only(top: 6),
-            child: Material(
-              elevation: 4,
-              shadowColor: Colors.black.withValues(alpha: 0.14),
-              borderRadius: BorderRadius.circular(12),
-              clipBehavior: Clip.antiAlias,
-              color: cs.surface,
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxHeight: 220),
-                child: ListView.separated(
-                  padding: EdgeInsets.zero,
-                  shrinkWrap: true,
-                  itemCount: _options.length,
-                  separatorBuilder: (_, __) => Divider(
-                    height: 1,
-                    thickness: 1,
-                    color: cs.outlineVariant.withValues(alpha: 0.45),
-                  ),
-                  itemBuilder: (context, index) {
-                    final c = _options[index];
-                    final phone = c.phone?.trim() ?? '';
-                    return SizedBox(
-                      height: 52,
-                      child: ListTile(
-                        dense: true,
-                        visualDensity: VisualDensity.compact,
-                        title: Text(
-                          c.name.trim().isEmpty ? 'عميل' : c.name,
-                          textAlign: TextAlign.start,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+          // القائمة جزء من منطقة الحقل. على الحاسوب يُخرج فلاتر المؤشر من
+          // الحقل لحظة نزول زر الفأرة خارجه، فتُغلق القائمة قبل رفع الزر ولا
+          // يصل الاختيار. اللمس على الهاتف لا يفعل ذلك.
+          TextFieldTapRegion(
+            child: Padding(
+              padding: const EdgeInsetsDirectional.only(top: 6),
+              child: Material(
+                elevation: 4,
+                shadowColor: Colors.black.withValues(alpha: 0.14),
+                borderRadius: BorderRadius.circular(12),
+                clipBehavior: Clip.antiAlias,
+                color: cs.surface,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 220),
+                  child: ListView.separated(
+                    padding: EdgeInsets.zero,
+                    shrinkWrap: true,
+                    itemCount: _options.length,
+                    separatorBuilder: (_, __) => Divider(
+                      height: 1,
+                      thickness: 1,
+                      color: cs.outlineVariant.withValues(alpha: 0.45),
+                    ),
+                    itemBuilder: (context, index) {
+                      final c = _options[index];
+                      final phone = c.phone?.trim() ?? '';
+                      return SizedBox(
+                        height: 52,
+                        child: ListTile(
+                          dense: true,
+                          visualDensity: VisualDensity.compact,
+                          title: Text(
+                            c.name.trim().isEmpty ? 'عميل' : c.name,
+                            textAlign: TextAlign.start,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          subtitle: phone.isEmpty
+                              ? null
+                              : Text(
+                                  phone,
+                                  textDirection: TextDirection.ltr,
+                                  textAlign: TextAlign.start,
+                                  maxLines: 1,
+                                ),
+                          onTap: widget.enabled ? () => _pick(c) : null,
                         ),
-                        subtitle: phone.isEmpty
-                            ? null
-                            : Text(
-                                phone,
-                                textDirection: TextDirection.ltr,
-                                textAlign: TextAlign.start,
-                                maxLines: 1,
-                              ),
-                        onTap: widget.enabled ? () => _pick(c) : null,
-                      ),
-                    );
-                  },
+                      );
+                    },
+                  ),
                 ),
               ),
             ),
