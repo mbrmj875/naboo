@@ -1,9 +1,17 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 
+import '../../models/customer_debt_models.dart';
 import '../../models/customer_record.dart';
+import '../../utils/iqd_money.dart';
+import '../../verticals/oil_change/widgets/oil_change_owner_pin_confirm_dialog.dart';
+import '../../utils/app_logger.dart';
 import '../../utils/screen_layout.dart';
 import '../../services/database_helper.dart';
+import '../../services/price_list_repository.dart';
+import '../../services/tenant_context_service.dart';
+import '../../verticals/_contract/vertical_registry.dart';
 import '../../theme/design_tokens.dart';
 import '../../utils/customer_validation.dart';
 import '../../widgets/adaptive/adaptive_form_container.dart';
@@ -24,16 +32,28 @@ class CustomerFormScreen extends StatefulWidget {
 class _CustomerFormScreenState extends State<CustomerFormScreen> {
   final _formKey = GlobalKey<FormState>();
   final DatabaseHelper _db = DatabaseHelper();
+  final PriceListRepository _priceLists = PriceListRepository();
 
   late final TextEditingController _nameCtrl;
   final List<TextEditingController> _phoneCtrls = [];
   late final TextEditingController _addressCtrl;
-  late final TextEditingController _emailCtrl;
   late final TextEditingController _notesCtrl;
 
   bool _saving = false;
+  int? _tenantId;
+
+  /// قائمة الأسعار المختارة للعميل (`null` = استخدام الافتراضي العام).
+  int? _selectedPriceListId;
+  bool _priceListsLoading = true;
+  List<Map<String, dynamic>> _priceListOptions = const [];
 
   bool get _isEdit => widget.existing != null;
+
+  /// استثناء الدين (فترة وسقف خاصان، «نقداً فقط»): الفارغ = العام.
+  final _debtPeriodCtrl = TextEditingController();
+  final _debtCapCtrl = TextEditingController();
+  bool _cashOnly = false;
+  CustomerDebtException _loadedDebtException = CustomerDebtException.none;
 
   @override
   void initState() {
@@ -42,8 +62,8 @@ class _CustomerFormScreenState extends State<CustomerFormScreen> {
     _nameCtrl = TextEditingController(text: e?.name ?? '');
     _phoneCtrls.add(TextEditingController(text: e?.phone ?? ''));
     _addressCtrl = TextEditingController(text: e?.address ?? '');
-    _emailCtrl = TextEditingController(text: e?.email ?? '');
     _notesCtrl = TextEditingController(text: e?.notes ?? '');
+    _selectedPriceListId = e?.priceListId;
     if (e != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         final extras = await _db.getCustomerExtraPhones(e.id);
@@ -55,23 +75,114 @@ class _CustomerFormScreenState extends State<CustomerFormScreen> {
         });
       });
     }
+    _loadPriceLists();
+    _loadTenantId();
+    if (e != null) _loadDebtException(e.id);
+  }
+
+  Future<void> _loadDebtException(int customerId) async {
+    try {
+      final ex = await _db.getCustomerDebtException(customerId);
+      if (!mounted) return;
+      setState(() {
+        _loadedDebtException = ex;
+        _debtPeriodCtrl.text = ex.periodDays == null ? '' : '${ex.periodDays}';
+        _debtCapCtrl.text = ex.capFils == null
+            ? ''
+            : IqdMoney.fromFils(ex.capFils!).round().toString();
+        _cashOnly = ex.cashOnly;
+      });
+    } catch (e, st) {
+      AppLogger.error('CustomerForm', 'load debt exception failed', e, st);
+    }
+  }
+
+  CustomerDebtException _debtExceptionFromForm() {
+    final p = int.tryParse(_debtPeriodCtrl.text.trim());
+    final cap = double.tryParse(_debtCapCtrl.text.replaceAll(',', '').trim());
+    return CustomerDebtException(
+      periodDays: p == null || p < 0 ? null : p.clamp(0, 3650),
+      capFils: cap == null || cap < 0 ? null : IqdMoney.toFils(cap),
+      cashOnly: _cashOnly,
+    );
+  }
+
+  bool _sameException(CustomerDebtException a, CustomerDebtException b) =>
+      a.periodDays == b.periodDays &&
+      a.capFils == b.capFils &&
+      a.cashOnly == b.cashOnly;
+
+  /// تغيير الاستثناء برمز المالك: لا يرفع موظف المنع عن زبون بنفسه.
+  Future<bool> _saveDebtExceptionIfChanged(int customerId) async {
+    final next = _debtExceptionFromForm();
+    if (_sameException(next, _loadedDebtException)) return true;
+    final ok = await confirmOwnerPinForSensitiveAction(
+      context,
+      title: 'استثناء دين العميل',
+      message: 'تغيير فترة التسديد أو السقف الخاص أو «نقداً فقط» لهذا العميل.',
+      confirmLabel: 'حفظ الاستثناء',
+      bypassIfElevatedAccess: true,
+    );
+    if (!ok) return false;
+    await _db.setCustomerDebtException(customerId, next);
+    _loadedDebtException = next;
+    return true;
+  }
+
+  Future<void> _loadTenantId() async {
+    try {
+      final tenant = TenantContextService.instance;
+      if (!tenant.loaded) await tenant.load();
+      if (!mounted) return;
+      setState(() => _tenantId = tenant.requireActiveTenantId());
+    } catch (e, st) {
+      AppLogger.error('CustomerForm', 'failed to load tenant', e, st);
+    }
+  }
+
+  Future<void> _loadPriceLists() async {
+    try {
+      final lists = await _priceLists.listPriceLists();
+      if (!mounted) return;
+      final activeIds = lists
+          .map((l) => (l['id'] as num?)?.toInt())
+          .whereType<int>()
+          .toSet();
+      setState(() {
+        _priceListOptions = lists;
+        _priceListsLoading = false;
+        if (_selectedPriceListId != null &&
+            !activeIds.contains(_selectedPriceListId)) {
+          _selectedPriceListId = null;
+        }
+      });
+    } catch (e, st) {
+      AppLogger.error('CustomerForm', 'failed to load price lists', e, st);
+      if (!mounted) return;
+      setState(() => _priceListsLoading = false);
+    }
   }
 
   @override
   void dispose() {
+    _debtPeriodCtrl.dispose();
+    _debtCapCtrl.dispose();
     _nameCtrl.dispose();
     for (final c in _phoneCtrls) {
       c.dispose();
     }
     _addressCtrl.dispose();
-    _emailCtrl.dispose();
     _notesCtrl.dispose();
     super.dispose();
   }
 
   String? _validateName(String? v) => CustomerValidation.name(v);
-  String? _validateEmail(String? v) => CustomerValidation.optionalEmail(v);
-  String? _validatePhone(String? v) => CustomerValidation.optionalPhone(v);
+  String? _validatePhone(String? v) => CustomerValidation.iraqiMobilePhone(v);
+
+  static final _iraqiPhoneInputFormatters = <TextInputFormatter>[
+    FilteringTextInputFormatter.digitsOnly,
+    LengthLimitingTextInputFormatter(11),
+  ];
 
   List<String> _phonesInOrder() {
     return _phoneCtrls
@@ -93,11 +204,18 @@ class _CustomerFormScreenState extends State<CustomerFormScreen> {
       final primary = phones.isEmpty ? null : phones.first;
       final extra = phones.length <= 1 ? <String>[] : phones.sublist(1);
 
+      final normalizedPrimary = primary == null
+          ? null
+          : CustomerValidation.normalizePhoneDigits(primary);
+      final normalizedExtra = extra
+          .map(CustomerValidation.normalizePhoneDigits)
+          .whereType<String>()
+          .toList();
+
       final data = <String, dynamic>{
         'name': _nameCtrl.text.trim(),
-        'phone': primary ?? '',
+        'phone': normalizedPrimary ?? '',
         'address': _addressCtrl.text.trim(),
-        'email': _emailCtrl.text.trim(),
         'notes': _notesCtrl.text.trim(),
       };
 
@@ -109,34 +227,44 @@ class _CustomerFormScreenState extends State<CustomerFormScreen> {
           phone: (data['phone'] as String).isEmpty
               ? null
               : data['phone'] as String?,
-          email: (data['email'] as String).isEmpty
-              ? null
-              : data['email'] as String?,
+          email: widget.existing?.email,
           address: (data['address'] as String).isEmpty
               ? null
               : data['address'] as String?,
           notes: (data['notes'] as String).isEmpty
               ? null
               : data['notes'] as String?,
-          extraPhones: extra,
+          extraPhones: normalizedExtra,
+          priceListId: _selectedPriceListId,
         );
+        if (!mounted) return;
+        if (!await _saveDebtExceptionIfChanged(id)) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('حُفظت بيانات العميل، ولم يُحفظ استثناء الدين.'),
+              ),
+            );
+          }
+        }
       } else {
         final newId = await _db.insertCustomer(
           name: data['name'] as String,
           phone: (data['phone'] as String).isEmpty
               ? null
               : data['phone'] as String?,
-          email: (data['email'] as String).isEmpty
-              ? null
-              : data['email'] as String?,
+          email: null,
           address: (data['address'] as String).isEmpty
               ? null
               : data['address'] as String?,
           notes: (data['notes'] as String).isEmpty
               ? null
               : data['notes'] as String?,
-          extraPhones: extra,
+          extraPhones: normalizedExtra,
+          priceListId: _selectedPriceListId,
         );
+        if (!mounted) return;
+        await _saveDebtExceptionIfChanged(newId);
         final row = await _db.getCustomerById(newId);
         if (!mounted) return;
         if (row == null) {
@@ -165,6 +293,67 @@ class _CustomerFormScreenState extends State<CustomerFormScreen> {
     }
   }
 
+  Widget _buildDebtExceptionSection(ColorScheme cs) {
+    final hasAny = !_debtExceptionFromForm().isNone;
+    return Card(
+      margin: EdgeInsets.zero,
+      child: ExpansionTile(
+        key: const ValueKey('customerDebtException'),
+        initiallyExpanded: hasAny,
+        leading: Icon(
+          Icons.rule_rounded,
+          color: hasAny ? cs.error : cs.onSurfaceVariant,
+        ),
+        title: const Text('استثناء الدين لهذا العميل'),
+        subtitle: Text(
+          hasAny ? 'مضبوط له استثناء' : 'يتبع إعدادات الدين العامة',
+          style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+        ),
+        childrenPadding: const EdgeInsetsDirectional.fromSTEB(16, 0, 16, 16),
+        children: [
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('نقداً فقط'),
+            subtitle: const Text(
+              'لا دين جديد له إلا برمز المالك.',
+              style: TextStyle(fontSize: 12),
+            ),
+            value: _cashOnly,
+            onChanged: _saving
+                ? null
+                : (v) => setState(() => _cashOnly = v),
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            key: const ValueKey('customerDebtPeriod'),
+            controller: _debtPeriodCtrl,
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(
+              labelText: 'فترة تسديد خاصة (أيام)',
+              helperText: 'فارغ = الفترة العامة. 0 = بلا فترة له.',
+              border: OutlineInputBorder(),
+              isDense: true,
+            ),
+            onChanged: (_) => setState(() {}),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            key: const ValueKey('customerDebtCap'),
+            controller: _debtCapCtrl,
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(
+              labelText: 'سقف دين خاص (د.ع)',
+              helperText: 'فارغ = السقف العام. 0 = بلا سقف له.',
+              border: OutlineInputBorder(),
+              isDense: true,
+            ),
+            onChanged: (_) => setState(() {}),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -175,15 +364,16 @@ class _CustomerFormScreenState extends State<CustomerFormScreen> {
       child: Scaffold(
         backgroundColor: Theme.of(context).scaffoldBackgroundColor,
         appBar: AppBar(
-          backgroundColor: cs.primary,
-          foregroundColor: cs.onPrimary,
+          backgroundColor: cs.surfaceContainerHighest,
+          foregroundColor: cs.onSurface,
+          iconTheme: IconThemeData(color: cs.onSurface),
           elevation: 0,
           title: Text(
             _isEdit ? 'تعديل بيانات العميل' : 'إضافة عميل جديد',
-            style: const TextStyle(fontWeight: FontWeight.bold),
+            style: TextStyle(fontWeight: FontWeight.bold, color: cs.onSurface),
           ),
           leading: IconButton(
-            icon: const Icon(Icons.arrow_back_ios_new_rounded),
+            icon: Icon(Icons.arrow_back_ios_new_rounded, color: cs.onSurface),
             onPressed: _saving ? null : () => Navigator.pop(context),
           ),
         ),
@@ -246,10 +436,12 @@ class _CustomerFormScreenState extends State<CustomerFormScreen> {
                                         ? 'رقم الهاتف (اختياري)'
                                         : 'رقم هاتف إضافي',
                                     hint: idx == 0
-                                        ? 'مثال: 07701234567 — لا يُكرَّر لعميل آخر (يُميّز الأسماء المتشابهة)'
-                                        : 'مثال: 07801234567',
+                                        ? '07701234567 — 11 رقمًا يبدأ بـ 07'
+                                        : '07801234567 — 11 رقمًا يبدأ بـ 07',
                                     icon: Icons.phone_outlined,
                                     keyboardType: TextInputType.phone,
+                                    textDirection: TextDirection.ltr,
+                                    inputFormatters: _iraqiPhoneInputFormatters,
                                     validator: _validatePhone,
                                   ),
                                 ),
@@ -284,12 +476,12 @@ class _CustomerFormScreenState extends State<CustomerFormScreen> {
                               icon: Icon(
                                 Icons.add_circle_outline_rounded,
                                 size: 20,
-                                color: cs.primary,
+                                color: AppColors.accentGold,
                               ),
                               label: Text(
                                 'إضافة رقم آخر',
                                 style: TextStyle(
-                                  color: cs.primary,
+                                  color: AppColors.accentGold,
                                   fontWeight: FontWeight.w700,
                                 ),
                               ),
@@ -306,21 +498,43 @@ class _CustomerFormScreenState extends State<CustomerFormScreen> {
                       ),
                       const SizedBox(height: 14),
                       _CustomerFormField(
-                        controller: _emailCtrl,
-                        label: 'البريد الإلكتروني (اختياري)',
-                        hint: 'example@domain.com',
-                        icon: Icons.email_outlined,
-                        keyboardType: TextInputType.emailAddress,
-                        validator: _validateEmail,
-                      ),
-                      const SizedBox(height: 14),
-                      _CustomerFormField(
                         controller: _notesCtrl,
                         label: 'ملاحظات (اختياري)',
                         hint: 'تفضيلات العميل، ملاحظات داخلية…',
                         icon: Icons.notes_outlined,
                         maxLines: 3,
                       ),
+                      const SizedBox(height: 14),
+                      _PriceListPicker(
+                        loading: _priceListsLoading,
+                        options: _priceListOptions,
+                        selectedId: _selectedPriceListId,
+                        onChanged: _saving
+                            ? null
+                            : (id) => setState(() => _selectedPriceListId = id),
+                      ),
+                      const SizedBox(height: 14),
+                      _buildDebtExceptionSection(cs),
+                      if (_isEdit && widget.existing!.id > 0 && _tenantId != null)
+                        ...[
+                          const SizedBox(height: 14),
+                          VerticalRegistry.instance.activeManifest
+                                  .buildCustomerExtensionSection(
+                                context: context,
+                                tenantId: _tenantId!,
+                                customerId: widget.existing!.id,
+                                customerName: _nameCtrl.text.trim().isEmpty
+                                    ? widget.existing!.name
+                                    : _nameCtrl.text.trim(),
+                                customerPhone: _phonesInOrder().isEmpty
+                                    ? widget.existing!.phone
+                                    : _phonesInOrder().first,
+                                onUpdated: () {
+                                  if (mounted) setState(() {});
+                                },
+                              ) ??
+                              const SizedBox.shrink(),
+                        ],
                     ],
                   ),
                 ),
@@ -347,18 +561,21 @@ class _CustomerFormScreenState extends State<CustomerFormScreen> {
                           onPressed: _saving
                               ? null
                               : () => Navigator.pop(context),
+                          style: TextButton.styleFrom(foregroundColor: cs.onSurface),
                           child: const Text('إلغاء'),
                         ),
                         const SizedBox(width: 8),
                         FilledButton(
                           onPressed: _saving ? null : _submit,
                           style: FilledButton.styleFrom(
+                            backgroundColor: AppColors.accentGold.withValues(alpha: 0.2),
+                            foregroundColor: AppColors.accentGold,
                             padding: const EdgeInsets.symmetric(
                               horizontal: 28,
                               vertical: 14,
                             ),
-                            shape: const RoundedRectangleBorder(
-                              borderRadius: AppShape.none,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
                             ),
                           ),
                           child: _saving
@@ -396,6 +613,8 @@ class _CustomerFormField extends StatelessWidget {
     this.validator,
     this.maxLines = 1,
     this.autofocus = false,
+    this.inputFormatters,
+    this.textDirection,
   });
 
   final TextEditingController controller;
@@ -406,6 +625,8 @@ class _CustomerFormField extends StatelessWidget {
   final String? Function(String?)? validator;
   final int maxLines;
   final bool autofocus;
+  final List<TextInputFormatter>? inputFormatters;
+  final TextDirection? textDirection;
 
   @override
   Widget build(BuildContext context) {
@@ -419,7 +640,7 @@ class _CustomerFormField extends StatelessWidget {
           style: TextStyle(
             fontSize: 13,
             fontWeight: FontWeight.w600,
-            color: cs.onSurface,
+            color: AppColors.accentGold,
           ),
         ),
         const SizedBox(height: 6),
@@ -429,6 +650,8 @@ class _CustomerFormField extends StatelessWidget {
           validator: validator,
           maxLines: maxLines,
           autofocus: autofocus,
+          inputFormatters: inputFormatters,
+          textDirection: textDirection,
           style: TextStyle(fontSize: 14, color: cs.onSurface),
           decoration: InputDecoration(
             hintText: hint,
@@ -437,7 +660,7 @@ class _CustomerFormField extends StatelessWidget {
               fontSize: 13,
             ),
             prefixIcon: icon != null
-                ? Icon(icon, size: 20, color: cs.onSurfaceVariant)
+                ? Icon(icon, size: 20, color: AppColors.accentGold)
                 : null,
             filled: true,
             fillColor: cs.surface,
@@ -446,21 +669,151 @@ class _CustomerFormField extends StatelessWidget {
               vertical: 12,
             ),
             border: OutlineInputBorder(
-              borderRadius: AppShape.none,
-              borderSide: BorderSide(color: outline.withValues(alpha: 0.55)),
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.5)),
             ),
             enabledBorder: OutlineInputBorder(
-              borderRadius: AppShape.none,
-              borderSide: BorderSide(color: outline.withValues(alpha: 0.55)),
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.5)),
             ),
             focusedBorder: OutlineInputBorder(
-              borderRadius: AppShape.none,
-              borderSide: BorderSide(color: cs.primary, width: 1.5),
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: AppColors.accentGold, width: 2),
             ),
-            errorBorder: const OutlineInputBorder(
-              borderRadius: AppShape.none,
-              borderSide: BorderSide(color: Colors.red, width: 1.2),
+            errorBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: Colors.red, width: 1.2),
             ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _PriceListPicker extends StatelessWidget {
+  const _PriceListPicker({
+    required this.loading,
+    required this.options,
+    required this.selectedId,
+    required this.onChanged,
+  });
+
+  final bool loading;
+  final List<Map<String, dynamic>> options;
+  final int? selectedId;
+  final ValueChanged<int?>? onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final outline = cs.outline;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'قائمة الأسعار للعميل (اختياري)',
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            color: AppColors.accentGold,
+          ),
+        ),
+        const SizedBox(height: 6),
+        if (loading)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+            decoration: BoxDecoration(
+              color: cs.surface,
+              border: Border.all(color: outline.withValues(alpha: 0.55)),
+              borderRadius: AppShape.none,
+            ),
+            child: Row(
+              children: [
+                const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+                const SizedBox(width: 10),
+                Text(
+                  'جاري تحميل القوائم…',
+                  style: TextStyle(
+                    color: cs.onSurfaceVariant,
+                    fontSize: 13,
+                  ),
+                ),
+              ],
+            ),
+          )
+        else
+          DropdownButtonFormField<int?>(
+            initialValue: selectedId,
+            isExpanded: true,
+            onChanged: onChanged,
+            dropdownColor: cs.surfaceContainerHighest,
+            decoration: InputDecoration(
+              prefixIcon: Icon(
+                Icons.price_change_outlined,
+                size: 20,
+                color: AppColors.accentGold,
+              ),
+              filled: true,
+              fillColor: cs.surface,
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 8,
+              ),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.5)),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.5)),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: AppColors.accentGold, width: 2),
+              ),
+            ),
+            items: [
+              const DropdownMenuItem<int?>(
+                value: null,
+                child: Text('استخدام الأسعار الافتراضية'),
+              ),
+              for (final l in options)
+                DropdownMenuItem<int?>(
+                  value: (l['id'] as num?)?.toInt(),
+                  child: Row(
+                    children: [
+                      if (((l['isDefault'] as int?) ?? 0) == 1)
+                        const Padding(
+                          padding: EdgeInsetsDirectional.only(end: 6),
+                          child: Icon(
+                            Icons.star_rounded,
+                            size: 16,
+                            color: AppColors.accentGold,
+                          ),
+                        ),
+                      Expanded(
+                        child: Text(
+                          (l['name'] as String?) ?? '—',
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+        const SizedBox(height: 4),
+        Text(
+          'عند ترك الخيار افتراضيًا، يطبَّق هرم الأسعار العام تلقائيًا في الفواتير.',
+          style: TextStyle(
+            fontSize: 11.5,
+            color: cs.onSurfaceVariant.withValues(alpha: 0.85),
           ),
         ),
       ],

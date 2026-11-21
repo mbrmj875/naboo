@@ -4,6 +4,7 @@ import 'cloud_sync_service.dart';
 import 'database_helper.dart';
 import 'product_variants_sql_ops.dart';
 import 'sync_queue_service.dart';
+import '../utils/app_logger.dart';
 import 'tenant_context_service.dart';
 
 class ProductVariantsRepository {
@@ -233,7 +234,14 @@ class ProductVariantsRepository {
             'updated_at': nowIso,
           },
         );
-      } catch (_) {}
+      } catch (e, st) {
+        AppLogger.error(
+          'ProductVariants',
+          'فشل طابور مزامنة متغير ملابس',
+          e,
+          st,
+        );
+      }
 
       return a;
     });

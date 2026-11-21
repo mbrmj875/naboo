@@ -10,18 +10,9 @@ import '../../widgets/barcode_input_launcher.dart';
 import '../../widgets/inputs/app_input.dart';
 import '../../widgets/permission_guard.dart';
 
-const _navy = Color(0xFF1E3A5F);
-const _teal = Color(0xFF0D9488);
-const _green = Color(0xFF16A34A);
-const _purple = Color(0xFFA855F7);
-const _blue = Color(0xFF3B82F6);
-const _greenStat = Color(0xFF22C55E);
-const _amber = Color(0xFFF59E0B);
-const _bg = Color(0xFFF1F5F9);
-const _card = Colors.white;
-const _border = Color(0xFFE2E8F0);
-const _t1 = Color(0xFF0F172A);
-const _t2 = Color(0xFF64748B);
+import '../../theme/design_tokens.dart';
+import '../../services/tenant_context_service.dart';
+
 const _red = Color(0xFFEF4444);
 
 /// فلتر/ترتيب عند النقر على بطاقة إحصائية.
@@ -215,7 +206,7 @@ class _WarehousesScreenState extends State<WarehousesScreen> {
     }
 
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(successMessage()), backgroundColor: _green),
+      SnackBar(content: Text(successMessage()), backgroundColor: AppColors.accentGold, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)), margin: const EdgeInsets.all(16), behavior: SnackBarBehavior.floating),
     );
   }
 
@@ -300,40 +291,46 @@ class _WarehousesScreenState extends State<WarehousesScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bg = isDark ? AppColors.primaryDark : const Color(0xFFF1F5F9);
+
     return PermissionGuard(
       permissionKey: PermissionKeys.inventoryView,
       child: Directionality(
         textDirection: TextDirection.rtl,
         child: Scaffold(
-          backgroundColor: _bg,
+          backgroundColor: bg,
           appBar: AppBar(
             title: const Text('المستودعات'),
-            backgroundColor: _navy,
-            foregroundColor: Colors.white,
+            backgroundColor: bg,
+            foregroundColor: cs.onSurface,
+            elevation: 0,
           ),
           floatingActionButton: FloatingActionButton.extended(
-            backgroundColor: _teal,
+            backgroundColor: AppColors.accentGold,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             onPressed: () => _openSheet(null),
-            icon: const Icon(Icons.add_rounded, color: Colors.white),
-            label: const Text(
+            icon: Icon(Icons.add_rounded, color: isDark ? AppColors.primaryDark : Colors.white),
+            label: Text(
               'مستودع جديد',
-              style: TextStyle(color: Colors.white),
+              style: TextStyle(color: isDark ? AppColors.primaryDark : Colors.white, fontWeight: FontWeight.bold),
             ),
           ),
           body: Column(
             children: [
               Container(
-                color: _navy,
+                color: bg,
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                 child: Row(
                   children: [
                     _StatSummaryCard(
-                      accent: _blue,
+                      accent: AppColors.accentGold,
                       label: 'القيمة الإجمالية',
                       selected: _statMode == _StatTapMode.byTotalValue,
                       onTap: () => _onStatCardTap(_StatTapMode.byTotalValue),
                       child: _loading
-                          ? const Text('—', style: _statValueStyle)
+                          ? Text('—', style: _statValueStyle(cs))
                           : TweenAnimationBuilder<double>(
                               duration: const Duration(milliseconds: 900),
                               curve: Curves.easeOutCubic,
@@ -342,19 +339,19 @@ class _WarehousesScreenState extends State<WarehousesScreen> {
                                 IraqiCurrencyFormat.formatCompactWarehouseValue(
                                   v,
                                 ),
-                                style: _statValueStyle,
+                                style: _statValueStyle(cs),
                                 textAlign: TextAlign.center,
                               ),
                             ),
                     ),
                     const SizedBox(width: 12),
                     _StatSummaryCard(
-                      accent: _greenStat,
+                      accent: AppColors.accentGold,
                       label: 'إجمالي الأصناف',
                       selected: _statMode == _StatTapMode.byTotalItems,
                       onTap: () => _onStatCardTap(_StatTapMode.byTotalItems),
                       child: _loading
-                          ? const Text('—', style: _statValueStyle)
+                          ? Text('—', style: _statValueStyle(cs))
                           : TweenAnimationBuilder<double>(
                               duration: const Duration(milliseconds: 900),
                               curve: Curves.easeOutCubic,
@@ -364,19 +361,19 @@ class _WarehousesScreenState extends State<WarehousesScreen> {
                               ),
                               builder: (_, v, __) => Text(
                                 IraqiCurrencyFormat.formatInt(v.round()),
-                                style: _statValueStyle,
+                                style: _statValueStyle(cs),
                                 textAlign: TextAlign.center,
                               ),
                             ),
                     ),
                     const SizedBox(width: 12),
                     _StatSummaryCard(
-                      accent: _purple,
+                      accent: AppColors.accentGold,
                       label: 'المستودعات',
                       selected: _statMode == _StatTapMode.none,
                       onTap: _clearStatSort,
                       child: _loading
-                          ? const Text('—', style: _statValueStyle)
+                          ? Text('—', style: _statValueStyle(cs))
                           : TweenAnimationBuilder<double>(
                               duration: const Duration(milliseconds: 900),
                               curve: Curves.easeOutCubic,
@@ -386,7 +383,7 @@ class _WarehousesScreenState extends State<WarehousesScreen> {
                               ),
                               builder: (_, v, __) => Text(
                                 IraqiCurrencyFormat.formatInt(v.round()),
-                                style: _statValueStyle,
+                                style: _statValueStyle(cs),
                                 textAlign: TextAlign.center,
                               ),
                             ),
@@ -420,17 +417,17 @@ class _WarehousesScreenState extends State<WarehousesScreen> {
                               )
                             : null,
                         border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(4),
+                          borderRadius: BorderRadius.circular(12),
                         ),
                         enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(4),
-                          borderSide: const BorderSide(color: _border),
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide(color: cs.outlineVariant),
                         ),
                         focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(4),
+                          borderRadius: BorderRadius.circular(12),
                           borderSide: const BorderSide(
-                            color: _navy,
-                            width: 1.4,
+                            color: AppColors.accentGold,
+                            width: 2.0,
                           ),
                         ),
                         prefixIcon: const Icon(Icons.search_rounded, size: 20),
@@ -478,8 +475,8 @@ class _WarehousesScreenState extends State<WarehousesScreen> {
   }
 }
 
-const TextStyle _statValueStyle = TextStyle(
-  color: Colors.white,
+TextStyle _statValueStyle(ColorScheme cs) => TextStyle(
+  color: cs.onSurface,
   fontSize: 14,
   fontWeight: FontWeight.bold,
 );
@@ -501,6 +498,7 @@ class _StatSummaryCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return Expanded(
       child: Material(
         color: Colors.transparent,
@@ -512,13 +510,13 @@ class _StatSummaryCard extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
             decoration: BoxDecoration(
               color: selected
-                  ? Colors.white.withValues(alpha: 0.2)
-                  : Colors.white.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(6),
+                  ? cs.surfaceContainerHighest.withValues(alpha: 0.35)
+                  : cs.surfaceContainerHighest.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(12),
               border: Border.all(
                 color: selected
                     ? accent.withValues(alpha: 0.95)
-                    : Colors.white24,
+                    : cs.outlineVariant.withValues(alpha: 0.5),
                 width: selected ? 1.5 : 1,
               ),
             ),
@@ -538,7 +536,7 @@ class _StatSummaryCard extends StatelessWidget {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       DefaultTextStyle(
-                        style: _statValueStyle,
+                        style: _statValueStyle(cs),
                         textAlign: TextAlign.center,
                         child: child,
                       ),
@@ -546,7 +544,7 @@ class _StatSummaryCard extends StatelessWidget {
                       Text(
                         label,
                         style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.82),
+                          color: cs.onSurfaceVariant,
                           fontSize: 11,
                         ),
                         textAlign: TextAlign.center,
@@ -579,7 +577,7 @@ class _EmptyWarehouseState extends StatelessWidget {
             Icon(
               Icons.warehouse_outlined,
               size: 72,
-              color: _t2.withValues(alpha: 0.6),
+              color: Theme.of(context).colorScheme.onSurfaceVariant.withValues(alpha: 0.6),
             ),
             const SizedBox(height: 16),
             Text(
@@ -587,19 +585,20 @@ class _EmptyWarehouseState extends StatelessWidget {
               style: TextStyle(
                 fontSize: 17,
                 fontWeight: FontWeight.w600,
-                color: _t1.withValues(alpha: 0.85),
+                color: Theme.of(context).colorScheme.onSurface,
               ),
             ),
             const SizedBox(height: 24),
             FilledButton.icon(
               onPressed: onCreate,
               style: FilledButton.styleFrom(
-                backgroundColor: _green,
-                foregroundColor: Colors.white,
+                backgroundColor: AppColors.accentGold,
+                foregroundColor: Theme.of(context).brightness == Brightness.dark ? AppColors.primaryDark : Colors.white,
                 padding: const EdgeInsets.symmetric(
                   horizontal: 24,
                   vertical: 14,
                 ),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               ),
               icon: const Icon(Icons.add_rounded),
               label: const Text('إنشاء أول مستودع'),
@@ -630,6 +629,7 @@ class _WarehouseCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     final isDefault = (data['isDefault'] as num? ?? 0) == 1;
     final isActive = (data['isActive'] as num? ?? 1) == 1;
     final whValue = (data['value'] as num?)?.toDouble() ?? 0;
@@ -639,12 +639,12 @@ class _WarehouseCard extends StatelessWidget {
       duration: const Duration(milliseconds: 400),
       curve: Curves.easeOut,
       decoration: BoxDecoration(
-        color: _card,
-        borderRadius: BorderRadius.circular(6),
+        color: cs.surface,
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(
           color: highlight
-              ? _green.withValues(alpha: 0.85)
-              : (isDefault ? _teal.withValues(alpha: 0.5) : _border),
+              ? AppColors.accentGold
+              : (isDefault ? AppColors.accentGold.withValues(alpha: 0.5) : cs.outlineVariant),
           width: highlight ? 2.2 : (isDefault ? 1.5 : 1),
         ),
         boxShadow: [
@@ -667,12 +667,12 @@ class _WarehouseCard extends StatelessWidget {
                   width: 48,
                   height: 48,
                   decoration: BoxDecoration(
-                    color: _teal.withValues(alpha: 0.1),
+                    color: AppColors.accentGold.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(6),
                   ),
                   child: const Icon(
                     Icons.warehouse_rounded,
-                    color: _teal,
+                    color: AppColors.accentGold,
                     size: 26,
                   ),
                 ),
@@ -686,18 +686,19 @@ class _WarehouseCard extends StatelessWidget {
                           Expanded(
                             child: Text(
                               data['name']?.toString() ?? '',
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 15,
                                 fontWeight: FontWeight.bold,
-                                color: _t1,
+                                color: cs.onSurface,
                               ),
                             ),
                           ),
-                          if (isDefault) _chip('افتراضي', _green),
+                          if (isDefault) _chip('افتراضي', AppColors.accentGold, cs),
                           const SizedBox(width: 6),
                           _chip(
                             isActive ? 'نشط' : 'معطّل',
-                            isActive ? _green : _t2,
+                            isActive ? Colors.green : cs.onSurfaceVariant,
+                            cs,
                           ),
                         ],
                       ),
@@ -706,16 +707,16 @@ class _WarehouseCard extends StatelessWidget {
                         data['code']?.toString().isNotEmpty == true
                             ? data['code'].toString()
                             : '—',
-                        style: const TextStyle(fontSize: 12, color: _t2),
+                        style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
                       ),
                       const SizedBox(height: 6),
                       Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Icon(
+                          Icon(
                             Icons.location_on_outlined,
                             size: 16,
-                            color: _t2,
+                            color: cs.onSurfaceVariant,
                           ),
                           const SizedBox(width: 4),
                           Expanded(
@@ -723,7 +724,7 @@ class _WarehouseCard extends StatelessWidget {
                               data['location']?.toString().isNotEmpty == true
                                   ? data['location'].toString()
                                   : '—',
-                              style: const TextStyle(fontSize: 12, color: _t2),
+                              style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
                             ),
@@ -736,7 +737,7 @@ class _WarehouseCard extends StatelessWidget {
               ],
             ),
           ),
-          const Divider(height: 1, color: _border),
+          Divider(height: 1, color: cs.outlineVariant),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
             child: Row(
@@ -777,7 +778,7 @@ class _WarehouseCard extends StatelessWidget {
               ],
             ),
           ),
-          const Divider(height: 1, color: _border),
+          Divider(height: 1, color: cs.outlineVariant),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
             child: Align(
@@ -790,14 +791,14 @@ class _WarehouseCard extends StatelessWidget {
                   style: TextStyle(fontSize: 12),
                 ),
                 style: OutlinedButton.styleFrom(
-                  foregroundColor: _teal,
-                  side: const BorderSide(color: _teal),
+                  foregroundColor: AppColors.accentGold,
+                  side: const BorderSide(color: AppColors.accentGold),
                   padding: const EdgeInsets.symmetric(
                     horizontal: 12,
                     vertical: 8,
                   ),
                   shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(4),
+                    borderRadius: BorderRadius.circular(12),
                   ),
                 ),
               ),
@@ -808,11 +809,11 @@ class _WarehouseCard extends StatelessWidget {
     );
   }
 
-  Widget _chip(String label, Color color) => Container(
+  Widget _chip(String label, Color color, ColorScheme cs) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
     decoration: BoxDecoration(
       color: color.withValues(alpha: 0.12),
-      borderRadius: BorderRadius.circular(4),
+      borderRadius: BorderRadius.circular(8),
       border: Border.all(color: color.withValues(alpha: 0.45)),
     ),
     child: Text(
@@ -835,21 +836,22 @@ class _InfoCell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(icon, size: 14, color: _t2),
+        Icon(icon, size: 14, color: cs.onSurfaceVariant),
         const SizedBox(width: 4),
         Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(label, style: const TextStyle(fontSize: 10, color: _t2)),
+            Text(label, style: TextStyle(fontSize: 10, color: cs.onSurfaceVariant)),
             Text(
               value,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.bold,
-                color: _t1,
+                color: cs.onSurface,
               ),
             ),
           ],
@@ -1218,6 +1220,9 @@ class _WarehouseSheetState extends State<_WarehouseSheet> {
 
     final branchWide = widget.branches.length > 5;
 
+    final cs = Theme.of(context).colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     final form = Form(
       key: _formKey,
       child: Column(
@@ -1229,7 +1234,7 @@ class _WarehouseSheetState extends State<_WarehouseSheet> {
               width: 40,
               height: 4,
               decoration: BoxDecoration(
-                color: Colors.grey.shade300,
+                color: cs.onSurfaceVariant.withValues(alpha: 0.5),
                 borderRadius: BorderRadius.circular(999),
               ),
             ),
@@ -1240,17 +1245,17 @@ class _WarehouseSheetState extends State<_WarehouseSheet> {
               Expanded(
                 child: Text(
                   isEdit ? 'تعديل المستودع' : 'مستودع جديد',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 17,
                     fontWeight: FontWeight.bold,
-                    color: _t1,
+                    color: cs.onSurface,
                   ),
                 ),
               ),
               IconButton(
                 tooltip: 'إغلاق',
                 onPressed: () => unawaited(_tryClose()),
-                icon: const Icon(Icons.close_rounded),
+                icon: Icon(Icons.close_rounded, color: cs.onSurfaceVariant),
               ),
             ],
           ),
@@ -1258,13 +1263,13 @@ class _WarehouseSheetState extends State<_WarehouseSheet> {
             Padding(
               padding: const EdgeInsets.only(bottom: 12),
               child: Material(
-                color: _blue.withValues(alpha: 0.08),
-                borderRadius: BorderRadius.circular(6),
-                child: const Padding(
-                  padding: EdgeInsets.all(10),
+                color: AppColors.accentGold.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(12),
+                child: Padding(
+                  padding: const EdgeInsets.all(10),
                   child: Text(
                     'تم تعيينه افتراضياً تلقائياً لأنه المستودع الأول',
-                    style: TextStyle(fontSize: 12, color: _blue),
+                    style: TextStyle(fontSize: 12, color: AppColors.accentGold),
                     textAlign: TextAlign.right,
                   ),
                 ),
@@ -1380,10 +1385,11 @@ class _WarehouseSheetState extends State<_WarehouseSheet> {
                     child: InputDecorator(
                       decoration: InputDecoration(
                         border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
                           borderSide: BorderSide(
                             color: _branchSelectError != null
-                                ? Theme.of(context).colorScheme.error
-                                : Colors.grey.shade400,
+                                ? cs.error
+                                : cs.outlineVariant,
                           ),
                         ),
                         contentPadding: const EdgeInsets.symmetric(
@@ -1393,15 +1399,15 @@ class _WarehouseSheetState extends State<_WarehouseSheet> {
                       ),
                       child: Row(
                         children: [
-                          const Icon(Icons.account_tree_outlined, color: _t2),
+                          Icon(Icons.account_tree_outlined, color: cs.onSurfaceVariant),
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text(
                               _branchLabel(),
-                              style: const TextStyle(fontSize: 14),
+                              style: TextStyle(fontSize: 14, color: cs.onSurface),
                             ),
                           ),
-                          const Icon(Icons.arrow_drop_down_rounded),
+                          Icon(Icons.arrow_drop_down_rounded, color: cs.onSurfaceVariant),
                         ],
                       ),
                     ),
@@ -1451,7 +1457,7 @@ class _WarehouseSheetState extends State<_WarehouseSheet> {
             children: [
               Switch(
                 value: _active,
-                activeThumbColor: _teal,
+                activeThumbColor: AppColors.accentGold,
                 onChanged: (v) {
                   setState(() {
                     _active = v;
@@ -1459,22 +1465,22 @@ class _WarehouseSheetState extends State<_WarehouseSheet> {
                   });
                 },
               ),
-              const Expanded(
+              Expanded(
                 child: Text(
                   'مستودع نشط',
                   textAlign: TextAlign.end,
-                  style: TextStyle(fontSize: 14, color: _t1),
+                  style: TextStyle(fontSize: 14, color: cs.onSurface),
                 ),
               ),
             ],
           ),
           if (!_active) ...[
             const SizedBox(height: 6),
-            const Align(
+            Align(
               alignment: AlignmentDirectional.centerStart,
               child: Text(
                 'المستودع المعطّل لن يظهر في عمليات البيع والشراء',
-                style: TextStyle(fontSize: 12, color: _amber),
+                style: TextStyle(fontSize: 12, color: Colors.amber.shade700),
               ),
             ),
           ],
@@ -1484,60 +1490,60 @@ class _WarehouseSheetState extends State<_WarehouseSheet> {
             children: [
               Switch(
                 value: _isDefault && _active,
-                activeThumbColor: _teal,
+                activeThumbColor: AppColors.accentGold,
                 onChanged: !_active
                     ? null
                     : (v) => unawaited(_onDefaultToggleRequest(v)),
               ),
-              const Expanded(
+              Expanded(
                 child: Text(
                   'افتراضي',
                   textAlign: TextAlign.end,
-                  style: TextStyle(fontSize: 14, color: _t1),
+                  style: TextStyle(fontSize: 14, color: cs.onSurface),
                 ),
               ),
             ],
           ),
           const SizedBox(height: 20),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton(
-              onPressed: (_submitting || _name.text.trim().isEmpty)
-                  ? null
-                  : () => unawaited(_submit()),
-              style: FilledButton.styleFrom(
-                backgroundColor: _green,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(6),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                onPressed: (_submitting || _name.text.trim().isEmpty)
+                    ? null
+                    : () => unawaited(_submit()),
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppColors.accentGold,
+                  foregroundColor: isDark ? AppColors.primaryDark : Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
                 ),
-              ),
-              child: _submitting
-                  ? Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
+                child: _submitting
+                    ? Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: isDark ? AppColors.primaryDark : Colors.white,
+                            ),
                           ),
+                          const SizedBox(width: 10),
+                          Text(isEdit ? 'جاري الحفظ...' : 'جارٍ الإنشاء...'),
+                        ],
+                      )
+                    : Text(
+                        isEdit ? 'حفظ التعديلات' : 'إنشاء المستودع',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 15,
                         ),
-                        const SizedBox(width: 10),
-                        Text(isEdit ? 'جاري الحفظ...' : 'جارٍ الإنشاء...'),
-                      ],
-                    )
-                  : Text(
-                      isEdit ? 'حفظ التعديلات' : 'إنشاء المستودع',
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 15,
                       ),
-                    ),
+              ),
             ),
-          ),
         ],
       ),
     );
@@ -1562,9 +1568,9 @@ class _WarehouseSheetState extends State<_WarehouseSheet> {
           child: Focus(
             autofocus: false,
             child: Container(
-              decoration: const BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
+              decoration: BoxDecoration(
+                color: cs.surface,
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
               ),
               padding: EdgeInsets.fromLTRB(
                 20,
@@ -1703,12 +1709,15 @@ class _StockDetailSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     final repo = InventoryRepository();
     final warehouseId = (warehouse['id'] as num?)?.toInt() ?? -1;
+    final cs = Theme.of(context).colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     return Directionality(
       textDirection: TextDirection.rtl,
       child: Container(
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
+        decoration: BoxDecoration(
+          color: cs.surface,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -1719,7 +1728,7 @@ class _StockDetailSheet extends StatelessWidget {
                 width: 40,
                 height: 4,
                 decoration: BoxDecoration(
-                  color: Colors.grey.shade300,
+                  color: cs.onSurfaceVariant.withValues(alpha: 0.5),
                   borderRadius: BorderRadius.circular(4),
                 ),
               ),
@@ -1728,22 +1737,22 @@ class _StockDetailSheet extends StatelessWidget {
               padding: const EdgeInsets.all(16),
               child: Row(
                 children: [
-                  const Icon(Icons.warehouse_rounded, color: _teal, size: 22),
+                  const Icon(Icons.warehouse_rounded, color: AppColors.accentGold, size: 22),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
                       'مخزون ${warehouse['name']}',
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.bold,
-                        color: _t1,
+                        color: cs.onSurface,
                       ),
                     ),
                   ),
                 ],
               ),
             ),
-            const Divider(height: 1, color: _border),
+            Divider(height: 1, color: cs.outlineVariant),
             SizedBox(
               height: 300,
               child: FutureBuilder<List<Map<String, dynamic>>>(
@@ -1761,12 +1770,12 @@ class _StockDetailSheet extends StatelessWidget {
                   return ListView.separated(
                     itemCount: rows.length,
                     separatorBuilder: (_, __) =>
-                        const Divider(height: 1, color: _border),
+                        Divider(height: 1, color: cs.outlineVariant),
                     itemBuilder: (_, i) {
                       final row = rows[i];
                       final qty = (row['qty'] as num?)?.toDouble() ?? 0.0;
                       final statusColor = qty <= 0
-                          ? _red
+                          ? cs.error
                           : qty < 5
                           ? Colors.orange
                           : Colors.green;

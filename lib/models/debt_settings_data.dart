@@ -1,4 +1,5 @@
 import 'dart:convert';
+import '../utils/app_logger.dart';
 
 /// إعدادات حدود بيع «دين / آجل» — صف واحد JSON في [debt_settings].
 class DebtSettingsData {
@@ -8,7 +9,11 @@ class DebtSettingsData {
     required this.warnDebtAgeDays,
     required this.enforceCustomerCapAtSale,
     required this.enforceSingleInvoiceCapAtSale,
+    this.paymentPeriodDays = defaultPaymentPeriodDays,
+    this.reminderMode = DebtReminderMode.manual,
   });
+
+  static const int defaultPaymentPeriodDays = 30;
 
   /// 0 = بدون حد: أقصى مجموع «متبقي آجل» لكل عميل (معرّف) عبر كل فواتير الدين المفتوحة.
   final double maxTotalOpenDebtPerCustomer;
@@ -25,6 +30,13 @@ class DebtSettingsData {
   /// عند التفعيل: يمنع الحفظ إذا تجاوز متبقي هذه الفاتورة [maxOpenRemainingPerInvoice].
   final bool enforceSingleInvoiceCapAtSale;
 
+  /// 0 = بلا فترة: كل دين أقدم من هذه الأيام «متأخر»، وصاحبه لا يأخذ ديناً
+  /// جديداً إلا برمز المالك (البيع نقداً مسموح دائماً).
+  final int paymentPeriodDays;
+
+  /// طريقة تذكير العميل بدينه.
+  final DebtReminderMode reminderMode;
+
   factory DebtSettingsData.defaults() => const DebtSettingsData(
         maxTotalOpenDebtPerCustomer: 0,
         maxOpenRemainingPerInvoice: 0,
@@ -39,6 +51,8 @@ class DebtSettingsData {
         'warnDebtAgeDays': warnDebtAgeDays,
         'enforceCustomerCapAtSale': enforceCustomerCapAtSale,
         'enforceSingleInvoiceCapAtSale': enforceSingleInvoiceCapAtSale,
+        'paymentPeriodDays': paymentPeriodDays,
+        'reminderMode': reminderMode.name,
       };
 
   factory DebtSettingsData.fromJson(Map<String, dynamic> m) {
@@ -60,6 +74,10 @@ class DebtSettingsData {
       enforceSingleInvoiceCapAtSale:
           m['enforceSingleInvoiceCapAtSale'] as bool? ??
               d.enforceSingleInvoiceCapAtSale,
+      paymentPeriodDays:
+          (m['paymentPeriodDays'] as num?)?.toInt().clamp(0, 3650) ??
+              d.paymentPeriodDays,
+      reminderMode: DebtReminderMode.parse(m['reminderMode']),
     );
   }
 
@@ -70,7 +88,13 @@ class DebtSettingsData {
     try {
       final m = jsonDecode(raw) as Map<String, dynamic>;
       return DebtSettingsData.fromJson(m);
-    } catch (_) {
+    } catch (e, st) {
+      AppLogger.error(
+        'DebtSettingsData',
+        'تعذر فك JSON إعدادات الدين',
+        e,
+        st,
+      );
       return DebtSettingsData.defaults();
     }
   }
@@ -83,6 +107,8 @@ class DebtSettingsData {
     int? warnDebtAgeDays,
     bool? enforceCustomerCapAtSale,
     bool? enforceSingleInvoiceCapAtSale,
+    int? paymentPeriodDays,
+    DebtReminderMode? reminderMode,
   }) {
     return DebtSettingsData(
       maxTotalOpenDebtPerCustomer: maxTotalOpenDebtPerCustomer ??
@@ -94,6 +120,33 @@ class DebtSettingsData {
           enforceCustomerCapAtSale ?? this.enforceCustomerCapAtSale,
       enforceSingleInvoiceCapAtSale: enforceSingleInvoiceCapAtSale ??
           this.enforceSingleInvoiceCapAtSale,
+      paymentPeriodDays: paymentPeriodDays ?? this.paymentPeriodDays,
+      reminderMode: reminderMode ?? this.reminderMode,
     );
+  }
+}
+
+/// طريقة تذكير العميل بدينه.
+enum DebtReminderMode {
+  /// الموظف يرسل التذكير بنفسه من صفحة الديون.
+  manual('يدوي'),
+
+  /// يُرسل التذكير تلقائياً عند تأخر الدين.
+  auto('تلقائي'),
+
+  /// تلقائي، مع زر الإرسال اليدوي.
+  both('الاثنان'),
+
+  /// لا تذكير.
+  none('بلا تذكير');
+
+  const DebtReminderMode(this.label);
+  final String label;
+
+  static DebtReminderMode parse(Object? raw) {
+    for (final m in values) {
+      if (m.name == raw) return m;
+    }
+    return DebtReminderMode.manual;
   }
 }

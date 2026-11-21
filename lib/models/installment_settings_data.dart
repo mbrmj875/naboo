@@ -1,4 +1,5 @@
 import 'dart:convert';
+import '../utils/app_logger.dart';
 
 /// إعدادات عامة لبيع التقسيط وتواريخ الأقساط — تُخزَّن في جدول `installment_settings` (صف واحد JSON).
 class InstallmentSettingsData {
@@ -102,7 +103,13 @@ class InstallmentSettingsData {
     try {
       final m = jsonDecode(raw) as Map<String, dynamic>;
       return InstallmentSettingsData.fromJson(m);
-    } catch (_) {
+    } catch (e, st) {
+      AppLogger.error(
+        'InstallmentSettingsData',
+        'تعذر فك JSON إعدادات التقسيط',
+        e,
+        st,
+      );
       return InstallmentSettingsData.defaults();
     }
   }

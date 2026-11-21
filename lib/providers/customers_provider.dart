@@ -13,9 +13,22 @@ class CustomersProvider extends ChangeNotifier {
   final List<CustomerRecord> _items = <CustomerRecord>[];
   List<CustomerRecord> get items => List.unmodifiable(_items);
 
-  Map<int, ({int creditInvoices, int installmentPlans})> _financeById = {};
-  Map<int, ({int creditInvoices, int installmentPlans})> get financeById =>
-      _financeById;
+  Map<int, ({int creditInvoices, int installmentPlans, int openRemainingFils})>
+      _financeById = {};
+  Map<int, ({int creditInvoices, int installmentPlans, int openRemainingFils})>
+      get financeById => _financeById;
+
+  /// عملاء لديهم فاتورة آجل مفتوحة (لشريط «عليهم دين»).
+  Set<int> _openDebtIds = {};
+  Set<int> get openDebtIds => _openDebtIds;
+
+  /// قائمة المدينين الكاملة (آجل مفتوح) — مستقلة عن صفحة «الكل».
+  final List<CustomerRecord> _debtorItems = <CustomerRecord>[];
+  List<CustomerRecord> get debtorItems => List.unmodifiable(_debtorItems);
+
+  bool _debtorsLoaded = false;
+  bool _isLoadingDebtors = false;
+  bool get isLoadingDebtors => _isLoadingDebtors;
 
   /// إجمالي العملاء في القاعدة (بدون فلترة نصّية).
   int _totalCustomersInDb = 0;
@@ -47,6 +60,7 @@ class CustomersProvider extends ChangeNotifier {
   bool get hasMore => _hasMore;
 
   int _offset = 0;
+  int _loadGeneration = 0;
 
   String _query = '';
   String _idQuery = '';
@@ -70,18 +84,19 @@ class CustomersProvider extends ChangeNotifier {
     _idQuery = iq;
     _status = statusArabic;
     _sortKey = sortKey;
-    await refresh();
+    // بحث هادئ: أبقِ القائمة الظاهرة حتى تصل النتائج الجديدة.
+    await refresh(quiet: true);
   }
 
-  Future<void> refresh() async {
-    if (_isLoading) return;
-    _isLoading = true;
-    notifyListeners();
+  /// [quiet]: لا تُفرغ القائمة ولا تُظهر مؤشر تحميل كامل — مناسب للكتابة في البحث.
+  Future<void> refresh({bool quiet = false}) async {
+    final gen = ++_loadGeneration;
+    final showFullLoading = !quiet && _items.isEmpty;
+    if (showFullLoading) {
+      _isLoading = true;
+      notifyListeners();
+    }
     try {
-      _items.clear();
-      _offset = 0;
-      _hasMore = true;
-
       final results = await Future.wait<Object>([
         _db.countCustomersTotal(),
         _db.getCustomerTabCountsRaw(),
@@ -100,6 +115,8 @@ class CustomersProvider extends ChangeNotifier {
         ),
       ]);
 
+      if (gen != _loadGeneration) return;
+
       _totalCustomersInDb = results[0] as int;
       _tabCounts = results[1]
           as ({
@@ -111,7 +128,9 @@ class CustomersProvider extends ChangeNotifier {
       _matchingCount = results[2] as int;
       final rows = results[3] as List<Map<String, dynamic>>;
       final list = rows.map(CustomerRecord.fromMap).toList();
-      _items.addAll(list);
+      _items
+        ..clear()
+        ..addAll(list);
       _offset = list.length;
       _hasMore = list.length >= _pageSize;
 
@@ -120,11 +139,64 @@ class CustomersProvider extends ChangeNotifier {
       } else {
         _financeById =
             await _db.getCustomerFinanceCountsBatch(list.map((e) => e.id));
+        if (gen != _loadGeneration) return;
+      }
+      _openDebtIds = await _db.listCustomerIdsWithOpenDebt();
+      if (gen != _loadGeneration) return;
+      // أعد تحميل قائمة المدينين إن كانت معروضة سابقاً حتى تبقى متزامنة.
+      if (_debtorsLoaded) {
+        await _reloadDebtors(gen);
       }
     } finally {
-      _isLoading = false;
-      lastRefreshedAt = DateTime.now();
-      notifyListeners();
+      if (gen == _loadGeneration) {
+        _isLoading = false;
+        lastRefreshedAt = DateTime.now();
+        notifyListeners();
+      }
+    }
+  }
+
+  /// يحمّل كل العملاء الذين عليهم آجل مفتوح (ليس فقط من الصفحة الحالية).
+  Future<void> ensureDebtorsLoaded({bool force = false}) async {
+    if (_isLoadingDebtors) return;
+    if (_debtorsLoaded && !force) return;
+    final gen = _loadGeneration;
+    _isLoadingDebtors = true;
+    notifyListeners();
+    try {
+      _openDebtIds = await _db.listCustomerIdsWithOpenDebt();
+      if (gen != _loadGeneration) return;
+      await _reloadDebtors(gen);
+      if (gen != _loadGeneration) return;
+      _debtorsLoaded = true;
+    } finally {
+      if (gen == _loadGeneration) {
+        _isLoadingDebtors = false;
+        notifyListeners();
+      }
+    }
+  }
+
+  Future<void> _reloadDebtors(int gen) async {
+    final ids = _openDebtIds;
+    if (ids.isEmpty) {
+      _debtorItems.clear();
+      return;
+    }
+    final rows = await _db.getCustomersByIds(
+      ids,
+      sortKey: _sortKey == 'balance_desc' ? 'balance_desc' : 'name_asc',
+    );
+    if (gen != _loadGeneration) return;
+    final list = rows.map(CustomerRecord.fromMap).toList();
+    _debtorItems
+      ..clear()
+      ..addAll(list);
+    if (list.isNotEmpty) {
+      final fin =
+          await _db.getCustomerFinanceCountsBatch(list.map((e) => e.id));
+      if (gen != _loadGeneration) return;
+      _financeById = {..._financeById, ...fin};
     }
   }
 
@@ -132,6 +204,7 @@ class CustomersProvider extends ChangeNotifier {
     if (_isLoading || _isLoadingMore || !_hasMore) return;
     _isLoadingMore = true;
     notifyListeners();
+    final gen = _loadGeneration;
     try {
       final rows = await _db.queryCustomersPage(
         query: _query,
@@ -141,6 +214,7 @@ class CustomersProvider extends ChangeNotifier {
         offset: _offset,
         idQuery: _idQuery,
       );
+      if (gen != _loadGeneration) return;
       final list = rows.map(CustomerRecord.fromMap).toList();
       _items.addAll(list);
       _offset += list.length;
@@ -149,15 +223,19 @@ class CustomersProvider extends ChangeNotifier {
       if (list.isNotEmpty) {
         final fin =
             await _db.getCustomerFinanceCountsBatch(list.map((e) => e.id));
+        if (gen != _loadGeneration) return;
         _financeById = {..._financeById, ...fin};
       }
     } finally {
-      _isLoadingMore = false;
-      notifyListeners();
+      if (gen == _loadGeneration) {
+        _isLoadingMore = false;
+        notifyListeners();
+      }
     }
   }
 
   void onCustomerChanged() {
+    _debtorsLoaded = false;
     unawaited(refresh());
   }
 }

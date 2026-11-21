@@ -1,20 +1,34 @@
 import 'dart:async' show unawaited;
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 import 'package:provider/provider.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../models/invoice.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/invoice_provider.dart';
 import '../../providers/notification_provider.dart';
 import '../../providers/product_provider.dart';
+import '../../providers/shift_provider.dart';
+import '../../owner/services/business_audit_log_service.dart';
+import '../../printing/receipt_builders.dart';
+import '../../printing/receipt_printer.dart';
 import '../../services/database_helper.dart';
+import '../../services/permission_service.dart';
+import '../../services/returns/return_approval.dart';
+import '../../services/returns/return_claim_service.dart';
+import '../../services/returns/return_guard.dart';
+import '../../services/returns/return_meta.dart';
+import '../../services/store_policy_settings_repository.dart';
+import '../../widgets/returns/return_approval_dialog.dart';
 import '../../theme/app_corner_style.dart';
 import '../../theme/design_tokens.dart';
 import '../../utils/invoice_barcode.dart';
 import '../../utils/iraqi_currency_format.dart';
 import '../../utils/screen_layout.dart';
+import '../../utils/shift_actor_conflict_guard.dart';
 
 /// واجهة مرتجع مخصّصة: قائمة منتجات فقط + ملخص مالي يظهر عند اختيار الكميات.
 /// الربط الصريح: [Invoice.originalInvoiceId] = رقم الفاتورة الأصلية المفتوحة.
@@ -23,14 +37,18 @@ class ProcessReturnScreen extends StatefulWidget {
     super.key,
     this.originalInvoice,
     this.invoiceId,
+    this.legacyReceipt = false,
   }) : assert(
-          originalInvoice != null || invoiceId != null,
-          'مرّر originalInvoice أو invoiceId',
-        );
+         originalInvoice != null || invoiceId != null,
+         'مرّر originalInvoice أو invoiceId',
+       );
 
   /// إن وُجدت تُستخدم مباشرة (بدون طلب شبكة).
   final Invoice? originalInvoice;
   final int? invoiceId;
+
+  /// فُتحت من رمز قديم بلا معرّف عالمي (أو باركود INV): تحتاج موافقة دائماً.
+  final bool legacyReceipt;
 
   @override
   State<ProcessReturnScreen> createState() => _ProcessReturnScreenState();
@@ -121,8 +139,7 @@ class _ProcessReturnScreenState extends State<ProcessReturnScreen> {
           inv.type == InvoiceType.supplierPayment) {
         setState(() {
           _loading = false;
-          _loadError =
-              'سندات القبض أو دفع المورد لا تُعالج من شاشة المرتجع.';
+          _loadError = 'سندات القبض أو دفع المورد لا تُعالج من شاشة المرتجع.';
         });
         return;
       }
@@ -133,7 +150,9 @@ class _ProcessReturnScreenState extends State<ProcessReturnScreen> {
         try {
           final full = await _db.getInvoiceById(inv.id!);
           if (full != null) inv = full;
-        } catch (_) {/* نُكمل بالـ inv الفارغ ونظهر الحالة الفارغة */}
+        } catch (_) {
+          /* نُكمل بالـ inv الفارغ ونظهر الحالة الفارغة */
+        }
       }
       await _applyInvoice(inv);
       setState(() => _loading = false);
@@ -169,8 +188,7 @@ class _ProcessReturnScreenState extends State<ProcessReturnScreen> {
           inv.type == InvoiceType.supplierPayment) {
         setState(() {
           _loading = false;
-          _loadError =
-              'سندات القبض أو دفع المورد لا تُعالج من شاشة المرتجع.';
+          _loadError = 'سندات القبض أو دفع المورد لا تُعالج من شاشة المرتجع.';
         });
         return;
       }
@@ -188,7 +206,11 @@ class _ProcessReturnScreenState extends State<ProcessReturnScreen> {
   Future<void> _applyInvoice(Invoice inv) async {
     _original = inv;
     _lines.clear();
-    final pids = inv.items.map((e) => e.productId).whereType<int>().toSet().toList();
+    final pids = inv.items
+        .map((e) => e.productId)
+        .whereType<int>()
+        .toSet()
+        .toList();
     final kindByPid = <int, int>{};
     final db = await _db.database;
     if (pids.isNotEmpty) {
@@ -218,9 +240,12 @@ class _ProcessReturnScreenState extends State<ProcessReturnScreen> {
                ii.enteredQty AS qty
         FROM invoice_items ii
         INNER JOIN invoices inv ON inv.id = ii.invoiceId
-        WHERE inv.originalInvoiceId = ? AND inv.isReturned = 1
+        WHERE inv.isReturned = 1 AND inv.deleted_at IS NULL
+          AND inv.tenantId = (SELECT tenantId FROM invoices WHERE id = ?)
+          AND (inv.originalInvoiceId = ?
+               OR (? != '' AND lower(inv.originalInvoiceGlobalId) = ?))
         ''',
-        [inv.id],
+        [inv.id, inv.id, _gidOf(inv), _gidOf(inv)],
       );
       for (final r in retRows) {
         final qty = (r['qty'] as num?)?.toDouble() ?? 0.0;
@@ -232,8 +257,7 @@ class _ProcessReturnScreenState extends State<ProcessReturnScreen> {
           final name = (r['name'] as String?) ?? '';
           final price = (r['price'] as num?)?.toDouble() ?? 0.0;
           final key = '$name|${price.toStringAsFixed(4)}';
-          returnedByNamePrice[key] =
-              (returnedByNamePrice[key] ?? 0) + qty;
+          returnedByNamePrice[key] = (returnedByNamePrice[key] ?? 0) + qty;
         }
       }
     }
@@ -260,10 +284,12 @@ class _ProcessReturnScreenState extends State<ProcessReturnScreen> {
     }
   }
 
+  static String _gidOf(Invoice? i) => (i?.globalId ?? '').trim().toLowerCase();
+
   double get _origLineSubtotal => _original!.items.fold<double>(
-        0,
-        (s, e) => s + e.enteredQtyResolved * e.price,
-      );
+    0,
+    (s, e) => s + e.enteredQtyResolved * e.price,
+  );
 
   /// مجموع أسطر الإرجاع الحالية (قبل خصم/ضريبة الفاتورة).
   double get _returnLinesGross {
@@ -321,7 +347,7 @@ class _ProcessReturnScreenState extends State<ProcessReturnScreen> {
       case InvoiceType.installment:
         return 'يُحدَّث إجمالي خطة التقسيط المرتبطة بهذه الفاتورة؛ ويُسجَّل خروج نقدي إن وُجد مقدم يُسترد.';
       case InvoiceType.credit:
-        return 'يُسجَّل المرتجع كفاتورة مرتبطة بالأصل؛ راجع قائمة الفواتير لحالة الدين.';
+        return 'يُخصم المبلغ من دين الفاتورة الأصلية ولا يُصرف نقداً.';
       case InvoiceType.supplierPayment:
         return 'لا يُستعمل لهذا النوع.';
     }
@@ -333,6 +359,20 @@ class _ProcessReturnScreenState extends State<ProcessReturnScreen> {
     if (_refundTotal <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('اختر كمية إرجاع واحدة على الأقل')),
+      );
+      return;
+    }
+    final conflict = ShiftActorConflictGuard.evaluate(
+      sessionUserId: context.read<AuthProvider>().userId,
+      activeShift: context.read<ShiftProvider>().activeShift,
+    );
+    if (conflict.hasConflict) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'لا يمكن تسجيل المرتجع من هذه الجلسة: الوردية المفتوحة باسم ${conflict.shiftStaffName}.',
+          ),
+        ),
       );
       return;
     }
@@ -351,7 +391,10 @@ class _ProcessReturnScreenState extends State<ProcessReturnScreen> {
             ? 'pid:${orig.productId}'
             : 'name:${orig.productName}|${orig.price.toStringAsFixed(4)}';
         final freshAlready = fresh[key] ?? 0.0;
-        final freshMax = (l.soldEnteredQty - freshAlready).clamp(0.0, double.infinity);
+        final freshMax = (l.soldEnteredQty - freshAlready).clamp(
+          0.0,
+          double.infinity,
+        );
         if (l.returnEnteredQty > freshMax + 1e-6) {
           if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(
@@ -371,6 +414,10 @@ class _ProcessReturnScreenState extends State<ProcessReturnScreen> {
       // إن فشل الاستعلام (خلل DB نادر) نسمح بالاستمرار اعتماداً على Clamp الـ UI
       // — لا نحبس المستخدم بسبب خطأ تحقق ثانوي.
     }
+
+    if (!mounted) return;
+    final protection = await _runReturnProtection(o);
+    if (protection == null || !mounted) return;
 
     final staff = context.read<AuthProvider>().username.trim();
     final items = <InvoiceItem>[];
@@ -399,11 +446,14 @@ class _ProcessReturnScreenState extends State<ProcessReturnScreen> {
     final disc = _discountReturn;
     final tax = _taxReturn;
     final total = _refundTotal;
-    final adv = (o.type == InvoiceType.installment || o.type == InvoiceType.credit)
-        ? total
-        : 0.0;
+    // الآجل: لا يُصرف نقداً — المرتجع بلا دفعة، ويُخصم المبلغ من دين الأصل بعد الحفظ.
+    final adv = o.type == InvoiceType.installment ? total : 0.0;
 
     final ret = Invoice(
+      presetGlobalId: protection.returnGlobalId,
+      originalInvoiceGlobalId: _gidOf(o),
+      returnReason: protection.reason,
+      returnMeta: protection.meta.encode(),
       customerName: o.customerName,
       date: DateTime.now(),
       type: o.type,
@@ -417,11 +467,71 @@ class _ProcessReturnScreenState extends State<ProcessReturnScreen> {
       deliveryAddress: o.deliveryAddress,
       createdByUserName: staff.isEmpty ? o.createdByUserName : staff,
       discountPercent: o.discountPercent,
+      customerId: o.customerId,
     );
 
+    // مطالبة الخادم: لا استرجاع بلا إنترنت، ولا تجاوز للمباع من أي جهاز.
+    final claimed = await _claimOnServer(o, protection, total);
+    if (!claimed || !mounted) return;
+    if (protection.approval != null &&
+        !protection.approval!.consume(_approvalKey(o), total)) {
+      unawaited(ReturnClaimService.voidClaim(protection.returnGlobalId));
+      _snack('تغيّر المبلغ بعد الموافقة. أعد المحاولة لطلب موافقة جديدة.');
+      return;
+    }
+
+    final auth = context.read<AuthProvider>();
+    final invoices = context.read<InvoiceProvider>();
+    final int newId;
     try {
-      final newId =
-          await context.read<InvoiceProvider>().addInvoice(ret);
+      newId = await invoices.addInvoice(ret);
+    } catch (e) {
+      // الحفظ فشل بعد المطالبة: حرّر المواد في الخادم.
+      unawaited(ReturnClaimService.voidClaim(protection.returnGlobalId));
+      unawaited(
+        BusinessAuditLogService.instance.record(
+          eventType: 'return_cancelled',
+          entityType: 'invoice_return',
+          entityId: protection.returnGlobalId,
+          newValueJson: jsonEncode({
+            'cause': 'local_save_failed',
+            'error': '$e',
+          }),
+          userId: auth.userId,
+          username: auth.displayName,
+        ),
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('تعذر الحفظ: $e')));
+      return;
+    }
+
+    // المرتجع محفوظ: لا تُلغى المطالبة بعد هذه النقطة مهما حدث.
+    try {
+      unawaited(
+        BusinessAuditLogService.instance.record(
+          eventType: 'return_completed',
+          entityType: 'invoice_return',
+          entityId: protection.returnGlobalId,
+          oldValueJson: jsonEncode({
+            'originalInvoiceId': o.id,
+            'originalGlobalId': _gidOf(o),
+          }),
+          newValueJson: jsonEncode({
+            'returnInvoiceId': newId,
+            'amount': total,
+            'reason': protection.reason,
+            'approver': protection.meta.approver,
+            'legacy': protection.meta.legacyReceipt,
+            'outsideWindow': protection.meta.outsideWindow,
+          }),
+          userId: auth.userId,
+          username: auth.displayName,
+        ),
+      );
+      // الآجل: خصم المرتجع من دين الأصل يتم داخل معاملة حفظ المرتجع نفسها.
       if (o.type == InvoiceType.installment) {
         await _db.applyInstallmentAdjustmentAfterReturn(
           originalInvoiceId: o.id!,
@@ -441,18 +551,200 @@ class _ProcessReturnScreenState extends State<ProcessReturnScreen> {
           duration: const Duration(seconds: 5),
         ),
       );
+      unawaited(ReceiptPrinter.autoPrintAfterSave(context, invoiceId: newId));
       Navigator.of(context).pop(true);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('تعذر الحفظ: $e')),
+        SnackBar(
+          content: Text(
+            'حُفظ المرتجع #$newId، لكن تعذر إكمال خطوة لاحقة: $e — راجع الفاتورة.',
+          ),
+          duration: const Duration(seconds: 8),
+        ),
       );
     }
   }
 
+  void _snack(String msg, {bool error = true}) {
+    if (!mounted) return;
+    final cs = Theme.of(context).colorScheme;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        backgroundColor: error ? cs.error : null,
+        duration: const Duration(seconds: 6),
+      ),
+    );
+  }
+
+  String _approvalKey(Invoice o) =>
+      _gidOf(o).isNotEmpty ? _gidOf(o) : 'local:${o.id}';
+
+  /// السبب والتأكيد، ثم قرار السياسة، ثم الموافقة إن لزمت.
+  /// يعيد `null` عند المنع أو الإلغاء (مع رسالة).
+  Future<_ReturnProtection?> _runReturnProtection(Invoice o) async {
+    final auth = context.read<AuthProvider>();
+    final activeShift = context.read<ShiftProvider>().activeShift;
+    final policy =
+        (await StorePolicySettingsRepository.instance.load()).returns;
+    final elevated = await PermissionService.instance
+        .hasElevatedAccessForSession(
+          sessionUserId: auth.userId,
+          sessionRoleKey: auth.roleKey,
+          activeShift: activeShift,
+        );
+    final legacy = widget.legacyReceipt || _gidOf(o).isEmpty;
+    final decision = ReturnGuard.evaluate(
+      policy: policy,
+      invoiceDate: o.date,
+      now: DateTime.now(),
+      legacy: legacy,
+      fullyReturned:
+          _lines.isNotEmpty && _lines.every((l) => l.isFullyReturned),
+      isOwner: auth.isOwner,
+      elevated: elevated,
+      hasOpenShift: activeShift != null,
+    );
+    if (decision.isForbidden) {
+      _snack(decision.message!);
+      return null;
+    }
+    if (_gidOf(o).isEmpty) {
+      _snack(
+        'هذه الفاتورة بلا معرّف موحّد بعد. انتظر المزامنة ثم أعد المحاولة.',
+      );
+      return null;
+    }
+    final needsCustomer =
+        o.type == InvoiceType.credit || o.type == InvoiceType.installment;
+    if (needsCustomer && (o.customerId ?? 0) <= 0) {
+      _snack(
+        'اربط هذه الفاتورة الآجلة بعميل أولاً (من «الديون»)، ثم أعد الاسترجاع.',
+      );
+      return null;
+    }
+    String? debtNote;
+    if (o.type == InvoiceType.credit) {
+      final remaining = await _db.creditInvoiceRemaining(o.id!);
+      if (!mounted) return null;
+      debtNote = remaining + 0.005 >= _refundTotal
+          ? 'يُخصم من دين الفاتورة (المتبقي ${IraqiCurrencyFormat.formatIqd(remaining)}).'
+          : 'دين الفاتورة المتبقي ${IraqiCurrencyFormat.formatIqd(remaining)} فقط: '
+                'يُخصم منه، والفرق لا يُصرف نقداً.';
+    }
+    if (!mounted) return null;
+    final details = await showDialog<_ReturnDetails>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _ReturnDetailsDialog(
+        refund: _refundTotal,
+        refundMethod: debtNote ?? ReceiptBuilders.refundMethodAr(o.type),
+        approvalNote: decision.needsApproval
+            ? 'يحتاج موافقة: ${decision.reasonsAr()}'
+            : null,
+      ),
+    );
+    if (details == null || !mounted) return null;
+
+    ReturnApproval? approval;
+    if (decision.needsApproval) {
+      approval = await requestReturnApproval(
+        context,
+        invoiceKey: _approvalKey(o),
+        amount: _refundTotal,
+        reasonsAr: decision.reasonsAr(),
+        blockSelfApproval: policy.blockSelfApproval,
+      );
+      if (approval == null || !mounted) return null;
+    }
+    final me = auth.displayName;
+    final selfApprovedOwner = auth.isOwner && decision.reasons.isNotEmpty;
+    return _ReturnProtection(
+      returnGlobalId: const Uuid().v4(),
+      reason: details.reason,
+      approval: approval,
+      meta: ReturnMeta(
+        originalNumber: o.id,
+        originalDate: o.date,
+        actor: me,
+        actorUserId: auth.userId,
+        approver: approval?.approverName ?? (selfApprovedOwner ? me : null),
+        approverUserId:
+            approval?.approverUserId ??
+            (selfApprovedOwner ? auth.userId : null),
+        approverIsOwner: approval?.approverIsOwner ?? selfApprovedOwner,
+        refundMethodAr: ReceiptBuilders.refundMethodAr(o.type),
+        intactConfirmedBy: me,
+        legacyReceipt: legacy,
+        outsideWindow: decision.reasons.contains(
+          ReturnApprovalReason.outsideWindow,
+        ),
+      ),
+    );
+  }
+
+  /// مطالبة الخادم بالكميات. يعرض الرسالة المناسبة عند الفشل.
+  Future<bool> _claimOnServer(
+    Invoice o,
+    _ReturnProtection p,
+    double total,
+  ) async {
+    final lines = <ReturnClaimLine>[];
+    for (var i = 0; i < _lines.length; i++) {
+      final l = _lines[i];
+      if (l.returnEnteredQty <= 0) continue;
+      final orig = o.items[i];
+      final key = (orig.globalId ?? '').trim().isNotEmpty
+          ? orig.globalId!.trim().toLowerCase()
+          : 'name:${orig.productName}|${orig.price.toStringAsFixed(4)}';
+      lines.add(
+        ReturnClaimLine(
+          key: key,
+          qty: l.returnEnteredQty,
+          sold: l.soldEnteredQty,
+        ),
+      );
+    }
+    final r = await ReturnClaimService.claim(
+      originalGlobalId: _gidOf(o),
+      returnGlobalId: p.returnGlobalId,
+      lines: lines,
+      amount: total,
+      actor: p.meta.actor ?? '',
+    );
+    if (r.ok) return true;
+    switch (r.status) {
+      case ReturnClaimStatus.offline:
+        _snack(ReturnGuard.offlineMessage);
+      case ReturnClaimStatus.notReady:
+        _snack(
+          'حماية الاسترجاع غير مفعّلة على الخادم بعد. لا يمكن الاسترجاع الآن.',
+        );
+      case ReturnClaimStatus.exceeds:
+        final idx = lines.indexWhere((l) => l.key == r.lineKey);
+        final name = idx >= 0
+            ? _lines
+                  .where((l) => l.returnEnteredQty > 0)
+                  .elementAt(idx)
+                  .productName
+            : 'إحدى المواد';
+        _snack(
+          'أُرجعت "$name" سابقاً (ربما من جهاز آخر). '
+          'المتبقي القابل للإرجاع: ${_formatReturnQty(r.remaining ?? 0)}.',
+        );
+      case ReturnClaimStatus.failed:
+      case ReturnClaimStatus.ok:
+        _snack('تعذر التحقق من الخادم: ${r.message ?? ''}');
+    }
+    return false;
+  }
+
   /// إعادة جلب المرتجعات السابقة للفاتورة الأصلية (Race-condition guard).
   /// يُرجِع map: `pid:<id>` أو `name:<name>|<price>` → الكمية المُرجَعة الكلية.
-  Future<Map<String, double>> _refetchAlreadyReturnedQtys(int originalId) async {
+  Future<Map<String, double>> _refetchAlreadyReturnedQtys(
+    int originalId,
+  ) async {
     final db = await _db.database;
     final rows = await db.rawQuery(
       '''
@@ -462,9 +754,12 @@ class _ProcessReturnScreenState extends State<ProcessReturnScreen> {
              ii.enteredQty AS qty
       FROM invoice_items ii
       INNER JOIN invoices inv ON inv.id = ii.invoiceId
-      WHERE inv.originalInvoiceId = ? AND inv.isReturned = 1
+      WHERE inv.isReturned = 1 AND inv.deleted_at IS NULL
+        AND inv.tenantId = (SELECT tenantId FROM invoices WHERE id = ?)
+        AND (inv.originalInvoiceId = ?
+             OR (? != '' AND lower(inv.originalInvoiceGlobalId) = ?))
       ''',
-      [originalId],
+      [originalId, originalId, _gidOf(_original), _gidOf(_original)],
     );
     final out = <String, double>{};
     for (final r in rows) {
@@ -474,7 +769,7 @@ class _ProcessReturnScreenState extends State<ProcessReturnScreen> {
       final key = pid != null
           ? 'pid:$pid'
           : 'name:${(r['name'] as String?) ?? ''}|'
-              '${((r['price'] as num?)?.toDouble() ?? 0).toStringAsFixed(4)}';
+                '${((r['price'] as num?)?.toDouble() ?? 0).toStringAsFixed(4)}';
       out[key] = (out[key] ?? 0) + qty;
     }
     return out;
@@ -490,7 +785,7 @@ class _ProcessReturnScreenState extends State<ProcessReturnScreen> {
       case InvoiceType.installment:
         return 'خُصم من إجمالي التقسيط.';
       case InvoiceType.credit:
-        return '';
+        return 'خُصم من الدين (لا يُصرف نقداً).';
       case InvoiceType.supplierPayment:
         return '';
     }
@@ -515,18 +810,19 @@ class _ProcessReturnScreenState extends State<ProcessReturnScreen> {
     final inv = await _db.getInvoiceById(id);
     if (!mounted) return;
     if (inv == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('لا توجد فاتورة برقم $id')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('لا توجد فاتورة برقم $id')));
       return;
     }
     if (inv.isReturned) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('فاتورة مرتجعة مسبقاً')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('فاتورة مرتجعة مسبقاً')));
       return;
     }
-    final ok = await showDialog<bool>(
+    final ok =
+        await showDialog<bool>(
           context: context,
           builder: (ctx) {
             final ac = ctx.appCorners;
@@ -535,14 +831,14 @@ class _ProcessReturnScreenState extends State<ProcessReturnScreen> {
               shape: RoundedRectangleBorder(borderRadius: ac.lg),
               title: Text(
                 'الانتقال إلى فاتورة #$id؟',
-                style: TextStyle(color: cs.onSurface, fontWeight: FontWeight.w800),
+                style: TextStyle(
+                  color: cs.onSurface,
+                  fontWeight: FontWeight.w800,
+                ),
               ),
               content: Text(
                 'سيتم استبدال المنتجات المعروضة بفاتورة أخرى.',
-                style: TextStyle(
-                  color: cs.onSurfaceVariant,
-                  height: 1.4,
-                ),
+                style: TextStyle(color: cs.onSurfaceVariant, height: 1.4),
               ),
               actions: [
                 TextButton(
@@ -559,12 +855,15 @@ class _ProcessReturnScreenState extends State<ProcessReturnScreen> {
         ) ??
         false;
     if (!ok || !mounted) return;
-    unawaited(Navigator.pushReplacement(
-      context,
-      MaterialPageRoute<void>(
-        builder: (_) => ProcessReturnScreen(originalInvoice: inv),
+    unawaited(
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute<void>(
+          builder: (_) =>
+              ProcessReturnScreen(originalInvoice: inv, legacyReceipt: true),
+        ),
       ),
-    ));
+    );
   }
 
   @override
@@ -597,11 +896,7 @@ class _ProcessReturnScreenState extends State<ProcessReturnScreen> {
         child: Scaffold(
           backgroundColor: scheme.surface,
           appBar: _returnAppBar(context, 'مرتجع'),
-          body: Center(
-            child: CircularProgressIndicator(
-              color: scheme.primary,
-            ),
-          ),
+          body: Center(child: CircularProgressIndicator(color: scheme.primary)),
         ),
       );
     }
@@ -646,9 +941,11 @@ class _ProcessReturnScreenState extends State<ProcessReturnScreen> {
     // `allMaxed` = كل البنود إما (أ) مُرجَعة بالكامل سابقاً، أو (ب) المستخدم
     // اختار إرجاع كل المتبقي منها في هذه الجلسة. نخفي عندها زر "إرجاع كامل"
     // لأن لا شيء قابل للإرجاع.
-    final allMaxed = _lines.isEmpty ||
+    final allMaxed =
+        _lines.isEmpty ||
         _lines.every(
-          (l) => l.isFullyReturned ||
+          (l) =>
+              l.isFullyReturned ||
               l.returnEnteredQty >= l.maxReturnableEnteredQty - 1e-9,
         );
 
@@ -671,10 +968,7 @@ class _ProcessReturnScreenState extends State<ProcessReturnScreen> {
       textDirection: TextDirection.rtl,
       child: Scaffold(
         backgroundColor: scheme.surface,
-        appBar: _returnAppBar(
-          context,
-          'مرتجع — فاتورة #${o.id}',
-        ),
+        appBar: _returnAppBar(context, 'مرتجع — فاتورة #${o.id}'),
         body: Column(
           children: [
             if (allFullyReturnedAlready)
@@ -682,7 +976,13 @@ class _ProcessReturnScreenState extends State<ProcessReturnScreen> {
             Expanded(
               child: isWide
                   ? _buildWideBody(
-                      context, o, gap, scheme, allMaxed, summaryPanel)
+                      context,
+                      o,
+                      gap,
+                      scheme,
+                      allMaxed,
+                      summaryPanel,
+                    )
                   : _buildNarrowBody(context, o, gap, scheme, allMaxed),
             ),
           ],
@@ -730,11 +1030,7 @@ class _ProcessReturnScreenState extends State<ProcessReturnScreen> {
             ],
           ),
         ),
-        _ItemsHeader(
-          gap: gap,
-          allMaxed: allMaxed,
-          onFullReturn: _setAllToMax,
-        ),
+        _ItemsHeader(gap: gap, allMaxed: allMaxed, onFullReturn: _setAllToMax),
         Expanded(child: _buildLinesList(gap)),
       ],
     );
@@ -961,11 +1257,7 @@ class _ItemsHeader extends StatelessWidget {
       padding: EdgeInsetsDirectional.fromSTEB(gap, topPadding, gap, 8),
       child: Row(
         children: [
-          Icon(
-            Icons.inventory_2_outlined,
-            size: 22,
-            color: scheme.primary,
-          ),
+          Icon(Icons.inventory_2_outlined, size: 22, color: scheme.primary),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
@@ -983,10 +1275,7 @@ class _ItemsHeader extends StatelessWidget {
             label: const Text('إرجاع كامل'),
             style: TextButton.styleFrom(
               foregroundColor: AppSemanticColors.danger,
-              padding: const EdgeInsets.symmetric(
-                horizontal: 10,
-                vertical: 4,
-              ),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
               textStyle: const TextStyle(
                 fontSize: 12.5,
                 fontWeight: FontWeight.w700,
@@ -1029,10 +1318,7 @@ class _BarcodeSwitchField extends StatelessWidget {
       decoration: InputDecoration(
         labelText: 'تبديل الفاتورة (INV-رقم)',
         hintText: 'امسح باركود إيصال آخر ثم Enter',
-        prefixIcon: Icon(
-          Icons.qr_code_scanner_rounded,
-          color: scheme.primary,
-        ),
+        prefixIcon: Icon(Icons.qr_code_scanner_rounded, color: scheme.primary),
         filled: true,
         fillColor: scheme.surfaceContainerHighest.withValues(alpha: 0.45),
         isDense: true,
@@ -1085,11 +1371,7 @@ class _OriginalInvoiceCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              Icon(
-                Icons.receipt_long_rounded,
-                size: 20,
-                color: scheme.primary,
-              ),
+              Icon(Icons.receipt_long_rounded, size: 20, color: scheme.primary),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
@@ -1124,19 +1406,13 @@ class _OriginalInvoiceCard extends StatelessWidget {
           const SizedBox(height: 10),
           Text(
             'التاريخ: ${dateFormat.format(invoice.date)}',
-            style: TextStyle(
-              fontSize: 13,
-              color: scheme.onSurfaceVariant,
-            ),
+            style: TextStyle(fontSize: 13, color: scheme.onSurfaceVariant),
           ),
           if (invoice.customerName.trim().isNotEmpty) ...[
             const SizedBox(height: 4),
             Text(
               'العميل: ${invoice.customerName}',
-              style: TextStyle(
-                fontSize: 13,
-                color: scheme.onSurface,
-              ),
+              style: TextStyle(fontSize: 13, color: scheme.onSurface),
             ),
           ],
           if (invoice.createdByUserName != null &&
@@ -1144,10 +1420,7 @@ class _OriginalInvoiceCard extends StatelessWidget {
             const SizedBox(height: 4),
             Text(
               'بائع أصلي: ${invoice.createdByUserName}',
-              style: TextStyle(
-                fontSize: 12,
-                color: scheme.onSurfaceVariant,
-              ),
+              style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
             ),
           ],
           Builder(
@@ -1459,9 +1732,7 @@ class _ReturnSummaryPanel extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(18, 14, 18, 10),
             decoration: BoxDecoration(
               color: scheme.primaryContainer.withValues(alpha: 0.42),
-              border: Border(
-                top: BorderSide(color: scheme.outlineVariant),
-              ),
+              border: Border(top: BorderSide(color: scheme.outlineVariant)),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1515,16 +1786,11 @@ class _ReturnSummaryPanel extends StatelessWidget {
               icon: const Icon(Icons.assignment_turned_in_rounded),
               label: const Text(
                 'تأكيد المرتجع',
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
-                ),
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
               ),
               style: FilledButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(
-                  borderRadius: ac.lg,
-                ),
+                shape: RoundedRectangleBorder(borderRadius: ac.lg),
                 backgroundColor: scheme.primary,
                 foregroundColor: scheme.onPrimary,
               ),
@@ -1572,14 +1838,122 @@ class _SummaryRow extends StatelessWidget {
               // المبلغ المسترد بـ AppSemanticColors.info (أزرق محايد)
               // — اتساقاً مع نمط ERP العالمي (Odoo/SAP). لا نستعمل success
               // لأن الإرجاع خسارة على المتجر، وليس success إيجابياً.
-              color: strong
-                  ? AppSemanticColors.info
-                  : scheme.onSurface,
+              color: strong ? AppSemanticColors.info : scheme.onSurface,
               fontFeatures: const [FontFeature.tabularFigures()],
             ),
           ),
         ],
       ),
+    );
+  }
+}
+
+class _ReturnProtection {
+  _ReturnProtection({
+    required this.returnGlobalId,
+    required this.reason,
+    required this.meta,
+    this.approval,
+  });
+
+  final String returnGlobalId;
+  final String reason;
+  final ReturnMeta meta;
+  final ReturnApproval? approval;
+}
+
+class _ReturnDetails {
+  const _ReturnDetails(this.reason);
+  final String reason;
+}
+
+/// السبب الإلزامي وتأكيد سلامة المواد قبل الاسترجاع.
+class _ReturnDetailsDialog extends StatefulWidget {
+  const _ReturnDetailsDialog({
+    required this.refund,
+    required this.refundMethod,
+    this.approvalNote,
+  });
+
+  final double refund;
+  final String refundMethod;
+  final String? approvalNote;
+
+  @override
+  State<_ReturnDetailsDialog> createState() => _ReturnDetailsDialogState();
+}
+
+class _ReturnDetailsDialogState extends State<_ReturnDetailsDialog> {
+  final _reason = TextEditingController();
+  bool _intact = false;
+
+  @override
+  void dispose() {
+    _reason.dispose();
+    super.dispose();
+  }
+
+  bool get _ready => _intact && _reason.text.trim().length >= 3;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return AlertDialog(
+      title: const Text('تأكيد الاسترجاع'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'المبلغ المسترد: ${IraqiCurrencyFormat.formatIqd(widget.refund)}',
+              style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 18),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              widget.refundMethod,
+              style: TextStyle(color: cs.onSurfaceVariant),
+            ),
+            if (widget.approvalNote != null) ...[
+              const SizedBox(height: 10),
+              Text(
+                widget.approvalNote!,
+                style: TextStyle(color: cs.error, fontWeight: FontWeight.w600),
+              ),
+            ],
+            const SizedBox(height: 14),
+            TextField(
+              controller: _reason,
+              maxLength: 200,
+              decoration: const InputDecoration(
+                labelText: 'سبب الاسترجاع (إلزامي)',
+                border: OutlineInputBorder(),
+              ),
+              onChanged: (_) => setState(() {}),
+            ),
+            CheckboxListTile(
+              value: _intact,
+              contentPadding: EdgeInsets.zero,
+              controlAffinity: ListTileControlAffinity.leading,
+              title: const Text('تأكدت أن المواد سليمة وغير مفتوحة'),
+              onChanged: (v) => setState(() => _intact = v ?? false),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('إلغاء'),
+        ),
+        FilledButton(
+          onPressed: _ready
+              ? () =>
+                    Navigator.pop(context, _ReturnDetails(_reason.text.trim()))
+              : null,
+          child: const Text('متابعة'),
+        ),
+      ],
     );
   }
 }

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 import 'package:provider/provider.dart';
 
+import '../../models/product_variant_kind.dart';
 import '../../providers/theme_provider.dart';
 import '../../services/database_helper.dart';
 import '../../services/tenant_context_service.dart';
@@ -58,7 +59,9 @@ class _StockAnalyticsScreenState extends State<StockAnalyticsScreen> {
     // 2. منتجات نفدت (qty <= 0)
     final outRows = await db.rawQuery('''
       SELECT COUNT(*) AS c FROM products
-      WHERE isActive = 1 AND tenantId = ? AND qty <= 0
+      WHERE isActive = 1 AND tenantId = ?
+        AND ${ProductVariantKind.sqlNotFluidFamilyParent}
+        AND qty <= 0
     ''', [tid]);
     _outOfStockCount = (outRows.first['c'] as num?)?.toInt() ?? 0;
 

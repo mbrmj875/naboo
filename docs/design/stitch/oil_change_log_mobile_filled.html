@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+
+<html dir="rtl" lang="ar"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>سجل غيارات الزيت - Naboo ERP</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<!-- Tailwind Configuration -->
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                "on-surface-variant": "#44474d",
+                "on-error": "#ffffff",
+                "inverse-surface": "#303033",
+                "inverse-on-surface": "#f3f0f4",
+                "primary-fixed-dim": "#b6c7eb",
+                "primary-container": "#081b37",
+                "tertiary-container": "#cca825",
+                "on-secondary-fixed": "#231b00",
+                "secondary-fixed-dim": "#e9c340",
+                "outline": "#75777e",
+                "on-tertiary-container": "#4e3e00",
+                "on-surface": "#1b1b1e",
+                "on-primary": "#ffffff",
+                "surface-tint": "#4e5f7e",
+                "on-secondary": "#ffffff",
+                "secondary": "#725c00",
+                "surface-container-low": "#f6f2f7",
+                "secondary-fixed": "#ffe081",
+                "on-tertiary": "#ffffff",
+                "on-secondary-container": "#735d00",
+                "on-background": "#1b1b1e",
+                "tertiary": "#725c00",
+                "on-primary-container": "#7484a5",
+                "on-primary-fixed": "#081b37",
+                "surface-variant": "#e4e1e5",
+                "surface-container-highest": "#e4e1e5",
+                "outline-variant": "#c5c6ce",
+                "tertiary-fixed-dim": "#e9c340",
+                "secondary-container": "#fed752",
+                "primary-fixed": "#d7e3ff",
+                "surface": "#fbf8fc",
+                "on-secondary-fixed-variant": "#564500",
+                "on-primary-fixed-variant": "#374765",
+                "error": "#ba1a1a",
+                "surface-container-lowest": "#ffffff",
+                "primary": "#000000",
+                "tertiary-fixed": "#ffe082",
+                "surface-bright": "#fbf8fc",
+                "error-container": "#ffdad6",
+                "on-error-container": "#93000a",
+                "on-tertiary-fixed-variant": "#564500",
+                "on-tertiary-fixed": "#231b00",
+                "surface-dim": "#dcd9dd",
+                "surface-container": "#f0edf1",
+                "surface-container-high": "#eae7eb",
+                "inverse-primary": "#b6c7eb",
+                "background": "#fbf8fc",
+                "brand-navy": "#152B47",
+                "brand-gold": "#C9A85C",
+                "brand-ivory": "#F7F4EF"
+            },
+            "borderRadius": {
+                "DEFAULT": "0.25rem",
+                "lg": "0.5rem",
+                "xl": "0.75rem",
+                "full": "9999px"
+            },
+            "spacing": {
+                "xs": "4px",
+                "gutter": "12px",
+                "margin-mobile": "16px",
+                "lg": "16px",
+                "sm": "8px",
+                "md": "12px",
+                "base": "4px",
+                "xl": "24px"
+            },
+            "fontFamily": {
+                "headline-lg": ["IBM Plex Sans Arabic"],
+                "display-price": ["IBM Plex Sans Arabic"],
+                "body-md": ["IBM Plex Sans Arabic"],
+                "body-lg": ["IBM Plex Sans Arabic"],
+                "display-price-sm": ["IBM Plex Sans Arabic"],
+                "label-sm": ["IBM Plex Sans Arabic"],
+                "headline-md": ["IBM Plex Sans Arabic"],
+                "label-md": ["IBM Plex Sans Arabic"]
+            }
+          }
+        }
+      }
+    </script>
+<style>
+        body {
+            font-family: 'IBM Plex Sans Arabic', sans-serif;
+            background-color: #F7F4EF; /* Brand Ivory */
+            -webkit-tap-highlight-color: transparent;
+        }
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .tab-active::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background-color: #C9A85C; /* Brand Gold */
+            border-radius: 3px 3px 0 0;
+        }
+        .custom-card-shadow {
+            box-shadow: 0 4px 6px -1px rgba(21, 43, 71, 0.05), 0 2px 4px -1px rgba(21, 43, 71, 0.03);
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="text-on-surface antialiased overflow-x-hidden">
+<!-- TopAppBar -->
+<header class="w-full top-0 sticky z-40 bg-white shadow-sm flex items-center justify-between px-margin-mobile py-md rtl border-b border-brand-gold/10">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-full overflow-hidden border-2 border-brand-gold/20">
+<img class="w-full h-full object-cover" data-alt="A professional headshot of a workshop manager with a clean-cut look, wearing a navy blue corporate uniform with a subtle gold logo. The background is a soft-focus modern automotive service center with high-key lighting, maintaining a premium and trustworthy professional atmosphere." src="https://lh3.googleusercontent.com/aida-public/AB6AXuCJ2js5B5rAj8Is4dlyBImr7qQLUN3Z6kIrTvxXe8DSiR1EZs-NjnTMqcqu-c8NeXsiXfGNlSbLjGQXFT8nFJ4fX4kuhIy8MgnAgKwGjZPoBVnVf7seZd_UjfRpAgdFpWy47l47PdKGawTvjrgaXxynOtaga93-NGAG2L7OuKotn1Kg2FAlHtObcO67PztpPiDVRMoUcvdCvxFjORBAkdHSTmaPPK4SNQbxRjbZwSu1pBG9KqvUFZWRjhyyrKcCzSDV1dqbzY6jl165"/>
+</div>
+<h1 class="font-headline-md text-headline-md font-bold text-brand-navy">سجل غيارات الزيت</h1>
+</div>
+<button class="w-10 h-10 flex items-center justify-center rounded-full hover:bg-surface-variant active:scale-95 transition-transform text-brand-navy">
+<span class="material-symbols-outlined" data-icon="notifications">notifications</span>
+</button>
+</header>
+<main class="pb-32">
+<!-- Search and Tabs Sticky Container -->
+<div class="bg-white sticky top-[64px] z-30 px-margin-mobile pt-sm space-y-4 shadow-sm border-b border-brand-gold/5">
+<!-- Tabs -->
+<div class="flex w-full">
+<button class="flex-1 py-3 text-center relative font-label-md text-label-md text-brand-gold font-bold tab-active">السجل</button>
+<button class="flex-1 py-3 text-center relative font-label-md text-label-md text-on-surface-variant">المعلّقة</button>
+</div>
+<!-- Search Bar -->
+<div class="pb-sm">
+<div class="relative flex items-center">
+<span class="material-symbols-outlined absolute right-4 text-outline" data-icon="search">search</span>
+<input class="w-full h-12 pr-12 pl-4 bg-brand-ivory/50 border-none rounded-full font-body-md text-body-md focus:ring-2 focus:ring-brand-gold/30" placeholder="ابحث برقم اللوحة أو اسم العميل..." type="text"/>
+</div>
+</div>
+</div>
+<!-- Action Buttons -->
+<div class="px-margin-mobile mt-lg space-y-3">
+<button class="w-full bg-brand-gold text-brand-navy font-headline-md text-headline-md h-14 rounded-xl flex items-center justify-center gap-2 shadow-lg active:scale-95 transition-all">
+<span class="material-symbols-outlined" data-icon="add_circle" style="font-variation-settings: 'FILL' 1;">add_circle</span>
+<span>بطاقة غيار زيت جديدة</span>
+</button>
+<button class="w-full bg-white border border-brand-gold/30 text-brand-navy font-body-lg text-body-lg h-12 rounded-xl flex items-center justify-center gap-2 active:scale-95 transition-all">
+<span class="material-symbols-outlined text-[#25D366]" data-icon="chat" style="font-variation-settings: 'FILL' 1;">chat</span>
+<span>إرسال واتساب للعملاء</span>
+</button>
+</div>
+<!-- Visit Log List -->
+<div class="mt-xl px-margin-mobile space-y-8">
+<!-- Group: Today -->
+<section>
+<div class="flex items-center justify-between mb-md">
+<h2 class="font-headline-md text-headline-md text-brand-navy font-bold">اليوم - 12 ديسمبر</h2>
+<span class="bg-brand-gold/10 text-brand-gold font-label-md text-label-md px-3 py-1 rounded-full">3 زيارات</span>
+</div>
+<div class="space-y-4">
+<!-- Visit Card 1 -->
+<div class="bg-white rounded-xl p-md border border-brand-gold/10 custom-card-shadow">
+<div class="flex justify-between items-start mb-sm">
+<div class="space-y-1">
+<h3 class="font-body-lg text-body-lg font-bold text-brand-navy">محمد جاسم محمد</h3>
+<div class="flex items-center gap-2">
+<span class="font-label-md text-label-md bg-surface-container-high px-2 py-0.5 rounded text-on-surface-variant">تويوتا كورولا</span>
+<span class="font-label-md text-label-md text-outline font-mono">44532 بابل - حمل</span>
+</div>
+</div>
+<span class="font-label-sm text-label-sm text-outline">09:15 ص</span>
+</div>
+<div class="h-px bg-brand-ivory w-full my-md"></div>
+<div class="flex items-center justify-between">
+<div class="space-y-1">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-brand-gold text-[18px]" data-icon="oil_barrel">oil_barrel</span>
+<span class="font-body-md text-body-md text-on-surface">Shell Helix Ultra 5W-40</span>
+</div>
+<div class="flex items-center gap-4 mt-2">
+<div class="flex items-center gap-1 opacity-60">
+<span class="material-symbols-outlined text-[16px]" data-icon="filter_alt">filter_alt</span>
+<span class="text-xs">فلتر زيت</span>
+</div>
+<div class="flex items-center gap-1 opacity-60">
+<span class="material-symbols-outlined text-[16px]" data-icon="build">build</span>
+<span class="text-xs">فحص عام</span>
+</div>
+</div>
+</div>
+<div class="text-left">
+<span class="font-display-price-sm text-display-price-sm text-brand-navy block">60,000 د.ع</span>
+<span class="font-label-sm text-label-sm text-[#2BA1A1]">تم الدفع</span>
+</div>
+</div>
+</div>
+<!-- Visit Card 2 -->
+<div class="bg-white rounded-xl p-md border border-brand-gold/10 custom-card-shadow">
+<div class="flex justify-between items-start mb-sm">
+<div class="space-y-1">
+<h3 class="font-body-lg text-body-lg font-bold text-brand-navy">عمار ياسر</h3>
+<div class="flex items-center gap-2">
+<span class="font-label-md text-label-md bg-surface-container-high px-2 py-0.5 rounded text-on-surface-variant">كيا سبورتج</span>
+<span class="font-label-md text-label-md text-outline font-mono">1289 بغداد</span>
+</div>
+</div>
+<span class="font-label-sm text-label-sm text-outline">10:45 ص</span>
+</div>
+<div class="h-px bg-brand-ivory w-full my-md"></div>
+<div class="flex items-center justify-between">
+<div class="space-y-1">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-brand-gold text-[18px]" data-icon="oil_barrel">oil_barrel</span>
+<span class="font-body-md text-body-md text-on-surface">Castrol Magnatec 10W-40</span>
+</div>
+<div class="flex items-center gap-4 mt-2">
+<div class="flex items-center gap-1 opacity-60">
+<span class="material-symbols-outlined text-[16px]" data-icon="air">air</span>
+<span class="text-xs">فلتر هواء</span>
+</div>
+</div>
+</div>
+<div class="text-left">
+<span class="font-display-price-sm text-display-price-sm text-brand-navy block">45,000 د.ع</span>
+<span class="font-label-sm text-label-sm text-error">متبقي 5,000</span>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- Group: Yesterday -->
+<section>
+<div class="flex items-center justify-between mb-md">
+<h2 class="font-headline-md text-headline-md text-brand-navy font-bold">أمس - 11 ديسمبر</h2>
+<span class="bg-surface-container-highest text-on-surface-variant font-label-md text-label-md px-3 py-1 rounded-full">2 زيارة</span>
+</div>
+<div class="space-y-4">
+<!-- Visit Card 3 -->
+<div class="bg-white/80 rounded-xl p-md border border-brand-gold/5 custom-card-shadow">
+<div class="flex justify-between items-start mb-sm">
+<div class="space-y-1">
+<h3 class="font-body-lg text-body-lg font-bold text-brand-navy opacity-80">باقر علي كاظم</h3>
+<div class="flex items-center gap-2">
+<span class="font-label-md text-label-md bg-surface-container-high px-2 py-0.5 rounded text-on-surface-variant">هيونداي توسان</span>
+<span class="font-label-md text-label-md text-outline font-mono">99201 كربلاء</span>
+</div>
+</div>
+<span class="font-label-sm text-label-sm text-outline">04:30 م</span>
+</div>
+<div class="h-px bg-brand-ivory w-full my-md"></div>
+<div class="flex items-center justify-between">
+<div class="space-y-1">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-brand-gold/60 text-[18px]" data-icon="oil_barrel">oil_barrel</span>
+<span class="font-body-md text-body-md text-on-surface-variant">Liqui Moly 5W-30</span>
+</div>
+</div>
+<div class="text-left">
+<span class="font-display-price-sm text-display-price-sm text-brand-navy/70 block">85,000 د.ع</span>
+</div>
+</div>
+</div>
+<!-- Visit Card 4 -->
+<div class="bg-white/80 rounded-xl p-md border border-brand-gold/5 custom-card-shadow">
+<div class="flex justify-between items-start mb-sm">
+<div class="space-y-1">
+<h3 class="font-body-lg text-body-lg font-bold text-brand-navy opacity-80">زيد الفارس</h3>
+<div class="flex items-center gap-2">
+<span class="font-label-md text-label-md bg-surface-container-high px-2 py-0.5 rounded text-on-surface-variant">نيسان باترول</span>
+<span class="font-label-md text-label-md text-outline font-mono">1104 أربيل</span>
+</div>
+</div>
+<span class="font-label-sm text-label-sm text-outline">01:15 م</span>
+</div>
+<div class="h-px bg-brand-ivory w-full my-md"></div>
+<div class="flex items-center justify-between">
+<div class="space-y-1">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-brand-gold/60 text-[18px]" data-icon="oil_barrel">oil_barrel</span>
+<span class="font-body-md text-body-md text-on-surface-variant">Shell Helix Ultra 0W-20</span>
+</div>
+<div class="flex items-center gap-2 mt-2">
+<span class="material-symbols-outlined text-[16px] text-brand-gold/60" data-icon="settings_suggest">settings_suggest</span>
+<span class="text-xs text-on-surface-variant">تبديل بلاكات</span>
+</div>
+</div>
+<div class="text-left">
+<span class="font-display-price-sm text-display-price-sm text-brand-navy/70 block">120,000 د.ع</span>
+</div>
+</div>
+</div>
+</div>
+</section>
+</div>
+</main>
+<!-- Bottom Navigation Shell -->
+<nav class="fixed bottom-4 left-4 right-4 z-50 bg-[#081b37] rounded-full shadow-lg flex justify-around items-center py-sm rtl h-16">
+<button class="flex flex-col items-center justify-center bg-secondary-container text-on-secondary-container rounded-full px-4 py-1 active:scale-90 transition-all duration-200">
+<span class="material-symbols-outlined" data-icon="history" style="font-variation-settings: 'FILL' 1;">history</span>
+<span class="font-label-md text-label-md mt-0.5">السجل</span>
+</button>
+<button class="flex flex-col items-center justify-center text-primary-fixed-dim hover:opacity-80 active:scale-90 transition-all duration-200">
+<span class="material-symbols-outlined" data-icon="account_balance_wallet">account_balance_wallet</span>
+<span class="font-label-md text-label-md">الخزنة</span>
+</button>
+<button class="flex flex-col items-center justify-center text-primary-fixed-dim hover:opacity-80 active:scale-90 transition-all duration-200">
+<span class="material-symbols-outlined" data-icon="payments">payments</span>
+<span class="font-label-md text-label-md">المصاريف</span>
+</button>
+<button class="flex flex-col items-center justify-center text-primary-fixed-dim hover:opacity-80 active:scale-90 transition-all duration-200">
+<span class="material-symbols-outlined" data-icon="group">group</span>
+<span class="font-label-md text-label-md">المستخدمين</span>
+</button>
+</nav>
+<script>
+        // Micro-interaction for tab switching
+        const tabs = document.querySelectorAll('.font-label-md.text-center');
+        tabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                tabs.forEach(t => {
+                    t.classList.remove('tab-active', 'text-brand-gold', 'font-bold');
+                    t.classList.add('text-on-surface-variant');
+                });
+                tab.classList.add('tab-active', 'text-brand-gold', 'font-bold');
+                tab.classList.remove('text-on-surface-variant');
+            });
+        });
+
+        // Add subtle scroll shadow for header
+        window.addEventListener('scroll', () => {
+            const header = document.querySelector('header');
+            if (window.scrollY > 10) {
+                header.classList.add('shadow-md');
+            } else {
+                header.classList.remove('shadow-md');
+            }
+        });
+    </script>
+</body></html>

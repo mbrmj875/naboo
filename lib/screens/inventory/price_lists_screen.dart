@@ -1,19 +1,11 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:naboo/services/price_list_repository.dart';
+import 'package:naboo/theme/design_tokens.dart';
+import 'package:naboo/widgets/inputs/app_price_input.dart';
+import 'package:naboo/utils/iraqi_currency_format.dart';
+import 'package:naboo/utils/app_logger.dart';
 
-const _navy = Color(0xFF1E3A5F);
-const _teal = Color(0xFF0D9488);
-const _bg = Color(0xFFF1F5F9);
-const _card = Colors.white;
-const _border = Color(0xFFE2E8F0);
-const _t1 = Color(0xFF0F172A);
-const _t2 = Color(0xFF64748B);
-const _green = Color(0xFF10B981);
-const _orange = Color(0xFFF97316);
-const _blue = Color(0xFF3B82F6);
-const _red = Color(0xFFEF4444);
-const _purple = Color(0xFF8B5CF6);
-
-// ══════════════════════════════════════════════════════════════════════════════
 class PriceListsScreen extends StatefulWidget {
   const PriceListsScreen({super.key});
 
@@ -24,44 +16,17 @@ class PriceListsScreen extends StatefulWidget {
 class _PriceListsScreenState extends State<PriceListsScreen>
     with SingleTickerProviderStateMixin {
   late final TabController _tab;
-
-  final List<Map<String, dynamic>> _lists = [
-    {
-      'id': 1,
-      'name': 'قائمة التجزئة',
-      'description': 'أسعار بيع التجزئة للعملاء العاديين',
-      'color': _blue,
-      'isDefault': true,
-      'isActive': true,
-      'itemsCount': 248,
-      'createdAt': '01/01/2025',
-    },
-    {
-      'id': 2,
-      'name': 'قائمة الجملة',
-      'description': 'أسعار الجملة للموزعين والتجار',
-      'color': _green,
-      'isDefault': false,
-      'isActive': true,
-      'itemsCount': 200,
-      'createdAt': '15/02/2025',
-    },
-    {
-      'id': 3,
-      'name': 'قائمة العملاء المميزين',
-      'description': 'أسعار خاصة للعملاء الدائمين (VIP)',
-      'color': _purple,
-      'isDefault': false,
-      'isActive': true,
-      'itemsCount': 150,
-      'createdAt': '01/03/2025',
-    },
-  ];
+  final _repo = PriceListRepository();
+  
+  List<Map<String, dynamic>> _lists = [];
+  bool _isLoading = true;
+  String? _error;
 
   @override
   void initState() {
     super.initState();
     _tab = TabController(length: 2, vsync: this);
+    _loadData();
   }
 
   @override
@@ -70,83 +35,131 @@ class _PriceListsScreenState extends State<PriceListsScreen>
     super.dispose();
   }
 
-  void _setDefault(int id) => setState(() {
-    for (final l in _lists) l['isDefault'] = l['id'] == id;
-  });
+  Future<void> _loadData() async {
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+    try {
+      final res = await _repo.listPriceLists();
+      if (mounted) {
+        setState(() {
+          _lists = res;
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = 'حدث خطأ أثناء جلب القوائم: $e';
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _setDefault(int id) async {
+    try {
+      await _repo.setDefaultPriceList(id);
+      await _loadData();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('فشل التعيين كافتراضي: $e')),
+        );
+      }
+    }
+  }
 
   Future<void> _openForm([Map<String, dynamic>? existing]) async {
-    final result = await showModalBottomSheet<Map<String, dynamic>>(
+    final result = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => _PriceListForm(existing: existing),
+      builder: (_) => _PriceListForm(existing: existing, repo: _repo),
     );
-    if (result == null) return;
-    setState(() {
-      if (existing != null) {
-        final i = _lists.indexWhere((l) => l['id'] == existing['id']);
-        if (i >= 0) _lists[i] = {...existing, ...result};
-      } else {
-        _lists.add({
-          'id': _lists.length + 1,
-          ...result,
-          'itemsCount': 0,
-          'createdAt': DateTime.now().toString().substring(0, 10),
-          'isDefault': false,
-        });
-      }
-    });
+    if (result == true) {
+      unawaited(_loadData());
+    }
   }
 
   Future<void> _delete(Map<String, dynamic> l) async {
-    if (l['isDefault'] == true) {
+    final id = l['id'] as int;
+    final isDefault = (l['isDefault'] as int?) == 1;
+    
+    if (isDefault) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('لا يمكن حذف قائمة الأسعار الافتراضية')),
+        const SnackBar(content: Text('لا يمكن حذف القائمة الافتراضية')),
       );
       return;
     }
+
     final ok = await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('حذف قائمة الأسعار'),
-        content: Text('هل تريد حذف «${l['name']}»؟'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('إلغاء'),
-          ),
-          TextButton(
-            style: TextButton.styleFrom(foregroundColor: _red),
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('حذف'),
-          ),
-        ],
+      builder: (_) => Directionality(
+        textDirection: TextDirection.rtl,
+        child: AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          title: const Text('حذف قائمة الأسعار'),
+          content: Text('هل تريد حذف «${l['name']}» نهائياً؟'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('إلغاء'),
+            ),
+            TextButton(
+              style: TextButton.styleFrom(foregroundColor: Theme.of(context).colorScheme.error),
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('حذف'),
+            ),
+          ],
+        ),
       ),
     );
+
     if (ok == true) {
-      setState(() => _lists.removeWhere((x) => x['id'] == l['id']));
+      try {
+        final success = await _repo.deletePriceList(id);
+        if (success) {
+          unawaited(_loadData());
+        } else {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('لا يمكن حذف هذه القائمة.')),
+            );
+          }
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('خطأ أثناء الحذف: $e')),
+          );
+        }
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
     return Directionality(
       textDirection: TextDirection.rtl,
       child: Scaffold(
-        backgroundColor: _bg,
+        backgroundColor: cs.surface,
         appBar: AppBar(
           title: const Text(
-            'فوائم الأسعار',
+            'قوائم الأسعار',
             style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17),
           ),
-          backgroundColor: _navy,
-          foregroundColor: Colors.white,
+          backgroundColor: cs.surface,
+          foregroundColor: cs.onSurface,
           elevation: 0,
           bottom: TabBar(
             controller: _tab,
-            indicatorColor: _teal,
-            labelColor: Colors.white,
-            unselectedLabelColor: Colors.white60,
+            indicatorColor: AppColors.accentGold,
+            labelColor: AppColors.accentGold,
+            unselectedLabelColor: cs.onSurfaceVariant,
             tabs: const [
               Tab(text: 'القوائم'),
               Tab(text: 'منتجات بحسب القائمة'),
@@ -154,35 +167,76 @@ class _PriceListsScreenState extends State<PriceListsScreen>
           ),
         ),
         floatingActionButton: FloatingActionButton.extended(
-          backgroundColor: _teal,
-          onPressed: _openForm,
-          icon: const Icon(Icons.add_rounded, color: Colors.white),
+          backgroundColor: AppColors.accentGold,
+          foregroundColor: AppColors.primaryDark,
+          onPressed: () => _openForm(),
+          icon: const Icon(Icons.add_rounded),
           label: const Text(
             'قائمة جديدة',
-            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+            style: TextStyle(fontWeight: FontWeight.bold),
           ),
         ),
         body: TabBarView(
           controller: _tab,
           children: [
             // ── Tab 1: Lists ──────────────────────────────────────────────
-            ListView.separated(
-              padding: const EdgeInsets.fromLTRB(14, 14, 14, 100),
-              itemCount: _lists.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 10),
-              itemBuilder: (_, i) => _PriceListCard(
-                data: _lists[i],
-                onEdit: () => _openForm(_lists[i]),
-                onDelete: () => _delete(_lists[i]),
-                onSetDefault: () => _setDefault(_lists[i]['id'] as int),
-                onViewItems: () => _showItems(context, _lists[i]),
-              ),
-            ),
+            _buildListsTab(cs),
 
-            // ── Tab 2: Products per list ──────────────────────────────────
-            _ProductPriceTable(priceLists: _lists),
+            // ── Tab 2: Products per list (P2) ──────────────────────────────
+            _ComparisonTab(repo: _repo, lists: _lists),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildListsTab(ColorScheme cs) {
+    if (_isLoading) {
+      return const Center(child: CircularProgressIndicator(color: AppColors.accentGold));
+    }
+    if (_error != null) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.error_outline, size: 48, color: cs.error),
+            const SizedBox(height: 16),
+            Text(_error!, style: TextStyle(color: cs.error)),
+            const SizedBox(height: 16),
+            ElevatedButton(
+              onPressed: _loadData,
+              child: const Text('إعادة المحاولة'),
+            ),
+          ],
+        ),
+      );
+    }
+    if (_lists.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.price_change_outlined, size: 72, color: cs.onSurfaceVariant.withValues(alpha: 0.5)),
+            const SizedBox(height: 16),
+            Text(
+              'لا توجد قوائم أسعار بعد',
+              style: TextStyle(fontSize: 18, color: cs.onSurfaceVariant),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return ListView.separated(
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 100),
+      itemCount: _lists.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 12),
+      itemBuilder: (_, i) => _PriceListCard(
+        data: _lists[i],
+        onEdit: () => _openForm(_lists[i]),
+        onDelete: () => _delete(_lists[i]),
+        onSetDefault: () => _setDefault(_lists[i]['id'] as int),
+        onViewItems: () => _showItems(context, _lists[i]),
       ),
     );
   }
@@ -192,7 +246,7 @@ class _PriceListsScreenState extends State<PriceListsScreen>
       context: ctx,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      builder: (_) => _PriceItemsSheet(list: list),
+      builder: (_) => _PriceItemsSheet(list: list, repo: _repo),
     );
   }
 }
@@ -206,6 +260,7 @@ class _PriceListCard extends StatelessWidget {
   final VoidCallback onDelete;
   final VoidCallback onSetDefault;
   final VoidCallback onViewItems;
+  
   const _PriceListCard({
     required this.data,
     required this.onEdit,
@@ -216,34 +271,25 @@ class _PriceListCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = data['color'] as Color;
-    final isDefault = data['isDefault'] as bool;
+    final cs = Theme.of(context).colorScheme;
+    final isDefault = (data['isDefault'] as int?) == 1;
+    final dateStr = (data['createdAt'] as String?)?.substring(0, 10) ?? '';
+    final color = AppColors.accentGold;
 
     return Container(
       decoration: BoxDecoration(
-        color: _card,
-        borderRadius: BorderRadius.zero,
+        color: cs.surfaceContainerHighest.withValues(alpha: 0.3),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: isDefault ? color.withValues(alpha: 0.5) : _border,
-          width: isDefault ? 1.5 : 1,
+          color: isDefault ? color : cs.outlineVariant,
+          width: isDefault ? 2 : 1,
         ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
       ),
       child: Column(
         children: [
           // ── Header ────────────────────────────────────────────────────────
-          Container(
+          Padding(
             padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.06),
-              borderRadius: BorderRadius.zero,
-            ),
             child: Row(
               children: [
                 Container(
@@ -251,10 +297,10 @@ class _PriceListCard extends StatelessWidget {
                   height: 44,
                   decoration: BoxDecoration(
                     color: color.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.zero,
+                    borderRadius: BorderRadius.circular(8),
                   ),
                   child: Icon(
-                    Icons.price_change_outlined,
+                    Icons.price_change_rounded,
                     color: color,
                     size: 24,
                   ),
@@ -268,11 +314,11 @@ class _PriceListCard extends StatelessWidget {
                         children: [
                           Expanded(
                             child: Text(
-                              data['name'],
-                              style: const TextStyle(
-                                fontSize: 15,
+                              data['name']?.toString() ?? '',
+                              style: TextStyle(
+                                fontSize: 16,
                                 fontWeight: FontWeight.bold,
-                                color: _t1,
+                                color: cs.onSurface,
                               ),
                             ),
                           ),
@@ -280,30 +326,30 @@ class _PriceListCard extends StatelessWidget {
                             Container(
                               padding: const EdgeInsets.symmetric(
                                 horizontal: 8,
-                                vertical: 3,
+                                vertical: 4,
                               ),
                               decoration: BoxDecoration(
-                                color: _teal.withValues(alpha: 0.1),
-                                borderRadius: BorderRadius.zero,
+                                color: color.withValues(alpha: 0.15),
+                                borderRadius: BorderRadius.circular(6),
                                 border: Border.all(
-                                  color: _teal.withValues(alpha: 0.4),
+                                  color: color.withValues(alpha: 0.5),
                                 ),
                               ),
-                              child: const Text(
+                              child: Text(
                                 'افتراضي',
                                 style: TextStyle(
-                                  fontSize: 10,
+                                  fontSize: 11,
                                   fontWeight: FontWeight.bold,
-                                  color: _teal,
+                                  color: color,
                                 ),
                               ),
                             ),
                         ],
                       ),
-                      const SizedBox(height: 3),
+                      const SizedBox(height: 4),
                       Text(
-                        data['description'],
-                        style: const TextStyle(fontSize: 12, color: _t2),
+                        data['description']?.toString() ?? 'بدون وصف',
+                        style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -311,6 +357,7 @@ class _PriceListCard extends StatelessWidget {
                   ),
                 ),
                 PopupMenuButton<String>(
+                  iconColor: cs.onSurfaceVariant,
                   onSelected: (v) {
                     if (v == 'edit') onEdit();
                     if (v == 'delete') onDelete();
@@ -338,17 +385,17 @@ class _PriceListCard extends StatelessWidget {
                           ],
                         ),
                       ),
-                    const PopupMenuItem(
+                    PopupMenuItem(
                       value: 'delete',
                       child: Row(
                         children: [
                           Icon(
                             Icons.delete_outline_rounded,
                             size: 18,
-                            color: _red,
+                            color: cs.error,
                           ),
-                          SizedBox(width: 8),
-                          Text('حذف', style: TextStyle(color: _red)),
+                          const SizedBox(width: 8),
+                          Text('حذف', style: TextStyle(color: cs.error)),
                         ],
                       ),
                     ),
@@ -357,36 +404,30 @@ class _PriceListCard extends StatelessWidget {
               ],
             ),
           ),
-
+          Divider(height: 1, color: cs.outlineVariant),
           // ── Footer ────────────────────────────────────────────────────────
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
             child: Row(
               children: [
-                Icon(Icons.inventory_2_outlined, size: 15, color: color),
+                Icon(Icons.calendar_today_outlined, size: 14, color: cs.onSurfaceVariant),
                 const SizedBox(width: 6),
                 Text(
-                  '${data['itemsCount']} صنف',
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.bold,
-                    color: color,
-                  ),
-                ),
-                const SizedBox(width: 16),
-                const Icon(Icons.calendar_today_outlined, size: 14, color: _t2),
-                const SizedBox(width: 4),
-                Text(
-                  data['createdAt'],
-                  style: const TextStyle(fontSize: 12, color: _t2),
+                  dateStr,
+                  style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant),
                 ),
                 const Spacer(),
-                TextButton(
+                FilledButton.icon(
                   onPressed: onViewItems,
-                  child: Text(
-                    'إدارة الأسعار',
-                    style: TextStyle(fontSize: 12, color: color),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: color.withValues(alpha: 0.15),
+                    foregroundColor: color,
+                    elevation: 0,
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                   ),
+                  icon: const Icon(Icons.settings_suggest_outlined, size: 18),
+                  label: const Text('إدارة الأسعار'),
                 ),
               ],
             ),
@@ -398,133 +439,76 @@ class _PriceListCard extends StatelessWidget {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// Products Price Table (Tab 2)
-// ══════════════════════════════════════════════════════════════════════════════
-class _ProductPriceTable extends StatelessWidget {
-  final List<Map<String, dynamic>> priceLists;
-  const _ProductPriceTable({required this.priceLists});
-
-  static const _products = [
-    ('Pringles-1250', 1000.0),
-    ('Coca-Cola 330ml', 750.0),
-    ('Pepsi 500ml', 700.0),
-    ('رز الحياني 5 كيلو', 3000.0),
-    ('مياه نون 1.5L', 250.0),
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      padding: const EdgeInsets.all(14),
-      child: Container(
-        decoration: BoxDecoration(
-          color: _card,
-          borderRadius: BorderRadius.zero,
-          border: Border.all(color: _border),
-        ),
-        child: DataTable(
-          headingRowColor: WidgetStateProperty.all(const Color(0xFFF8FAFC)),
-          columns: [
-            const DataColumn(
-              label: Text(
-                'المنتج',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
-            const DataColumn(
-              label: Text(
-                'سعر الشراء',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
-            for (final l in priceLists)
-              DataColumn(
-                label: Text(
-                  l['name'],
-                  style: const TextStyle(fontWeight: FontWeight.bold),
-                ),
-              ),
-          ],
-          rows: _products.map((p) {
-            return DataRow(
-              cells: [
-                DataCell(Text(p.$1, style: const TextStyle(fontSize: 13))),
-                DataCell(
-                  Text(
-                    '${p.$2.toInt()} د.ع',
-                    style: const TextStyle(fontSize: 13, color: _t2),
-                  ),
-                ),
-                // Retail: +30%
-                DataCell(
-                  Text(
-                    '${(p.$2 * 1.30).toInt()} د.ع',
-                    style: const TextStyle(
-                      fontSize: 13,
-                      color: _blue,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-                // Wholesale: +15%
-                DataCell(
-                  Text(
-                    '${(p.$2 * 1.15).toInt()} د.ع',
-                    style: const TextStyle(
-                      fontSize: 13,
-                      color: _green,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-                // VIP: +20%
-                DataCell(
-                  Text(
-                    '${(p.$2 * 1.20).toInt()} د.ع',
-                    style: const TextStyle(
-                      fontSize: 13,
-                      color: _purple,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-              ],
-            );
-          }).toList(),
-        ),
-      ),
-    );
-  }
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
 // Price Items Sheet
 // ══════════════════════════════════════════════════════════════════════════════
-class _PriceItemsSheet extends StatelessWidget {
+class _PriceItemsSheet extends StatefulWidget {
   final Map<String, dynamic> list;
-  const _PriceItemsSheet({required this.list});
+  final PriceListRepository repo;
+  const _PriceItemsSheet({required this.list, required this.repo});
 
-  static const _items = [
-    ('Pringles-1250', '1,625', '1,300'),
-    ('Coca-Cola 330ml', '975', '750'),
-    ('Pepsi 500ml', '910', '700'),
-    ('رز الحياني 5 كيلو', '3,900', '3,000'),
-    ('مياه نون 1.5L', '325', '250'),
-  ];
+  @override
+  State<_PriceItemsSheet> createState() => _PriceItemsSheetState();
+}
+
+class _PriceItemsSheetState extends State<_PriceItemsSheet> {
+  final _searchCtrl = TextEditingController();
+  List<Map<String, dynamic>> _items = [];
+  bool _isLoading = true;
+  Timer? _searchDebounce;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadItems();
+  }
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    _searchDebounce?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _loadItems([String query = '']) async {
+    setState(() => _isLoading = true);
+    try {
+      final listId = widget.list['id'] as int;
+      final res = await widget.repo.listPriceListItems(listId, query: query);
+      if (mounted) {
+        setState(() {
+          _items = res;
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isLoading = false);
+        AppLogger.error('PriceItemsSheet', 'Failed to load price items: $e');
+      }
+    }
+  }
+
+  void _onSearchChanged(String val) {
+    if (_searchDebounce?.isActive ?? false) _searchDebounce!.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 500), () {
+      _loadItems(val);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
-    final color = list['color'] as Color;
+    final cs = Theme.of(context).colorScheme;
+    final color = AppColors.accentGold;
+
     return Directionality(
       textDirection: TextDirection.rtl,
       child: Container(
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.zero,
+        height: MediaQuery.of(context).size.height * 0.85,
+        decoration: BoxDecoration(
+          color: cs.surface,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
         ),
         child: Column(
-          mainAxisSize: MainAxisSize.min,
           children: [
             const SizedBox(height: 12),
             Center(
@@ -532,8 +516,8 @@ class _PriceItemsSheet extends StatelessWidget {
                 width: 40,
                 height: 4,
                 decoration: BoxDecoration(
-                  color: Colors.grey.shade300,
-                  borderRadius: BorderRadius.zero,
+                  color: cs.onSurfaceVariant.withValues(alpha: 0.4),
+                  borderRadius: BorderRadius.circular(4),
                 ),
               ),
             ),
@@ -541,131 +525,209 @@ class _PriceItemsSheet extends StatelessWidget {
               padding: const EdgeInsets.all(16),
               child: Row(
                 children: [
-                  Icon(Icons.price_change_outlined, color: color, size: 22),
+                  Icon(Icons.price_change_rounded, color: color, size: 26),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
-                      'أسعار ${list['name']}',
-                      style: const TextStyle(
-                        fontSize: 16,
+                      'أسعار ${widget.list['name']}',
+                      style: TextStyle(
+                        fontSize: 18,
                         fontWeight: FontWeight.bold,
-                        color: _t1,
+                        color: cs.onSurface,
                       ),
                     ),
                   ),
+                  IconButton(
+                    icon: const Icon(Icons.close_rounded),
+                    onPressed: () => Navigator.pop(context),
+                  )
                 ],
               ),
             ),
-            const Divider(height: 1, color: _border),
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Row(
-                children: [
-                  Expanded(
-                    flex: 4,
-                    child: Text(
-                      'المنتج',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        color: _t2,
-                      ),
-                    ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: TextField(
+                controller: _searchCtrl,
+                onChanged: _onSearchChanged,
+                decoration: InputDecoration(
+                  hintText: 'ابحث برقم الباركود أو اسم المنتج...',
+                  prefixIcon: const Icon(Icons.search_rounded),
+                  filled: true,
+                  fillColor: cs.surfaceContainerHighest.withValues(alpha: 0.3),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide.none,
                   ),
-                  Expanded(
-                    flex: 3,
-                    child: Text(
-                      'سعر البيع',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        color: _t2,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                  ),
-                  Expanded(
-                    flex: 3,
-                    child: Text(
-                      'سعر الشراء',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        color: _t2,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                  ),
-                  SizedBox(width: 36),
-                ],
+                ),
               ),
             ),
-            const Divider(height: 1, color: _border),
-            SizedBox(
-              height: 250,
-              child: ListView.separated(
-                itemCount: _items.length,
-                separatorBuilder: (_, __) =>
-                    const Divider(height: 1, color: _border),
-                itemBuilder: (_, i) {
-                  final item = _items[i];
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 10,
-                    ),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          flex: 4,
-                          child: Text(
-                            item.$1,
-                            style: const TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                              color: _t1,
-                            ),
-                          ),
+            const SizedBox(height: 12),
+            Divider(height: 1, color: cs.outlineVariant),
+            Expanded(
+              child: _isLoading
+                  ? const Center(child: CircularProgressIndicator(color: AppColors.accentGold))
+                  : _items.isEmpty
+                      ? Center(child: Text('لا توجد منتجات', style: TextStyle(color: cs.onSurfaceVariant)))
+                      : ListView.separated(
+                          itemCount: _items.length,
+                          separatorBuilder: (_, __) => Divider(height: 1, color: cs.outlineVariant),
+                          itemBuilder: (ctx, i) {
+                            return _PriceItemRow(
+                              item: _items[i],
+                              listId: widget.list['id'] as int,
+                              repo: widget.repo,
+                            );
+                          },
                         ),
-                        Expanded(
-                          flex: 3,
-                          child: Text(
-                            '${item.$2} د.ع',
-                            style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.bold,
-                              color: color,
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
-                        ),
-                        Expanded(
-                          flex: 3,
-                          child: Text(
-                            '${item.$3} د.ع',
-                            style: const TextStyle(fontSize: 12, color: _t2),
-                            textAlign: TextAlign.center,
-                          ),
-                        ),
-                        IconButton(
-                          icon: const Icon(
-                            Icons.edit_outlined,
-                            size: 18,
-                            color: _t2,
-                          ),
-                          onPressed: () {},
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(),
-                        ),
-                      ],
-                    ),
-                  );
-                },
-              ),
             ),
-            const SizedBox(height: 16),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _PriceItemRow extends StatefulWidget {
+  final Map<String, dynamic> item;
+  final int listId;
+  final PriceListRepository repo;
+
+  const _PriceItemRow({
+    required this.item,
+    required this.listId,
+    required this.repo,
+  });
+
+  @override
+  State<_PriceItemRow> createState() => _PriceItemRowState();
+}
+
+class _PriceItemRowState extends State<_PriceItemRow> {
+  late double _currentPrice;
+  late TextEditingController _priceCtrl;
+  Timer? _debounce;
+  bool _isSaving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final customPrice = (widget.item['customPrice'] as num?)?.toDouble();
+    final defaultPrice = (widget.item['defaultSellPrice'] as num?)?.toDouble() ?? 0.0;
+    _currentPrice = customPrice ?? defaultPrice;
+    _priceCtrl = TextEditingController(text: _currentPrice.toInt().toString());
+  }
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _priceCtrl.dispose();
+    super.dispose();
+  }
+
+  void _onPriceChanged(double newPrice) {
+    if (_debounce?.isActive ?? false) _debounce!.cancel();
+    
+    // Save previous in case of revert
+    final prevPrice = _currentPrice;
+    
+    setState(() {
+      _currentPrice = newPrice;
+      _isSaving = true;
+    });
+
+    _debounce = Timer(const Duration(milliseconds: 600), () async {
+      try {
+        final productId = widget.item['productId'] as int;
+        await widget.repo.savePriceListItem(widget.listId, productId, newPrice);
+        if (mounted) {
+          setState(() => _isSaving = false);
+        }
+      } catch (e) {
+        if (mounted) {
+          setState(() {
+            _currentPrice = prevPrice;
+            _isSaving = false;
+          });
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('خطأ أثناء حفظ السعر. تمت إعادة القيمة السابقة.'),
+              backgroundColor: Theme.of(context).colorScheme.error,
+            ),
+          );
+        }
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final name = widget.item['productName']?.toString() ?? '';
+    final barcode = widget.item['barcode']?.toString() ?? 'بدون باركود';
+    final buyPrice = (widget.item['buyPrice'] as num?)?.toDouble() ?? 0.0;
+    
+    final hasCustomPrice = widget.item['customPrice'] != null;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Expanded(
+            flex: 4,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  name,
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: cs.onSurface),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  barcode,
+                  style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'الشراء: ${IraqiCurrencyFormat.formatInt(buyPrice)} د.ع',
+                  style: TextStyle(fontSize: 12, color: cs.outline),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            flex: 3,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                AppPriceInput(
+                  label: 'السعر المخصص',
+                  controller: _priceCtrl,
+                  onParsedChanged: (int val) => _onPriceChanged(val.toDouble()),
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (_isSaving)
+                      const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.accentGold))
+                    else if (hasCustomPrice)
+                      const Icon(Icons.check_circle_rounded, size: 14, color: Colors.green),
+                    const SizedBox(width: 4),
+                    Text(
+                      hasCustomPrice ? 'مخصص' : 'الافتراضي',
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: hasCustomPrice ? Colors.green : cs.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -676,7 +738,8 @@ class _PriceItemsSheet extends StatelessWidget {
 // ══════════════════════════════════════════════════════════════════════════════
 class _PriceListForm extends StatefulWidget {
   final Map<String, dynamic>? existing;
-  const _PriceListForm({this.existing});
+  final PriceListRepository repo;
+  const _PriceListForm({this.existing, required this.repo});
 
   @override
   State<_PriceListForm> createState() => _PriceListFormState();
@@ -686,7 +749,7 @@ class _PriceListFormState extends State<_PriceListForm> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _name;
   late final TextEditingController _desc;
-  Color _color = _blue;
+  bool _isSaving = false;
 
   @override
   void initState() {
@@ -694,7 +757,6 @@ class _PriceListFormState extends State<_PriceListForm> {
     final e = widget.existing;
     _name = TextEditingController(text: e?['name'] ?? '');
     _desc = TextEditingController(text: e?['description'] ?? '');
-    _color = e?['color'] ?? _blue;
   }
 
   @override
@@ -704,18 +766,42 @@ class _PriceListFormState extends State<_PriceListForm> {
     super.dispose();
   }
 
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() => _isSaving = true);
+    
+    try {
+      if (widget.existing != null) {
+        final id = widget.existing!['id'] as int;
+        await widget.repo.updatePriceList(id, _name.text.trim(), _desc.text.trim());
+      } else {
+        await widget.repo.createPriceList(_name.text.trim(), _desc.text.trim());
+      }
+      if (mounted) Navigator.pop(context, true);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isSaving = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('خطأ أثناء الحفظ: $e')),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
     return Directionality(
       textDirection: TextDirection.rtl,
       child: Container(
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.zero,
+        decoration: BoxDecoration(
+          color: cs.surface,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
         ),
         padding: EdgeInsets.fromLTRB(
           20,
-          20,
+          12,
           20,
           MediaQuery.of(context).viewInsets.bottom + 20,
         ),
@@ -730,136 +816,463 @@ class _PriceListFormState extends State<_PriceListForm> {
                   width: 40,
                   height: 4,
                   decoration: BoxDecoration(
-                    color: Colors.grey.shade300,
-                    borderRadius: BorderRadius.zero,
+                    color: cs.onSurfaceVariant.withValues(alpha: 0.4),
+                    borderRadius: BorderRadius.circular(4),
                   ),
                 ),
               ),
               const SizedBox(height: 16),
               Text(
                 widget.existing != null ? 'تعديل القائمة' : 'قائمة أسعار جديدة',
-                style: const TextStyle(
-                  fontSize: 17,
+                style: TextStyle(
+                  fontSize: 18,
                   fontWeight: FontWeight.bold,
-                  color: _t1,
+                  color: cs.onSurface,
                 ),
               ),
               const SizedBox(height: 20),
               TextFormField(
                 controller: _name,
-                decoration: const InputDecoration(
+                decoration: InputDecoration(
                   labelText: 'اسم القائمة *',
-                  prefixIcon: Icon(
-                    Icons.label_outline,
-                    size: 20,
-                    color: _t2,
-                  ),
+                  prefixIcon: Icon(Icons.label_outline, color: cs.onSurfaceVariant),
                   filled: true,
-                  fillColor: Color(0xFFF8FAFC),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.zero),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.zero,
-                    borderSide: BorderSide(color: _border),
-                  ),
+                  fillColor: cs.surfaceContainerHighest.withValues(alpha: 0.3),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
                   focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.zero,
-                    borderSide: BorderSide(color: _navy, width: 1.5),
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: const BorderSide(color: AppColors.accentGold, width: 2),
                   ),
                 ),
-                validator: (v) =>
-                    (v == null || v.trim().isEmpty) ? 'مطلوب' : null,
+                validator: (v) => (v == null || v.trim().isEmpty) ? 'مطلوب' : null,
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 16),
               TextFormField(
                 controller: _desc,
                 maxLines: 2,
-                decoration: const InputDecoration(
+                decoration: InputDecoration(
                   labelText: 'الوصف',
-                  prefixIcon: Icon(
-                    Icons.description_outlined,
-                    size: 20,
-                    color: _t2,
-                  ),
+                  prefixIcon: Icon(Icons.description_outlined, color: cs.onSurfaceVariant),
                   filled: true,
-                  fillColor: Color(0xFFF8FAFC),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.zero),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.zero,
-                    borderSide: BorderSide(color: _border),
-                  ),
+                  fillColor: cs.surfaceContainerHighest.withValues(alpha: 0.3),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
                   focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.zero,
-                    borderSide: BorderSide(color: _navy, width: 1.5),
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: const BorderSide(color: AppColors.accentGold, width: 2),
                   ),
                 ),
               ),
-              const SizedBox(height: 14),
-              const Text(
-                'لون القائمة:',
-                style: TextStyle(fontSize: 13, color: _t2),
-              ),
-              const SizedBox(height: 8),
-              Row(
-                children: [_blue, _green, _purple, _orange, _teal]
-                    .map(
-                      (c) => GestureDetector(
-                        onTap: () => setState(() => _color = c),
-                        child: Container(
-                          width: 34,
-                          height: 34,
-                          margin: const EdgeInsetsDirectional.only(start: 8),
-                          decoration: BoxDecoration(
-                            color: c,
-                            shape: BoxShape.circle,
-                            border: Border.all(
-                              color: _color == c
-                                  ? Colors.black54
-                                  : Colors.transparent,
-                              width: 2.5,
-                            ),
-                          ),
-                          child: _color == c
-                              ? const Icon(
-                                  Icons.check,
-                                  color: Colors.white,
-                                  size: 18,
-                                )
-                              : null,
-                        ),
+              const SizedBox(height: 24),
+              FilledButton(
+                onPressed: _isSaving ? null : _submit,
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppColors.accentGold,
+                  foregroundColor: AppColors.primaryDark,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                child: _isSaving
+                    ? const SizedBox(
+                        height: 24,
+                        width: 24,
+                        child: CircularProgressIndicator(color: AppColors.primaryDark, strokeWidth: 2),
+                      )
+                    : Text(
+                        widget.existing != null ? 'حفظ التعديلات' : 'إنشاء القائمة',
+                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                       ),
-                    )
-                    .toList(),
-              ),
-              const SizedBox(height: 20),
-              ElevatedButton(
-                onPressed: () {
-                  if (!_formKey.currentState!.validate()) return;
-                  Navigator.pop(context, {
-                    'name': _name.text.trim(),
-                    'description': _desc.text.trim(),
-                    'color': _color,
-                    'isActive': true,
-                  });
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _navy,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: const RoundedRectangleBorder(
-                    borderRadius: BorderRadius.zero,
-                  ),
-                ),
-                child: Text(
-                  widget.existing != null ? 'حفظ التعديلات' : 'إنشاء القائمة',
-                  style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 15,
-                  ),
-                ),
               ),
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tab 2 — Smart comparison view (P2)
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _ComparisonTab extends StatefulWidget {
+  const _ComparisonTab({required this.repo, required this.lists});
+
+  final PriceListRepository repo;
+  final List<Map<String, dynamic>> lists;
+
+  @override
+  State<_ComparisonTab> createState() => _ComparisonTabState();
+}
+
+class _ComparisonTabState extends State<_ComparisonTab> {
+  final TextEditingController _search = TextEditingController();
+  Timer? _debounce;
+  bool _loading = false;
+  List<Map<String, dynamic>> _rows = const [];
+  String? _error;
+
+  static const int _kInitialLimit = 100;
+  static const int _kSearchLimit = 200;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(covariant _ComparisonTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.lists.length != widget.lists.length) {
+      _load();
+    }
+  }
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _search.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    if (!mounted) return;
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final q = _search.text.trim();
+      final rows = await widget.repo.searchComparisonMatrix(
+        query: q,
+        limit: q.isEmpty ? _kInitialLimit : _kSearchLimit,
+      );
+      if (!mounted) return;
+      setState(() {
+        _rows = rows;
+        _loading = false;
+      });
+    } catch (e, st) {
+      AppLogger.error('PriceLists', 'comparison load failed', e, st);
+      if (!mounted) return;
+      setState(() {
+        _error = 'تعذّر تحميل المقارنة: $e';
+        _loading = false;
+      });
+    }
+  }
+
+  void _onSearchChanged(String _) {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 320), _load);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Column(
+      children: [
+        // ── Search bar ─────────────────────────────────────────────────────
+        Padding(
+          padding: const EdgeInsetsDirectional.fromSTEB(16, 12, 16, 8),
+          child: TextField(
+            controller: _search,
+            textInputAction: TextInputAction.search,
+            onChanged: _onSearchChanged,
+            decoration: InputDecoration(
+              hintText: 'ابحث باسم المنتج أو الباركود…',
+              prefixIcon: Icon(Icons.search_rounded, color: cs.onSurfaceVariant),
+              suffixIcon: _search.text.isEmpty
+                  ? null
+                  : IconButton(
+                      tooltip: 'مسح',
+                      icon: const Icon(Icons.close_rounded),
+                      onPressed: () {
+                        _search.clear();
+                        _load();
+                        setState(() {});
+                      },
+                    ),
+              filled: true,
+              fillColor: cs.surfaceContainerHighest.withValues(alpha: 0.3),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide.none,
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: AppColors.accentGold, width: 2),
+              ),
+              isDense: true,
+            ),
+          ),
+        ),
+        // ── Hint banner ────────────────────────────────────────────────────
+        if (_search.text.trim().isEmpty)
+          Padding(
+            padding: const EdgeInsetsDirectional.fromSTEB(16, 0, 16, 8),
+            child: Row(
+              children: [
+                Icon(Icons.info_outline_rounded,
+                    size: 14, color: cs.onSurfaceVariant),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'يعرض أول $_kInitialLimit منتج — ابحث للوصول إلى منتج بعينه.',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: cs.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        const Divider(height: 1),
+        Expanded(child: _buildBody(cs)),
+      ],
+    );
+  }
+
+  Widget _buildBody(ColorScheme cs) {
+    if (_loading) {
+      return const Center(
+        child: CircularProgressIndicator(color: AppColors.accentGold),
+      );
+    }
+    if (_error != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.error_outline, size: 56, color: cs.error),
+              const SizedBox(height: 12),
+              Text(_error!,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: cs.onSurface)),
+              const SizedBox(height: 12),
+              FilledButton.tonal(onPressed: _load, child: const Text('إعادة المحاولة')),
+            ],
+          ),
+        ),
+      );
+    }
+    if (_rows.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.inbox_outlined,
+                  size: 64,
+                  color: cs.onSurfaceVariant.withValues(alpha: 0.5)),
+              const SizedBox(height: 12),
+              Text(
+                _search.text.trim().isEmpty
+                    ? 'لا توجد منتجات نشطة لعرضها.'
+                    : 'لا توجد نتائج مطابقة للبحث.',
+                style: TextStyle(color: cs.onSurfaceVariant, fontSize: 14),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    if (widget.lists.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Text(
+            'أنشئ قائمة أسعار من تبويب «القوائم» لبدء المقارنة.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: cs.onSurfaceVariant),
+          ),
+        ),
+      );
+    }
+    return ListView.separated(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
+      itemCount: _rows.length,
+      cacheExtent: 800,
+      separatorBuilder: (_, _) => const SizedBox(height: 8),
+      itemBuilder: (context, i) => _ComparisonRowCard(
+        row: _rows[i],
+        lists: widget.lists,
+      ),
+    );
+  }
+}
+
+class _ComparisonRowCard extends StatelessWidget {
+  const _ComparisonRowCard({required this.row, required this.lists});
+
+  final Map<String, dynamic> row;
+  final List<Map<String, dynamic>> lists;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final name = (row['productName'] as String?) ?? '—';
+    final barcode = (row['barcode'] as String?)?.trim() ?? '';
+    final defPrice = (row['defaultSellPrice'] as num?)?.toDouble() ?? 0;
+    final prices = (row['prices'] as Map?)?.cast<int, double>() ?? const {};
+
+    return Container(
+      decoration: BoxDecoration(
+        color: cs.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: cs.outlineVariant.withValues(alpha: 0.5),
+        ),
+      ),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      name,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: cs.onSurface,
+                      ),
+                    ),
+                    if (barcode.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        barcode,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: cs.onSurfaceVariant,
+                          fontFamilyFallback: const ['monospace'],
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              _PriceChip(
+                label: 'السعر الافتراضي',
+                value: defPrice,
+                bold: true,
+              ),
+            ],
+          ),
+          if (lists.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              children: [
+                for (final l in lists)
+                  _PriceChip(
+                    label: (l['name'] as String?) ?? 'قائمة',
+                    value: prices[(l['id'] as num).toInt()],
+                    isDefaultList: ((l['isDefault'] as int?) ?? 0) == 1,
+                    fallbackPrice: defPrice,
+                  ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _PriceChip extends StatelessWidget {
+  const _PriceChip({
+    required this.label,
+    required this.value,
+    this.bold = false,
+    this.isDefaultList = false,
+    this.fallbackPrice,
+  });
+
+  final String label;
+  final double? value;
+  final bool bold;
+  final bool isDefaultList;
+  final double? fallbackPrice;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final hasCustom = value != null;
+    final shown = value ?? fallbackPrice ?? 0;
+
+    final Color border = hasCustom
+        ? AppColors.accentGold
+        : cs.outlineVariant.withValues(alpha: 0.7);
+    final Color tint = hasCustom
+        ? AppColors.accentGold.withValues(alpha: 0.12)
+        : cs.surfaceContainerHighest.withValues(alpha: 0.4);
+    final Color textColor = hasCustom
+        ? AppColors.accentGold
+        : cs.onSurfaceVariant;
+
+    return Container(
+      padding: const EdgeInsetsDirectional.fromSTEB(10, 6, 10, 6),
+      decoration: BoxDecoration(
+        color: tint,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: border, width: hasCustom ? 1.2 : 0.8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (isDefaultList) ...[
+                const Icon(Icons.star_rounded,
+                    size: 12, color: AppColors.accentGold),
+                const SizedBox(width: 3),
+              ],
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w600,
+                  color: textColor,
+                ),
+              ),
+              if (!hasCustom) ...[
+                const SizedBox(width: 4),
+                Text(
+                  '·افتراضي',
+                  style: TextStyle(
+                    fontSize: 9.5,
+                    color: cs.onSurfaceVariant.withValues(alpha: 0.7),
+                  ),
+                ),
+              ],
+            ],
+          ),
+          const SizedBox(height: 2),
+          Text(
+            IraqiCurrencyFormat.formatIqd(shown),
+            style: TextStyle(
+              fontSize: 12.5,
+              fontWeight: bold ? FontWeight.w800 : FontWeight.w700,
+              color: hasCustom ? AppColors.accentGold : cs.onSurface,
+            ),
+          ),
+        ],
       ),
     );
   }

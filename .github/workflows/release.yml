@@ -30,7 +30,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag || github.ref }}
+          # التشغيل اليدوي يبني الفرع المختار (آخر كود)، لا وسم قديم.
+          ref: ${{ github.ref }}
 
       - uses: subosito/flutter-action@v2
         with:
@@ -41,7 +42,11 @@ jobs:
         run: flutter config --enable-windows-desktop
 
       - run: flutter pub get
-      - run: flutter build windows --release --dart-define=SUPABASE_URL="${{ secrets.SUPABASE_URL }}" --dart-define=SUPABASE_ANON_KEY="${{ secrets.SUPABASE_ANON_KEY }}"
+      # CMAKE_POLICY_VERSION_MINIMUM: firebase_cpp_sdk القديم يطلب CMake قديم على runners الحديثة
+      - name: Build Windows release
+        env:
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+        run: flutter build windows --release --dart-define=SUPABASE_URL="${{ secrets.SUPABASE_URL }}" --dart-define=SUPABASE_ANON_KEY="${{ secrets.SUPABASE_ANON_KEY }}"
 
       - name: Resolve build output path
         id: paths
@@ -57,6 +62,29 @@ jobs:
           Write-Host "Version: $version"
           foreach ($line in @("BUILD_SRC=$src", "APP_VERSION=$version")) {
             [System.IO.File]::AppendAllText($env:GITHUB_OUTPUT, "$line`n", [System.Text.UTF8Encoding]::new($false))
+          }
+
+      - name: Bundle Visual C++ runtime next to naboo.exe
+        shell: pwsh
+        run: |
+          $src = "${{ steps.paths.outputs.BUILD_SRC }}"
+          $sys = Join-Path $env:SystemRoot "System32"
+          $dlls = @(
+            "msvcp140.dll",
+            "msvcp140_1.dll",
+            "msvcp140_2.dll",
+            "vcruntime140.dll",
+            "vcruntime140_1.dll",
+            "concrt140.dll"
+          )
+          foreach ($dll in $dlls) {
+            $from = Join-Path $sys $dll
+            if (Test-Path $from) {
+              Copy-Item $from -Destination (Join-Path $src $dll) -Force
+              Write-Host "Bundled $dll"
+            } else {
+              Write-Warning "Missing $from"
+            }
           }
 
       - name: Package portable ZIP
@@ -100,7 +128,9 @@ jobs:
           gh release upload "$TAG" naboo-windows-setup.exe naboo-windows.zip --clobber --repo "$REPO"
           echo "OK: Windows assets on $TAG (existing APK untouched)"
 
+  # أندرويد يُرفع يدوياً من الجهاز (توقيع upload-keystore). لا تُبنَ هنا حتى لا يُستبدل APK بتوقيع CI.
   android:
+    if: false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

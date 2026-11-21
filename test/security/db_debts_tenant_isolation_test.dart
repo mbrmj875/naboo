@@ -365,7 +365,7 @@ void main() {
           sandbox.db,
             1,
           invoiceId,
-          1234.0,
+          1234,
         );
         expect(affected, 1);
 
@@ -398,7 +398,7 @@ void main() {
             sandbox.db,
             2,
             t1InvoiceId,
-            9999.0,
+            9999,
           );
           expect(affected, 0);
 

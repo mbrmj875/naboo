@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  استخدم هذا الملف عند الاشتراك في Apple Developer Program (مدفوع) وتمكين Push:
+  1. انسخ إلى Runner.push.entitlements
+  2. في Xcode → Runner → Build Settings → Code Signing Entitlements = Runner/Runner.push.entitlements
+  3. Signing & Capabilities → + Capability → Push Notifications
+  4. أعد تفعيل UIBackgroundModes → remote-notification في Info.plist
+-->
+<plist version="1.0">
+<dict>
+	<key>aps-environment</key>
+	<string>production</string>
+</dict>
+</plist>

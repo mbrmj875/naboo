@@ -5,13 +5,8 @@ import '../../services/inventory_repository.dart';
 import '../../utils/screen_layout.dart';
 import 'stock_voucher_screen.dart';
 
-const _navy = Color(0xFF1E3A5F);
-const _teal = Color(0xFF0D9488);
-const _bg = Color(0xFFF1F5F9);
-const _card = Colors.white;
-const _border = Color(0xFFE2E8F0);
-const _t1 = Color(0xFF0F172A);
-const _t2 = Color(0xFF64748B);
+import '../../theme/design_tokens.dart';
+
 const _green = Color(0xFF10B981);
 const _red = Color(0xFFEF4444);
 const _blue = Color(0xFF3B82F6);
@@ -82,36 +77,43 @@ class _InventoryManagementScreenState extends State<InventoryManagementScreen> {
     super.dispose();
   }
 
+  bool get _isDark => Theme.of(context).brightness == Brightness.dark;
+
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final bg = _isDark ? AppColors.primaryDark : const Color(0xFFF1F5F9);
+    final borderColor = _isDark ? AppColors.accentGold.withValues(alpha: 0.35) : AppColors.accentGold.withValues(alpha: 0.5);
+
     return Scaffold(
-      backgroundColor: _bg,
+      backgroundColor: bg,
       appBar: AppBar(
-        title: const Text(
+        title: Text(
           'حركات المخزون',
-          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17),
+          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17, color: cs.onSurface),
         ),
-        backgroundColor: _navy,
-        foregroundColor: Colors.white,
+        backgroundColor: bg,
+        foregroundColor: cs.onSurface,
         elevation: 0,
       ),
       floatingActionButton: FloatingActionButton.extended(
-        backgroundColor: _teal,
+        backgroundColor: AppColors.accentGold,
         onPressed: () => Navigator.push(
           context,
           MaterialPageRoute(builder: (_) => const StockVoucherScreen()),
         ),
-        icon: const Icon(Icons.add_rounded, color: Colors.white),
-        label: const Text(
+        icon: Icon(Icons.add_rounded, color: _isDark ? AppColors.primaryDark : Colors.white),
+        label: Text(
           'سند جديد',
-          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+          style: TextStyle(color: _isDark ? AppColors.primaryDark : Colors.white, fontWeight: FontWeight.bold),
         ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       ),
       body: Column(
         children: [
           // ── Summary bar ─────────────────────────────────────────────────
           Container(
-            color: _navy,
+            color: bg,
             padding: EdgeInsetsDirectional.only(
               start: ScreenLayout.of(context).pageHorizontalGap,
               end: ScreenLayout.of(context).pageHorizontalGap,
@@ -146,7 +148,7 @@ class _InventoryManagementScreenState extends State<InventoryManagementScreen> {
 
           // ── Search + Sort ────────────────────────────────────────────────
           Container(
-            color: _card,
+            color: cs.surface,
             padding: const EdgeInsets.all(12),
             child: Row(
               children: [
@@ -157,24 +159,24 @@ class _InventoryManagementScreenState extends State<InventoryManagementScreen> {
                     decoration: InputDecoration(
                       hintText: 'بحث بالمنتج أو رقم السند...',
                       hintStyle: TextStyle(
-                        color: Colors.grey.shade400,
+                        color: cs.onSurfaceVariant.withValues(alpha: 0.7),
                         fontSize: 12,
                       ),
-                      prefixIcon: const Icon(Icons.search_rounded, size: 19),
+                      prefixIcon: Icon(Icons.search_rounded, size: 19, color: cs.onSurfaceVariant),
                       filled: true,
-                      fillColor: _bg,
+                      fillColor: cs.surfaceContainerHighest.withValues(alpha: 0.35),
                       contentPadding: const EdgeInsets.symmetric(vertical: 10),
-                      border: const OutlineInputBorder(
-                        borderRadius: BorderRadius.zero,
-                        borderSide: BorderSide(color: _border),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide(color: cs.outlineVariant, width: 1.5),
                       ),
-                      enabledBorder: const OutlineInputBorder(
-                        borderRadius: BorderRadius.zero,
-                        borderSide: BorderSide(color: _border),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide(color: cs.outlineVariant, width: 1.5),
                       ),
-                      focusedBorder: const OutlineInputBorder(
-                        borderRadius: BorderRadius.zero,
-                        borderSide: BorderSide(color: _navy, width: 1.5),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(color: AppColors.accentGold, width: 2),
                       ),
                     ),
                   ),
@@ -184,15 +186,16 @@ class _InventoryManagementScreenState extends State<InventoryManagementScreen> {
                   padding: const EdgeInsets.symmetric(horizontal: 10),
                   height: 44,
                   decoration: BoxDecoration(
-                    color: _bg,
-                    borderRadius: BorderRadius.zero,
-                    border: Border.all(color: _border),
+                    color: cs.surfaceContainerHighest.withValues(alpha: 0.35),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: cs.outlineVariant, width: 1.5),
                   ),
                   child: DropdownButtonHideUnderline(
                     child: DropdownButton<String>(
                       value: _sortBy,
-                      icon: const Icon(Icons.sort_rounded, size: 18),
-                      style: const TextStyle(color: _t1, fontSize: 13),
+                      icon: Icon(Icons.sort_rounded, size: 18, color: cs.onSurfaceVariant),
+                      style: TextStyle(color: cs.onSurface, fontSize: 13),
+                      dropdownColor: cs.surface,
                       items: _sortOptions
                           .map(
                             (s) => DropdownMenuItem(value: s, child: Text(s)),
@@ -211,7 +214,7 @@ class _InventoryManagementScreenState extends State<InventoryManagementScreen> {
 
           // ── Filter chips ────────────────────────────────────────────────
           Container(
-            color: _card,
+            color: cs.surface,
             padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
@@ -222,7 +225,7 @@ class _InventoryManagementScreenState extends State<InventoryManagementScreen> {
                     'إيداع' => _green,
                     'صرف' => _red,
                     'تحويل' => _blue,
-                    _ => _teal,
+                    _ => AppColors.accentGold,
                   };
                   return Padding(
                     padding: const EdgeInsetsDirectional.only(start: 8),
@@ -235,17 +238,19 @@ class _InventoryManagementScreenState extends State<InventoryManagementScreen> {
                       }),
                       selectedColor: color.withValues(alpha: 0.15),
                       checkmarkColor: color,
+                      backgroundColor: cs.surfaceContainerHighest.withValues(alpha: 0.35),
                       labelStyle: TextStyle(
                         fontSize: 12,
-                        color: selected ? color : _t2,
+                        color: selected ? color : cs.onSurfaceVariant,
                         fontWeight: selected
                             ? FontWeight.bold
                             : FontWeight.normal,
                       ),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                       side: BorderSide(
                         color: selected
                             ? color.withValues(alpha: 0.5)
-                            : _border,
+                            : cs.outlineVariant,
                       ),
                     ),
                   );
@@ -254,15 +259,15 @@ class _InventoryManagementScreenState extends State<InventoryManagementScreen> {
             ),
           ),
 
-          const Divider(height: 1, color: _border),
+          Divider(height: 1, color: cs.outlineVariant.withValues(alpha: 0.5)),
 
           // ── List ─────────────────────────────────────────────────────────
           Expanded(
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : _rows.isEmpty
-                ? const Center(
-                    child: Text('لا توجد حركات', style: TextStyle(color: _t2)),
+                ? Center(
+                    child: Text('لا توجد حركات', style: TextStyle(color: cs.onSurfaceVariant)),
                   )
                 : ListView.separated(
                     padding: const EdgeInsets.fromLTRB(14, 14, 14, 100),
@@ -286,12 +291,13 @@ class _MovementCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     final type = data['voucherType']?.toString() ?? '';
     final (icon, color, label) = switch (type) {
       'in' => (Icons.arrow_downward_rounded, _green, 'إيداع'),
       'out' => (Icons.arrow_upward_rounded, _red, 'صرف'),
       'transfer' => (Icons.swap_horiz_rounded, _blue, 'تحويل'),
-      _ => (Icons.circle, _t2, ''),
+      _ => (Icons.circle, cs.onSurfaceVariant, ''),
     };
     final from = data['fromWarehouseName']?.toString() ?? '—';
     final to = data['toWarehouseName']?.toString() ?? '—';
@@ -314,9 +320,9 @@ class _MovementCard extends StatelessWidget {
 
     return Container(
       decoration: BoxDecoration(
-        color: _card,
-        borderRadius: BorderRadius.zero,
-        border: Border.all(color: _border),
+        color: cs.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.5)),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.04),
@@ -334,7 +340,7 @@ class _MovementCard extends StatelessWidget {
             height: 42,
             decoration: BoxDecoration(
               color: color.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.zero,
+              borderRadius: BorderRadius.circular(8),
             ),
             child: Icon(icon, color: color, size: 22),
           ),
@@ -354,7 +360,7 @@ class _MovementCard extends StatelessWidget {
                       ),
                       decoration: BoxDecoration(
                         color: color.withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.zero,
+                        borderRadius: BorderRadius.circular(4),
                       ),
                       child: Text(
                         label,
@@ -368,25 +374,25 @@ class _MovementCard extends StatelessWidget {
                     const SizedBox(width: 8),
                     Text(
                       voucherNo,
-                      style: const TextStyle(fontSize: 12, color: _t2),
+                      style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
                     ),
                   ],
                 ),
                 const SizedBox(height: 5),
                 Text(
                   firstProduct,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.bold,
-                    color: _t1,
+                    color: cs.onSurface,
                   ),
                 ),
                 const SizedBox(height: 3),
                 Row(
                   children: [
-                    const Icon(Icons.warehouse_outlined, size: 13, color: _t2),
+                    Icon(Icons.warehouse_outlined, size: 13, color: cs.onSurfaceVariant),
                     const SizedBox(width: 4),
-                    Text(loc, style: const TextStyle(fontSize: 12, color: _t2)),
+                    Text(loc, style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
                   ],
                 ),
               ],
@@ -406,9 +412,9 @@ class _MovementCard extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 4),
-              Text(dateLabel, style: const TextStyle(fontSize: 11, color: _t2)),
+              Text(dateLabel, style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
               const SizedBox(height: 4),
-              const Icon(Icons.chevron_left_rounded, size: 18, color: _t2),
+              Icon(Icons.chevron_left_rounded, size: 18, color: cs.onSurfaceVariant),
             ],
           ),
         ],
@@ -432,32 +438,34 @@ class _SummaryChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return Expanded(
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
         decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.zero,
+          color: cs.surfaceContainerHighest.withValues(alpha: 0.35),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.5)),
         ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, color: Colors.white70, size: 16),
+            Icon(icon, color: cs.onSurfaceVariant, size: 16),
             const SizedBox(width: 6),
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
                   value,
-                  style: const TextStyle(
-                    color: Colors.white,
+                  style: TextStyle(
+                    color: cs.onSurface,
                     fontSize: 15,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
                 Text(
                   label,
-                  style: const TextStyle(color: Colors.white60, fontSize: 10),
+                  style: TextStyle(color: cs.onSurfaceVariant, fontSize: 10),
                 ),
               ],
             ),

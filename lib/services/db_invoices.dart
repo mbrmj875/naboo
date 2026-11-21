@@ -14,6 +14,7 @@ int? _tryParseLocalTenantId(String raw) {
   return null;
 }
 
+/// معرّف المستأجر المحلي الموحّد (SQLite) — يتجاهل `local-{userId}` من الجلسة.
 Future<int> _resolveActiveTenantIdForLocalDb(DatabaseExecutor ex) async {
   try {
     final rows = await ex.query(
@@ -27,13 +28,133 @@ Future<int> _resolveActiveTenantIdForLocalDb(DatabaseExecutor ex) async {
         ? null
         : int.tryParse((rows.first['value'] ?? '').toString());
     if (fromSettings != null && fromSettings > 0) return fromSettings;
-  } catch (_) {}
-  try {
-    final sid = TenantContext.instance.requireTenantId();
-    final fromSession = _tryParseLocalTenantId(sid);
-    if (fromSession != null && fromSession > 0) return fromSession;
-  } catch (_) {}
+  } catch (e, st) {
+    AppLogger.error(
+      'DBInvoices',
+      'فشل قراءة active_tenant_id — fallback 1',
+      e,
+      st,
+    );
+  }
+  // لا نستخدم local-{userId} من TenantContext كـ tenantId — يفصل ورديات الموظف عن لوحة المالك.
   return 1;
+}
+
+Future<int?> _resolveWorkShiftIdForInvoice(
+  DatabaseExecutor txn, {
+  required int tenantId,
+  required Invoice invoice,
+}) async {
+  if (invoice.workShiftId != null && invoice.workShiftId! > 0) {
+    return invoice.workShiftId;
+  }
+
+  final actor = (invoice.createdByUserName ?? '').trim();
+  if (actor.isNotEmpty) {
+    final userRows = await txn.rawQuery(
+      '''
+      SELECT id FROM users
+      WHERE LOWER(TRIM(COALESCE(displayName, ''))) = LOWER(?)
+         OR LOWER(TRIM(COALESCE(username, ''))) = LOWER(?)
+      LIMIT 1
+      ''',
+      [actor, actor],
+    );
+    if (userRows.isNotEmpty) {
+      final uid = userRows.first['id'] as int;
+      final wsRows = await txn.rawQuery(
+        '''
+        SELECT id FROM work_shifts
+        WHERE deleted_at IS NULL
+          AND (closedAt IS NULL OR TRIM(IFNULL(closedAt, '')) = '')
+          AND shiftStaffUserId = ?
+          AND (
+            tenantId = ?
+            OR NOT EXISTS (SELECT 1 FROM tenants t WHERE t.id = tenantId)
+          )
+        ORDER BY datetime(openedAt) DESC, id DESC
+        LIMIT 1
+        ''',
+        [uid, tenantId],
+      );
+      if (wsRows.isNotEmpty) {
+        return wsRows.first['id'] as int?;
+      }
+    }
+
+    final byName = await txn.rawQuery(
+      '''
+      SELECT id FROM work_shifts
+      WHERE deleted_at IS NULL
+        AND (closedAt IS NULL OR TRIM(IFNULL(closedAt, '')) = '')
+        AND LOWER(TRIM(COALESCE(shiftStaffName, ''))) = LOWER(?)
+        AND (
+          tenantId = ?
+          OR NOT EXISTS (SELECT 1 FROM tenants t WHERE t.id = tenantId)
+        )
+      ORDER BY datetime(openedAt) DESC, id DESC
+      LIMIT 1
+      ''',
+      [actor, tenantId],
+    );
+    if (byName.isNotEmpty) {
+      return byName.first['id'] as int?;
+    }
+  }
+
+  final fallback = await txn.rawQuery(
+    '''
+    SELECT id FROM work_shifts
+    WHERE deleted_at IS NULL
+      AND (closedAt IS NULL OR TRIM(IFNULL(closedAt, '')) = '')
+      AND (
+        tenantId = ?
+        OR NOT EXISTS (SELECT 1 FROM tenants t WHERE t.id = tenantId)
+      )
+    ORDER BY datetime(openedAt) DESC, id DESC
+    LIMIT 1
+    ''',
+    [tenantId],
+  );
+  if (fallback.isEmpty) return null;
+  return fallback.first['id'] as int?;
+}
+
+Future<int?> _resolveActorUserIdForInvoice(
+  DatabaseExecutor txn, {
+  required Invoice invoice,
+}) async {
+  final actor = (invoice.createdByUserName ?? '').trim();
+  if (actor.isEmpty) return null;
+  final userRows = await txn.rawQuery(
+    '''
+    SELECT id FROM users
+    WHERE LOWER(TRIM(COALESCE(displayName, ''))) = LOWER(?)
+       OR LOWER(TRIM(COALESCE(username, ''))) = LOWER(?)
+    LIMIT 1
+    ''',
+    [actor, actor],
+  );
+  if (userRows.isEmpty) return null;
+  return userRows.first['id'] as int?;
+}
+
+Future<int?> _resolveShiftOwnerUserIdForInvoice(
+  DatabaseExecutor txn, {
+  required int? workShiftId,
+}) async {
+  if (workShiftId == null || workShiftId <= 0) return null;
+  final rows = await txn.query(
+    'work_shifts',
+    columns: const ['shiftStaffUserId'],
+    where: 'id = ?',
+    whereArgs: [workShiftId],
+    limit: 1,
+  );
+  if (rows.isEmpty) return null;
+  final sid = (rows.first['shiftStaffUserId'] as num?)?.toInt();
+  if (sid == null || sid <= 0) return null;
+  return sid;
 }
 
 extension DbInvoices on DatabaseHelper {
@@ -132,7 +253,8 @@ extension DbInvoices on DatabaseHelper {
     };
 
     final whereSql = where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}';
-    final rows = await db.rawQuery('''
+    final rows = await db.rawQuery(
+      '''
       SELECT
         i.*,
         c.phone AS customerPhone
@@ -141,13 +263,16 @@ extension DbInvoices on DatabaseHelper {
       $whereSql
       ORDER BY $orderBy
       LIMIT ? OFFSET ?
-    ''', [...args, limit, offset]);
+    ''',
+      [...args, limit, offset],
+    );
 
     return rows.whereType<Map<String, dynamic>>().map((invoiceMap) {
       return Invoice(
         id: invoiceMap['id'] as int?,
         customerName: invoiceMap['customerName'] as String? ?? '',
-        date: DateTime.tryParse((invoiceMap['date'] ?? '').toString()) ??
+        date:
+            DateTime.tryParse((invoiceMap['date'] ?? '').toString()) ??
             DateTime.fromMillisecondsSinceEpoch(0),
         type: invoiceTypeFromDb(invoiceMap['type']),
         items: const <InvoiceItem>[],
@@ -195,10 +320,10 @@ extension DbInvoices on DatabaseHelper {
             (invoiceMap['installmentInterestAmount'] as num?)?.toDouble() ?? 0,
         installmentTotalWithInterest:
             (invoiceMap['installmentTotalWithInterest'] as num?)?.toDouble() ??
-                0,
+            0,
         installmentSuggestedMonthly:
             (invoiceMap['installmentSuggestedMonthly'] as num?)?.toDouble() ??
-                0,
+            0,
       );
     }).toList();
   }
@@ -271,9 +396,10 @@ extension DbInvoices on DatabaseHelper {
   Future<int> _insertInvoiceInTransaction(
     Transaction txn,
     Invoice invoice,
-    LoyaltySettingsData loyaltySettings,
-    {required bool enforceStockNonZero}
-  ) async {
+    LoyaltySettingsData loyaltySettings, {
+    required bool enforceStockNonZero,
+    bool syncWarehouseStock = false,
+  }) async {
     _validateInvoiceForSave(invoice);
     final tenantId = await _resolveActiveTenantIdForLocalDb(txn);
     final actor = (invoice.createdByUserName ?? '').trim();
@@ -291,18 +417,26 @@ extension DbInvoices on DatabaseHelper {
     final loyaltyDiscount = loyaltyActive ? invoice.loyaltyDiscount : 0.0;
     final loyaltyRedeem = loyaltyActive ? invoice.loyaltyPointsRedeemed : 0;
 
-    final wsRows = await txn.query(
-      'work_shifts',
-      columns: ['id'],
-      where: 'closedAt IS NULL',
-      limit: 1,
+    final shiftId = await _resolveWorkShiftIdForInvoice(
+      txn,
+      tenantId: tenantId,
+      invoice: invoice,
     );
-    final int? shiftId = wsRows.isNotEmpty
-        ? wsRows.first['id'] as int
-        : invoice.workShiftId;
+    final actorUserId = await _resolveActorUserIdForInvoice(
+      txn,
+      invoice: invoice,
+    );
+    final shiftOwnerUserId = await _resolveShiftOwnerUserIdForInvoice(
+      txn,
+      workShiftId: shiftId,
+    );
+    final nowIso = DateTime.now().toUtc().toIso8601String();
+    final preset = invoice.presetGlobalId?.trim().toLowerCase() ?? '';
+    final invoiceGlobalId = preset.isNotEmpty ? preset : const Uuid().v4();
 
     final id = await txn.insert('invoices', {
       'tenantId': tenantId,
+      'global_id': invoiceGlobalId,
       'customerName': invoice.customerName,
       'date': invoice.date.toIso8601String(),
       'type': invoice.type.index,
@@ -318,6 +452,8 @@ extension DbInvoices on DatabaseHelper {
       'originalInvoiceId': invoice.originalInvoiceId,
       'deliveryAddress': invoice.deliveryAddress,
       'createdByUserName': invoice.createdByUserName,
+      'actorUserId': actorUserId,
+      'shiftOwnerUserId': shiftOwnerUserId,
       'discountPercent': invoice.discountPercent,
       'workShiftId': shiftId,
       'customerId': invoice.customerId,
@@ -331,6 +467,11 @@ extension DbInvoices on DatabaseHelper {
       'installmentInterestAmount': invoice.installmentInterestAmount,
       'installmentTotalWithInterest': invoice.installmentTotalWithInterest,
       'installmentSuggestedMonthly': invoice.installmentSuggestedMonthly,
+      'updatedAt': nowIso,
+      if (invoice.originalInvoiceGlobalId != null)
+        'originalInvoiceGlobalId': invoice.originalInvoiceGlobalId,
+      if (invoice.returnReason != null) 'returnReason': invoice.returnReason,
+      if (invoice.returnMeta != null) 'returnMeta': invoice.returnMeta,
     });
     await _insertActivityLogInTxn(
       txn,
@@ -364,7 +505,12 @@ extension DbInvoices on DatabaseHelper {
             final tq = (wacRows.first['totalQty'] as num?)?.toDouble() ?? 0.0;
             if (tq > 0) stampedUnitCost = tc / tq;
           }
-        } catch (_) {}
+        } catch (e) {
+          AppLogger.warn(
+            'DbInvoices',
+            'WAC cost stamp skipped for product ${item.productId}: $e',
+          );
+        }
         if (stampedUnitCost <= 0) {
           try {
             final p = await txn.query(
@@ -378,11 +524,35 @@ extension DbInvoices on DatabaseHelper {
               stampedUnitCost =
                   (p.first['buyPrice'] as num?)?.toDouble() ?? 0.0;
             }
-          } catch (_) {}
+          } catch (e) {
+            AppLogger.warn(
+              'DbInvoices',
+              'buyPrice fallback failed for product ${item.productId}: $e',
+            );
+          }
+        }
+      }
+      String? productGlobalId;
+      final pid = item.productId;
+      if (pid != null && pid > 0) {
+        final rows = await txn.query(
+          'products',
+          columns: ['global_id'],
+          where: 'id = ?',
+          whereArgs: [pid],
+          limit: 1,
+        );
+        if (rows.isNotEmpty) {
+          final gid = (rows.first['global_id'] ?? '').toString().trim();
+          if (gid.isNotEmpty) productGlobalId = gid;
         }
       }
       final base = item.baseQtyResolved;
       await txn.insert('invoice_items', {
+        'global_id': const Uuid().v4(),
+        'invoice_global_id': invoiceGlobalId,
+        'product_global_id': productGlobalId,
+        'updatedAt': nowIso,
         'invoiceId': id,
         'productName': item.productName,
         'quantity': base,
@@ -405,6 +575,8 @@ extension DbInvoices on DatabaseHelper {
     }
 
     if (!invoice.isReturned) {
+      final warehouseLines =
+          <({int productId, double qty, double unitPrice})>[];
       if (!serviceReceipt) {
         if (enforceStockNonZero) {
           // منع البيع عند مخزون 0 في الوضع المقيّد (طبقة الخدمة).
@@ -435,7 +607,9 @@ extension DbInvoices on DatabaseHelper {
             final delta = item.baseQtyResolved;
             final q = delta.round();
             if ((delta - q).abs() > 1e-9) {
-              throw const FormatException('كمية الملابس يجب أن تكون رقماً صحيحاً.');
+              throw const FormatException(
+                'كمية الملابس يجب أن تكون رقماً صحيحاً.',
+              );
             }
             final affected = await txn.rawUpdate(
               'UPDATE product_variants SET quantity = quantity - ? '
@@ -443,7 +617,9 @@ extension DbInvoices on DatabaseHelper {
               [q, pvId, q],
             );
             if (affected < 1 && !allowNeg) {
-              throw const FormatException('لا توجد كمية متوفرة لهذا المقاس/اللون.');
+              throw const FormatException(
+                'لا توجد كمية متوفرة لهذا المقاس/اللون.',
+              );
             }
 
             // Sync mutation for this variant (best-effort).
@@ -510,7 +686,14 @@ extension DbInvoices on DatabaseHelper {
                   }
                 }
               }
-            } catch (_) {}
+            } catch (e, st) {
+              AppLogger.error(
+                'DBInvoices',
+                'فشل طابور مزامنة متغير ملابس',
+                e,
+                st,
+              );
+            }
 
             continue;
           }
@@ -520,11 +703,38 @@ extension DbInvoices on DatabaseHelper {
             'UPDATE products SET qty = qty - ? WHERE id = ?',
             [item.baseQtyResolved, pid],
           );
+          if (syncWarehouseStock) {
+            final tracked = await txn.query(
+              'products',
+              columns: ['trackInventory'],
+              where: 'id = ? AND tenantId = ?',
+              whereArgs: [pid, tenantId],
+              limit: 1,
+            );
+            final tracks =
+                tracked.isNotEmpty &&
+                ((tracked.first['trackInventory'] as num?)?.toInt() ?? 1) != 0;
+            if (tracks) {
+              warehouseLines.add((
+                productId: pid,
+                qty: item.baseQtyResolved,
+                unitPrice: item.price,
+              ));
+            }
+          }
+        }
+        if (syncWarehouseStock && warehouseLines.isNotEmpty) {
+          await _syncDirectSaleWarehouseOut(
+            txn,
+            tenantId: tenantId,
+            invoiceId: id,
+            lines: warehouseLines,
+          );
         }
       }
 
       if (invoice.type == InvoiceType.supplierPayment) {
-        if (invoice.supplierPaymentAffectsCash && invoice.total > 1e-9) {
+        if (invoice.supplierPaymentAffectsCash && _toFils(invoice.total) > 0) {
           final cust = invoice.customerName.isEmpty
               ? 'مورد'
               : invoice.customerName;
@@ -536,6 +746,8 @@ extension DbInvoices on DatabaseHelper {
             'description': 'دفع مورد — $cust (سند #${id.toString()})',
             'invoiceId': id,
             'workShiftId': shiftId,
+            'actorUserId': actorUserId,
+            'shiftOwnerUserId': shiftOwnerUserId,
             'createdAt': DateTime.now().toIso8601String(),
           });
           await _insertActivityLogInTxn(
@@ -579,6 +791,8 @@ extension DbInvoices on DatabaseHelper {
             'description': desc,
             'invoiceId': id,
             'workShiftId': shiftId,
+            'actorUserId': actorUserId,
+            'shiftOwnerUserId': shiftOwnerUserId,
             'createdAt': DateTime.now().toIso8601String(),
           });
           await _insertActivityLogInTxn(
@@ -596,6 +810,96 @@ extension DbInvoices on DatabaseHelper {
     } else {
       if (!serviceReceipt) {
         for (final item in invoice.items) {
+          final pvId = item.productVariantId;
+          if (pvId != null) {
+            // الملابس: إعادة الكمية إلى product_variants (مرآة مسار البيع).
+            final delta = item.baseQtyResolved;
+            final q = delta.round();
+            if ((delta - q).abs() > 1e-9) {
+              throw const FormatException(
+                'كمية الملابس يجب أن تكون رقماً صحيحاً.',
+              );
+            }
+            await txn.rawUpdate(
+              'UPDATE product_variants SET quantity = quantity + ? '
+              'WHERE id = ? AND deleted_at IS NULL',
+              [q, pvId],
+            );
+
+            // Sync mutation for this variant (best-effort).
+            try {
+              final vRows = await txn.query(
+                'product_variants',
+                columns: [
+                  'global_id',
+                  'productId',
+                  'colorId',
+                  'size',
+                  'quantity',
+                  'barcode',
+                  'sku',
+                ],
+                where: 'id = ?',
+                whereArgs: [pvId],
+                limit: 1,
+              );
+              if (vRows.isNotEmpty) {
+                final v = vRows.first;
+                final vGlobal = (v['global_id'] ?? '').toString().trim();
+                final productId = (v['productId'] as num?)?.toInt() ?? 0;
+                final colorId = (v['colorId'] as num?)?.toInt() ?? 0;
+                if (vGlobal.isNotEmpty && productId > 0 && colorId > 0) {
+                  final pRows = await txn.query(
+                    'products',
+                    columns: ['global_id'],
+                    where: 'id = ?',
+                    whereArgs: [productId],
+                    limit: 1,
+                  );
+                  final cRows = await txn.query(
+                    'product_colors',
+                    columns: ['global_id'],
+                    where: 'id = ?',
+                    whereArgs: [colorId],
+                    limit: 1,
+                  );
+                  final pGlobal = pRows.isEmpty
+                      ? ''
+                      : (pRows.first['global_id'] ?? '').toString().trim();
+                  final cGlobal = cRows.isEmpty
+                      ? ''
+                      : (cRows.first['global_id'] ?? '').toString().trim();
+                  if (pGlobal.isNotEmpty && cGlobal.isNotEmpty) {
+                    final nowIso = DateTime.now().toUtc().toIso8601String();
+                    await SyncQueueService.instance.enqueueMutation(
+                      txn,
+                      entityType: 'product_variant',
+                      globalId: vGlobal,
+                      operation: 'UPDATE',
+                      payload: {
+                        'id': vGlobal,
+                        'product_id': pGlobal,
+                        'color_id': cGlobal,
+                        'size': (v['size'] ?? '').toString(),
+                        'quantity': (v['quantity'] as num?)?.toInt() ?? 0,
+                        'barcode': (v['barcode'] ?? '').toString(),
+                        'sku': (v['sku'] ?? '').toString(),
+                        'updated_at': nowIso,
+                      },
+                    );
+                  }
+                }
+              }
+            } catch (e, st) {
+              AppLogger.error(
+                'DBInvoices',
+                'فشل طابور مزامنة متغير ملابس (مرتجع)',
+                e,
+                st,
+              );
+            }
+            continue;
+          }
           final pid = item.productId;
           if (pid == null) continue;
           await txn.rawUpdate(
@@ -615,6 +919,8 @@ extension DbInvoices on DatabaseHelper {
               'مرتجع فاتورة #${id.toString()}${invoice.originalInvoiceId != null ? ' (أصل #${invoice.originalInvoiceId})' : ''} — ${invoice.customerName.isEmpty ? 'عميل' : invoice.customerName}',
           'invoiceId': id,
           'workShiftId': shiftId,
+          'actorUserId': actorUserId,
+          'shiftOwnerUserId': shiftOwnerUserId,
           'createdAt': DateTime.now().toIso8601String(),
         });
         await _insertActivityLogInTxn(
@@ -625,6 +931,17 @@ extension DbInvoices on DatabaseHelper {
           title: 'قيد صندوق: مرتجع بيع',
           details: 'المنفّذ: $actorLabel — الفاتورة #$id',
           amount: -refund,
+        );
+      }
+      // مرتجع آجل: يُخصم من دين الفاتورة الأصلية داخل نفس المعاملة، فلا يبقى
+      // مرتجع محفوظ بلا خصم من الدين إن فشلت خطوة لاحقة.
+      final origId = invoice.originalInvoiceId;
+      if (invoice.type == InvoiceType.credit && origId != null && origId > 0) {
+        await _applyReturnToCreditInvoiceDebtInTxn(
+          txn,
+          tenantId: tenantId,
+          originalInvoiceId: origId,
+          amountFils: _toFils(invoice.total),
         );
       }
     }
@@ -643,9 +960,118 @@ extension DbInvoices on DatabaseHelper {
     return id;
   }
 
+  /// يخصم كمية البيع المباشر من رصيد المستودع حتى لو تجاوزت المتاح،
+  /// ويسجّل السند بالرصيد قبل وبعد حتى يطابق رقم المنتج.
+  Future<void> _syncDirectSaleWarehouseOut(
+    Transaction txn, {
+    required int tenantId,
+    required int invoiceId,
+    required List<({int productId, double qty, double unitPrice})> lines,
+  }) async {
+    final warehouses = await txn.query(
+      'warehouses',
+      columns: ['id'],
+      where: 'tenantId = ? AND isActive = 1',
+      whereArgs: [tenantId],
+      orderBy: 'isDefault DESC, id ASC',
+      limit: 1,
+    );
+    if (warehouses.isEmpty) return;
+    final fallbackWarehouseId = (warehouses.first['id'] as num).toInt();
+    final nowIso = DateTime.now().toIso8601String();
+    final voucherId = await txn.insert('stock_vouchers', {
+      'tenantId': tenantId,
+      'voucherNo': 'DS-$invoiceId',
+      'voucherType': 'out',
+      'voucherDate': nowIso,
+      'warehouseFromId': fallbackWarehouseId,
+      'warehouseToId': null,
+      'notes': 'بيع مباشر #$invoiceId',
+      'sourceType': 'oil_direct_sale',
+      'sourceName': 'بيع مباشر',
+      'sourceRefId': invoiceId,
+      'createdAt': nowIso,
+    });
+
+    for (final line in lines) {
+      if (line.qty <= 1e-12) continue;
+      final held = await txn.query(
+        'product_warehouse_stock',
+        columns: ['warehouseId', 'qty'],
+        where: 'tenantId = ? AND productId = ?',
+        whereArgs: [tenantId, line.productId],
+        orderBy: 'qty DESC',
+      );
+      if (held.isEmpty) {
+        final bookRows = await txn.query(
+          'products',
+          columns: ['qty'],
+          where: 'id = ?',
+          whereArgs: [line.productId],
+          limit: 1,
+        );
+        final book = bookRows.isEmpty
+            ? -line.qty
+            : (bookRows.first['qty'] as num?)?.toDouble() ?? -line.qty;
+        final before = book + line.qty;
+        await txn.insert('stock_voucher_items', {
+          'tenantId': tenantId,
+          'voucherId': voucherId,
+          'productId': line.productId,
+          'qty': line.qty,
+          'unitPrice': line.unitPrice,
+          'total': line.qty * line.unitPrice,
+          'stockBefore': before,
+          'stockAfter': book,
+          'baseQty': line.qty,
+        });
+        await txn.insert('product_warehouse_stock', {
+          'tenantId': tenantId,
+          'productId': line.productId,
+          'warehouseId': fallbackWarehouseId,
+          'qty': book,
+          'updatedAt': nowIso,
+        });
+        continue;
+      }
+      final warehouseId = (held.first['warehouseId'] as num).toInt();
+      final before = (held.first['qty'] as num?)?.toDouble() ?? 0.0;
+      final after = before - line.qty;
+      await txn.insert('stock_voucher_items', {
+        'tenantId': tenantId,
+        'voucherId': voucherId,
+        'productId': line.productId,
+        'qty': line.qty,
+        'unitPrice': line.unitPrice,
+        'total': line.qty * line.unitPrice,
+        'stockBefore': before,
+        'stockAfter': after,
+        'baseQty': line.qty,
+      });
+      final updated = await txn.rawUpdate(
+        '''
+        UPDATE product_warehouse_stock
+        SET qty = qty - ?, updatedAt = ?
+        WHERE tenantId = ? AND productId = ? AND warehouseId = ?
+        ''',
+        [line.qty, nowIso, tenantId, line.productId, warehouseId],
+      );
+      if (updated < 1) {
+        await txn.insert('product_warehouse_stock', {
+          'tenantId': tenantId,
+          'productId': line.productId,
+          'warehouseId': warehouseId,
+          'qty': after,
+          'updatedAt': nowIso,
+        });
+      }
+    }
+  }
+
   Future<int> insertInvoiceWithPolicy(
     Invoice invoice, {
     required bool enforceStockNonZero,
+    bool syncWarehouseStock = false,
   }) async {
     _validateInvoiceForSave(invoice);
     final db = await database;
@@ -656,6 +1082,7 @@ extension DbInvoices on DatabaseHelper {
         invoice,
         loyaltySettings,
         enforceStockNonZero: enforceStockNonZero,
+        syncWarehouseStock: syncWarehouseStock,
       ),
     );
     CloudSyncService.instance.scheduleSyncSoon();
@@ -664,14 +1091,17 @@ extension DbInvoices on DatabaseHelper {
 
   void _validateInvoiceForSave(Invoice invoice) {
     const moneyTol = 0.05;
+    const moneyTolFils = 50;
 
     bool isFiniteNum(double v) => v.isFinite && !v.isNaN;
 
     void ensureFinite(String label, double v) {
       if (!isFiniteNum(v)) {
-        throw const FormatException('بيانات الفاتورة غير صالحة (قيمة رقمية غير منتهية).');
+        throw const FormatException(
+          'بيانات الفاتورة غير صالحة (قيمة رقمية غير منتهية).',
+        );
       }
-      if (v < -moneyTol) {
+      if (_toFils(v) < -moneyTolFils) {
         throw FormatException('لا يمكن أن يكون $label أقل من الصفر.');
       }
     }
@@ -701,6 +1131,18 @@ extension DbInvoices on DatabaseHelper {
       );
     }
 
+    final requiresCustomerLink =
+        invoice.type == InvoiceType.credit ||
+        invoice.type == InvoiceType.installment;
+    if (requiresCustomerLink) {
+      final customerId = invoice.customerId;
+      if (customerId == null || customerId <= 0) {
+        throw const FormatException(
+          'لا يمكن حفظ فاتورة دين/تقسيط بدون ربط العميل ببطاقته (customerId).',
+        );
+      }
+    }
+
     var subtotal = 0.0;
     for (var i = 0; i < invoice.items.length; i++) {
       final item = invoice.items[i];
@@ -714,17 +1156,22 @@ extension DbInvoices on DatabaseHelper {
       ensureFinite('سعر البند رقم $lineNo', item.price);
       ensureFinite('إجمالي البند رقم $lineNo', item.total);
       if (!isFiniteNum(enteredQty) || enteredQty <= 0) {
-        throw FormatException('كمية البيع في البند رقم $lineNo يجب أن تكون أكبر من صفر.');
+        throw FormatException(
+          'كمية البيع في البند رقم $lineNo يجب أن تكون أكبر من صفر.',
+        );
       }
       if (!isFiniteNum(baseQty) || baseQty <= 0) {
-        throw FormatException('كمية المخزون الأساسية في البند رقم $lineNo غير صالحة.');
+        throw FormatException(
+          'كمية المخزون الأساسية في البند رقم $lineNo غير صالحة.',
+        );
       }
       if (item.productId != null && item.productId! <= 0) {
         throw FormatException('معرّف المنتج في البند رقم $lineNo غير صالح.');
       }
 
-      final expectedLine = item.price * enteredQty;
-      if ((expectedLine - item.total).abs() > moneyTol) {
+      final expectedLineFils = _toFils(item.price * enteredQty);
+      final itemTotalFils = _toFils(item.total);
+      if ((expectedLineFils - itemTotalFils).abs() > moneyTolFils) {
         throw FormatException(
           'إجمالي البند رقم $lineNo غير متطابق مع السعر × الكمية.',
         );
@@ -733,18 +1180,26 @@ extension DbInvoices on DatabaseHelper {
       subtotal += item.total;
     }
 
-    if (invoice.discount - subtotal > moneyTol) {
+    final subtotalFils = _toFils(subtotal);
+    final discountFils = _toFils(invoice.discount);
+    final taxFils = _toFils(invoice.tax);
+    final totalFils = _toFils(invoice.total);
+    final advanceFils = _toFils(invoice.advancePayment);
+
+    if (discountFils - subtotalFils > moneyTolFils) {
       throw const FormatException('قيمة الخصم لا يمكن أن تتجاوز مجموع البنود.');
     }
 
-    final expectedTotal = subtotal - invoice.discount + invoice.tax;
-    if ((expectedTotal - invoice.total).abs() > moneyTol) {
+    final expectedTotalFils = subtotalFils - discountFils + taxFils;
+    if ((expectedTotalFils - totalFils).abs() > moneyTolFils) {
       throw const FormatException(
         'إجمالي الفاتورة غير متطابق مع مجموع البنود بعد الخصم والضريبة.',
       );
     }
-    if (invoice.advancePayment - invoice.total > moneyTol) {
-      throw const FormatException('الدفعة المقدمة لا يمكن أن تتجاوز إجمالي الفاتورة.');
+    if (advanceFils - totalFils > moneyTolFils) {
+      throw const FormatException(
+        'الدفعة المقدمة لا يمكن أن تتجاوز إجمالي الفاتورة.',
+      );
     }
   }
 
@@ -766,13 +1221,118 @@ extension DbInvoices on DatabaseHelper {
     }
   }
 
-  /// فاتورة واحدة مع بنودها.
+  /// مرتجع فاتورة آجلة: يُخصم من دينها المتبقي ولا يُصرف نقداً.
+  /// يعيد المبلغ المخصوم فعلاً (لا يتجاوز المتبقي).
+  Future<double> applyReturnToCreditInvoiceDebt(
+    int originalInvoiceId,
+    double amount,
+  ) async {
+    if (amount <= 0) return 0;
+    final db = await database;
+    final tenantId = await _resolveActiveTenantIdForLocalDb(db);
+    return db.transaction<double>(
+      (txn) => _applyReturnToCreditInvoiceDebtInTxn(
+        txn,
+        tenantId: tenantId,
+        originalInvoiceId: originalInvoiceId,
+        amountFils: _toFils(amount),
+      ),
+    );
+  }
+
+  /// إجمالي الفاتورة ومقدّمها بالفلس بنفس قاعدة [MoneySql]: الفلس إن كان أحدهما
+  /// غير صفر، وإلا قيمة الدينار القديمة (العمودان افتراضيهما صفر لا فارغ).
+  ({int totalFils, int advFils}) _invoiceTotalAndAdvanceFils(
+    Map<String, Object?> r,
+  ) {
+    final tF = (r['totalFils'] as num?)?.toInt() ?? 0;
+    final aF = (r['advancePaymentFils'] as num?)?.toInt() ?? 0;
+    if (tF != 0 || aF != 0) return (totalFils: tF, advFils: aF);
+    return (
+      totalFils: _toFils((r['total'] as num?)?.toDouble() ?? 0),
+      advFils: _toFils((r['advancePayment'] as num?)?.toDouble() ?? 0),
+    );
+  }
+
+  Future<double> _applyReturnToCreditInvoiceDebtInTxn(
+    DatabaseExecutor txn, {
+    required int tenantId,
+    required int originalInvoiceId,
+    required int amountFils,
+  }) async {
+    if (amountFils <= 0) return 0;
+    final rows = await txn.query(
+      'invoices',
+      columns: ['total', 'totalFils', 'advancePayment', 'advancePaymentFils'],
+      where: 'id = ? AND tenantId = ? AND deleted_at IS NULL',
+      whereArgs: [originalInvoiceId, tenantId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return 0;
+    final m = _invoiceTotalAndAdvanceFils(rows.first);
+    final remaining = m.totalFils - m.advFils;
+    if (remaining <= 0) return 0;
+    final apply = amountFils > remaining ? remaining : amountFils;
+    final newAdv = m.advFils + apply;
+    await txn.update(
+      'invoices',
+      {
+        'advancePayment': newAdv / 1000.0,
+        'advancePaymentFils': newAdv,
+        // فاتورة قديمة بالدينار فقط: يُكتب إجماليها بالفلس أيضاً، وإلا يقرأ
+        // MoneySql المقدّم بالفلس مقابل إجمالي صفر فيظهر الدين صفراً.
+        'totalFils': m.totalFils,
+        'updatedAt': DateTime.now().toUtc().toIso8601String(),
+      },
+      where: 'id = ? AND tenantId = ?',
+      whereArgs: [originalInvoiceId, tenantId],
+    );
+    return apply / 1000.0;
+  }
+
+  /// المتبقي من دين فاتورة آجلة (لعرضه قبل الاسترجاع).
+  Future<double> creditInvoiceRemaining(int invoiceId) async {
+    final db = await database;
+    final tenantId = await _resolveActiveTenantIdForLocalDb(db);
+    final rows = await db.query(
+      'invoices',
+      columns: ['total', 'totalFils', 'advancePayment', 'advancePaymentFils'],
+      where: 'id = ? AND tenantId = ? AND deleted_at IS NULL',
+      whereArgs: [invoiceId, tenantId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return 0;
+    final m = _invoiceTotalAndAdvanceFils(rows.first);
+    final rem = m.totalFils - m.advFils;
+    return rem > 0 ? rem / 1000.0 : 0;
+  }
+
+  /// الرقم المحلي لفاتورة من معرّفها العالمي (المطبوع في QR الإيصال).
+  /// نطاق المستأجر النشط فقط: رمز من محل آخر لا يجد شيئاً.
+  Future<int?> getInvoiceIdByGlobalId(String globalId) async {
+    final g = globalId.trim().toLowerCase();
+    if (g.isEmpty) return null;
+    final db = await database;
+    final tenantId = await _resolveActiveTenantIdForLocalDb(db);
+    final rows = await db.query(
+      'invoices',
+      columns: ['id'],
+      where: 'lower(global_id) = ? AND tenantId = ? AND deleted_at IS NULL',
+      whereArgs: [g, tenantId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return (rows.first['id'] as num?)?.toInt();
+  }
+
+  /// فاتورة واحدة مع بنودها (نطاق المستأجر النشط + غير محذوفة).
   Future<Invoice?> getInvoiceById(int id) async {
     final db = await database;
+    final tenantId = await _resolveActiveTenantIdForLocalDb(db);
     final maps = await db.query(
       'invoices',
-      where: 'id = ?',
-      whereArgs: [id],
+      where: 'id = ? AND tenantId = ? AND deleted_at IS NULL',
+      whereArgs: [id, tenantId],
       limit: 1,
     );
     if (maps.isEmpty) return null;
@@ -812,12 +1372,10 @@ extension DbInvoices on DatabaseHelper {
       originalInvoiceId: invoiceMap['originalInvoiceId'] as int?,
       deliveryAddress: invoiceMap['deliveryAddress'] as String?,
       createdByUserName: invoiceMap['createdByUserName'] as String?,
-      discountPercent:
-          (invoiceMap['discountPercent'] as num?)?.toDouble() ?? 0,
+      discountPercent: (invoiceMap['discountPercent'] as num?)?.toDouble() ?? 0,
       workShiftId: invoiceMap['workShiftId'] as int?,
       customerId: invoiceMap['customerId'] as int?,
-      loyaltyDiscount:
-          (invoiceMap['loyaltyDiscount'] as num?)?.toDouble() ?? 0,
+      loyaltyDiscount: (invoiceMap['loyaltyDiscount'] as num?)?.toDouble() ?? 0,
       loyaltyPointsRedeemed:
           (invoiceMap['loyaltyPointsRedeemed'] as num?)?.toInt() ?? 0,
       loyaltyPointsEarned:
@@ -831,11 +1389,13 @@ extension DbInvoices on DatabaseHelper {
       installmentInterestAmount:
           (invoiceMap['installmentInterestAmount'] as num?)?.toDouble() ?? 0,
       installmentTotalWithInterest:
-          (invoiceMap['installmentTotalWithInterest'] as num?)?.toDouble() ??
-          0,
+          (invoiceMap['installmentTotalWithInterest'] as num?)?.toDouble() ?? 0,
       installmentSuggestedMonthly:
-          (invoiceMap['installmentSuggestedMonthly'] as num?)?.toDouble() ??
-          0,
+          (invoiceMap['installmentSuggestedMonthly'] as num?)?.toDouble() ?? 0,
+      globalId: (invoiceMap['global_id'] as String?)?.trim(),
+      originalInvoiceGlobalId: invoiceMap['originalInvoiceGlobalId'] as String?,
+      returnReason: invoiceMap['returnReason'] as String?,
+      returnMeta: invoiceMap['returnMeta'] as String?,
     );
   }
 
@@ -924,5 +1484,13 @@ extension DbInvoices on DatabaseHelper {
             0,
       );
     }).toList();
+  }
+}
+
+extension DbLocalTenant on DatabaseHelper {
+  /// معرّف tenant للبيانات المحلية (فواتير، صندوق، ديون) — موحّد عبر الشاشات.
+  Future<int> resolveLocalBusinessTenantId() async {
+    final db = await database;
+    return _resolveActiveTenantIdForLocalDb(db);
   }
 }

@@ -25,11 +25,13 @@ class ScreenLayout {
   final Size size;
   final EdgeInsets viewPadding;
 
+  /// يعتمد على `sizeOf`/`viewPaddingOf` لا `MediaQuery.of` ولا `paddingOf`:
+  /// `padding` يتقلّص مع ظهور الكيبورد فيُعاد بناء الشاشات الثقيلة كل إطار.
+  /// `viewPadding` ثابت أثناء الـ IME.
   factory ScreenLayout.of(BuildContext context) {
-    final mq = MediaQuery.of(context);
     return ScreenLayout._(
-      size: mq.size,
-      viewPadding: mq.padding,
+      size: MediaQuery.sizeOf(context),
+      viewPadding: MediaQuery.viewPaddingOf(context),
     );
   }
 

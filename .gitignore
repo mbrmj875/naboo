@@ -1,5 +1,12 @@
+# Local secrets / agent runtime (never commit)
+.local/
+
+# Advisor session state (verdicts and consult logs)
+.cursor/advisor/
+
 # Miscellaneous
 *.class
+*.hprof
 *.log
 *.pyc
 *.swp
@@ -59,11 +66,18 @@ app.*.map.json
 .env
 .env.*
 !.env.example
+!.env.waha.example
+env/*.env
+!env/*.env.example
 *.pem
 secrets/
 
+# Cursor MCP — قد يحتوي مفاتيح Stitch وغيرها
+.cursor/mcp.json
+
 # Local backup snapshots (do not push to GitHub)
 *.backup
+/backup/
 
 # Built distributables (rebuilt via CI release workflows)
 /dist/
@@ -79,3 +93,4 @@ admin-web/out/
 # عوائد بناء TypeScript / npm خاطئ من جذر المشروع
 *.tsbuildinfo
 /package-lock.json
+env/prod.env

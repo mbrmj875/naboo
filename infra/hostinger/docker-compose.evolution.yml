@@ -1,0 +1,40 @@
+# Evolution API + PostgreSQL — واتساب Gateway لـ NaBoo
+# مشروع Docker: naboo-evolution على Hostinger VPS
+# المرجع: docs/specs/oil_change_n8n_whatsapp_setup_guide_ar.md
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: naboo-evolution-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: evolution
+      POSTGRES_PASSWORD: "Naboo_Evo_DB_2026!Secure"
+      POSTGRES_DB: evolution
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  evolution-api:
+    image: evoapicloud/evolution-api:v2.3.7
+    container_name: naboo-evolution
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    ports:
+      - "8080:8080"
+    environment:
+      AUTHENTICATION_API_KEY: "Ev0_Naboo_72aB91cD3eF4gH5iJ"
+      SERVER_URL: "http://72.61.191.237:8080"
+      SERVER_TYPE: "http"
+      DATABASE_ENABLED: "true"
+      DATABASE_PROVIDER: "postgresql"
+      DATABASE_CONNECTION_URI: "postgresql://evolution:Naboo_Evo_DB_2026!Secure@postgres:5432/evolution?schema=public"
+      CACHE_REDIS_ENABLED: "false"
+      CACHE_LOCAL_ENABLED: "true"
+      NODE_OPTIONS: "--dns-result-order=ipv4first"
+    volumes:
+      - evolution_data:/evolution/instances
+
+volumes:
+  postgres_data:
+  evolution_data:

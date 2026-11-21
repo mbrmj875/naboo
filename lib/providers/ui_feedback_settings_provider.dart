@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../utils/app_logger.dart';
 
 /// تفضيلات عرض الإشعارات السريعة (SnackBar) في كامل التطبيق.
 class UiFeedbackSettingsProvider extends ChangeNotifier {
@@ -22,7 +23,14 @@ class UiFeedbackSettingsProvider extends ChangeNotifier {
       final p = await SharedPreferences.getInstance();
       _compactSnackNotifications = p.getBool(_kKey) ?? true;
       notifyListeners();
-    } catch (_) {}
+    } catch (e, st) {
+      AppLogger.error(
+        'UiFeedbackSettings',
+        'تعذر تحميل تفضيلات واجهة التنبيهات',
+        e,
+        st,
+      );
+    }
   }
 
   Future<void> setCompactSnackNotifications(bool value) async {
@@ -32,6 +40,13 @@ class UiFeedbackSettingsProvider extends ChangeNotifier {
     try {
       final p = await SharedPreferences.getInstance();
       await p.setBool(_kKey, value);
-    } catch (_) {}
+    } catch (e, st) {
+      AppLogger.error(
+        'UiFeedbackSettings',
+        'تعذر حفظ تفضيلات واجهة التنبيهات',
+        e,
+        st,
+      );
+    }
   }
 }

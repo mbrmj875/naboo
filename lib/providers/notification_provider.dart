@@ -57,6 +57,8 @@ enum NotificationType {
   debtCustomerCeiling,
   /// متبقٍ لفاتورة آجل واحدة وصل أو تجاوز السقف في إعدادات الدين.
   debtInvoiceCeiling,
+  /// وصل مورد حلّ موعد «يُدفع قبل» وما زال عليه باقٍ.
+  supplierBillDue,
   /// تم تسجيل بيع بالدين أو بالتقسيط من شاشة البيع.
   financedSale,
   systemInfo,
@@ -107,6 +109,8 @@ class AppNotification {
         return Icons.groups_outlined;
       case NotificationType.debtInvoiceCeiling:
         return Icons.receipt_long_outlined;
+      case NotificationType.supplierBillDue:
+        return Icons.local_shipping_outlined;
       case NotificationType.financedSale:
         return Icons.point_of_sale_outlined;
       case NotificationType.systemInfo:
@@ -142,6 +146,8 @@ class AppNotification {
         return const Color(0xFFEA580C);
       case NotificationType.debtInvoiceCeiling:
         return const Color(0xFFDB2777);
+      case NotificationType.supplierBillDue:
+        return const Color(0xFFDC2626);
       case NotificationType.financedSale:
         return const Color(0xFF6366F1);
       case NotificationType.systemInfo:
@@ -177,6 +183,8 @@ class AppNotification {
         return 'سقف عميل';
       case NotificationType.debtInvoiceCeiling:
         return 'سقف فاتورة';
+      case NotificationType.supplierBillDue:
+        return 'دفع مورد';
       case NotificationType.financedSale:
         return 'بيع مموّل';
       case NotificationType.systemInfo:
@@ -231,6 +239,19 @@ class NotificationProvider extends ChangeNotifier {
   Set<String> _readIds = {};
   bool _loading = false;
   String? _lastError;
+  bool _disposed = false;
+
+  /// التحديث يطول، وقد تُغلق الشاشة قبل انتهائه.
+  @override
+  void notifyListeners() {
+    if (!_disposed) super.notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
+  }
 
   /// بعد أول [refresh]: لا نُكرّر نفس [id] في شريط الجهاز.
   /// عند أول تشغيل: نُظهر حتى [_maxPrimeTray] تنبيهات مهمة (مخزون، صلاحية، أقساط، ديون) دون تكرار لاحقاً.
@@ -247,6 +268,7 @@ class NotificationProvider extends ChangeNotifier {
     NotificationType.debtInvoiceAged,
     NotificationType.debtCustomerCeiling,
     NotificationType.debtInvoiceCeiling,
+    NotificationType.supplierBillDue,
     NotificationType.financedSale,
   };
 
@@ -329,7 +351,8 @@ class NotificationProvider extends ChangeNotifier {
     try {
       final list = jsonDecode(raw) as List<dynamic>;
       _readIds = list.map((e) => e.toString()).toSet();
-    } catch (_) {
+    } catch (e) {
+      AppLogger.warn('NotificationProvider', 'readIds JSON تالف: $e');
       _readIds = {};
     }
     if (_readIds.length > 400) {
@@ -406,7 +429,11 @@ class NotificationProvider extends ChangeNotifier {
     List<dynamic> list;
     try {
       list = jsonDecode(raw) as List<dynamic>;
-    } catch (_) {
+    } catch (e) {
+      AppLogger.warn(
+        'NotificationProvider',
+        'negativeStockEvents JSON تالف: $e',
+      );
       return;
     }
     final pruned = await _pruneNegativeStockEventsIfResolved(list);
@@ -481,7 +508,12 @@ class NotificationProvider extends ChangeNotifier {
     if (prev != null && prev.trim().isNotEmpty) {
       try {
         list = jsonDecode(prev) as List<dynamic>;
-      } catch (_) {}
+      } catch (e) {
+        AppLogger.warn(
+          'NotificationProvider',
+          'shiftLifecycleEvents JSON تالف: $e',
+        );
+      }
     }
     list.insert(0, {
       'id': id,
@@ -513,7 +545,11 @@ class NotificationProvider extends ChangeNotifier {
     List<dynamic> list;
     try {
       list = jsonDecode(raw) as List<dynamic>;
-    } catch (_) {
+    } catch (e) {
+      AppLogger.warn(
+        'NotificationProvider',
+        'shiftLifecycleEvents read JSON تالف: $e',
+      );
       return;
     }
     final now = DateTime.now();
@@ -560,7 +596,12 @@ class NotificationProvider extends ChangeNotifier {
     if (prev != null && prev.trim().isNotEmpty) {
       try {
         list = jsonDecode(prev) as List<dynamic>;
-      } catch (_) {}
+      } catch (e) {
+        AppLogger.warn(
+          'NotificationProvider',
+          'negativeStockEvents append JSON تالف: $e',
+        );
+      }
     }
     list.insert(0, {
       'id': id,
@@ -609,7 +650,12 @@ class NotificationProvider extends ChangeNotifier {
     if (prev != null && prev.trim().isNotEmpty) {
       try {
         list = jsonDecode(prev) as List<dynamic>;
-      } catch (_) {}
+      } catch (e) {
+        AppLogger.warn(
+          'NotificationProvider',
+          'financedSaleEvents JSON تالف: $e',
+        );
+      }
     }
     list.removeWhere((e) {
       if (e is! Map) return false;
@@ -659,7 +705,11 @@ class NotificationProvider extends ChangeNotifier {
     List<dynamic> list;
     try {
       list = jsonDecode(raw) as List<dynamic>;
-    } catch (_) {
+    } catch (e) {
+      AppLogger.warn(
+        'NotificationProvider',
+        'financedSaleEvents read JSON تالف: $e',
+      );
       return;
     }
     for (final e in list) {
@@ -928,6 +978,29 @@ class NotificationProvider extends ChangeNotifier {
           }
         }
 
+        try {
+          final dueSuppliers = await _db.getSupplierDueEntries();
+          for (final e in dueSuppliers) {
+            final nid =
+                'supplier_due_${e.supplierId}_${e.status.oldestDueDate?.toIso8601String() ?? ''}';
+            final st = e.status;
+            built.add(
+              AppNotification(
+                id: nid,
+                title: 'حان دفع مورد',
+                body:
+                    '${e.name} — ${numFmt.format(st.dueFils / 1000.0)} د.ع '
+                    '${st.daysLate == 0 ? '(موعده اليوم)' : '(متأخر ${st.daysLate} يوماً)'}',
+                type: NotificationType.supplierBillDue,
+                time: st.oldestDueDate ?? now,
+                isRead: _readIds.contains(nid),
+              ),
+            );
+          }
+        } catch (e, st) {
+          AppLogger.error('Notifications', 'supplier due', e, st);
+        }
+
         final capC = debtSettings.maxTotalOpenDebtPerCustomer;
         if (capC > 1e-9) {
           final byId = await _db.getCreditDebtCustomerTotalCapBreaches(
@@ -937,7 +1010,8 @@ class NotificationProvider extends ChangeNotifier {
           for (final row in byId) {
             final cid = row['customerId'];
             final name = (row['customerName'] as String?)?.trim() ?? 'عميل';
-            final open = (row['openTotal'] as num?)?.toDouble() ?? 0;
+            final openFils = (row['openTotalFils'] as num?)?.toInt() ?? 0;
+            final open = openFils / 1000.0;
             built.add(
               AppNotification(
                 id: 'debt_set_cap_c_$cid',
@@ -958,7 +1032,8 @@ class NotificationProvider extends ChangeNotifier {
           for (final row in byName) {
             final nameKey = (row['nameKey'] as String?)?.trim() ?? '';
             final name = (row['customerName'] as String?)?.trim() ?? 'عميل';
-            final open = (row['openTotal'] as num?)?.toDouble() ?? 0;
+            final openFils = (row['openTotalFils'] as num?)?.toInt() ?? 0;
+            final open = openFils / 1000.0;
             final nid =
                 'debt_set_cap_n_${tenantId}_${nameKey.hashCode}';
             built.add(

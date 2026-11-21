@@ -17,9 +17,21 @@ if (keystorePropertiesFile.exists()) {
     keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
 
+val localProperties = Properties()
+val localPropertiesFile = rootProject.file("local.properties")
+if (localPropertiesFile.exists()) {
+    localProperties.load(FileInputStream(localPropertiesFile))
+}
+
+// أضف في android/local.properties: google.maps.api.key=YOUR_GOOGLE_MAPS_API_KEY
+val googleMapsApiKey = localProperties.getProperty("google.maps.api.key") ?: ""
+
+val qaBuild =
+    (project.findProperty("naboo.qa") as String?)?.equals("true", ignoreCase = true) == true
+
 android {
-    namespace = "com.basra.storemanager"
-    compileSdk = flutter.compileSdkVersion
+    namespace = "com.basra.storemanager.app"
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
@@ -33,13 +45,20 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.basra.storemanager"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
+        // الموقع / GitHub APK: com.basra.storemanager
+        // Google Play: مرّر -Pnaboo.play=true → com.basra.storemanager.app
+        val playStore =
+            (project.findProperty("naboo.play") as String?)?.equals("true", ignoreCase = true) == true
+        // نسخة اختبار على هاتف حقيقي: -Pnaboo.qa=true → com.basra.storemanager.qa
+        // حزمة منفصلة لا تلمس نسخة المتجر ولا بياناتها.
+        applicationId =
+            if (qaBuild) "com.basra.storemanager.qa"
+            else if (playStore) "com.basra.storemanager.app" else "com.basra.storemanager"
         minSdk = flutter.minSdkVersion
-        targetSdk = flutter.targetSdkVersion
+        targetSdk = 36
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        manifestPlaceholders["googleMapsApiKey"] = googleMapsApiKey
     }
 
     signingConfigs {
@@ -66,8 +85,16 @@ android {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+    implementation("androidx.core:core-ktx:1.15.0")
 }
 
 flutter {
     source = "../.."
+}
+
+// google-services.json لا يعرف حزمة الاختبار؛ Firebase اختياري عند الإقلاع.
+if (qaBuild) {
+    tasks.configureEach {
+        if (name.contains("GoogleServices")) enabled = false
+    }
 }

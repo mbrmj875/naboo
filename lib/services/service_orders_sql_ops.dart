@@ -1,6 +1,10 @@
 import 'package:sqflite/sqflite.dart';
 
 import '../utils/app_logger.dart';
+import '../verticals/oil_change/utils/oil_change_lookup_normalize.dart';
+import '../verticals/oil_change/utils/oil_change_order_status.dart';
+import 'service_order_kinds.dart';
+import '../verticals/oil_change/services/vehicle_registry.dart';
 
 /// Pure SQL operations for service orders + their items.
 ///
@@ -38,9 +42,8 @@ class ServiceOrdersSqlOps {
     final statusClause = (status != null && status.trim().isNotEmpty)
         ? 'AND so.status = ?'
         : '';
-    final args = <Object?>[tenantId, if (status != null && status.trim().isNotEmpty) status.trim(), limit];
-
-    final sql = '''
+    final sql =
+        '''
       SELECT
         so.*,
         inv.type            AS invType,
@@ -49,13 +52,21 @@ class ServiceOrdersSqlOps {
         inv.isReturned      AS invIsReturned
       FROM service_orders AS so
       LEFT JOIN invoices AS inv ON so.invoiceId = inv.id
-      WHERE so.tenantId = ? AND so.deletedAt IS NULL $statusClause
+      WHERE so.tenantId = ? AND so.deletedAt IS NULL
+        AND (so.orderKind IS NULL OR so.orderKind = ?) $statusClause
       ORDER BY so.id DESC
       LIMIT ?
     ''';
 
+    final repairArgs = <Object?>[
+      tenantId,
+      ServiceOrderKinds.repair,
+      if (status != null && status.trim().isNotEmpty) status.trim(),
+      limit,
+    ];
+
     try {
-      return await db.rawQuery(sql, args);
+      return await db.rawQuery(sql, repairArgs);
     } on Object catch (e, st) {
       AppLogger.error(
         'service_orders_sql',
@@ -64,8 +75,10 @@ class ServiceOrdersSqlOps {
         st,
       );
       // الاحتياط: الاستعلام البسيط بدون JOIN
-      final where = StringBuffer('tenantId = ? AND deletedAt IS NULL');
-      final simpleArgs = <Object?>[tenantId];
+      final where = StringBuffer(
+        "tenantId = ? AND deletedAt IS NULL AND (orderKind IS NULL OR orderKind = ?)",
+      );
+      final simpleArgs = <Object?>[tenantId, ServiceOrderKinds.repair];
       if (status != null && status.trim().isNotEmpty) {
         where.write(' AND status = ?');
         simpleArgs.add(status.trim());
@@ -112,14 +125,17 @@ class ServiceOrdersSqlOps {
     String? statusKey,
     int limit,
   ) {
-    Iterable<Map<String, dynamic>> out = raw.where((r) {
-      final tid = _tenantIdFromRow(r);
-      return tid == tenantId;
-    }).where(_rowNotSoftDeleted);
+    Iterable<Map<String, dynamic>> out = raw
+        .where((r) {
+          final tid = _tenantIdFromRow(r);
+          return tid == tenantId;
+        })
+        .where(_rowNotSoftDeleted);
     final sk = statusKey?.trim();
     if (sk != null && sk.isNotEmpty) {
       out = out.where((r) => (r['status'] ?? '').toString() == sk);
     }
+    out = out.where(ServiceOrderKinds.isRepairTicket);
     return out.take(limit).toList(growable: false);
   }
 
@@ -137,29 +153,529 @@ class ServiceOrdersSqlOps {
     return rows.isEmpty ? null : rows.first;
   }
 
+  static Future<Map<String, dynamic>?> getServiceOrderById(
+    DatabaseExecutor db,
+    int tenantId,
+    int id,
+  ) async {
+    final rows = await db.query(
+      'service_orders',
+      where: 'tenantId = ? AND deletedAt IS NULL AND id = ?',
+      whereArgs: [tenantId, id],
+      limit: 1,
+    );
+    return rows.isEmpty ? null : rows.first;
+  }
+
+  /// آخر بطاقة غيار زيت لنفس رقم اللوحة (لتعبئة بيانات السيارة تلقائياً).
+  static Future<Map<String, dynamic>?> getLatestOilChangeByPlate(
+    DatabaseExecutor db,
+    int tenantId, {
+    required String deviceSerial,
+    int? excludeOrderId,
+  }) => getLatestByPlate(
+    db,
+    tenantId,
+    deviceSerial: deviceSerial,
+    excludeOrderId: excludeOrderId,
+  );
+
+  /// آخر بطاقة (زيت أو غسيل حسب [orderKind]) لهذه اللوحة، بعد توحيد كتابتها.
+  static Future<Map<String, dynamic>?> getLatestByPlate(
+    DatabaseExecutor db,
+    int tenantId, {
+    required String deviceSerial,
+    int? excludeOrderId,
+    String orderKind = ServiceOrderKinds.oilChange,
+  }) async {
+    final plate = deviceSerial.trim();
+    if (plate.isEmpty) return null;
+    final plateKey = OilChangeLookupNormalize.normalizePlateKey(plate);
+    if (plateKey.isEmpty) return null;
+
+    // المسار السريع: السيارة من السجل ثم آخر بطاقة لها (فهرسان).
+    // سيارة معروفة بلا بطاقة من هذا النوع = لا زيارة؛ لا داعي للمسح القديم.
+    try {
+      final v = await VehicleRegistry.findByPlate(db, tenantId, plate);
+      if (v != null) {
+        return VehicleRegistry.latestOrderForVehicle(
+          db,
+          tenantId,
+          vehicleGlobalId: v['global_id'].toString(),
+          orderKind: orderKind,
+          excludeOrderId: excludeOrderId,
+        );
+      }
+    } catch (_) {
+      // قاعدة بلا سجل السيارات بعد — المسار القديم أدناه.
+    }
+
+    final variants = <String>{plate, plate.toLowerCase(), plateKey};
+    for (final variant in variants) {
+      if (variant.isEmpty) continue;
+      final row = await _queryLatestOilChangeWhere(
+        db,
+        tenantId,
+        excludeOrderId: excludeOrderId,
+        extraWhere: 'deviceSerial = ?',
+        extraArgs: [variant],
+        orderKind: orderKind,
+      );
+      if (row != null) return row;
+    }
+
+    return _scanRecentOilChangeByPlateKey(
+      db,
+      tenantId,
+      plateKey: plateKey,
+      excludeOrderId: excludeOrderId,
+      orderKind: orderKind,
+    );
+  }
+
+  static Future<Map<String, dynamic>?> _queryLatestOilChangeWhere(
+    DatabaseExecutor db,
+    int tenantId, {
+    required String extraWhere,
+    required List<Object?> extraArgs,
+    int? excludeOrderId,
+    String orderKind = ServiceOrderKinds.oilChange,
+  }) async {
+    // المعلّقة ليست «آخر زيارة» مكتملة — جلبها كان يفسد القراءة الحالية/اللاحقة.
+    final where = StringBuffer(
+      'tenantId = ? AND deletedAt IS NULL AND orderKind = ? '
+      "AND status != '${OilChangeOrderStatus.suspended}' AND $extraWhere",
+    );
+    final args = <Object?>[tenantId, orderKind, ...extraArgs];
+    if (excludeOrderId != null && excludeOrderId > 0) {
+      where.write(' AND id != ?');
+      args.add(excludeOrderId);
+    }
+    final rows = await db.query(
+      'service_orders',
+      where: where.toString(),
+      whereArgs: args,
+      orderBy: 'id DESC',
+      limit: 1,
+    );
+    return rows.isEmpty ? null : rows.first;
+  }
+
+  static Future<Map<String, dynamic>?> _scanRecentOilChangeByPlateKey(
+    DatabaseExecutor db,
+    int tenantId, {
+    required String plateKey,
+    int? excludeOrderId,
+    String orderKind = ServiceOrderKinds.oilChange,
+  }) async {
+    final where = StringBuffer(
+      'tenantId = ? AND deletedAt IS NULL AND orderKind = ? '
+      "AND status != '${OilChangeOrderStatus.suspended}' "
+      "AND deviceSerial IS NOT NULL AND trim(deviceSerial) != ''",
+    );
+    final args = <Object?>[tenantId, orderKind];
+    if (excludeOrderId != null && excludeOrderId > 0) {
+      where.write(' AND id != ?');
+      args.add(excludeOrderId);
+    }
+    final rows = await db.query(
+      'service_orders',
+      where: where.toString(),
+      whereArgs: args,
+      orderBy: 'id DESC',
+      limit: 160,
+    );
+    for (final row in rows) {
+      final stored = (row['deviceSerial'] ?? '').toString();
+      if (OilChangeLookupNormalize.normalizePlateKey(stored) == plateKey) {
+        return row;
+      }
+    }
+    return null;
+  }
+
+  /// كل بطاقات غيار الزيت المرتبطة بعميل مسجّل (أو بنفس الاسم إن لم تُربط بـ id).
+  ///
+  /// ترقيم بمؤشر [afterId] تنازلي (بدون OFFSET).
+  static Future<List<Map<String, dynamic>>> listOilChangeOrdersForCustomer(
+    DatabaseExecutor db,
+    int tenantId, {
+    required int customerId,
+    String? customerName,
+    int? afterId,
+    int limit = 80,
+  }) async {
+    if (customerId <= 0) return const [];
+    final cap = limit < 1 ? 80 : (limit > 200 ? 200 : limit);
+    final nameKey = OilChangeLookupNormalize.normalizeNameKey(
+      (customerName ?? '').trim(),
+    );
+
+    final where = StringBuffer(
+      "tenantId = ? AND (deletedAt IS NULL OR TRIM(COALESCE(deletedAt,'')) = '') "
+      'AND orderKind = ? AND (customerId = ?',
+    );
+    final args = <Object?>[tenantId, ServiceOrderKinds.oilChange, customerId];
+    if (nameKey.isNotEmpty) {
+      where.write(
+        ' OR ('
+        '(customerId IS NULL OR customerId = 0) '
+        'AND LOWER(TRIM(COALESCE(customerNameSnapshot, \'\'))) = ?'
+        ')',
+      );
+      args.add(nameKey);
+    }
+    where.write(')');
+
+    // استبعاد المعلّقة والملغاة — السجل الحقيقي فقط.
+    where.write(
+      " AND (status IS NULL OR TRIM(COALESCE(status,'')) = '' "
+      'OR (status != ? AND status != ?))',
+    );
+    args.add(OilChangeOrderStatus.suspended);
+    args.add(OilChangeOrderStatus.cancelled);
+
+    if (afterId != null && afterId > 0) {
+      where.write(' AND id < ?');
+      args.add(afterId);
+    }
+
+    return db.query(
+      'service_orders',
+      where: where.toString(),
+      whereArgs: args,
+      orderBy: 'id DESC',
+      limit: cap,
+    );
+  }
+
+  /// آخر بطاقة غيار زيت لنفس العميل (عند عدم وجود لوحة).
+  static Future<Map<String, dynamic>?> getLatestOilChangeByCustomerId(
+    DatabaseExecutor db,
+    int tenantId, {
+    required int customerId,
+    int? excludeOrderId,
+  }) async {
+    if (customerId <= 0) return null;
+    final where = StringBuffer(
+      'tenantId = ? AND deletedAt IS NULL AND orderKind = ? AND customerId = ? '
+      "AND status != '${OilChangeOrderStatus.suspended}'",
+    );
+    final args = <Object?>[tenantId, ServiceOrderKinds.oilChange, customerId];
+    if (excludeOrderId != null && excludeOrderId > 0) {
+      where.write(' AND id != ?');
+      args.add(excludeOrderId);
+    }
+    final rows = await db.query(
+      'service_orders',
+      where: where.toString(),
+      whereArgs: args,
+      orderBy: 'id DESC',
+      limit: 1,
+    );
+    return rows.isEmpty ? null : rows.first;
+  }
+
+  /// آخر بطاقة غيار زيت لنفس اسم العميل (للعملاء غير المربوطين بـ customerId).
+  static Future<Map<String, dynamic>?> getLatestOilChangeByCustomerName(
+    DatabaseExecutor db,
+    int tenantId, {
+    required String customerName,
+    int? excludeOrderId,
+  }) async {
+    final name = customerName.trim();
+    if (name.isEmpty) return null;
+    final nameKey = OilChangeLookupNormalize.normalizeNameKey(name);
+    if (nameKey.isEmpty) return null;
+
+    final row = await _queryLatestOilChangeWhere(
+      db,
+      tenantId,
+      excludeOrderId: excludeOrderId,
+      extraWhere: 'LOWER(TRIM(customerNameSnapshot)) = ?',
+      extraArgs: [nameKey],
+    );
+    if (row != null) return row;
+
+    return _scanRecentOilChangeByCustomerNameKey(
+      db,
+      tenantId,
+      nameKey: nameKey,
+      excludeOrderId: excludeOrderId,
+    );
+  }
+
+  static Future<Map<String, dynamic>?> _scanRecentOilChangeByCustomerNameKey(
+    DatabaseExecutor db,
+    int tenantId, {
+    required String nameKey,
+    int? excludeOrderId,
+  }) async {
+    final where = StringBuffer(
+      'tenantId = ? AND deletedAt IS NULL AND orderKind = ? '
+      "AND status != '${OilChangeOrderStatus.suspended}' "
+      "AND customerNameSnapshot IS NOT NULL AND trim(customerNameSnapshot) != ''",
+    );
+    final args = <Object?>[tenantId, ServiceOrderKinds.oilChange];
+    if (excludeOrderId != null && excludeOrderId > 0) {
+      where.write(' AND id != ?');
+      args.add(excludeOrderId);
+    }
+    final rows = await db.query(
+      'service_orders',
+      where: where.toString(),
+      whereArgs: args,
+      orderBy: 'id DESC',
+      limit: 160,
+    );
+    for (final row in rows) {
+      final stored = (row['customerNameSnapshot'] ?? '').toString();
+      if (OilChangeLookupNormalize.normalizeNameKey(stored) == nameKey) {
+        return row;
+      }
+    }
+    return null;
+  }
+
+  static final Map<String, bool> _columnPresenceCache = {};
+
+  static Future<bool> _tableHasColumn(
+    DatabaseExecutor db,
+    String table,
+    String column,
+  ) async {
+    final cacheKey = '$table.$column';
+    final cached = _columnPresenceCache[cacheKey];
+    if (cached != null) return cached;
+    final info = await db.rawQuery('PRAGMA table_info($table)');
+    var found = false;
+    for (final r in info) {
+      if ((r['name'] ?? '').toString() == column) {
+        found = true;
+        break;
+      }
+    }
+    _columnPresenceCache[cacheKey] = found;
+    return found;
+  }
+
+  static bool _rowNotDeleted(Map<String, dynamic> r) => _rowNotSoftDeleted(r);
+
+  static bool _matchesOilLogSearch(Map<String, dynamic> r, String q) {
+    final needle = q.toLowerCase();
+    bool hit(String? v) => (v ?? '').toString().toLowerCase().contains(needle);
+    return hit(r['customerNameSnapshot']?.toString()) ||
+        hit(r['customerPhone']?.toString()) ||
+        hit(r['deviceName']?.toString()) ||
+        hit(r['deviceSerial']?.toString()) ||
+        hit(r['carModel']?.toString());
+  }
+
+  static List<Map<String, dynamic>> _filterOilLogRows(
+    List<Map<String, dynamic>> rows, {
+    String? searchQuery,
+    int? afterId,
+    required int limit,
+    OilChangeLogStatusFilter? statusFilter,
+  }) {
+    final cap = limit < 1 ? 40 : (limit > 120 ? 120 : limit);
+    final q = searchQuery?.trim();
+    final hasSearch = q != null && q.isNotEmpty;
+
+    var out = rows
+        .where(_rowNotDeleted)
+        .where(ServiceOrderKinds.isOilChangeLogRow)
+        .toList();
+
+    if (statusFilter == OilChangeLogStatusFilter.suspended) {
+      out = out.where(OilChangeOrderStatus.isSuspended).toList();
+    } else if (statusFilter == OilChangeLogStatusFilter.active) {
+      out = out.where(OilChangeOrderStatus.isActiveLogRow).toList();
+    }
+
+    if (hasSearch) {
+      out = out.where((r) => _matchesOilLogSearch(r, q)).toList();
+    }
+
+    out.sort((a, b) {
+      final ai = (a['id'] as num?)?.toInt() ?? 0;
+      final bi = (b['id'] as num?)?.toInt() ?? 0;
+      return bi.compareTo(ai);
+    });
+
+    if (afterId != null && afterId > 0) {
+      out = out
+          .where((r) => ((r['id'] as num?)?.toInt() ?? 0) < afterId)
+          .toList();
+    }
+
+    if (out.length > cap) {
+      out = out.sublist(0, cap);
+    }
+    return out;
+  }
+
+  /// سجل بطاقات غيار الزيت — ترقيم بمؤشر [afterId] (بدون OFFSET).
+  ///
+  /// يدعم قواعد قديمة بلا [orderKind] أو ببطاقات مُوسومة repair مع بيانات زيت.
+  static Future<List<Map<String, dynamic>>> listOilChangeLogPage(
+    DatabaseExecutor db,
+    int tenantId, {
+    String? searchQuery,
+    int? afterId,
+    int limit = 40,
+    OilChangeLogStatusFilter? statusFilter,
+  }) async {
+    final cap = limit < 1 ? 40 : (limit > 120 ? 120 : limit);
+    final q = searchQuery?.trim();
+    final hasSearch = q != null && q.isNotEmpty;
+    final like = hasSearch ? '%$q%' : null;
+
+    final hasOrderKind = await _tableHasColumn(
+      db,
+      'service_orders',
+      'orderKind',
+    );
+    final hasCustomerPhone = await _tableHasColumn(
+      db,
+      'service_orders',
+      'customerPhone',
+    );
+
+    try {
+      final where = StringBuffer(
+        "tenantId = ? AND (deletedAt IS NULL OR TRIM(COALESCE(deletedAt,'')) = '')",
+      );
+      final args = <Object?>[tenantId];
+
+      if (hasOrderKind) {
+        where.write(
+          " AND (orderKind = ? OR ("
+          "(orderKind IS NULL OR orderKind = ?) AND ("
+          "(oilType IS NOT NULL AND TRIM(oilType) != '') OR "
+          "(odometerCurrent IS NOT NULL AND TRIM(odometerCurrent) != '')"
+          ")))",
+        );
+        args.addAll([ServiceOrderKinds.oilChange, ServiceOrderKinds.repair]);
+      }
+
+      if (afterId != null && afterId > 0) {
+        where.write(' AND id < ?');
+        args.add(afterId);
+      }
+      if (hasSearch) {
+        if (hasCustomerPhone) {
+          where.write(
+            ' AND (customerNameSnapshot LIKE ? OR customerPhone LIKE ? '
+            'OR deviceName LIKE ? OR deviceSerial LIKE ? OR carModel LIKE ?)',
+          );
+          args.addAll([like, like, like, like, like]);
+        } else {
+          where.write(
+            ' AND (customerNameSnapshot LIKE ? OR deviceName LIKE ? '
+            'OR deviceSerial LIKE ? OR carModel LIKE ?)',
+          );
+          args.addAll([like, like, like, like]);
+        }
+      }
+
+      if (statusFilter == OilChangeLogStatusFilter.suspended) {
+        where.write(' AND status = ?');
+        args.add(OilChangeOrderStatus.suspended);
+      } else if (statusFilter == OilChangeLogStatusFilter.active) {
+        // السجل الحقيقي: استبعاد المعلّقة والملغاة (المحذوفة تُستبعد عبر deletedAt).
+        where.write(
+          " AND (status IS NULL OR TRIM(COALESCE(status,'')) = '' "
+          'OR (status != ? AND status != ?))',
+        );
+        args.add(OilChangeOrderStatus.suspended);
+        args.add(OilChangeOrderStatus.cancelled);
+      }
+
+      final rows = await db.query(
+        'service_orders',
+        where: where.toString(),
+        whereArgs: args,
+        orderBy: 'id DESC',
+        limit: cap,
+      );
+
+      if (!hasOrderKind) {
+        return _filterOilLogRows(
+          rows,
+          searchQuery: searchQuery,
+          afterId: afterId,
+          limit: cap,
+          statusFilter: statusFilter,
+        );
+      }
+      return rows;
+    } on Object catch (e) {
+      AppLogger.warn(
+        'service_orders_sql',
+        'listOilChangeLogPage strict query failed; using in-memory filter: $e',
+      );
+      final raw = await db.query(
+        'service_orders',
+        where: 'tenantId = ?',
+        whereArgs: [tenantId],
+        orderBy: 'id DESC',
+        limit: 800,
+      );
+      return _filterOilLogRows(
+        raw,
+        searchQuery: searchQuery,
+        afterId: afterId,
+        limit: cap,
+        statusFilter: statusFilter,
+      );
+    }
+  }
+
   static Future<int> insertServiceOrder(
     DatabaseExecutor txn,
     int tenantId,
     Map<String, dynamic> values,
-  ) {
+  ) async {
     final stamped = Map<String, dynamic>.from(values);
     stamped['tenantId'] = tenantId;
-    return txn.insert('service_orders', stamped);
+    final id = await txn.insert('service_orders', stamped);
+    await VehicleRegistry.linkOrder(txn, tenantId, id);
+    return id;
   }
+
+  /// أعمدة تغيّر سيارة البطاقة أو ما يُشتق منها (الاسم، المالك، العداد، الزيارة).
+  static const _vehicleCols = {
+    'deviceSerial',
+    'deviceName',
+    'carModel',
+    'engineSize',
+    'odometerCurrent',
+    'customerId',
+    'customerNameSnapshot',
+    'customerPhone',
+    'status',
+    'createdAt',
+    'orderKind',
+  };
 
   static Future<int> updateServiceOrderById(
     DatabaseExecutor txn,
     int tenantId, {
     required int id,
     required Map<String, dynamic> values,
-  }) {
+  }) async {
     final patched = Map<String, dynamic>.from(values);
-    return txn.update(
+    final n = await txn.update(
       'service_orders',
       patched,
       where: 'id = ? AND tenantId = ? AND deletedAt IS NULL',
       whereArgs: [id, tenantId],
     );
+    if (n > 0 && patched.keys.any(_vehicleCols.contains)) {
+      await VehicleRegistry.linkOrder(txn, tenantId, id);
+    }
+    return n;
   }
 
   static Future<int> softDeleteServiceOrderById(
@@ -167,13 +683,15 @@ class ServiceOrdersSqlOps {
     int tenantId, {
     required int id,
     required String nowIso,
-  }) {
-    return txn.update(
+  }) async {
+    final n = await txn.update(
       'service_orders',
       {'deletedAt': nowIso, 'updatedAt': nowIso},
       where: 'id = ? AND tenantId = ? AND deletedAt IS NULL',
       whereArgs: [id, tenantId],
     );
+    if (n > 0) await VehicleRegistry.linkOrder(txn, tenantId, id);
+    return n;
   }
 
   // ─────────────────────── service_order_items ───────────────────────
@@ -245,4 +763,3 @@ class ServiceOrdersSqlOps {
     );
   }
 }
-

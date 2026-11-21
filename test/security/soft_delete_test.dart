@@ -325,7 +325,7 @@ void main() {
         sandbox.db,
         1,
         ids.deletedId,
-        500.0,
+        500,
       );
       expect(affected, 0);
       // Confirm advancePayment unchanged (still 0).

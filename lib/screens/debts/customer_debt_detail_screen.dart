@@ -9,12 +9,20 @@ import '../../models/customer_debt_models.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/invoice_provider.dart';
 import '../../providers/notification_provider.dart';
+import '../../providers/shift_provider.dart';
+import '../../models/debt_settings_data.dart';
+import '../../printing/receipt_printer.dart';
+import '../../services/customer_debt_statement.dart';
 import '../../services/database_helper.dart';
+import '../../services/effective_store_branding.dart';
+import '../../utils/iqd_money.dart';
 import '../../theme/design_tokens.dart';
 import '../../utils/sale_receipt_pdf.dart';
+import '../../utils/shift_actor_conflict_guard.dart';
 import '../../utils/customer_phone_launch.dart';
 import '../../widgets/customer_contact_bar.dart';
 import '../../widgets/invoice_detail_sheet.dart';
+import 'void_payment_dialog.dart';
 
 final _numFmt = NumberFormat('#,##0', 'ar');
 final _dateFmt = DateFormat('dd/MM/yyyy', 'ar');
@@ -47,7 +55,10 @@ class _CustomerDebtDetailScreenState extends State<CustomerDebtDetailScreen> {
   List<CustomerDebtLineItem> _lines = [];
   List<CreditDebtInvoice> _invoices = [];
   double _openTotal = 0;
+  int _openTotalFils = 0;
   List<String> _contactPhones = [];
+  List<CustomerDebtPaymentRow> _payments = [];
+  DebtSettingsData _settings = DebtSettingsData.defaults();
   bool _loading = true;
   String? _resolveError;
 
@@ -89,10 +100,17 @@ class _CustomerDebtDetailScreenState extends State<CustomerDebtDetailScreen> {
     try {
       final lines = await _db.getCustomerDebtLineItems(p);
       final inv = await _db.getCreditDebtInvoicesForParty(p);
-      final open = await _db.sumOpenCreditDebtForParty(p);
+      final openFilsFromInvoices =
+          inv.fold<int>(0, (s, x) => s + x.remainingFils);
+      final open = openFilsFromInvoices / 1000.0;
       var contactPhones = <String>[];
+      var payments = <CustomerDebtPaymentRow>[];
+      final settings = await _db.getDebtSettings();
       final cid = p.customerId;
       if (cid != null) {
+        payments = (await _db.getCustomerDebtPaymentRows(cid))
+            .map(CustomerDebtPaymentRow.fromRow)
+            .toList();
         final row = await _db.getCustomerById(cid);
         if (row != null) {
           contactPhones = mergeCustomerPhoneChoices(
@@ -106,7 +124,10 @@ class _CustomerDebtDetailScreenState extends State<CustomerDebtDetailScreen> {
         _lines = lines;
         _invoices = inv;
         _openTotal = open;
+        _openTotalFils = openFilsFromInvoices;
         _contactPhones = contactPhones;
+        _payments = payments;
+        _settings = settings;
         _loading = false;
         _resolveError = null;
       });
@@ -121,61 +142,48 @@ class _CustomerDebtDetailScreenState extends State<CustomerDebtDetailScreen> {
 
   Future<void> _openPayDialog() async {
     final p = _party;
-    if (p == null || _openTotal < 0.009) return;
-    final ctrl = TextEditingController(
-      text: _openTotal.toStringAsFixed(0),
-    );
-    final submitted = await showDialog<String>(
-      context: context,
-      builder: (ctx) => Directionality(
-        textDirection: TextDirection.rtl,
-        child: AlertDialog(
-          shape: const RoundedRectangleBorder(borderRadius: AppShape.none),
-          title: const Text('تسديد دين'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                'المتبقي الحالي: ${_numFmt.format(_openTotal)} د.ع',
-                style: const TextStyle(fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: ctrl,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
-                  labelText: 'المبلغ (د.ع)',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'يُوزَّع تلقائياً على الفواتير من الأقدم إلى الأحدث.',
-                style: TextStyle(fontSize: 12, color: Theme.of(ctx).hintColor),
-              ),
-            ],
+    if (p == null || _openTotalFils <= 0) return;
+    if (p.customerId == null || p.customerId! <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'لا يمكن تسديد الدين لهذا السجل لأنه غير مربوط ببطاقة عميل. اربط العميل أولاً ثم أعد المحاولة.',
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('إلغاء'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx, ctrl.text),
-              child: const Text('تأكيد'),
-            ),
-          ],
         ),
+      );
+      return;
+    }
+    final defaultText = (_openTotalFils / 1000.0).toStringAsFixed(0);
+    final remainingLabel =
+        '${_numFmt.format(_openTotalFils / 1000.0)} د.ع';
+    final submitted = await showDialog<({String amount, String note})>(
+      context: context,
+      builder: (ctx) => _DebtPayAmountDialog(
+        remainingLabel: remainingLabel,
+        initialAmountText: defaultText,
+        openFils: _openTotalFils,
       ),
     );
-    ctrl.dispose();
     if (submitted == null || !mounted) return;
-    final raw = submitted.replaceAll(',', '').trim();
+    final raw = submitted.amount.replaceAll(',', '').trim();
     final amt = double.tryParse(raw) ?? 0;
     if (amt <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('أدخل مبلغاً صالحاً')),
+      );
+      return;
+    }
+    final conflict = ShiftActorConflictGuard.evaluate(
+      sessionUserId: context.read<AuthProvider>().userId,
+      activeShift: context.read<ShiftProvider>().activeShift,
+    );
+    if (conflict.hasConflict) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'لا يمكن تسجيل تسديد الدين من هذه الجلسة: الوردية المفتوحة باسم ${conflict.shiftStaffName}.',
+          ),
+        ),
       );
       return;
     }
@@ -185,6 +193,7 @@ class _CustomerDebtDetailScreenState extends State<CustomerDebtDetailScreen> {
         party: p,
         amount: amt,
         recordedByUserName: user.isEmpty ? '—' : user,
+        note: submitted.note,
       );
       if (!mounted) return;
       if (res == null) {
@@ -221,6 +230,142 @@ class _CustomerDebtDetailScreenState extends State<CustomerDebtDetailScreen> {
           SnackBar(content: Text('تعذّر إكمال التسديد: $e')),
         );
       }
+    }
+  }
+
+  Future<void> _voidPayment(CustomerDebtPaymentRow pay) async {
+    if (!pay.canVoid) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'هذه دفعة قديمة سُجّلت قبل تحديث الإلغاء، فلا يمكن إلغاؤها تلقائياً.',
+          ),
+        ),
+      );
+      return;
+    }
+    final amount = '${_numFmt.format(pay.amountFils / 1000.0)} د.ع';
+    final reason = await confirmVoidPayment(
+      context,
+      title: 'إلغاء دفعة خاطئة',
+      amountLabel: amount,
+      effect:
+          'يعود المبلغ ديناً على فواتيره كما كان، ويُخصم من الصندوق، '
+          'وتبقى الدفعة في السجل بعلامة «ملغاة».',
+    );
+    if (reason == null || !mounted) return;
+    try {
+      final user = context.read<AuthProvider>().username.trim();
+      await _db.voidCustomerDebtPayment(
+        paymentId: pay.id,
+        reason: reason,
+        voidedByUserName: user,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('أُلغيت الدفعة ($amount) وعاد الدين.')),
+      );
+      unawaited(context.read<InvoiceProvider>().refresh());
+      unawaited(context.read<NotificationProvider>().refresh());
+      await _load();
+    } on StateError catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.message)));
+    }
+  }
+
+  CustomerDebtStatement _statement() => CustomerDebtStatement(
+    customerName: _party?.displayName ?? '',
+    invoices: _invoices,
+    payments: _payments,
+  );
+
+  Future<String> _storeName() async {
+    try {
+      final s = await EffectiveStoreBranding.resolveFromContext(context);
+      return s.storeTitleLine;
+    } catch (_) {
+      return '';
+    }
+  }
+
+  bool get _canRemind =>
+      _openTotalFils >= 500 &&
+      _contactPhones.isNotEmpty &&
+      _settings.reminderMode != DebtReminderMode.none;
+
+  Future<void> _remind() async {
+    final open = _invoices.where((i) => i.remainingFils >= 500).toList();
+    DateTime? oldest;
+    for (final i in open) {
+      if (oldest == null || i.date.isBefore(oldest)) oldest = i.date;
+    }
+    final store = await _storeName();
+    if (!mounted) return;
+    await launchCustomerWhatsApp(
+      context,
+      _contactPhones,
+      message: customerDebtReminderMessage(
+        customerName: _party?.displayName ?? '',
+        openFils: _openTotalFils,
+        oldestDate: oldest,
+        storeName: store,
+      ),
+    );
+  }
+
+  Future<void> _openStatement() async {
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => Directionality(
+        textDirection: TextDirection.rtl,
+        child: SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const ListTile(
+                title: Text(
+                  'كشف حساب العميل',
+                  style: TextStyle(fontWeight: FontWeight.w800),
+                ),
+                subtitle: Text(
+                  'الفواتير غير المسدَّدة وآخر 10 دفعات والرصيد الآن.',
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.print_rounded),
+                title: const Text('طباعة الكشف'),
+                onTap: () => Navigator.pop(ctx, 'print'),
+              ),
+              ListTile(
+                enabled: _contactPhones.isNotEmpty,
+                leading: const Icon(Icons.chat_rounded),
+                title: const Text('إرسال الكشف بالواتساب'),
+                subtitle: _contactPhones.isEmpty
+                    ? const Text('لا يوجد رقم هاتف لهذا العميل')
+                    : null,
+                onTap: () => Navigator.pop(ctx, 'whatsapp'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (!mounted || choice == null) return;
+    final st = _statement();
+    if (choice == 'print') {
+      await ReceiptPrinter.printWithFeedback(context, () async => st.toReceipt());
+    } else {
+      final store = await _storeName();
+      if (!mounted) return;
+      await launchCustomerWhatsApp(
+        context,
+        _contactPhones,
+        message: st.toWhatsAppText(storeName: store),
+      );
     }
   }
 
@@ -270,6 +415,28 @@ class _CustomerDebtDetailScreenState extends State<CustomerDebtDetailScreen> {
                             cardColor: card,
                             isDark: isDark,
                           ),
+                          const SizedBox(height: 10),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              if (_canRemind)
+                                OutlinedButton.icon(
+                                  key: const Key('debtRemindButton'),
+                                  onPressed: _remind,
+                                  icon: const Icon(
+                                    Icons.notifications_active_outlined,
+                                  ),
+                                  label: const Text('ذكّره بالدين'),
+                                ),
+                              OutlinedButton.icon(
+                                key: const Key('debtStatementButton'),
+                                onPressed: _openStatement,
+                                icon: const Icon(Icons.receipt_long_outlined),
+                                label: const Text('كشف الحساب'),
+                              ),
+                            ],
+                          ),
                           const SizedBox(height: 14),
                           Text(
                             'فواتير آجل',
@@ -290,6 +457,29 @@ class _CustomerDebtDetailScreenState extends State<CustomerDebtDetailScreen> {
                               ),
                             ),
                           ),
+                          if ((_party?.customerId ?? 0) > 0) ...[
+                            const SizedBox(height: 18),
+                            Text(
+                              'الدفعات',
+                              style: theme.textTheme.titleMedium?.copyWith(
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            if (_payments.isEmpty)
+                              Text(
+                                'لم يسدّد شيئاً بعد.',
+                                style: TextStyle(color: cs.onSurfaceVariant),
+                              )
+                            else
+                              ..._payments.map(
+                                (pay) => _PaymentTile(
+                                  payment: pay,
+                                  cardColor: card,
+                                  onVoid: () => _voidPayment(pay),
+                                ),
+                              ),
+                          ],
                           const SizedBox(height: 18),
                           Text(
                             'المنتجات المأخوذة بالدين',
@@ -317,7 +507,7 @@ class _CustomerDebtDetailScreenState extends State<CustomerDebtDetailScreen> {
                   ),
                   CustomerContactBar(phones: _contactPhones),
                   _PayBar(
-                    enabled: _openTotal >= 0.009,
+                    enabled: _openTotalFils > 0 && (_party?.customerId ?? 0) > 0,
                     openTotal: _openTotal,
                     onPay: _openPayDialog,
                   ),
@@ -372,7 +562,7 @@ class _SummaryHeader extends StatelessWidget {
             style: TextStyle(
               fontSize: 28,
               fontWeight: FontWeight.w800,
-              color: openTotal >= 0.009
+              color: openTotal > 0
                   ? const Color(0xFF0EA5E9)
                   : const Color(0xFF22C55E),
             ),
@@ -563,6 +753,87 @@ class _ProductDebtTile extends StatelessWidget {
   }
 }
 
+class _PaymentTile extends StatelessWidget {
+  const _PaymentTile({
+    required this.payment,
+    required this.cardColor,
+    required this.onVoid,
+  });
+
+  final CustomerDebtPaymentRow payment;
+  final Color cardColor;
+  final VoidCallback onVoid;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final p = payment;
+    final when = DateFormat('dd/MM/yyyy HH:mm', 'en').format(p.createdAt);
+    final details = [
+      when,
+      if (p.recordedBy != null) 'استلمها ${p.recordedBy}',
+      if (!p.isVoided)
+        'الدين بعدها ${_numFmt.format(p.debtAfterFils / 1000.0)} د.ع',
+    ].join(' · ');
+    final lines = [
+      details,
+      if (p.note != null) 'ملاحظة: ${p.note}',
+      if (p.isVoided)
+        'ملغاة ${DateFormat('dd/MM/yyyy', 'en').format(p.voidedAt!)}'
+            '${p.voidedBy == null ? '' : ' · ألغاها ${p.voidedBy}'}'
+            '${p.voidReason == null ? '' : ' · السبب: ${p.voidReason}'}',
+    ];
+    return Card(
+      color: cardColor,
+      margin: const EdgeInsets.only(bottom: 8),
+      child: ListTile(
+        leading: Icon(
+          p.isVoided ? Icons.block_rounded : Icons.payments_outlined,
+          color: p.isVoided ? cs.error : AppSemanticColors.success,
+        ),
+        title: Row(
+          children: [
+            Text(
+              '${_numFmt.format(p.amountFils / 1000.0)} د.ع',
+              style: TextStyle(
+                fontWeight: FontWeight.w800,
+                decoration: p.isVoided ? TextDecoration.lineThrough : null,
+              ),
+            ),
+            if (p.isVoided) ...[
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                color: cs.errorContainer,
+                child: Text(
+                  'ملغاة',
+                  style: TextStyle(
+                    color: cs.onErrorContainer,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+        subtitle: Text(
+          lines.join('\n'),
+          style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
+        ),
+        trailing: p.isVoided
+            ? null
+            : IconButton(
+                key: Key('debtPaymentVoid_${p.id}'),
+                tooltip: 'إلغاء دفعة خاطئة',
+                icon: const Icon(Icons.undo_rounded),
+                onPressed: onVoid,
+              ),
+      ),
+    );
+  }
+}
+
 class _PayBar extends StatelessWidget {
   const _PayBar({
     required this.enabled,
@@ -600,6 +871,138 @@ class _PayBar extends StatelessWidget {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// حوار مبلغ التسديد — يملك [TextEditingController] داخلياً حتى لا يُستدعى
+/// dispose أثناء إغلاق الـ dialog (كان يسبب الشاشة الحمراء).
+class _DebtPayAmountDialog extends StatefulWidget {
+  const _DebtPayAmountDialog({
+    required this.remainingLabel,
+    required this.initialAmountText,
+    required this.openFils,
+  });
+
+  final String remainingLabel;
+  final String initialAmountText;
+  final int openFils;
+
+  @override
+  State<_DebtPayAmountDialog> createState() => _DebtPayAmountDialogState();
+}
+
+class _DebtPayAmountDialogState extends State<_DebtPayAmountDialog> {
+  late final TextEditingController _ctrl;
+  final TextEditingController _note = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = TextEditingController(text: widget.initialAmountText);
+    _ctrl.addListener(_onAmount);
+  }
+
+  void _onAmount() => setState(() {});
+
+  @override
+  void dispose() {
+    _ctrl.removeListener(_onAmount);
+    _ctrl.dispose();
+    _note.dispose();
+    super.dispose();
+  }
+
+  void _submit() =>
+      Navigator.pop(context, (amount: _ctrl.text, note: _note.text));
+
+  @override
+  Widget build(BuildContext context) {
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: AlertDialog(
+        shape: const RoundedRectangleBorder(borderRadius: AppShape.none),
+        title: const Text('تسديد دين'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'المتبقي الحالي: ${widget.remainingLabel}',
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _ctrl,
+                autofocus: true,
+                keyboardType: TextInputType.number,
+                textInputAction: TextInputAction.done,
+                onSubmitted: (_) => _submit(),
+                decoration: const InputDecoration(
+                  labelText: 'المبلغ (د.ع)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              Builder(
+                builder: (context) {
+                  final entered = IqdMoney.toFils(
+                    double.tryParse(_ctrl.text.replaceAll(',', '').trim()) ??
+                        0,
+                  );
+                  final warn = debtPaymentOverAmountWarning(
+                    enteredFils: entered,
+                    openFils: widget.openFils,
+                  );
+                  if (warn == null) return const SizedBox.shrink();
+                  return Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      warn,
+                      key: const Key('debtPayOverWarning'),
+                      style: const TextStyle(
+                        color: AppSemanticColors.danger,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 12.5,
+                      ),
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                key: const Key('debtPayNote'),
+                controller: _note,
+                maxLength: 200,
+                textInputAction: TextInputAction.done,
+                decoration: const InputDecoration(
+                  labelText: 'ملاحظة (اختياري)',
+                  hintText: 'مثال: سدّد عن طريق أخيه',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'يُوزَّع تلقائياً على الفواتير من الأقدم إلى الأحدث.',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Theme.of(context).hintColor,
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            onPressed: _submit,
+            child: const Text('تأكيد'),
+          ),
+        ],
       ),
     );
   }

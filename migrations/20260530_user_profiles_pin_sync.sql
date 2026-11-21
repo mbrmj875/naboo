@@ -1,0 +1,10 @@
+-- مزامنة PIN الموظفين عبر لقطة app_snapshots (جدول user_profiles داخل JSON)
+--
+-- الأمان:
+-- - يُرفع hash+salt فقط (SHA-256 + salt) — لا plaintext PIN
+-- - جدول users المحلي يبقى خارج اللقطة
+-- - كلمة مرور المالك (Gmail/Supabase) لا تُرفع في pinHash/pinSalt
+-- - RLS على app_snapshots/app_snapshot_chunks يقيّد الوصول لـ auth.uid()
+--
+-- SQLite (محلي): أُضيف pinHash/pinSalt إلى user_profiles عبر DatabaseHelper migration.
+-- Supabase: لا تغيير schema — اللقطة JSON تتضمن الحقلين الجديدين تلقائياً.

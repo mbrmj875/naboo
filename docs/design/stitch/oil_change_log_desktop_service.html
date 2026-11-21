@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+
+<html dir="rtl" lang="ar"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Naboo ERP - سجل خدمات تبديل الزيت</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "inverse-on-surface": "#f3f0f4",
+                    "on-primary-container": "#7484a5",
+                    "on-secondary-fixed-variant": "#564500",
+                    "surface-container-lowest": "#ffffff",
+                    "primary-fixed": "#d7e3ff",
+                    "on-primary-fixed-variant": "#374765",
+                    "inverse-surface": "#303033",
+                    "surface-container-low": "#f6f2f7",
+                    "on-error-container": "#93000a",
+                    "tertiary-container": "#cca825",
+                    "on-surface-variant": "#44474d",
+                    "outline-variant": "#c5c6ce",
+                    "on-surface": "#1b1b1e",
+                    "secondary": "#725c00",
+                    "primary-fixed-dim": "#b6c7eb",
+                    "primary": "#000000",
+                    "inverse-primary": "#b6c7eb",
+                    "error": "#ba1a1a",
+                    "on-tertiary-container": "#4e3e00",
+                    "outline": "#75777e",
+                    "surface-variant": "#e4e1e5",
+                    "on-primary-fixed": "#081b37",
+                    "surface-container": "#f0edf1",
+                    "primary-container": "#081b37",
+                    "tertiary-fixed-dim": "#e9c340",
+                    "error-container": "#ffdad6",
+                    "on-error": "#ffffff",
+                    "secondary-container": "#fed752",
+                    "surface-container-high": "#eae7eb",
+                    "tertiary-fixed": "#ffe082",
+                    "on-tertiary-fixed": "#231b00",
+                    "on-primary": "#ffffff",
+                    "on-secondary": "#ffffff",
+                    "on-tertiary": "#ffffff",
+                    "surface-dim": "#dcd9dd",
+                    "on-secondary-fixed": "#231b00",
+                    "secondary-fixed": "#ffe081",
+                    "background": "#fbf8fc",
+                    "surface": "#fbf8fc",
+                    "surface-bright": "#fbf8fc"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.25rem",
+                    "lg": "0.5rem",
+                    "xl": "0.75rem",
+                    "full": "9999px"
+            },
+            "spacing": {
+                    "xs": "4px",
+                    "sm": "8px",
+                    "md": "12px",
+                    "gutter": "12px",
+                    "xl": "24px",
+                    "lg": "16px",
+                    "margin-mobile": "16px",
+                    "base": "4px"
+            },
+            "fontFamily": {
+                    "label-sm": ["IBM Plex Sans Arabic"],
+                    "body-lg": ["IBM Plex Sans Arabic"],
+                    "headline-lg": ["IBM Plex Sans Arabic"],
+                    "label-md": ["IBM Plex Sans Arabic"],
+                    "display-price-sm": ["IBM Plex Sans Arabic"],
+                    "headline-md": ["IBM Plex Sans Arabic"],
+                    "body-md": ["IBM Plex Sans Arabic"],
+                    "display-price": ["IBM Plex Sans Arabic"]
+            },
+            "fontSize": {
+                    "label-sm": ["10px", {"lineHeight": "14px", "fontWeight": "500"}],
+                    "body-lg": ["16px", {"lineHeight": "24px", "fontWeight": "400"}],
+                    "headline-lg": ["20px", {"lineHeight": "28px", "fontWeight": "600"}],
+                    "label-md": ["12px", {"lineHeight": "16px", "fontWeight": "500"}],
+                    "display-price-sm": ["18px", {"lineHeight": "24px", "fontWeight": "700"}],
+                    "headline-md": ["18px", {"lineHeight": "24px", "fontWeight": "600"}],
+                    "body-md": ["14px", {"lineHeight": "20px", "fontWeight": "400"}],
+                    "display-price": ["22px", {"lineHeight": "28px", "fontWeight": "700"}]
+            }
+          },
+        },
+      }
+    </script>
+<style>
+        body {
+            font-family: 'IBM Plex Sans Arabic', sans-serif;
+            background-color: #fbf9fb;
+        }
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+            vertical-align: middle;
+        }
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: #f5f3f6;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #c5c6ce;
+            border-radius: 10px;
+        }
+        .glass-card {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(197, 198, 206, 0.3);
+        }
+        .table-row-hover:hover {
+            background-color: #f5f3f6;
+        }
+    </style>
+</head>
+<body class="bg-background text-on-surface flex overflow-hidden h-screen">
+<!-- Persistent Navigation Drawer (Right Side for RTL) -->
+<aside class="fixed right-0 top-0 h-full w-80 z-50 flex flex-col p-lg bg-surface-bright shadow-xl border-l border-outline-variant">
+<div class="flex items-center gap-md mb-xl p-md">
+<div class="w-12 h-12 rounded-xl bg-primary-container flex items-center justify-center text-secondary-container">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">oil_barrel</span>
+</div>
+<div>
+<h1 class="font-headline-md text-headline-md font-bold text-primary">Al-Mudir ERP</h1>
+<p class="font-label-md text-label-md text-on-surface-variant">إدارة الخدمات المتقدمة</p>
+</div>
+</div>
+<nav class="flex-grow flex flex-col gap-xs">
+<a class="flex items-center gap-md p-md text-on-surface-variant hover:bg-surface-container-high transition-all duration-300 rounded-lg" href="#">
+<span class="material-symbols-outlined">dashboard</span>
+<span class="font-body-md text-body-md">Dashboard</span>
+</a>
+<a class="flex items-center gap-md p-md bg-secondary-container text-on-secondary-container rounded-lg font-bold transition-all duration-300" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">receipt_long</span>
+<span class="font-body-md text-body-md">Transactions</span>
+</a>
+<a class="flex items-center gap-md p-md text-on-surface-variant hover:bg-surface-container-high transition-all duration-300 rounded-lg" href="#">
+<span class="material-symbols-outlined">local_shipping</span>
+<span class="font-body-md text-body-md">Suppliers</span>
+</a>
+<a class="flex items-center gap-md p-md text-on-surface-variant hover:bg-surface-container-high transition-all duration-300 rounded-lg" href="#">
+<span class="material-symbols-outlined">assessment</span>
+<span class="font-body-md text-body-md">Reports</span>
+</a>
+<div class="my-lg border-t border-outline-variant opacity-50"></div>
+<a class="flex items-center gap-md p-md text-on-surface-variant hover:bg-surface-container-high transition-all duration-300 rounded-lg" href="#">
+<span class="material-symbols-outlined">settings</span>
+<span class="font-body-md text-body-md">Settings</span>
+</a>
+</nav>
+<div class="mt-auto p-md bg-surface-container rounded-xl flex items-center gap-md">
+<div class="w-10 h-10 rounded-full overflow-hidden border-2 border-secondary-container">
+<img class="w-full h-full object-cover" data-alt="A professional portrait of an Iraqi business owner with a friendly and authoritative expression, wearing a sharp navy blue suit and standing in a modern corporate office with golden accents. The lighting is bright and clean, typical of a high-end corporate environment." src="https://lh3.googleusercontent.com/aida-public/AB6AXuBn4treT--M_8AYHISTkvRBT5Q4S0Q_xNTrcGjNO7Jgafzi9TUMVmrrCb0ok58fMUIoSiVGhUxCdCXOVf8Z9tSBo9WCTwPnHugd3fXtf6Xp-oHnR6ye5rl22gMJbvr1YGt9qH1H9eCGEZUxN_Y-_eY_3xLmiMrwDixV4hyCwDObXPhwJU379xpUItfLrxyAcPFnYXk2T2lrBkzxtyQMsIMexGK5Zx786s-VlMga3R24Ms2GybSY0UvrIHGnf1_3FXGal2PaI8ExY1EA"/>
+</div>
+<div class="flex-grow overflow-hidden">
+<h3 class="font-label-md text-label-md font-bold truncate">Ahmed Hassan</h3>
+<p class="font-label-sm text-label-sm text-outline truncate">Premium Account</p>
+</div>
+<span class="material-symbols-outlined text-outline cursor-pointer hover:text-primary">logout</span>
+</div>
+</aside>
+<!-- Main Content Area -->
+<main class="mr-80 w-full flex flex-col h-screen">
+<!-- Top Action Bar -->
+<header class="h-16 flex items-center justify-between px-xl bg-surface border-b border-outline-variant z-40">
+<div class="flex items-center gap-xl">
+<div class="relative w-96">
+<span class="material-symbols-outlined absolute right-md top-1/2 -translate-y-1/2 text-outline">search</span>
+<input class="w-full bg-surface-container-low border-none rounded-lg pr-12 pl-md py-2 text-body-md focus:ring-2 focus:ring-secondary-container" placeholder="بحث عن عميل، رقم لوحة، أو نوع الزيت..." type="text"/>
+</div>
+<div class="flex items-center gap-sm bg-surface-container px-md py-2 rounded-lg cursor-pointer hover:bg-surface-container-high transition-colors">
+<span class="material-symbols-outlined text-outline text-lg">calendar_month</span>
+<span class="font-label-md text-label-md text-on-surface-variant">01 تشرين الثاني - 30 تشرين الثاني</span>
+<span class="material-symbols-outlined text-outline text-lg">expand_more</span>
+</div>
+</div>
+<div class="flex items-center gap-md">
+<button class="bg-primary-container text-on-primary text-body-md font-bold px-xl py-2 rounded-full flex items-center gap-sm hover:opacity-90 transition-opacity">
+<span class="material-symbols-outlined">add_circle</span>
+                    سجل تبديل زيت جديد
+                </button>
+<div class="w-10 h-10 flex items-center justify-center rounded-full hover:bg-surface-container cursor-pointer transition-colors">
+<span class="material-symbols-outlined text-on-surface-variant">notifications</span>
+</div>
+</div>
+</header>
+<!-- Content Canvas -->
+<section class="flex-grow p-xl overflow-y-auto custom-scrollbar">
+<!-- Bento Dashboard Summary (Compact) -->
+<div class="grid grid-cols-4 gap-lg mb-xl">
+<div class="glass-card p-lg rounded-xl flex flex-col gap-xs">
+<span class="text-on-surface-variant font-label-md text-label-md">إجمالي الخدمات اليوم</span>
+<div class="flex justify-between items-end">
+<span class="text-primary font-display-price text-display-price">42</span>
+<span class="text-green-600 font-label-sm text-label-sm flex items-center"><span class="material-symbols-outlined text-sm">trending_up</span> +12%</span>
+</div>
+</div>
+<div class="glass-card p-lg rounded-xl flex flex-col gap-xs">
+<span class="text-on-surface-variant font-label-md text-label-md">إيرادات اليوم</span>
+<div class="flex justify-between items-end">
+<span class="text-primary font-display-price text-display-price">1,240,000 د.ع</span>
+<span class="text-green-600 font-label-sm text-label-sm flex items-center"><span class="material-symbols-outlined text-sm">trending_up</span> +8%</span>
+</div>
+</div>
+<div class="glass-card p-lg rounded-xl flex flex-col gap-xs">
+<span class="text-on-surface-variant font-label-md text-label-md">الزيوت الأكثر طلباً</span>
+<div class="flex justify-between items-end">
+<span class="text-primary font-headline-md text-headline-md">Shell Helix 5W-30</span>
+<span class="bg-secondary-container/20 text-secondary px-2 py-0.5 rounded text-label-sm font-bold">الأعلى</span>
+</div>
+</div>
+<div class="glass-card p-lg rounded-xl flex flex-col gap-xs">
+<span class="text-on-surface-variant font-label-md text-label-md">تنبيهات المخزون</span>
+<div class="flex justify-between items-end">
+<span class="text-error font-headline-md text-headline-md">3 منتجات منخفضة</span>
+<span class="material-symbols-outlined text-error">warning</span>
+</div>
+</div>
+</div>
+<!-- High-Density Data Table Card -->
+<div class="bg-white rounded-xl shadow-sm overflow-hidden border border-outline-variant">
+<div class="p-lg border-b border-outline-variant flex justify-between items-center bg-surface-bright">
+<h2 class="font-headline-md text-headline-md font-bold text-primary">سجل عمليات تبديل الزيت الأخيرة</h2>
+<div class="flex items-center gap-md">
+<button class="flex items-center gap-xs px-md py-1.5 border border-outline rounded-lg text-label-md hover:bg-surface-container transition-colors">
+<span class="material-symbols-outlined text-lg">filter_list</span>
+                            تصفية
+                        </button>
+<button class="flex items-center gap-xs px-md py-1.5 border border-outline rounded-lg text-label-md hover:bg-surface-container transition-colors">
+<span class="material-symbols-outlined text-lg">download</span>
+                            تصدير Excel
+                        </button>
+</div>
+</div>
+<div class="overflow-x-auto">
+<table class="w-full text-right border-collapse">
+<thead>
+<tr class="bg-surface-container-low text-on-surface-variant font-label-md text-label-md border-b border-outline-variant">
+<th class="p-lg">التاريخ</th>
+<th class="p-lg">العميل</th>
+<th class="p-lg">المركبة</th>
+<th class="p-lg">رقم اللوحة</th>
+<th class="p-lg">نوع الزيت</th>
+<th class="p-lg">المسافة الحالية (كم)</th>
+<th class="p-lg">السعر</th>
+<th class="p-lg w-16">إجراءات</th>
+</tr>
+</thead>
+<tbody class="text-body-md text-on-surface divide-y divide-outline-variant">
+<!-- Row 1 -->
+<tr class="table-row-hover transition-colors">
+<td class="p-lg text-on-surface-variant">2023/11/24 - 10:30 AM</td>
+<td class="p-lg font-bold">محمد جاسم العبيدي</td>
+<td class="p-lg">Toyota Land Cruiser 2022</td>
+<td class="p-lg"><span class="bg-surface-container-high px-2 py-1 rounded font-mono text-label-md">بغداد / 45902 ب</span></td>
+<td class="p-lg">
+<div class="flex items-center gap-sm">
+<div class="w-2 h-8 bg-yellow-500 rounded-full"></div>
+<span>Mobil 1 High Mileage 5W-20</span>
+</div>
+</td>
+<td class="p-lg">45,200</td>
+<td class="p-lg font-bold">85,000 د.ع</td>
+<td class="p-lg text-center">
+<button class="p-2 hover:bg-surface-container-highest rounded-full transition-colors">
+<span class="material-symbols-outlined">more_vert</span>
+</button>
+</td>
+</tr>
+<!-- Row 2 -->
+<tr class="table-row-hover transition-colors">
+<td class="p-lg text-on-surface-variant">2023/11/24 - 11:15 AM</td>
+<td class="p-lg font-bold">سارة مكي الراوي</td>
+<td class="p-lg">Hyundai Tucson 2021</td>
+<td class="p-lg"><span class="bg-surface-container-high px-2 py-1 rounded font-mono text-label-md">أربيل / 11200 ش</span></td>
+<td class="p-lg">
+<div class="flex items-center gap-sm">
+<div class="w-2 h-8 bg-blue-600 rounded-full"></div>
+<span>Castrol EDGE 0W-40</span>
+</div>
+</td>
+<td class="p-lg">32,800</td>
+<td class="p-lg font-bold">65,000 د.ع</td>
+<td class="p-lg text-center">
+<button class="p-2 hover:bg-surface-container-highest rounded-full transition-colors">
+<span class="material-symbols-outlined">more_vert</span>
+</button>
+</td>
+</tr>
+<!-- Row 3 -->
+<tr class="table-row-hover transition-colors">
+<td class="p-lg text-on-surface-variant">2023/11/24 - 12:00 PM</td>
+<td class="p-lg font-bold">علي كمال</td>
+<td class="p-lg">Chevrolet Tahoe 2019</td>
+<td class="p-lg"><span class="bg-surface-container-high px-2 py-1 rounded font-mono text-label-md">البصرة / 8831 ج</span></td>
+<td class="p-lg">
+<div class="flex items-center gap-sm">
+<div class="w-2 h-8 bg-red-600 rounded-full"></div>
+<span>Shell Helix Ultra 5W-40</span>
+</div>
+</td>
+<td class="p-lg">112,000</td>
+<td class="p-lg font-bold">95,000 د.ع</td>
+<td class="p-lg text-center">
+<button class="p-2 hover:bg-surface-container-highest rounded-full transition-colors">
+<span class="material-symbols-outlined">more_vert</span>
+</button>
+</td>
+</tr>
+<!-- Row 4 -->
+<tr class="table-row-hover transition-colors">
+<td class="p-lg text-on-surface-variant">2023/11/24 - 01:45 PM</td>
+<td class="p-lg font-bold">حسن كريم الموسوي</td>
+<td class="p-lg">Nissan Sunny 2023</td>
+<td class="p-lg"><span class="bg-surface-container-high px-2 py-1 rounded font-mono text-label-md">بغداد / 99014 د</span></td>
+<td class="p-lg">
+<div class="flex items-center gap-sm">
+<div class="w-2 h-8 bg-green-500 rounded-full"></div>
+<span>ZIC X7 5W-30</span>
+</div>
+</td>
+<td class="p-lg">5,400</td>
+<td class="p-lg font-bold">45,000 د.ع</td>
+<td class="p-lg text-center">
+<button class="p-2 hover:bg-surface-container-highest rounded-full transition-colors">
+<span class="material-symbols-outlined">more_vert</span>
+</button>
+</td>
+</tr>
+<!-- Row 5 -->
+<tr class="table-row-hover transition-colors">
+<td class="p-lg text-on-surface-variant">2023/11/24 - 02:30 PM</td>
+<td class="p-lg font-bold">ياسر عبد المهدي</td>
+<td class="p-lg">Kia Sportage 2022</td>
+<td class="p-lg"><span class="bg-surface-container-high px-2 py-1 rounded font-mono text-label-md">النجف / 5542 أ</span></td>
+<td class="p-lg">
+<div class="flex items-center gap-sm">
+<div class="w-2 h-8 bg-yellow-500 rounded-full"></div>
+<span>Mobil 1 Super 10W-40</span>
+</div>
+</td>
+<td class="p-lg">28,900</td>
+<td class="p-lg font-bold">55,000 د.ع</td>
+<td class="p-lg text-center">
+<button class="p-2 hover:bg-surface-container-highest rounded-full transition-colors">
+<span class="material-symbols-outlined">more_vert</span>
+</button>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="p-lg bg-surface-container-low flex justify-between items-center border-t border-outline-variant">
+<span class="text-label-md text-on-surface-variant">عرض 1-5 من أصل 124 عملية</span>
+<div class="flex gap-xs">
+<button class="w-8 h-8 flex items-center justify-center rounded border border-outline-variant hover:bg-white"><span class="material-symbols-outlined">chevron_right</span></button>
+<button class="w-8 h-8 flex items-center justify-center rounded bg-primary-container text-on-primary font-bold">1</button>
+<button class="w-8 h-8 flex items-center justify-center rounded border border-outline-variant hover:bg-white">2</button>
+<button class="w-8 h-8 flex items-center justify-center rounded border border-outline-variant hover:bg-white">3</button>
+<span class="w-8 h-8 flex items-center justify-center">...</span>
+<button class="w-8 h-8 flex items-center justify-center rounded border border-outline-variant hover:bg-white">25</button>
+<button class="w-8 h-8 flex items-center justify-center rounded border border-outline-variant hover:bg-white"><span class="material-symbols-outlined">chevron_left</span></button>
+</div>
+</div>
+</div>
+<!-- Contextual Banner for Inventory -->
+<div class="mt-xl grid grid-cols-3 gap-lg">
+<div class="col-span-2 glass-card rounded-xl p-xl flex items-center gap-xl bg-gradient-to-l from-primary-container to-surface-container-highest text-on-primary">
+<div class="flex-grow">
+<h3 class="font-headline-md text-headline-md font-bold mb-sm">تذكير بالمخزون</h3>
+<p class="font-body-md text-body-md opacity-80 max-w-lg">مخزون زيت Shell Helix Ultra أوشك على الانتهاء. تبقى 12 عبوة فقط. هل ترغب في إرسال طلب شراء للمورد "شركة النور للتجارة"؟</p>
+<div class="flex gap-md mt-lg">
+<button class="bg-secondary-container text-on-secondary-container px-lg py-2 rounded-full font-bold hover:opacity-90">إرسال طلب الآن</button>
+<button class="border border-white/30 text-white px-lg py-2 rounded-full font-bold hover:bg-white/10">تذكيري لاحقاً</button>
+</div>
+</div>
+<span class="material-symbols-outlined text-8xl opacity-20" style="font-variation-settings: 'FILL' 1;">inventory_2</span>
+</div>
+<div class="glass-card rounded-xl p-lg flex flex-col justify-between overflow-hidden relative group">
+<div class="relative z-10">
+<h3 class="font-headline-md text-headline-md font-bold text-primary mb-xs">تحليل الإيرادات</h3>
+<p class="text-label-md text-on-surface-variant">نمو الإيرادات الأسبوعي مقارنة بالشهر السابق</p>
+</div>
+<div class="mt-lg h-32 flex items-end justify-between gap-sm relative z-10">
+<div class="w-full bg-outline-variant h-12 rounded-t-sm group-hover:bg-secondary-container transition-all"></div>
+<div class="w-full bg-outline-variant h-20 rounded-t-sm group-hover:bg-secondary-container transition-all"></div>
+<div class="w-full bg-outline-variant h-16 rounded-t-sm group-hover:bg-secondary-container transition-all"></div>
+<div class="w-full bg-outline-variant h-24 rounded-t-sm group-hover:bg-secondary-container transition-all"></div>
+<div class="w-full bg-primary-container h-28 rounded-t-sm"></div>
+</div>
+<div class="absolute -right-8 -bottom-8 opacity-10 rotate-12">
+<span class="material-symbols-outlined text-[120px] text-primary">query_stats</span>
+</div>
+</div>
+</div>
+</section>
+</main>
+<!-- Micro-interaction Scripts -->
+<script>
+        document.querySelectorAll('.table-row-hover').forEach(row => {
+            row.addEventListener('click', () => {
+                // In a real app, this would open details
+                console.log('Opening record details...');
+                row.classList.add('bg-secondary-container/10');
+                setTimeout(() => row.classList.remove('bg-secondary-container/10'), 300);
+            });
+        });
+
+        // Simple search highlighting simulation
+        const searchInput = document.querySelector('input[type="text"]');
+        searchInput.addEventListener('input', (e) => {
+            if(e.target.value.length > 2) {
+                console.log('Searching for:', e.target.value);
+            }
+        });
+    </script>
+</body></html>

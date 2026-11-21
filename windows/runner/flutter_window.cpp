@@ -27,6 +27,8 @@ bool FlutterWindow::OnCreate() {
   RegisterPlugins(flutter_controller_->engine());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
+  // أظهر النافذة فوراً (كحلي) بدل الانتظار حتى إطار Flutter الأول.
+  Show();
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
     this->Show();
   });

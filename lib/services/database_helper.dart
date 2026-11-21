@@ -1,3 +1,8 @@
+import '../verticals/oil_change/utils/oil_change_lookup_normalize.dart';
+import '../verticals/oil_change/services/vehicle_registry.dart';
+import 'shared_db_transaction.dart';
+import 'dart:async' show unawaited;
+import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
@@ -5,6 +10,11 @@ import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import 'package:uuid/uuid.dart';
 import 'cloud_sync_service.dart';
+import 'marketplace/marketplace_catalog_sync_service.dart';
+import 'customer_delete_guard.dart';
+import 'supplier_statement.dart';
+import 'cash_ledger_audit.dart';
+import 'password_hashing.dart';
 import 'sync_queue_service.dart';
 import 'tenant_context.dart';
 import '../models/invoice.dart';
@@ -13,12 +23,24 @@ import '../models/installment_settings_data.dart';
 import '../models/debt_settings_data.dart';
 import '../models/credit_debt_invoice.dart';
 import '../models/customer_debt_models.dart';
+import '../models/product_variant_kind.dart';
 import '../models/supplier_ap_models.dart';
 import '../models/loyalty_settings_data.dart';
 import '../models/recent_activity_entry.dart';
 import '../utils/app_logger.dart';
+import '../utils/db_migration_safety.dart';
 import '../utils/loyalty_math.dart';
 import '../utils/customer_validation.dart';
+import '../utils/iqd_money.dart';
+import '../utils/money_sql.dart';
+import '../utils/staff_activity_filter.dart';
+import '../utils/warehouse_avg_cost.dart';
+import '../owner/owner_command_center_refresh_bridge.dart';
+import '../owner/models/owner_section_ttl.dart';
+import '../owner/services/business_audit_log_service.dart';
+import '../verticals/pharmacy/services/pharmacy_db_schema.dart';
+import '../verticals/restaurant/services/restaurant_db_schema.dart';
+import 'returns/returns_offers_db_schema.dart';
 
 part 'db_settings.dart';
 part 'db_stock.dart';
@@ -36,10 +58,9 @@ part 'db_notifications.dart';
 part 'db_reports.dart';
 part 'db_expenses.dart';
 part 'db_product_variants.dart';
+part 'db_oil_product_grades.dart';
 part 'db_products_sync.dart';
 part 'db_financial_sync.dart';
-
-
 
 class DatabaseHelper {
   static final DatabaseHelper _instance = DatabaseHelper._internal();
@@ -63,6 +84,8 @@ class DatabaseHelper {
   static Future<Database>? _opening;
 
   Future<Database> get database async {
+    final shared = SharedDbTransaction.current();
+    if (shared != null) return shared;
     if (_database != null) return _database!;
     final opening = _opening;
     if (opening != null) return opening;
@@ -76,26 +99,126 @@ class DatabaseHelper {
     }
   }
 
+  /// ينفّذ [action] في معاملة واحدة: كل ما يكتبه أي مستودع داخلها ينجح معاً
+  /// أو يُلغى معاً. انظر [SharedDbTransaction].
+  Future<T> runInOneTransaction<T>(Future<T> Function() action) async {
+    return SharedDbTransaction.run(await database, action);
+  }
+
   /// ترحيلات حرجة وقت الإقلاع، تُنفَّذ صراحةً حتى لو لم يُستدعَ onOpen مبكراً.
   Future<void> runStartupCriticalMigrations() async {
     final db = await database;
     if (kDebugMode) {
       AppLogger.info('DatabaseHelper', 'DB PATH: ${db.path}');
     }
+    await ensureExpensesSchema(db);
     await _ensureMoneyFilsColumns(db);
+    await _ensureInvoiceActorShiftColumns(db);
+    await _ensureCashLedgerActorShiftColumns(db);
     await ensureCashLedgerGlobalIdSchema(db);
     await ensureWorkShiftsGlobalIdSchema(db);
     await ensureCustomersGlobalIdSchema(db);
     await ensureSuppliersGlobalIdSchema(db);
-    await ensureExpensesSchema(db);
     await ensureCategoriesBrandsGlobalIdSchema(db);
     await ensureProductsGlobalIdSchema(db);
     await ensureInvoicesGlobalIdSchema(db);
     await ensureFinancialGlobalIdSchema(db);
+    await ensureUserDirectoryGlobalIdSchema(db);
+    await ensureBusinessAuditEventsTable(db);
+    await ensureServiceOrdersReadRepair();
+    await ensureOwnerDashboardQueryIndexes(db);
+  }
+
+  /// جدول تدقيق محلي لمركز قيادة المالك — retention 90 يوم.
+  Future<void> ensureBusinessAuditEventsTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS business_audit_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tenant_id INTEGER NOT NULL,
+        user_id INTEGER,
+        username TEXT,
+        event_type TEXT NOT NULL,
+        entity_type TEXT,
+        entity_id TEXT,
+        warehouse_id INTEGER,
+        old_value_json TEXT,
+        new_value_json TEXT,
+        created_at TEXT NOT NULL
+      )
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_bae_tenant_created
+      ON business_audit_events(tenant_id, created_at DESC, id DESC)
+    ''');
+  }
+
+  /// فهارس مركّبة لاستعلامات لوحة المالk v3 (tenant + تاريخ/حالة).
+  Future<void> ensureOwnerDashboardQueryIndexes(Database db) async {
+    if (await _tableExists(db, 'invoices') &&
+        await _tableHasColumn(db, 'invoices', 'tenantId')) {
+      await db.execute('''
+        CREATE INDEX IF NOT EXISTS idx_invoices_tenant_date_active
+        ON invoices(tenantId, date, deleted_at, isReturned)
+      ''');
+      if (await _tableHasColumn(db, 'invoices', 'createdByUserName')) {
+        await db.execute('''
+          CREATE INDEX IF NOT EXISTS idx_invoices_tenant_staff_date
+          ON invoices(tenantId, createdByUserName, date)
+        ''');
+      }
+    }
+    if (!await _tableExists(db, 'service_orders') ||
+        !await _tableHasColumn(db, 'service_orders', 'tenantId')) {
+      return;
+    }
+    if (await _tableHasColumn(db, 'service_orders', 'createdAt')) {
+      await db.execute('''
+        CREATE INDEX IF NOT EXISTS idx_service_orders_tenant_created
+        ON service_orders(tenantId, deletedAt, createdAt)
+      ''');
+    }
+    await _ensureServiceOrdersOrderKind(db);
+    if (await _tableHasColumn(db, 'service_orders', 'orderKind')) {
+      await db.execute('''
+        CREATE INDEX IF NOT EXISTS idx_service_orders_tenant_status_kind
+        ON service_orders(tenantId, status, orderKind)
+      ''');
+    }
+    if (await _tableExists(db, 'invoice_items')) {
+      await db.execute('''
+        CREATE INDEX IF NOT EXISTS idx_invoice_items_invoice_deleted
+        ON invoice_items(invoiceId, deleted_at)
+      ''');
+      if (await _tableHasColumn(db, 'invoice_items', 'productId')) {
+        await db.execute('''
+          CREATE INDEX IF NOT EXISTS idx_invoice_items_product_invoice
+          ON invoice_items(productId, invoiceId)
+        ''');
+      }
+      if (await _tableHasColumn(db, 'invoice_items', 'productVariantId')) {
+        await db.execute('''
+          CREATE INDEX IF NOT EXISTS idx_invoice_items_variant_invoice
+          ON invoice_items(productVariantId, invoiceId)
+        ''');
+      }
+    }
+    if (await _tableExists(db, 'product_variants')) {
+      await db.execute('''
+        CREATE INDEX IF NOT EXISTS idx_product_variants_tenant_deleted_qty
+        ON product_variants(tenantId, deleted_at, quantity)
+      ''');
+    }
   }
 
   /// إغلاق ملف SQLite وحذفه — عند تبديل حساب سحابي (يُعاد إنشاء الملف عند أول وصول لاحق).
   Future<void> closeAndDeleteDatabaseFile() async {
+    final pending = _opening;
+    _opening = null;
+    if (pending != null) {
+      try {
+        await pending;
+      } catch (_) {}
+    }
     if (_database != null) {
       await _database!.close();
       _database = null;
@@ -103,7 +226,11 @@ class DatabaseHelper {
     final path = join(await getDatabasesPath(), 'business_app.db');
     try {
       await deleteDatabase(path);
-    } catch (_) {}
+    } catch (e) {
+      if (kDebugMode) {
+        AppLogger.warn('DatabaseHelper', 'deleteDatabase failed: $e');
+      }
+    }
   }
 
   /// حذف بيانات العمل من كل الجداول ما عدا [users] — تبديل مستخدمين محليين دون خلط فواتير/مخزون.
@@ -147,19 +274,305 @@ class DatabaseHelper {
   }
 
   /// أعمدة وجداول تذاكر الصيانة قبل أي قراءة — يُكمّل ما قد يفوته مسار onOpen.
+  Future<void>? _serviceOrdersReadRepairInFlight;
+  bool _serviceOrdersReadRepairDone = false;
+
   Future<void> ensureServiceOrdersReadRepair() async {
+    if (_serviceOrdersReadRepairDone) return;
+    final pending = _serviceOrdersReadRepairInFlight;
+    if (pending != null) {
+      await pending;
+      return;
+    }
+    final job = () async {
+      final db = await database;
+      await _ensureServiceOrdersSchema(db);
+      await _ensureServiceOrdersCamelDeletedAt(db);
+      await _ensureServiceOrdersOilChangeColumns(db);
+      await _ensureServiceOrdersOrderKind(db);
+      await _ensureServiceOrderItemsSchema(db);
+      await _ensureServiceOrderItemsCamelDeletedAt(db);
+      await _migrateServiceOrdersAllowSuspendedStatus(db);
+      _serviceOrdersReadRepairDone = true;
+    }();
+    _serviceOrdersReadRepairInFlight = job;
+    try {
+      await job;
+    } finally {
+      if (identical(_serviceOrdersReadRepairInFlight, job)) {
+        _serviceOrdersReadRepairInFlight = null;
+      }
+    }
+  }
+
+  /// جدول خدمات غيار الزيت الإضافية (اسم + سعر).
+  Future<void> ensureOilChangeServicesSchema() async {
     final db = await database;
-    await _ensureServiceOrdersSchema(db);
-    await _ensureServiceOrdersCamelDeletedAt(db);
-    await _ensureServiceOrderItemsSchema(db);
-    await _ensureServiceOrderItemsCamelDeletedAt(db);
+    await _ensureOilChangeServicesTable(db);
+  }
+
+  /// جدول أنواع غسيل السيارات (اسم + سعر) — كتالوج مستقل عن خدمات الزيت.
+  Future<void> ensureCarWashServicesSchema() async {
+    final db = await database;
+    await _ensureCarWashServicesTable(db);
+  }
+
+  Future<void> ensureOilChangeOilCatalogSchema() async {
+    final db = await database;
+    await _ensureOilChangeOilCatalogTable(db);
+  }
+
+  Future<void> ensureOilChangeHydraulicCatalogSchema() async {
+    final db = await database;
+    await _ensureOilChangeHydraulicCatalogTable(db);
+  }
+
+  Future<void> ensureOilChangeFilterCatalogSchema() async {
+    final db = await database;
+    await _ensureOilChangeFilterKindsTable(db);
+    await _ensureOilChangeFilterCatalogTable(db);
+    await _ensureServiceOrdersOilChangeFilterColumns(db);
+  }
+
+  Future<void> _ensureOilChangeFilterKindsTable(Database db) async {
+    try {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS oil_change_filter_kinds (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tenantId INTEGER NOT NULL,
+          code TEXT NOT NULL,
+          labelAr TEXT NOT NULL,
+          sortOrder INTEGER NOT NULL DEFAULT 0,
+          isBuiltin INTEGER NOT NULL DEFAULT 0,
+          createdAt TEXT NOT NULL,
+          updatedAt TEXT NOT NULL,
+          deletedAt TEXT
+        )
+      ''');
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_oil_change_filter_kinds_tenant '
+        'ON oil_change_filter_kinds(tenantId, deletedAt, sortOrder)',
+      );
+      try {
+        await db.execute('''
+          CREATE UNIQUE INDEX IF NOT EXISTS uq_oil_change_filter_kinds_code
+          ON oil_change_filter_kinds(tenantId, code)
+          WHERE deletedAt IS NULL
+        ''');
+      } catch (_) {}
+    } catch (_) {}
+  }
+
+  /// Migration 49: Pharmacy vertical catalog
+  /// جداول: drug_reference · manufacturers · dosage_forms ·
+  ///         product_profile · batches · stock_policy
+  Future<void> ensurePharmacyCatalogSchema() async {
+    final db = await database;
+    await ensurePharmacyCatalogTables(db);
+  }
+
+  /// Migration 50: Restaurant vertical (§3 spec)
+  Future<void> ensureRestaurantSchema() async {
+    final db = await database;
+    await ensureRestaurantTables(db);
+    await ensureReturnsAndOffersSchema(db);
+  }
+
+  Future<void> _ensureOilChangeServicesTable(Database db) async {
+    try {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS oil_change_services (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tenantId INTEGER NOT NULL,
+          name TEXT NOT NULL,
+          priceFils INTEGER NOT NULL DEFAULT 0,
+          sortOrder INTEGER NOT NULL DEFAULT 0,
+          createdAt TEXT NOT NULL,
+          updatedAt TEXT NOT NULL,
+          deletedAt TEXT
+        )
+      ''');
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_oil_change_services_tenant '
+        'ON oil_change_services(tenantId, deletedAt, sortOrder)',
+      );
+    } catch (_) {}
+  }
+
+  Future<void> _ensureCarWashServicesTable(Database db) async {
+    try {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS car_wash_services (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tenantId INTEGER NOT NULL,
+          name TEXT NOT NULL,
+          priceFils INTEGER NOT NULL DEFAULT 0,
+          sortOrder INTEGER NOT NULL DEFAULT 0,
+          createdAt TEXT NOT NULL,
+          updatedAt TEXT NOT NULL,
+          deletedAt TEXT
+        )
+      ''');
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_car_wash_services_tenant '
+        'ON car_wash_services(tenantId, deletedAt, sortOrder)',
+      );
+    } catch (_) {}
+  }
+
+  Future<void> _ensureOilChangeOilCatalogTable(Database db) async {
+    try {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS oil_change_oil_catalog (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tenantId INTEGER NOT NULL,
+          brandName TEXT NOT NULL,
+          viscosity TEXT NOT NULL,
+          sellPerLiterFils INTEGER NOT NULL DEFAULT 0,
+          sortOrder INTEGER NOT NULL DEFAULT 0,
+          createdAt TEXT NOT NULL,
+          updatedAt TEXT NOT NULL,
+          deletedAt TEXT
+        )
+      ''');
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_oil_change_oil_catalog_tenant '
+        'ON oil_change_oil_catalog(tenantId, deletedAt, brandName)',
+      );
+      try {
+        await db.execute('''
+          CREATE UNIQUE INDEX IF NOT EXISTS uq_oil_change_oil_catalog_brand_vis
+          ON oil_change_oil_catalog(
+            tenantId,
+            LOWER(TRIM(brandName)),
+            UPPER(REPLACE(TRIM(viscosity), ' ', ''))
+          )
+          WHERE deletedAt IS NULL
+        ''');
+      } catch (_) {}
+    } catch (_) {}
+  }
+
+  Future<void> _ensureOilChangeHydraulicCatalogTable(Database db) async {
+    try {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS oil_change_hydraulic_catalog (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tenantId INTEGER NOT NULL,
+          brandName TEXT NOT NULL,
+          grade TEXT NOT NULL,
+          sellPerLiterFils INTEGER NOT NULL DEFAULT 0,
+          sortOrder INTEGER NOT NULL DEFAULT 0,
+          createdAt TEXT NOT NULL,
+          updatedAt TEXT NOT NULL,
+          deletedAt TEXT
+        )
+      ''');
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_oil_change_hydraulic_catalog_tenant '
+        'ON oil_change_hydraulic_catalog(tenantId, deletedAt, brandName)',
+      );
+      try {
+        await db.execute('''
+          CREATE UNIQUE INDEX IF NOT EXISTS uq_oil_change_hydraulic_catalog_brand_grade
+          ON oil_change_hydraulic_catalog(
+            tenantId,
+            LOWER(TRIM(brandName)),
+            UPPER(REPLACE(TRIM(grade), ' ', ''))
+          )
+          WHERE deletedAt IS NULL
+        ''');
+      } catch (_) {}
+    } catch (_) {}
+  }
+
+  Future<void> _ensureOilChangeFilterCatalogTable(Database db) async {
+    try {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS oil_change_filter_catalog (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tenantId INTEGER NOT NULL,
+          filterKind TEXT NOT NULL,
+          name TEXT NOT NULL,
+          priceFils INTEGER NOT NULL DEFAULT 0,
+          sortOrder INTEGER NOT NULL DEFAULT 0,
+          createdAt TEXT NOT NULL,
+          updatedAt TEXT NOT NULL,
+          deletedAt TEXT
+        )
+      ''');
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_oil_change_filter_catalog_tenant '
+        'ON oil_change_filter_catalog(tenantId, deletedAt, filterKind)',
+      );
+      try {
+        // قديم: كان يمنع أكثر من صنف بلا اسم لنفس الفئة.
+        await db.execute(
+          'DROP INDEX IF EXISTS uq_oil_change_filter_catalog_kind_name',
+        );
+        await db.execute('''
+          CREATE UNIQUE INDEX IF NOT EXISTS uq_oil_change_filter_catalog_kind_name
+          ON oil_change_filter_catalog(
+            tenantId,
+            filterKind,
+            LOWER(TRIM(name))
+          )
+          WHERE deletedAt IS NULL AND LENGTH(TRIM(name)) > 0
+        ''');
+      } catch (_) {}
+    } catch (_) {}
+  }
+
+  /// الإصدار 52 — استثناء العميل من إعدادات الدين العامة (من صفحته):
+  /// فترة تسديد وسقف خاصان (null = العام)، و«نقداً فقط» (لا دين جديد).
+  Future<void> _ensureCustomerDebtExceptionColumns(Database db) async {
+    try {
+      for (final (name, type) in const [
+        ('debtPeriodDays', 'INTEGER'),
+        ('debtCapFils', 'INTEGER'),
+        ('cashOnly', 'INTEGER NOT NULL DEFAULT 0'),
+      ]) {
+        if (!await _tableHasColumn(db, 'customers', name)) {
+          await db.execute('ALTER TABLE customers ADD COLUMN $name $type');
+        }
+      }
+    } catch (e, st) {
+      AppLogger.error('DatabaseHelper', 'customer debt exception columns', e, st);
+    }
+  }
+
+  Future<void> _ensureServiceOrdersOilChangeFilterColumns(Database db) async {
+    try {
+      final cols = <(String, String)>[
+        ('engineFilterName', 'TEXT'),
+        ('engineFilterPriceFils', 'INTEGER'),
+        ('airFilterName', 'TEXT'),
+        ('airFilterPriceFils', 'INTEGER'),
+        ('gearFilterName', 'TEXT'),
+        ('gearFilterPriceFils', 'INTEGER'),
+        // JSON: [{code,name,priceFils,catalogEntryId?,customerProvided?,laborFils?}]
+        ('oilFiltersJson', 'TEXT'),
+        // الإصدار 51: أجور اليد المحفوظة في البطاقة، وسعر لتر هيدروليك الكتالوج
+        // (null في البطاقات القديمة: تُحسب الأجرة من الإعدادات كما كانت).
+        ('oilLaborFils', 'INTEGER'),
+        ('hydraulicLaborFils', 'INTEGER'),
+        ('powerHydraulicLaborFils', 'INTEGER'),
+        ('hydraulicSellPerLiterFils', 'INTEGER'),
+        ('powerHydraulicSellPerLiterFils', 'INTEGER'),
+      ];
+      for (final (col, type) in cols) {
+        if (!await _tableHasColumn(db, 'service_orders', col)) {
+          await db.execute('ALTER TABLE service_orders ADD COLUMN $col $type');
+        }
+      }
+    } catch (_) {}
   }
 
   Future<Database> _initDatabase() async {
     String path = join(await getDatabasesPath(), 'business_app.db');
     return await openDatabase(
       path,
-      version: 41,
+      version: 52,
       onConfigure: (db) async {
         await db.execute('PRAGMA foreign_keys = ON');
         // Reduce "database locked" warnings under concurrent access.
@@ -196,11 +609,15 @@ class DatabaseHelper {
     await _ensureSupplierApTables(db);
     await _ensureSupplierBillStockLinkColumns(db);
     await _ensureInstallmentFinanceColumns(db);
+    await ensureExpensesSchema(db);
     await _ensureMoneyFilsColumns(db);
+    await _ensureInvoiceActorShiftColumns(db);
+    await _ensureCashLedgerActorShiftColumns(db);
     await _ensureMultiTenantFoundation(db);
     await _ensureStockVoucherSourceColumns(db);
     await _ensureRbacFoundation(db);
     await _ensureUserProfilesTable(db);
+    await ensureUserDirectoryGlobalIdSchema(db);
     await _ensureBranchTopology(db);
     await _repairInstallmentInvoiceLinkage(db);
     await _reconcileInstallmentPlanPaidAmounts(db);
@@ -211,7 +628,6 @@ class DatabaseHelper {
     await ensureWorkShiftsGlobalIdSchema(db);
     await ensureCustomersGlobalIdSchema(db);
     await ensureSuppliersGlobalIdSchema(db);
-    await ensureExpensesSchema(db);
     await ensureCategoriesBrandsGlobalIdSchema(db);
     await ensureProductsGlobalIdSchema(db);
     await ensureInvoicesGlobalIdSchema(db);
@@ -225,6 +641,218 @@ class DatabaseHelper {
     await ensureProductColorsAndVariantsSchema(db);
     await _ensureProductVariantsGlobalIds(db);
     await _ensureServicesAndJobTicketsSchema(db);
+    await _ensureOilVolumeStockPhase1Schema(db);
+    await _ensureOilChangeStockLinkColumns(db);
+    await _ensureOilChangeOilCatalogTable(db);
+    await _ensureOilChangeHydraulicCatalogTable(db);
+    await _ensureOilChangeFilterCatalogTable(db);
+    await _ensureServiceOrdersOilChangeFilterColumns(db);
+    await _ensureCustomerDebtExceptionColumns(db);
+    await ensureOilProductGradesSchema(db);
+    await ensureBusinessAuditEventsTable(db);
+    await ensureOwnerDashboardQueryIndexes(db);
+    await ensurePharmacyCatalogTables(db);
+    await ensureRestaurantTables(db);
+    // سجل السيارات: الجدول، ثم ربط البطاقات القديمة (مرة واحدة فعلياً).
+    try {
+      await VehicleRegistry.ensureSchema(db);
+      await VehicleRegistry.reconcile(db);
+    } catch (e, st) {
+      AppLogger.error('DatabaseHelper', 'vehicle registry setup failed', e, st);
+    }
+  }
+
+  /// ربط بطاقة الغيار بصرف المخزون (زيت المحل).
+  Future<void> _ensureOilChangeStockLinkColumns(Database db) async {
+    try {
+      if (!await _tableHasColumn(db, 'service_orders', 'oilProductId')) {
+        await db.execute(
+          'ALTER TABLE service_orders ADD COLUMN oilProductId INTEGER',
+        );
+      }
+      if (!await _tableHasColumn(db, 'service_orders', 'oilLitersUsed')) {
+        await db.execute(
+          'ALTER TABLE service_orders ADD COLUMN oilLitersUsed REAL',
+        );
+      }
+      if (!await _tableHasColumn(db, 'service_orders', 'oilCustomerProvided')) {
+        await db.execute(
+          'ALTER TABLE service_orders ADD COLUMN oilCustomerProvided '
+          'INTEGER NOT NULL DEFAULT 0',
+        );
+      }
+      if (!await _tableHasColumn(db, 'service_orders', 'stockVoucherId')) {
+        await db.execute(
+          'ALTER TABLE service_orders ADD COLUMN stockVoucherId INTEGER',
+        );
+      }
+      if (!await _tableHasColumn(db, 'service_orders', 'oilWarehouseId')) {
+        await db.execute(
+          'ALTER TABLE service_orders ADD COLUMN oilWarehouseId INTEGER',
+        );
+      }
+      if (!await _tableHasColumn(db, 'service_orders', 'oilSellPerLiterFils')) {
+        await db.execute(
+          'ALTER TABLE service_orders ADD COLUMN oilSellPerLiterFils INTEGER',
+        );
+      }
+      if (!await _tableHasColumn(db, 'service_orders', 'hydraulicType')) {
+        await db.execute(
+          'ALTER TABLE service_orders ADD COLUMN hydraulicType TEXT',
+        );
+      }
+      if (!await _tableHasColumn(db, 'service_orders', 'hydraulicGrade')) {
+        await db.execute(
+          'ALTER TABLE service_orders ADD COLUMN hydraulicGrade TEXT',
+        );
+      }
+      if (!await _tableHasColumn(db, 'service_orders', 'hydraulicSize')) {
+        await db.execute(
+          'ALTER TABLE service_orders ADD COLUMN hydraulicSize TEXT',
+        );
+      }
+      if (!await _tableHasColumn(db, 'service_orders', 'hydraulicProductId')) {
+        await db.execute(
+          'ALTER TABLE service_orders ADD COLUMN hydraulicProductId INTEGER',
+        );
+      }
+      if (!await _tableHasColumn(db, 'service_orders', 'hydraulicLitersUsed')) {
+        await db.execute(
+          'ALTER TABLE service_orders ADD COLUMN hydraulicLitersUsed REAL',
+        );
+      }
+      if (!await _tableHasColumn(
+        db,
+        'service_orders',
+        'hydraulicCustomerProvided',
+      )) {
+        await db.execute(
+          'ALTER TABLE service_orders ADD COLUMN hydraulicCustomerProvided '
+          'INTEGER NOT NULL DEFAULT 0',
+        );
+      }
+      if (!await _tableHasColumn(
+        db,
+        'service_orders',
+        'hydraulicWarehouseId',
+      )) {
+        await db.execute(
+          'ALTER TABLE service_orders ADD COLUMN hydraulicWarehouseId INTEGER',
+        );
+      }
+      if (!await _tableHasColumn(
+        db,
+        'service_orders',
+        'hydraulicStockVoucherId',
+      )) {
+        await db.execute(
+          'ALTER TABLE service_orders ADD COLUMN hydraulicStockVoucherId INTEGER',
+        );
+      }
+      if (!await _tableHasColumn(db, 'service_orders', 'powerHydraulicType')) {
+        await db.execute(
+          'ALTER TABLE service_orders ADD COLUMN powerHydraulicType TEXT',
+        );
+      }
+      if (!await _tableHasColumn(db, 'service_orders', 'powerHydraulicGrade')) {
+        await db.execute(
+          'ALTER TABLE service_orders ADD COLUMN powerHydraulicGrade TEXT',
+        );
+      }
+      if (!await _tableHasColumn(db, 'service_orders', 'powerHydraulicSize')) {
+        await db.execute(
+          'ALTER TABLE service_orders ADD COLUMN powerHydraulicSize TEXT',
+        );
+      }
+      if (!await _tableHasColumn(
+        db,
+        'service_orders',
+        'powerHydraulicProductId',
+      )) {
+        await db.execute(
+          'ALTER TABLE service_orders ADD COLUMN powerHydraulicProductId INTEGER',
+        );
+      }
+      if (!await _tableHasColumn(
+        db,
+        'service_orders',
+        'powerHydraulicLitersUsed',
+      )) {
+        await db.execute(
+          'ALTER TABLE service_orders ADD COLUMN powerHydraulicLitersUsed REAL',
+        );
+      }
+      if (!await _tableHasColumn(
+        db,
+        'service_orders',
+        'powerHydraulicCustomerProvided',
+      )) {
+        await db.execute(
+          'ALTER TABLE service_orders ADD COLUMN powerHydraulicCustomerProvided '
+          'INTEGER NOT NULL DEFAULT 0',
+        );
+      }
+      if (!await _tableHasColumn(
+        db,
+        'service_orders',
+        'powerHydraulicWarehouseId',
+      )) {
+        await db.execute(
+          'ALTER TABLE service_orders ADD COLUMN powerHydraulicWarehouseId INTEGER',
+        );
+      }
+      if (!await _tableHasColumn(
+        db,
+        'service_orders',
+        'powerHydraulicStockVoucherId',
+      )) {
+        await db.execute(
+          'ALTER TABLE service_orders ADD COLUMN powerHydraulicStockVoucherId INTEGER',
+        );
+      }
+      await _ensureServiceOrdersOilChangeFilterColumns(db);
+    } catch (_) {}
+  }
+
+  /// مرحلة 1 زيوت: متوسط تكلفة/مستودع + لقطات وحدة على بنود السند.
+  Future<void> _ensureOilVolumeStockPhase1Schema(Database db) async {
+    try {
+      if (!await _tableHasColumn(
+        db,
+        'product_warehouse_stock',
+        'avgCostFils',
+      )) {
+        await db.execute(
+          'ALTER TABLE product_warehouse_stock '
+          'ADD COLUMN avgCostFils INTEGER NOT NULL DEFAULT 0',
+        );
+      }
+      if (!await _tableHasColumn(db, 'products', 'unitTemplateId')) {
+        await db.execute(
+          'ALTER TABLE products ADD COLUMN unitTemplateId INTEGER',
+        );
+      }
+      if (!await _tableHasColumn(db, 'stock_voucher_items', 'enteredQty')) {
+        await db.execute(
+          'ALTER TABLE stock_voucher_items ADD COLUMN enteredQty REAL',
+        );
+      }
+      if (!await _tableHasColumn(db, 'stock_voucher_items', 'unitFactor')) {
+        await db.execute(
+          'ALTER TABLE stock_voucher_items ADD COLUMN unitFactor REAL',
+        );
+      }
+      if (!await _tableHasColumn(db, 'stock_voucher_items', 'unitLabel')) {
+        await db.execute(
+          'ALTER TABLE stock_voucher_items ADD COLUMN unitLabel TEXT',
+        );
+      }
+      if (!await _tableHasColumn(db, 'stock_voucher_items', 'baseQty')) {
+        await db.execute(
+          'ALTER TABLE stock_voucher_items ADD COLUMN baseQty REAL',
+        );
+      }
+    } catch (_) {}
   }
 
   Future<void> _ensureServicesAndJobTicketsSchema(Database db) async {
@@ -233,8 +861,91 @@ class DatabaseHelper {
     await _ensureServiceOrdersCamelDeletedAt(db);
     await _ensureServiceOrdersEtaColumns(db);
     await _ensureServiceOrdersWorkStartedAtColumn(db);
+    await _ensureServiceOrdersOilChangeColumns(db);
     await _ensureServiceOrderItemsSchema(db);
     await _ensureServiceOrderItemsCamelDeletedAt(db);
+    await _migrateServiceOrdersAllowSuspendedStatus(db);
+  }
+
+  /// يسمح بحالة [suspended] لتعليق فاتورة غيار الزيت — القيد القديم كان يمنعها.
+  Future<void> _migrateServiceOrdersAllowSuspendedStatus(Database db) async {
+    try {
+      if (!await _tableExists(db, 'service_orders')) return;
+
+      final ddlRows = await db.rawQuery(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='service_orders'",
+      );
+      if (ddlRows.isEmpty) return;
+      final ddl = ddlRows.first['sql']?.toString() ?? '';
+      if (ddl.contains("'suspended'")) return;
+      if (!ddl.toUpperCase().contains('CHECK')) return;
+
+      const updatedCheck =
+          "CHECK(status IN ('pending', 'in_progress', 'completed', "
+          "'delivered', 'cancelled', 'suspended'))";
+      final patched = ddl.replaceAll(
+        RegExp(
+          r'CHECK\s*\(\s*status\s+IN\s*\([^)]+\)\s*\)',
+          caseSensitive: false,
+        ),
+        updatedCheck,
+      );
+      if (patched == ddl) return;
+
+      var createNew = patched.replaceFirst(
+        'CREATE TABLE service_orders',
+        'CREATE TABLE service_orders_new',
+      );
+      if (createNew == patched) {
+        createNew = patched.replaceFirst(
+          'CREATE TABLE "service_orders"',
+          'CREATE TABLE service_orders_new',
+        );
+      }
+      if (createNew == patched) return;
+
+      await db.execute('PRAGMA foreign_keys = OFF');
+      await db.transaction((txn) async {
+        await txn.execute(createNew);
+        await txn.execute(
+          'INSERT INTO service_orders_new SELECT * FROM service_orders',
+        );
+        await txn.execute('DROP TABLE service_orders');
+        await txn.execute(
+          'ALTER TABLE service_orders_new RENAME TO service_orders',
+        );
+      });
+      await db.execute('PRAGMA foreign_keys = ON');
+      await _recreateServiceOrdersIndexes(db);
+      AppLogger.info(
+        'database',
+        'service_orders.status now allows suspended (oil change park)',
+      );
+    } catch (e, st) {
+      AppLogger.error(
+        'DatabaseHelper',
+        '_migrateServiceOrdersAllowSuspendedStatus failed',
+        e,
+        st,
+      );
+    }
+  }
+
+  Future<void> _recreateServiceOrdersIndexes(Database db) async {
+    try {
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_service_orders_lookup '
+        'ON service_orders(tenantId, deletedAt, status)',
+      );
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_service_orders_customer_lookup '
+        'ON service_orders(tenantId, deletedAt, customerId)',
+      );
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_service_orders_invoice_lookup '
+        'ON service_orders(tenantId, invoiceId)',
+      );
+    } catch (_) {}
   }
 
   /// إصدارات قديمة قد تكون أنشأت الجدول بدون عمود الحذف الناعم (camelCase).
@@ -329,7 +1040,11 @@ class DatabaseHelper {
   /// مدة الخدمة المتوقعة وموعد التسليم المقترح — لتذاكر الصيانة.
   Future<void> _ensureServiceOrdersEtaColumns(Database db) async {
     try {
-      if (!await _tableHasColumn(db, 'service_orders', 'expectedDurationMinutes')) {
+      if (!await _tableHasColumn(
+        db,
+        'service_orders',
+        'expectedDurationMinutes',
+      )) {
         await db.execute(
           'ALTER TABLE service_orders ADD COLUMN expectedDurationMinutes INTEGER',
         );
@@ -349,6 +1064,49 @@ class DatabaseHelper {
         await db.execute(
           'ALTER TABLE service_orders ADD COLUMN workStartedAt TEXT',
         );
+      }
+    } catch (_) {}
+  }
+
+  /// نوع السجل: repair | oil_change — فصل غيار الزيت عن تذاكر الصيانة.
+  Future<void> _ensureServiceOrdersOrderKind(Database db) async {
+    try {
+      if (!await _tableHasColumn(db, 'service_orders', 'orderKind')) {
+        await db.execute(
+          "ALTER TABLE service_orders ADD COLUMN orderKind TEXT NOT NULL DEFAULT 'repair'",
+        );
+      }
+      await db.execute('''
+        UPDATE service_orders
+        SET orderKind = 'oil_change'
+        WHERE orderKind = 'repair'
+          AND (
+            (oilType IS NOT NULL AND TRIM(oilType) != '')
+            OR (odometerCurrent IS NOT NULL AND TRIM(odometerCurrent) != '')
+          )
+      ''');
+    } catch (_) {}
+  }
+
+  /// أعمدة إضافية لبطاقة صيانة وتغيير زيت السيارات
+  Future<void> _ensureServiceOrdersOilChangeColumns(Database db) async {
+    try {
+      final cols = [
+        'carModel',
+        'engineSize',
+        'odometerCurrent',
+        'odometerNext',
+        'oilType',
+        'oilViscosity',
+        'oilSize',
+        'filterType',
+        'requestedServices',
+        'customerPhone',
+      ];
+      for (final col in cols) {
+        if (!await _tableHasColumn(db, 'service_orders', col)) {
+          await db.execute('ALTER TABLE service_orders ADD COLUMN $col TEXT');
+        }
       }
     } catch (_) {}
   }
@@ -386,7 +1144,7 @@ class DatabaseHelper {
           agreedPriceFils INTEGER,
           advancePaymentFils INTEGER NOT NULL DEFAULT 0,
           status TEXT NOT NULL DEFAULT 'pending'
-            CHECK(status IN ('pending', 'in_progress', 'completed', 'delivered', 'cancelled')),
+            CHECK(status IN ('pending', 'in_progress', 'completed', 'delivered', 'cancelled', 'suspended')),
           technicianId INTEGER,
           technicianName TEXT,
           issueDescription TEXT,
@@ -482,17 +1240,23 @@ class DatabaseHelper {
     } catch (_) {}
   }
 
+  // PR-4: global_id حرج للمزامنة — استبدلنا catch (_) {} الصامت بـ runIdempotent.
   Future<void> _ensureProductVariantsGlobalIds(Database db) async {
-    try {
-      if (!await _tableHasColumn(db, 'product_colors', 'global_id')) {
-        await db.execute('ALTER TABLE product_colors ADD COLUMN global_id TEXT');
-      }
-      if (!await _tableHasColumn(db, 'product_variants', 'global_id')) {
-        await db.execute(
+    if (!await _tableHasColumn(db, 'product_colors', 'global_id')) {
+      await DbMigrationSafety.runIdempotent(
+        'add product_colors.global_id',
+        () =>
+            db.execute('ALTER TABLE product_colors ADD COLUMN global_id TEXT'),
+      );
+    }
+    if (!await _tableHasColumn(db, 'product_variants', 'global_id')) {
+      await DbMigrationSafety.runIdempotent(
+        'add product_variants.global_id',
+        () => db.execute(
           'ALTER TABLE product_variants ADD COLUMN global_id TEXT',
-        );
-      }
-    } catch (_) {}
+        ),
+      );
+    }
 
     try {
       final uuid = const Uuid();
@@ -546,13 +1310,19 @@ class DatabaseHelper {
     } catch (_) {}
   }
 
+  // PR-4 (roadmap_phase2_execution_v1 §4): migrations مالية حرجة مع
+  // runIdempotent — يبتلع "duplicate column" بصمت لكن يُسجّل ويرمي
+  // أي خطأ حقيقي (صلاحيات، disk، schema corruption) بدلاً من ابتلاعه.
   Future<void> _ensureMoneyFilsColumns(Database db) async {
     Future<void> addIntFilsColumn(String table, String column) async {
-      if (!await _tableHasColumn(db, table, column)) {
-        await db.execute(
+      if (!await _tableExists(db, table)) return;
+      if (await _tableHasColumn(db, table, column)) return;
+      await DbMigrationSafety.runIdempotent(
+        'add $table.$column (INTEGER fils)',
+        () => db.execute(
           'ALTER TABLE $table ADD COLUMN $column INTEGER NOT NULL DEFAULT 0',
-        );
-      }
+        ),
+      );
     }
 
     await addIntFilsColumn('invoices', 'discountFils');
@@ -566,6 +1336,58 @@ class DatabaseHelper {
     await addIntFilsColumn('invoice_items', 'unitCostFils');
 
     await addIntFilsColumn('cash_ledger', 'amountFils');
+    await addIntFilsColumn('expenses', 'amountFils');
+
+    // PR-5 (roadmap_phase2_execution_v1 §4): أعمدة *Fils للأقساط لإغلاق
+    // فجوة "الأقساط بدون fils". تُحوّل القيم القديمة في backfill بعد ALTER.
+    await addIntFilsColumn('installment_plans', 'totalAmountFils');
+    await addIntFilsColumn('installment_plans', 'paidAmountFils');
+    await addIntFilsColumn('installments', 'amountFils');
+
+    await _backfillInstallmentFilsColumns(db);
+    await _backfillExpenseFilsColumns(db);
+  }
+
+  /// تحويل `expenses.amount` (REAL دينار) إلى `amountFils` للتقارير.
+  Future<void> _backfillExpenseFilsColumns(Database db) async {
+    if (!await _tableExists(db, 'expenses')) return;
+    if (!await _tableHasColumn(db, 'expenses', 'amountFils')) return;
+    await DbMigrationSafety.runIdempotent(
+      'backfill expenses.amountFils',
+      () => db.execute(
+        "UPDATE expenses SET "
+        "amountFils = CAST(ROUND(IFNULL(amount, 0) * 1000) AS INTEGER) "
+        "WHERE IFNULL(amountFils, 0) = 0 AND IFNULL(amount, 0) > 0",
+      ),
+    );
+  }
+
+  /// PR-5: تحويل أعمدة REAL القديمة إلى INTEGER fils لكل صفوف الأقساط.
+  /// idempotent — يتعامل فقط مع الصفوف التي لم تُحوَّل بعد.
+  Future<void> _backfillInstallmentFilsColumns(Database db) async {
+    if (await _tableHasColumn(db, 'installment_plans', 'totalAmountFils') &&
+        await _tableHasColumn(db, 'installment_plans', 'paidAmountFils')) {
+      await DbMigrationSafety.runIdempotent(
+        'backfill installment_plans.*Fils',
+        () => db.execute(
+          "UPDATE installment_plans SET "
+          "totalAmountFils = CAST(ROUND(IFNULL(totalAmount, 0) * 1000) AS INTEGER), "
+          "paidAmountFils = CAST(ROUND(IFNULL(paidAmount, 0) * 1000) AS INTEGER) "
+          "WHERE (totalAmountFils = 0 AND IFNULL(totalAmount, 0) != 0) "
+          "   OR (paidAmountFils = 0 AND IFNULL(paidAmount, 0) != 0)",
+        ),
+      );
+    }
+    if (await _tableHasColumn(db, 'installments', 'amountFils')) {
+      await DbMigrationSafety.runIdempotent(
+        'backfill installments.amountFils',
+        () => db.execute(
+          "UPDATE installments SET "
+          "amountFils = CAST(ROUND(IFNULL(amount, 0) * 1000) AS INTEGER) "
+          "WHERE amountFils = 0 AND IFNULL(amount, 0) != 0",
+        ),
+      );
+    }
   }
 
   /// جدول آمن للمزامنة: بيانات المستخدم العامة فقط بدون حقول تسجيل الدخول الحساسة.
@@ -581,10 +1403,13 @@ class DatabaseHelper {
         displayName TEXT,
         jobTitle TEXT,
         isActive INTEGER NOT NULL DEFAULT 1,
+        pinHash TEXT,
+        pinSalt TEXT,
         createdAt TEXT NOT NULL,
         updatedAt TEXT
       )
     ''');
+    await _ensureUserProfilesPinColumns(db);
     await db.execute(
       'CREATE INDEX IF NOT EXISTS idx_user_profiles_active ON user_profiles(isActive)',
     );
@@ -614,31 +1439,53 @@ class DatabaseHelper {
     for (final u in users) {
       final idNum = u['id'] as num?;
       if (idNum == null) continue;
-      batch.insert(
-        'user_profiles',
-        {
-          'id': idNum.toInt(),
-          'username': (u['username'] ?? '').toString().trim().toLowerCase(),
-          'role': ((u['role'] ?? 'staff').toString().trim().isEmpty)
-              ? 'staff'
-              : (u['role'] ?? 'staff').toString().trim(),
-          'email': (u['email'] ?? '').toString().trim(),
-          'phone': (u['phone'] ?? '').toString().trim(),
-          'phone2': (u['phone2'] ?? '').toString().trim(),
-          'displayName': (u['displayName'] ?? '').toString().trim(),
-          'jobTitle': (u['jobTitle'] ?? '').toString().trim(),
-          'isActive': ((u['isActive'] as num?)?.toInt() ?? 1) == 1 ? 1 : 0,
-          'createdAt': ((u['createdAt'] ?? '').toString().trim().isEmpty)
-              ? now
-              : (u['createdAt'] ?? '').toString(),
-          'updatedAt': ((u['updatedAt'] ?? '').toString().trim().isEmpty)
-              ? now
-              : (u['updatedAt'] ?? '').toString(),
-        },
-        conflictAlgorithm: ConflictAlgorithm.replace,
-      );
+      batch.insert('user_profiles', {
+        'id': idNum.toInt(),
+        'username': (u['username'] ?? '').toString().trim().toLowerCase(),
+        'role': ((u['role'] ?? 'staff').toString().trim().isEmpty)
+            ? 'staff'
+            : (u['role'] ?? 'staff').toString().trim(),
+        'email': (u['email'] ?? '').toString().trim(),
+        'phone': (u['phone'] ?? '').toString().trim(),
+        'phone2': (u['phone2'] ?? '').toString().trim(),
+        'displayName': (u['displayName'] ?? '').toString().trim(),
+        'jobTitle': (u['jobTitle'] ?? '').toString().trim(),
+        'isActive': ((u['isActive'] as num?)?.toInt() ?? 1) == 1 ? 1 : 0,
+        'createdAt': ((u['createdAt'] ?? '').toString().trim().isEmpty)
+            ? now
+            : (u['createdAt'] ?? '').toString(),
+        'updatedAt': ((u['updatedAt'] ?? '').toString().trim().isEmpty)
+            ? now
+            : (u['updatedAt'] ?? '').toString(),
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
     }
     await batch.commit(noResult: true);
+  }
+
+  /// أعمدة hash PIN للموظفين — تُزامَن عبر [user_profiles] (بدون plaintext).
+  Future<void> _ensureUserProfilesPinColumns(Database db) async {
+    try {
+      if (!await _tableHasColumn(db, 'user_profiles', 'pinHash')) {
+        await db.execute('ALTER TABLE user_profiles ADD COLUMN pinHash TEXT');
+      }
+      if (!await _tableHasColumn(db, 'user_profiles', 'pinSalt')) {
+        await db.execute('ALTER TABLE user_profiles ADD COLUMN pinSalt TEXT');
+      }
+      await db.rawUpdate('''
+        UPDATE user_profiles
+        SET
+          pinHash = (SELECT u.passwordHash FROM users u WHERE u.id = user_profiles.id),
+          pinSalt = (SELECT u.passwordSalt FROM users u WHERE u.id = user_profiles.id)
+        WHERE IFNULL(user_profiles.role, 'staff') != 'owner'
+          AND (IFNULL(user_profiles.pinHash, '') = '' OR IFNULL(user_profiles.pinSalt, '') = '')
+          AND EXISTS (
+            SELECT 1 FROM users u
+            WHERE u.id = user_profiles.id
+              AND IFNULL(u.passwordHash, '') != ''
+              AND IFNULL(u.passwordSalt, '') != ''
+          )
+      ''');
+    } catch (_) {}
   }
 
   /// منتجات مثبّتة في لوحة التحكم — بطاقة وصول سريع لفاتورة جديدة.
@@ -986,7 +1833,9 @@ class DatabaseHelper {
     );
     if (planRows.isNotEmpty) {
       final total = (planRows.first['totalAmount'] as num?)?.toDouble() ?? 0;
-      if (combined > total + 1e-6) combined = total;
+      final combinedFils = (combined * 1000).round();
+      final totalFils = (total * 1000).round();
+      if (combinedFils > totalFils) combined = total;
     }
     await ex.update(
       'installment_plans',
@@ -997,7 +1846,6 @@ class DatabaseHelper {
       where: 'id = ?',
       whereArgs: [planId],
     );
-
   }
 
   Future<void> _reconcileInstallmentPlanPaidAmounts(Database db) async {
@@ -1054,6 +1902,7 @@ class DatabaseHelper {
     await db.execute('''
       CREATE TABLE invoices(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        global_id TEXT,
         customerName TEXT,
         date TEXT,
         type INTEGER,
@@ -1069,19 +1918,26 @@ class DatabaseHelper {
         originalInvoiceId INTEGER,
         deliveryAddress TEXT,
         createdByUserName TEXT,
+        actorUserId INTEGER,
+        shiftOwnerUserId INTEGER,
         discountPercent REAL NOT NULL DEFAULT 0,
         workShiftId INTEGER,
         customerId INTEGER,
         loyaltyDiscount REAL NOT NULL DEFAULT 0,
         loyaltyDiscountFils INTEGER NOT NULL DEFAULT 0,
         loyaltyPointsRedeemed INTEGER NOT NULL DEFAULT 0,
-        loyaltyPointsEarned INTEGER NOT NULL DEFAULT 0
+        loyaltyPointsEarned INTEGER NOT NULL DEFAULT 0,
+        updatedAt TEXT
       )
     ''');
 
     await db.execute('''
       CREATE TABLE invoice_items(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        global_id TEXT,
+        invoice_global_id TEXT,
+        product_global_id TEXT,
+        updatedAt TEXT,
         invoiceId INTEGER,
         productName TEXT,
         quantity INTEGER,
@@ -1107,6 +1963,8 @@ class DatabaseHelper {
         description TEXT,
         invoiceId INTEGER,
         workShiftId INTEGER,
+        actorUserId INTEGER,
+        shiftOwnerUserId INTEGER,
         createdAt TEXT NOT NULL,
         updatedAt TEXT,
         FOREIGN KEY(invoiceId) REFERENCES invoices(id) ON DELETE SET NULL
@@ -1235,7 +2093,11 @@ class DatabaseHelper {
   /// ترحيل لمرة واحدة: منتجات [stockBaseKind]=1 كانت تُخزَّن بالـ **غرام** وتُسعَّر للغرام؛
   /// أصبحت بالـ **كيلوغرام** مع سعر للكيلو. تُحافظ على إجماليات الأسطر والتكاليف.
   Future<void> _migrateWeightStockBaseGramsToKilograms(Database db) async {
-    final hasPoItems = await _tableHasColumn(db, 'purchase_order_items', 'productId');
+    final hasPoItems = await _tableHasColumn(
+      db,
+      'purchase_order_items',
+      'productId',
+    );
     await db.transaction((txn) async {
       await txn.execute('''
         UPDATE product_unit_variants
@@ -1596,6 +2458,42 @@ class DatabaseHelper {
         } catch (_) {}
       }
     }
+    if (oldVersion < 42) {
+      await _ensureOilChangeServicesTable(db);
+    }
+    if (oldVersion < 43) {
+      await _ensureOilVolumeStockPhase1Schema(db);
+    }
+    if (oldVersion < 44) {
+      await _ensureOilChangeStockLinkColumns(db);
+    }
+    if (oldVersion < 45) {
+      await _ensureOilChangeHydraulicCatalogTable(db);
+      await _ensureOilChangeFilterCatalogTable(db);
+      await _ensureServiceOrdersOilChangeFilterColumns(db);
+    }
+    if (oldVersion < 46) {
+      await _ensureServiceOrdersOilChangeFilterColumns(db);
+      await _migrateServiceOrdersAllowSuspendedStatus(db);
+    }
+    if (oldVersion < 47) {
+      await ensureBusinessAuditEventsTable(db);
+    }
+    if (oldVersion < 48) {
+      await ensureOwnerDashboardQueryIndexes(db);
+    }
+    if (oldVersion < 49) {
+      await ensurePharmacyCatalogTables(db);
+    }
+    if (oldVersion < 50) {
+      await ensureRestaurantTables(db);
+    }
+    if (oldVersion < 51) {
+      await _ensureServiceOrdersOilChangeFilterColumns(db);
+    }
+    if (oldVersion < 52) {
+      await _ensureCustomerDebtExceptionColumns(db);
+    }
     await _ensureRbacFoundation(db);
     await _ensureBranchTopology(db);
   }
@@ -1690,10 +2588,10 @@ class DatabaseHelper {
   /// حقول إضافية لبطاقة المنتج: الرتبة/الدرجة (grade)، رقم الدفعة (batchNumber).
   Future<void> _ensureInventoryProductExtendedCols(Database db) async {
     final cols = <String, String>{
-      'grade':           'TEXT',
-      'batchNumber':     'TEXT',
+      'grade': 'TEXT',
+      'batchNumber': 'TEXT',
       'expiryAlertDaysBefore': 'INTEGER',
-      'imageUrl':        'TEXT',
+      'imageUrl': 'TEXT',
     };
     for (final e in cols.entries) {
       if (!await _tableHasColumn(db, 'products', e.key)) {
@@ -1902,9 +2800,7 @@ class DatabaseHelper {
   Future<void> _ensureSoftDeleteColumn(Database db, String table) async {
     if (!await _tableHasColumn(db, table, 'deleted_at')) {
       try {
-        await db.execute(
-          'ALTER TABLE $table ADD COLUMN deleted_at TEXT',
-        );
+        await db.execute('ALTER TABLE $table ADD COLUMN deleted_at TEXT');
       } catch (e, st) {
         if (kDebugMode) {
           AppLogger.error(
@@ -2034,6 +2930,37 @@ class DatabaseHelper {
     }
   }
 
+  // PR-4: actor/shift columns حرجة لتدقيق العمليات المالية.
+  Future<void> _ensureInvoiceActorShiftColumns(Database db) async {
+    const cols = <String, String>{
+      'actorUserId': 'INTEGER',
+      'shiftOwnerUserId': 'INTEGER',
+    };
+    for (final e in cols.entries) {
+      if (await _tableHasColumn(db, 'invoices', e.key)) continue;
+      await DbMigrationSafety.runIdempotent(
+        'add invoices.${e.key}',
+        () => db.execute('ALTER TABLE invoices ADD COLUMN ${e.key} ${e.value}'),
+      );
+    }
+  }
+
+  Future<void> _ensureCashLedgerActorShiftColumns(Database db) async {
+    const cols = <String, String>{
+      'actorUserId': 'INTEGER',
+      'shiftOwnerUserId': 'INTEGER',
+    };
+    for (final e in cols.entries) {
+      if (await _tableHasColumn(db, 'cash_ledger', e.key)) continue;
+      await DbMigrationSafety.runIdempotent(
+        'add cash_ledger.${e.key}',
+        () => db.execute(
+          'ALTER TABLE cash_ledger ADD COLUMN ${e.key} ${e.value}',
+        ),
+      );
+    }
+  }
+
   Future<void> _createInstallmentSettingsTable(Database db) async {
     await db.execute('''
       CREATE TABLE IF NOT EXISTS installment_settings (
@@ -2076,7 +3003,7 @@ class DatabaseHelper {
         'id': 1,
         'payload': DebtSettingsData.defaults().toJsonString(),
         'updatedAt': DateTime.now().toIso8601String(),
-      });
+      }, conflictAlgorithm: ConflictAlgorithm.ignore);
     }
   }
 
@@ -2088,16 +3015,46 @@ class DatabaseHelper {
     await db.execute('''
       CREATE TABLE IF NOT EXISTS customer_debt_payments (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        global_id TEXT,
+        customer_global_id TEXT,
         customerId INTEGER,
         customerNameSnapshot TEXT NOT NULL,
         amount REAL NOT NULL,
         debtBefore REAL NOT NULL,
         debtAfter REAL NOT NULL,
         createdAt TEXT NOT NULL,
+        updatedAt TEXT,
         createdByUserName TEXT,
-        note TEXT
+        note TEXT,
+        tenantId INTEGER NOT NULL DEFAULT 1
       )
     ''');
+    // تثبيت قديم: الجدول وُجد بدون أعمدة المزامنة — أضفها بأمان.
+    Future<void> addCol(String name, String type) async {
+      if (await _tableHasColumn(db, 'customer_debt_payments', name)) return;
+      try {
+        await db.execute(
+          'ALTER TABLE customer_debt_payments ADD COLUMN $name $type',
+        );
+      } catch (_) {}
+    }
+
+    await addCol('global_id', 'TEXT');
+    await addCol('customer_global_id', 'TEXT');
+    await addCol('updatedAt', 'TEXT');
+    await addCol('tenantId', 'INTEGER NOT NULL DEFAULT 1');
+    // المرحلة 5 — الشريحة 3: توزيع الدفعة على الفواتير (JSON) وحالة الإلغاء.
+    await addCol('allocationsJson', 'TEXT');
+    await addCol('receipt_invoice_global_id', 'TEXT');
+    await addCol('voidedAt', 'TEXT');
+    await addCol('voidedByUserName', 'TEXT');
+    await addCol('voidReason', 'TEXT');
+    try {
+      await db.execute(
+        'CREATE UNIQUE INDEX IF NOT EXISTS ux_customer_debt_payments_global_id '
+        'ON customer_debt_payments(global_id) WHERE global_id IS NOT NULL',
+      );
+    } catch (_) {}
   }
 
   /// موردون + وصولاتهم (ذمم دائنة AP) + دفعات للمورد.
@@ -2149,6 +3106,14 @@ class DatabaseHelper {
       'CREATE INDEX IF NOT EXISTS ix_supplier_payouts_supplierId ON supplier_payouts(supplierId)',
     );
     await _ensureSupplierPayoutReceiptInvoiceColumn(db);
+    // المرحلة 5 — الشريحة 3: الدفعة المعكوسة تبقى ظاهرة «ملغاة».
+    for (final col in const ['voidedAt', 'voidedByUserName', 'voidReason']) {
+      if (!await _tableHasColumn(db, 'supplier_payouts', col)) {
+        try {
+          await db.execute('ALTER TABLE supplier_payouts ADD COLUMN $col TEXT');
+        } catch (_) {}
+      }
+    }
   }
 
   Future<void> _ensureSupplierPayoutReceiptInvoiceColumn(Database db) async {
@@ -2162,6 +3127,12 @@ class DatabaseHelper {
   }
 
   Future<void> _ensureSupplierBillStockLinkColumns(Database db) async {
+    // المرحلة 5 — الشريحة 4: «يُدفع قبل» اختياري على الوصل (تاريخ yyyy-MM-dd).
+    if (!await _tableHasColumn(db, 'supplier_bills', 'dueDate')) {
+      try {
+        await db.execute('ALTER TABLE supplier_bills ADD COLUMN dueDate TEXT');
+      } catch (_) {}
+    }
     if (!await _tableHasColumn(db, 'supplier_bills', 'linkedStockVoucherId')) {
       try {
         await db.execute(
@@ -2365,6 +3336,7 @@ class DatabaseHelper {
     await db.execute('''
       CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        global_id TEXT,
         username TEXT NOT NULL,
         role TEXT NOT NULL DEFAULT 'staff',
         email TEXT,
@@ -2384,6 +3356,7 @@ class DatabaseHelper {
     await db.execute('''
       CREATE TABLE IF NOT EXISTS user_profiles (
         id INTEGER PRIMARY KEY,
+        global_id TEXT,
         username TEXT NOT NULL,
         role TEXT NOT NULL DEFAULT 'staff',
         email TEXT,
@@ -2392,6 +3365,8 @@ class DatabaseHelper {
         displayName TEXT,
         jobTitle TEXT,
         isActive INTEGER NOT NULL DEFAULT 1,
+        pinHash TEXT,
+        pinSalt TEXT,
         createdAt TEXT NOT NULL,
         updatedAt TEXT
       )
@@ -2415,6 +3390,7 @@ class DatabaseHelper {
         notes TEXT,
         balance REAL NOT NULL DEFAULT 0,
         loyaltyPoints INTEGER NOT NULL DEFAULT 0,
+        priceListId INTEGER,
         createdAt TEXT NOT NULL,
         updatedAt TEXT
       )

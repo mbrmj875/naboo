@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
 
@@ -159,18 +157,31 @@ PwIDAQAB
   @override
   Future<String> getDeviceName() async {
     try {
+      if (kIsWeb) {
+        final i = await DeviceInfoPlugin().webBrowserInfo;
+        final browser = i.browserName.name;
+        final platform = (i.platform ?? '').trim();
+        if (platform.isNotEmpty) return 'Web · $browser · $platform';
+        return 'Web · $browser';
+      }
       final p = DeviceInfoPlugin();
-      if (Platform.isMacOS) {
-        final i = await p.macOsInfo;
-        return '${i.model} (${i.computerName})';
-      } else if (Platform.isAndroid) {
-        final i = await p.androidInfo;
-        return '${i.brand} ${i.model}';
-      } else if (Platform.isIOS) {
-        final i = await p.iosInfo;
-        return '${i.name} (${i.model})';
-      } else if (Platform.isWindows) {
-        return (await p.windowsInfo).computerName;
+      switch (defaultTargetPlatform) {
+        case TargetPlatform.macOS:
+          final i = await p.macOsInfo;
+          return '${i.model} (${i.computerName})';
+        case TargetPlatform.android:
+          final i = await p.androidInfo;
+          return '${i.brand} ${i.model}';
+        case TargetPlatform.iOS:
+          final i = await p.iosInfo;
+          return '${i.name} (${i.model})';
+        case TargetPlatform.windows:
+          return (await p.windowsInfo).computerName;
+        case TargetPlatform.linux:
+          final i = await p.linuxInfo;
+          return i.prettyName;
+        default:
+          break;
       }
     } catch (_) {}
     return 'Unknown Device';

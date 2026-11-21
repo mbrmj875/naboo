@@ -192,16 +192,29 @@ void main() {
       expect(timers.created, isEmpty);
     });
 
-    test('tick reconnects channel when it goes unhealthy (>30s)', () {
+    test('tick reconnects channel after prior error when still unhealthy', () async {
       watchdog.register('snapshots', reconnect: () async {});
 
-      // Push past the unhealthy threshold (30s).
+      watchdog.markError('snapshots');
+      expect(timers.created, hasLength(1));
+      timers.fireLast();
+      await Future<void>.delayed(Duration.zero);
+
       clock.advance(const Duration(seconds: 31));
       watchdog.tick();
 
-      expect(timers.created, hasLength(1));
-      expect(timers.created.last.delay, const Duration(seconds: 5));
+      expect(timers.created.length, greaterThanOrEqualTo(2));
       expect(watchdog.hasPendingReconnect('snapshots'), isTrue);
+    });
+
+    test('tick ignores idle subscribed channels with no prior errors', () {
+      watchdog.register('snapshots', reconnect: () async {});
+
+      clock.advance(const Duration(seconds: 31));
+      watchdog.tick();
+
+      expect(timers.created, isEmpty);
+      expect(watchdog.consecutiveErrors('snapshots'), 0);
     });
 
     test('max backoff does not exceed 60s — even after many errors', () {
@@ -383,11 +396,16 @@ void main() {
       );
       w.register('x', reconnect: () async {});
 
-      // Make the channel "stale" relative to the fake clock.
+      // Idle subscribed channels must not be treated as unhealthy.
       clock.advance(const Duration(seconds: 1));
 
       w.start();
-      // Wait long enough for the periodic timer to fire at least once.
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      expect(w.consecutiveErrors('x'), 0);
+      expect(w.scheduledBackoff('x'), isNull);
+
+      w.markError('x');
+      clock.advance(const Duration(seconds: 1));
       await Future<void>.delayed(const Duration(milliseconds: 80));
       expect(w.consecutiveErrors('x'), greaterThanOrEqualTo(1));
       expect(w.scheduledBackoff('x'), isNotNull);

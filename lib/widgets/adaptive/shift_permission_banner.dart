@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../theme/app_spacing.dart';
+import '../../theme/design_tokens.dart';
 import '../../utils/screen_layout.dart';
 
 /// بانر معلومات حالة وردية المستخدم وصلاحياته.
@@ -56,7 +57,7 @@ class ShiftPermissionBanner extends StatelessWidget {
   Widget _buildCompactBanner(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return Material(
-      color: cs.primaryContainer,
+      color: AppColors.accentGold.withValues(alpha: 0.2),
       child: InkWell(
         onTap: onTap,
         child: SizedBox(
@@ -67,7 +68,7 @@ class ShiftPermissionBanner extends StatelessWidget {
             ),
             child: Row(
               children: [
-                Icon(icon, size: 16, color: cs.onPrimaryContainer),
+                Icon(icon, size: 16, color: AppColors.accentGold),
                 const SizedBox(width: AppSpacing.sm),
                 Expanded(
                   child: Text(
@@ -75,15 +76,16 @@ class ShiftPermissionBanner extends StatelessWidget {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color: cs.onPrimaryContainer,
+                      color: AppColors.accentGold,
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
                 ),
                 if (onTap != null)
-                  Icon(
+                  const Icon(
                     Icons.chevron_left,
                     size: 16,
-                    color: cs.onPrimaryContainer,
+                    color: AppColors.accentGold,
                   ),
               ],
             ),
@@ -97,7 +99,7 @@ class ShiftPermissionBanner extends StatelessWidget {
   Widget _buildDesktopBanner(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return Material(
-      color: cs.primaryContainer,
+      color: AppColors.accentGold.withValues(alpha: 0.2),
       child: InkWell(
         onTap: onTap,
         child: Padding(
@@ -107,28 +109,28 @@ class ShiftPermissionBanner extends StatelessWidget {
           ),
           child: Row(
             children: [
-              Icon(icon, size: 18, color: cs.onPrimaryContainer),
+              Icon(icon, size: 18, color: AppColors.accentGold),
               const SizedBox(width: AppSpacing.md),
               Expanded(
                 child: Text(
                   _fullText(),
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: cs.onPrimaryContainer,
-                    fontWeight: FontWeight.w500,
+                    color: AppColors.accentGold,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
               ),
               if (onTap != null)
                 TextButton.icon(
                   onPressed: onTap,
-                  icon: Icon(
+                  icon: const Icon(
                     Icons.info_outline,
                     size: 16,
-                    color: cs.onPrimaryContainer,
+                    color: AppColors.accentGold,
                   ),
-                  label: Text(
+                  label: const Text(
                     'تفاصيل',
-                    style: TextStyle(color: cs.onPrimaryContainer),
+                    style: TextStyle(color: AppColors.accentGold),
                   ),
                 ),
             ],

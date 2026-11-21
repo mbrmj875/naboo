@@ -3,19 +3,14 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
 type Body = {
   userId: string;
-  version: "v1" | "v2";
 };
 
 export async function POST(req: Request) {
   try {
     const body = (await req.json()) as Body;
     const userId = (body.userId ?? "").trim();
-    const version = body.version;
     if (!userId) {
       return NextResponse.json({ error: "معرّف المستخدم ناقص" }, { status: 400 });
-    }
-    if (version !== "v1" && version !== "v2") {
-      return NextResponse.json({ error: "الإصدار يجب أن يكون v1 أو v2" }, { status: 400 });
     }
 
     const nowIso = new Date().toISOString();
@@ -23,7 +18,8 @@ export async function POST(req: Request) {
     const { error } = await supabase
       .from("profiles")
       .update({
-        license_system_version: version,
+        // v2 هو النظام الوحيد المعتمد؛ لا نقبل إرجاع الحساب إلى v1.
+        license_system_version: "v2",
         updated_at: nowIso,
       })
       .eq("id", userId);

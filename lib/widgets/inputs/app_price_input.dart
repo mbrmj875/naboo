@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../theme/erp_input_constants.dart';
+import '../../theme/design_tokens.dart';
 import '../../utils/iraqi_currency_format.dart';
 import '../../utils/numeric_format.dart';
 
@@ -134,8 +135,9 @@ class _AppPriceInputState extends State<AppPriceInput> {
     final hasWarn = widget.warningText != null &&
         widget.warningText!.trim().isNotEmpty;
 
-    Color borderLine = cs.outline;
-    Color focusLine = cs.primary;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    Color borderLine = isDark ? AppColors.accentGold.withValues(alpha: 0.35) : AppColors.accentGold.withValues(alpha: 0.5);
+    Color focusLine = AppColors.accentGold;
 
     if (hasWarn) {
       borderLine = _amber;
@@ -227,7 +229,7 @@ class _AppPriceInputState extends State<AppPriceInput> {
                 !hasWarn
             ? [
                 BoxShadow(
-                  color: cs.primary.withValues(alpha: 0.15),
+                  color: AppColors.accentGold.withValues(alpha: 0.15),
                   blurRadius: 6,
                   spreadRadius: 3,
                   offset: Offset.zero,

@@ -1,0 +1,93 @@
+import 'package:flutter/material.dart';
+
+import '../../_contract/vertical_registry.dart';
+import '../../../services/reports_repository.dart';
+import '../../../services/tenant_context_service.dart';
+import '../models/pharmacy_report_models.dart';
+import '../widgets/pharmacy_report_panels.dart';
+
+/// تقرير مخزون الصيدلية — لوحة مستقلة.
+class PharmacyInventoryReportScreen extends StatefulWidget {
+  const PharmacyInventoryReportScreen({super.key});
+
+  @override
+  State<PharmacyInventoryReportScreen> createState() =>
+      _PharmacyInventoryReportScreenState();
+}
+
+class _PharmacyInventoryReportScreenState
+    extends State<PharmacyInventoryReportScreen> {
+  bool _loading = true;
+  String? _error;
+  PharmacyInventoryReportSnapshot? _snapshot;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final tenant = TenantContextService.instance;
+      if (!tenant.loaded) await tenant.load();
+      final bundle = await VerticalRegistry.instance.activeManifest
+          .loadReportSectionSnapshot(
+        9,
+        ReportDateRange(
+          from: DateTime.now().subtract(const Duration(days: 30)),
+          to: DateTime.now(),
+        ),
+      );
+      if (!mounted) return;
+      setState(() {
+        _snapshot = (bundle as PharmacyReportsBundle?)?.inventory;
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = 'تعذر تحميل تقرير المخزون.';
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('تقرير مخزون الصيدلية'),
+          actions: [
+            IconButton(
+              onPressed: _load,
+              icon: const Icon(Icons.refresh_rounded),
+            ),
+          ],
+        ),
+        body: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : _error != null
+                ? Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(_error!),
+                        TextButton(
+                          onPressed: _load,
+                          child: const Text('إعادة المحاولة'),
+                        ),
+                      ],
+                    ),
+                  )
+                : PharmacyInventoryReportPanel(snapshot: _snapshot!),
+      ),
+    );
+  }
+}

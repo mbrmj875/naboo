@@ -8,8 +8,11 @@ import '../../models/debt_settings_data.dart';
 import '../../providers/notification_provider.dart';
 import '../../services/cloud_sync_service.dart';
 import '../../services/database_helper.dart';
+import '../../services/debt_auto_reminder_service.dart';
 import '../../theme/design_tokens.dart';
+import '../../utils/app_logger.dart';
 import '../../utils/screen_layout.dart';
+import 'customer_debt_linking_screen.dart';
 
 final _numFmt = NumberFormat('#,##0', 'en');
 
@@ -26,18 +29,23 @@ class _DebtSettingsScreenState extends State<DebtSettingsScreen> {
   bool _loading = true;
   DebtSettingsData _data = DebtSettingsData.defaults();
 
+  /// حالة قالب التذكير التلقائي عند ميتا (المرحلة 7 — الشريحة 4).
+  String? _templateStatus;
+  bool _templateLoading = false;
+
+  bool _isAuto(DebtReminderMode m) =>
+      m == DebtReminderMode.auto || m == DebtReminderMode.both;
+
   final _maxPerCustomer = TextEditingController();
   final _maxPerInvoice = TextEditingController();
   final _warnDays = TextEditingController();
+  final _periodDays = TextEditingController();
 
   Color get _pageBg => Theme.of(context).scaffoldBackgroundColor;
   Color get _surface => Theme.of(context).colorScheme.surface;
-  Color get _primary => Theme.of(context).colorScheme.primary;
-  Color get _onPrimary => Theme.of(context).colorScheme.onPrimary;
   Color get _filterBg => Theme.of(context).colorScheme.surfaceContainerHighest;
   Color get _textPrimary => Theme.of(context).colorScheme.onSurface;
   Color get _textSecondary => Theme.of(context).colorScheme.onSurfaceVariant;
-  Color get _outline => Theme.of(context).colorScheme.outline;
 
   InputDecoration _fieldDecoration({
     required String label,
@@ -54,16 +62,16 @@ class _DebtSettingsScreenState extends State<DebtSettingsScreen> {
       isDense: true,
       prefixIcon: prefixIcon,
       border: OutlineInputBorder(
-        borderRadius: AppShape.none,
-        borderSide: BorderSide(color: _outline.withValues(alpha: 0.55)),
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.5)),
       ),
       enabledBorder: OutlineInputBorder(
-        borderRadius: AppShape.none,
-        borderSide: BorderSide(color: _outline.withValues(alpha: 0.55)),
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.5)),
       ),
       focusedBorder: OutlineInputBorder(
-        borderRadius: AppShape.none,
-        borderSide: BorderSide(color: _primary, width: 1.5),
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: AppColors.accentGold, width: 2),
       ),
     );
   }
@@ -79,6 +87,7 @@ class _DebtSettingsScreenState extends State<DebtSettingsScreen> {
     _maxPerCustomer.dispose();
     _maxPerInvoice.dispose();
     _warnDays.dispose();
+    _periodDays.dispose();
     super.dispose();
   }
 
@@ -95,7 +104,21 @@ class _DebtSettingsScreenState extends State<DebtSettingsScreen> {
           ? ''
           : _numFmt.format(s.maxOpenRemainingPerInvoice);
       _warnDays.text = s.warnDebtAgeDays <= 0 ? '' : '${s.warnDebtAgeDays}';
+      _periodDays.text = '${s.paymentPeriodDays}';
       _loading = false;
+    });
+    if (_isAuto(s.reminderMode)) unawaited(_refreshTemplate(submit: false));
+  }
+
+  Future<void> _refreshTemplate({required bool submit}) async {
+    setState(() => _templateLoading = true);
+    final svc = DebtAutoReminderService.instance;
+    final status =
+        submit ? await svc.submitTemplate() : await svc.templateStatus();
+    if (!mounted) return;
+    setState(() {
+      _templateStatus = status;
+      _templateLoading = false;
     });
   }
 
@@ -115,17 +138,34 @@ class _DebtSettingsScreenState extends State<DebtSettingsScreen> {
       );
       return;
     }
+    final period = int.tryParse(_periodDays.text.trim()) ?? 0;
+    if (period < 0 || period > 3650) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('فترة التسديد: بين 0 و 3650 يوماً')),
+      );
+      return;
+    }
     final next = _data.copyWith(
       maxTotalOpenDebtPerCustomer: capC,
       maxOpenRemainingPerInvoice: capI,
       warnDebtAgeDays: days,
+      paymentPeriodDays: period,
     );
     await _db.saveDebtSettings(next);
+    await DebtAutoReminderService.instance.onModeChanged(next.reminderMode);
     CloudSyncService.instance.scheduleSyncSoon();
+    if (_isAuto(next.reminderMode)) unawaited(_refreshTemplate(submit: true));
     if (!mounted) return;
     try {
       unawaited(context.read<NotificationProvider>().refresh());
-    } catch (_) {}
+    } catch (e, st) {
+      AppLogger.error(
+        'DebtSettingsScreen',
+        'تعذر تحديث لوحة الإشعارات بعد حفظ إعدادات الدين',
+        e,
+        st,
+      );
+    }
     setState(() => _data = next);
     ScaffoldMessenger.of(
       context,
@@ -133,18 +173,20 @@ class _DebtSettingsScreenState extends State<DebtSettingsScreen> {
   }
 
   PreferredSizeWidget _buildAppBar() {
+    final cs = Theme.of(context).colorScheme;
     return AppBar(
-      backgroundColor: _primary,
-      foregroundColor: _onPrimary,
+      backgroundColor: cs.surfaceContainerHighest,
+      foregroundColor: cs.onSurface,
+      iconTheme: IconThemeData(color: cs.onSurface),
       elevation: 0,
       centerTitle: false,
-      title: const Text(
+      title: Text(
         'إعدادات الدين',
-        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: cs.onSurface),
       ),
       actions: [
         IconButton(
-          icon: const Icon(Icons.refresh_rounded),
+          icon: Icon(Icons.refresh_rounded, color: cs.onSurface),
           tooltip: 'إعادة التحميل من القاعدة',
           onPressed: _loading ? null : _load,
         ),
@@ -157,14 +199,14 @@ class _DebtSettingsScreenState extends State<DebtSettingsScreen> {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: _primary.withValues(alpha: 0.1),
-        borderRadius: AppShape.none,
-        border: Border.all(color: _primary.withValues(alpha: 0.28)),
+        color: _filterBg.withValues(alpha: 0.3),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.accentGold.withValues(alpha: 0.5)),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(Icons.info_outline_rounded, color: _primary, size: 26),
+          const Icon(Icons.info_outline_rounded, color: AppColors.accentGold, size: 26),
           const SizedBox(width: 12),
           Expanded(
             child: Text(
@@ -189,9 +231,9 @@ class _DebtSettingsScreenState extends State<DebtSettingsScreen> {
   }) {
     return Container(
       decoration: BoxDecoration(
-        color: _surface,
-        borderRadius: AppShape.none,
-        border: Border.all(color: _outline.withValues(alpha: 0.35)),
+        color: _filterBg.withValues(alpha: 0.3),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.accentGold.withValues(alpha: 0.5)),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.04),
@@ -214,7 +256,7 @@ class _DebtSettingsScreenState extends State<DebtSettingsScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 if (icon != null) ...[
-                  Icon(icon, color: _primary, size: 24),
+                  Icon(icon, color: AppColors.accentGold, size: 24),
                   const SizedBox(width: 12),
                 ],
                 Expanded(
@@ -246,7 +288,7 @@ class _DebtSettingsScreenState extends State<DebtSettingsScreen> {
               ],
             ),
           ),
-          Divider(height: 1, color: _outline.withValues(alpha: 0.28)),
+          Divider(height: 1, color: AppColors.accentGold.withValues(alpha: 0.2)),
           Padding(
             padding: const EdgeInsets.all(16),
             child: Column(
@@ -279,8 +321,10 @@ class _DebtSettingsScreenState extends State<DebtSettingsScreen> {
         ),
       ),
       value: value,
-      activeThumbColor: _onPrimary,
-      activeTrackColor: _primary.withValues(alpha: 0.55),
+      activeThumbColor: AppColors.accentGold,
+      activeTrackColor: AppColors.accentGold.withValues(alpha: 0.3),
+      inactiveThumbColor: _textSecondary,
+      inactiveTrackColor: _surface,
       onChanged: onChanged,
     );
   }
@@ -336,10 +380,10 @@ class _DebtSettingsScreenState extends State<DebtSettingsScreen> {
                                 helper:
                                     'مجموع المتبقي عبر كل فواتير الدين المفتوحة لنفس العميل. يمنع للعميل تجاوز السقف عند التفعيل أدناه.',
                                 helperMaxLines: 3,
-                                prefixIcon: Icon(
+                                prefixIcon: const Icon(
                                   Icons.groups_outlined,
                                   size: 20,
-                                  color: _textSecondary,
+                                  color: AppColors.accentGold,
                                 ),
                               ),
                             ),
@@ -350,10 +394,10 @@ class _DebtSettingsScreenState extends State<DebtSettingsScreen> {
                               decoration: _fieldDecoration(
                                 label: 'أقصى متبقٍ لفاتورة دين واحدة (د.ع)',
                                 helper: 'إجمالي الفاتورة − المقدّم (النقدي).',
-                                prefixIcon: Icon(
+                                prefixIcon: const Icon(
                                   Icons.receipt_long_outlined,
                                   size: 20,
-                                  color: _textSecondary,
+                                  color: AppColors.accentGold,
                                 ),
                               ),
                             ),
@@ -366,13 +410,92 @@ class _DebtSettingsScreenState extends State<DebtSettingsScreen> {
                                 helper:
                                     '0 = لا تنبيه بالعمر. بعد هذا العدد من أيام تاريخ الفاتورة تُعرَّف الفاتورة كقديمة.',
                                 helperMaxLines: 3,
-                                prefixIcon: Icon(
+                                prefixIcon: const Icon(
                                   Icons.schedule_outlined,
                                   size: 20,
-                                  color: _textSecondary,
+                                  color: AppColors.accentGold,
                                 ),
                               ),
                             ),
+                          ],
+                        ),
+                        const SizedBox(height: 16),
+                        _section(
+                          icon: Icons.event_available_outlined,
+                          title: 'فترة التسديد والتذكير',
+                          subtitle:
+                              'الدين الأقدم من الفترة يصير متأخراً: البيع نقداً '
+                              'مسموح دائماً، والدين الجديد يُمنع حتى يسدّد '
+                              'المتأخر إلا برمز المالك.',
+                          children: [
+                            TextField(
+                              key: const ValueKey('debtPaymentPeriodDays'),
+                              controller: _periodDays,
+                              keyboardType: TextInputType.number,
+                              decoration: _fieldDecoration(
+                                label: 'فترة التسديد (أيام)',
+                                helper:
+                                    '0 = بلا فترة ولا منع. الافتراضي '
+                                    '${DebtSettingsData.defaultPaymentPeriodDays} يوماً.',
+                                prefixIcon: const Icon(
+                                  Icons.timer_outlined,
+                                  size: 20,
+                                  color: AppColors.accentGold,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            Text(
+                              'طريقة تذكير العميل',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w600,
+                                fontSize: 14,
+                                color: _textPrimary,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: [
+                                for (final m in DebtReminderMode.values)
+                                  ChoiceChip(
+                                    label: Text(m.label),
+                                    selected: _data.reminderMode == m,
+                                    onSelected: (_) => setState(
+                                      () => _data =
+                                          _data.copyWith(reminderMode: m),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                            if (_isAuto(_data.reminderMode)) ...[
+                              const SizedBox(height: 10),
+                              Text(
+                                'رسالة واتساب واحدة للعميل يوم تأخّر دينه، '
+                                'بمجموع دينه وتاريخ أقدم فاتورة. تُحسب '
+                                'الديون التي تتأخر من يوم التفعيل، وكل '
+                                'رسالة تُخصم من رصيد الرسائل.',
+                                style: TextStyle(
+                                  color: _textSecondary,
+                                  height: 1.4,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                _templateLoading
+                                    ? 'جاري فحص رسالة التذكير…'
+                                    : debtTemplateStatusAr(_templateStatus),
+                                key: const ValueKey('debtTemplateStatus'),
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                  color: _templateStatus == 'approved'
+                                      ? Colors.green.shade700
+                                      : _textPrimary,
+                                  height: 1.4,
+                                ),
+                              ),
+                            ],
                           ],
                         ),
                         const SizedBox(height: 16),
@@ -407,6 +530,26 @@ class _DebtSettingsScreenState extends State<DebtSettingsScreen> {
                             ),
                           ],
                         ),
+                        const SizedBox(height: 16),
+                        OutlinedButton.icon(
+                          onPressed: () {
+                            Navigator.of(context).push<void>(
+                              MaterialPageRoute<void>(
+                                builder: (_) =>
+                                    const CustomerDebtLinkingScreen(),
+                              ),
+                            );
+                          },
+                          icon: const Icon(Icons.link_rounded),
+                          label: const Text('مراجعة وربط ديون قديمة'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: AppColors.accentGold,
+                            side: BorderSide(
+                              color: AppColors.accentGold.withValues(alpha: 0.5),
+                            ),
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                          ),
+                        ),
                         const SizedBox(height: 28),
                         FilledButton.icon(
                           onPressed: _save,
@@ -422,14 +565,14 @@ class _DebtSettingsScreenState extends State<DebtSettingsScreen> {
                             ),
                           ),
                           style: FilledButton.styleFrom(
-                            backgroundColor: _primary,
-                            foregroundColor: _onPrimary,
+                            backgroundColor: AppColors.accentGold.withValues(alpha: 0.2),
+                            foregroundColor: AppColors.accentGold,
                             padding: const EdgeInsets.symmetric(
                               horizontal: 24,
                               vertical: 14,
                             ),
-                            shape: const RoundedRectangleBorder(
-                              borderRadius: AppShape.none,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
                             ),
                           ),
                         ),

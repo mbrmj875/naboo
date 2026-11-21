@@ -1,12 +1,19 @@
+import '../../verticals/oil_change/screens/vehicles_registry_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' hide TextDirection;
+import 'package:provider/provider.dart';
 
 import '../../models/credit_debt_invoice.dart';
+import '../../providers/business_features_provider.dart';
 import '../../models/customer_record.dart';
 import '../../models/installment.dart';
 import '../../theme/design_tokens.dart';
 import '../../utils/iraqi_currency_format.dart';
 import '../../services/database_helper.dart';
+import '../../verticals/oil_change/utils/oil_change_log_format.dart';
+import '../../verticals/oil_change/utils/oil_change_order_status.dart';
+import '../../verticals/oil_change/services/oil_change_orders_repository.dart';
+import '../../verticals/oil_change/widgets/oil_change_log_detail_sheet.dart';
 import '../../widgets/invoice_detail_sheet.dart';
 import '../debts/customer_debt_detail_screen.dart';
 import '../installments/installment_details_screen.dart';
@@ -48,6 +55,8 @@ class _CustomerFinancialDetailPanelState
 
   List<CreditDebtInvoice> _creditInvoices = [];
   List<InstallmentPlan> _plans = [];
+  List<Map<String, dynamic>> _oilCards = [];
+  List<Map<String, dynamic>> _vehicles = [];
   bool _loading = true;
   String? _error;
 
@@ -67,6 +76,8 @@ class _CustomerFinancialDetailPanelState
         setState(() {
           _creditInvoices = [];
           _plans = [];
+          _oilCards = [];
+          _vehicles = [];
           _loading = false;
           _error = null;
         });
@@ -82,12 +93,35 @@ class _CustomerFinancialDetailPanelState
       _error = null;
     });
     try {
-      final credits = await _db.getCreditDebtInvoicesForCustomerId(c.id);
-      final plans = await _db.getInstallmentPlansForCustomerId(c.id);
+      final features = context.read<BusinessFeaturesProvider>().data;
+      final credits = features.enableDebts
+          ? await _db.getCreditDebtInvoicesForCustomerId(c.id)
+          : <CreditDebtInvoice>[];
+      final plans = features.enableInstallments
+          ? await _db.getInstallmentPlansForCustomerId(c.id)
+          : <InstallmentPlan>[];
+      // تخصص الزيوت فقط: بطاقات غيار الزيت المرتبطة بهذا العميل.
+      final oilCards = features.enableOilChange
+          ? await OilChangeOrdersRepository.instance
+              .listOilChangeOrdersForCustomer(
+              customerId: c.id,
+              customerName: c.name,
+            )
+          : <Map<String, dynamic>>[];
+      // سيارات العميل من سجل السيارات (المرحلة 6 — الشريحة 5).
+      var vehicles = <Map<String, dynamic>>[];
+      if (features.enableOilChange) {
+        try {
+          vehicles =
+              await OilChangeOrdersRepository.instance.vehiclesForCustomer(c.id);
+        } catch (_) {}
+      }
       if (!mounted) return;
       setState(() {
         _creditInvoices = credits;
         _plans = plans;
+        _oilCards = oilCards;
+        _vehicles = vehicles;
         _loading = false;
       });
     } catch (e) {
@@ -113,6 +147,7 @@ class _CustomerFinancialDetailPanelState
       );
     }
 
+    final features = context.watch<BusinessFeaturesProvider>();
     final cs = Theme.of(context).colorScheme;
     return RefreshIndicator(
       onRefresh: _load,
@@ -126,93 +161,167 @@ class _CustomerFinancialDetailPanelState
           ),
           const SizedBox(height: 12),
           _SummaryCard(customer: c),
-          const SizedBox(height: 16),
-          OutlinedButton.icon(
-            onPressed: () {
-              Navigator.push<void>(
-                context,
-                MaterialPageRoute<void>(
-                  builder: (_) => CustomerDebtDetailScreen.fromCustomerId(
-                    registeredCustomerId: c.id,
+          if (features.data.enableDebts) ...[
+            const SizedBox(height: 16),
+            OutlinedButton.icon(
+              onPressed: () {
+                Navigator.push<void>(
+                  context,
+                  MaterialPageRoute<void>(
+                    builder: (_) => CustomerDebtDetailScreen.fromCustomerId(
+                      registeredCustomerId: c.id,
+                    ),
+                  ),
+                );
+              },
+              style: OutlinedButton.styleFrom(
+                foregroundColor: cs.primary,
+                side: BorderSide(color: cs.primary.withValues(alpha: 0.5)),
+                shape: const RoundedRectangleBorder(
+                  borderRadius: AppShape.none,
+                ),
+                padding: const EdgeInsets.symmetric(
+                  vertical: 12,
+                  horizontal: 16,
+                ),
+              ),
+              icon: const Icon(Icons.account_balance_wallet_outlined),
+              label: const Text('شاشة الديون الكاملة (تسديد وتفاصيل)'),
+            ),
+            const SizedBox(height: 20),
+            const _SectionTitle(
+              icon: Icons.receipt_long_outlined,
+              title: 'مبيعات بالأجل (دين)',
+              subtitle:
+                  'كل فاتورة مرتبطة بإيصال البيع — اضغط لعرض التفاصيل',
+              color: AppSemanticColors.warning,
+            ),
+            const SizedBox(height: 8),
+            if (_creditInvoices.isEmpty)
+              const _EmptyHint(
+                text:
+                    'لا توجد فواتير «آجل» مربوطة بهذا العميل. استخدم البيع بالدين مع اختيار العميل من القائمة.',
+              )
+            else
+              ..._creditInvoices.map(
+                (inv) => _CreditInvoiceTile(
+                  inv: inv,
+                  onReceipt: () => showInvoiceDetailSheet(
+                    context,
+                    _db,
+                    inv.invoiceId,
                   ),
                 ),
-              );
-            },
-            style: OutlinedButton.styleFrom(
-              foregroundColor: cs.primary,
-              side: BorderSide(color: cs.primary.withValues(alpha: 0.5)),
-              shape: const RoundedRectangleBorder(
-                borderRadius: AppShape.none,
               ),
-              padding: const EdgeInsets.symmetric(
-                vertical: 12,
-                horizontal: 16,
-              ),
+          ],
+          if (features.data.enableInstallments) ...[
+            const SizedBox(height: 22),
+            _SectionTitle(
+              icon: Icons.calendar_month_rounded,
+              title: 'التقسيط',
+              subtitle: 'خطط الأقساط المرتبطة بفواتير البيع',
+              color: cs.primary,
             ),
-            icon: const Icon(Icons.account_balance_wallet_outlined),
-            label: const Text('شاشة الديون الكاملة (تسديد وتفاصيل)'),
-          ),
-          const SizedBox(height: 20),
-          const _SectionTitle(
-            icon: Icons.receipt_long_outlined,
-            title: 'مبيعات بالأجل (دين)',
-            subtitle:
-                'كل فاتورة مرتبطة بإيصال البيع — اضغط لعرض التفاصيل',
-            color: AppSemanticColors.warning,
-          ),
-          const SizedBox(height: 8),
-          if (_creditInvoices.isEmpty)
-            const _EmptyHint(
-              text:
-                  'لا توجد فواتير «آجل» مربوطة بهذا العميل. استخدم البيع بالدين مع اختيار العميل من القائمة.',
-            )
-          else
-            ..._creditInvoices.map(
-              (inv) => _CreditInvoiceTile(
-                inv: inv,
-                onReceipt: () => showInvoiceDetailSheet(
-                  context,
-                  _db,
-                  inv.invoiceId,
-                ),
-              ),
-            ),
-          const SizedBox(height: 22),
-          _SectionTitle(
-            icon: Icons.calendar_month_rounded,
-            title: 'التقسيط',
-            subtitle: 'خطط الأقساط المرتبطة بفواتير البيع',
-            color: cs.primary,
-          ),
-          const SizedBox(height: 8),
-          if (_plans.isEmpty)
-            const _EmptyHint(
-              text:
-                  'لا توجد خطط تقسيط مربوطة بهذا العميل. استخدم نوع البيع «تقسيط» مع اختيار العميل.',
-            )
-          else
-            ..._plans.map(
-              (p) => _InstallmentPlanTile(
-                plan: p,
-                onReceipt: () => showInvoiceDetailSheet(
-                  context,
-                  _db,
-                  p.invoiceId,
-                ),
-                onPlanDetails: p.id != null
-                    ? () {
-                        Navigator.push<void>(
-                          context,
-                          MaterialPageRoute<void>(
-                            builder: (_) => InstallmentDetailsScreen(
-                              planId: p.id!,
+            const SizedBox(height: 8),
+            if (_plans.isEmpty)
+              const _EmptyHint(
+                text:
+                    'لا توجد خطط تقسيط مربوطة بهذا العميل. استخدم نوع البيع «تقسيط» مع اختيار العميل.',
+              )
+            else
+              ..._plans.map(
+                (p) => _InstallmentPlanTile(
+                  plan: p,
+                  onReceipt: () => showInvoiceDetailSheet(
+                    context,
+                    _db,
+                    p.invoiceId,
+                  ),
+                  onPlanDetails: p.id != null
+                      ? () {
+                          Navigator.push<void>(
+                            context,
+                            MaterialPageRoute<void>(
+                              builder: (_) => InstallmentDetailsScreen(
+                                planId: p.id!,
+                              ),
                             ),
-                          ),
-                        );
-                      }
-                    : null,
+                          );
+                        }
+                      : null,
+                ),
               ),
+          ],
+          if (features.data.enableOilChange) ...[
+            const SizedBox(height: 22),
+            _SectionTitle(
+              icon: Icons.directions_car_rounded,
+              title: 'سياراته',
+              subtitle: _vehicles.isEmpty
+                  ? 'تظهر هنا كل سيارة يكون هو صاحب آخر بطاقة لها'
+                  : 'اضغط على السيارة لتاريخها: الزيارات والعداد ومالكوها',
+              color: const Color(0xFF0EA5E9),
             ),
+            const SizedBox(height: 8),
+            if (_vehicles.isEmpty)
+              const _EmptyHint(text: 'لا سيارة مسجّلة باسمه بعد.')
+            else
+              for (final v in _vehicles)
+                Card(
+                  margin: const EdgeInsets.only(bottom: 6),
+                  child: ListTile(
+                    key: Key('customerVehicle_${v['global_id']}'),
+                    leading: const Icon(Icons.directions_car_rounded),
+                    title: Text(
+                      [
+                        (v['plate_display'] ?? '').toString(),
+                        (v['name'] ?? '').toString(),
+                        (v['model'] ?? '').toString(),
+                      ].where((s) => s.trim().isNotEmpty).join(' · '),
+                    ),
+                    subtitle: Text(
+                      [
+                        '${(v['visits_count'] as num?)?.toInt() ?? 0} زيارة',
+                        if ((v['last_odometer'] as num?) != null)
+                          'آخر عداد ${IraqiCurrencyFormat.formatInt((v['last_odometer'] as num).toInt())} كم',
+                      ].join(' · '),
+                    ),
+                    trailing: const Icon(Icons.chevron_left_rounded),
+                    onTap: () => Navigator.push<void>(
+                      context,
+                      MaterialPageRoute<void>(
+                        builder: (_) => VehicleDetailScreen(
+                          vehicleGlobalId: (v['global_id'] ?? '').toString(),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            const SizedBox(height: 22),
+            const _SectionTitle(
+              icon: Icons.opacity_rounded,
+              title: 'عمليات غيار الزيت',
+              subtitle:
+                  'كل البطاقات المسجّلة لهذا العميل من بطاقة غيار الزيت — اضغط للتفاصيل',
+              color: Color(0xFF0EA5E9),
+            ),
+            const SizedBox(height: 8),
+            if (_oilCards.isEmpty)
+              const _EmptyHint(
+                text:
+                    'لا توجد بطاقات غيار زيت مرتبطة بهذا العميل بعد.',
+              )
+            else
+              ..._oilCards.map(
+                (row) => _OilChangeCardTile(
+                  row: row,
+                  onOpen: () => OilChangeLogDetailSheet.show(
+                    context,
+                    row: row,
+                  ),
+                ),
+              ),
+          ],
         ],
       ),
     );
@@ -387,10 +496,6 @@ class _SummaryCard extends StatelessWidget {
           _kv(
             'البريد',
             customer.email?.trim().isNotEmpty == true ? customer.email! : '—',
-          ),
-          _kv(
-            'رصيد المحفظة',
-            IraqiCurrencyFormat.formatIqd(customer.balance),
           ),
           _kv('نقاط الولاء', '${customer.loyaltyPoints}'),
         ],
@@ -623,6 +728,123 @@ class _InstallmentPlanTile extends StatelessWidget {
               ],
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _OilChangeCardTile extends StatelessWidget {
+  const _OilChangeCardTile({
+    required this.row,
+    required this.onOpen,
+  });
+
+  final Map<String, dynamic> row;
+  final VoidCallback onOpen;
+
+  static String _statusLabel(Map<String, dynamic> r) {
+    final s = (r['status'] ?? '').toString().trim();
+    if (s == OilChangeOrderStatus.delivered) return 'مسلّمة';
+    if (s == OilChangeOrderStatus.completed) return 'مكتملة';
+    if (s == OilChangeOrderStatus.suspended) return 'معلّقة';
+    if (s == OilChangeOrderStatus.cancelled) return 'ملغاة';
+    if (s == 'in_progress' || s == 'working') return 'قيد العمل';
+    if (s == 'pending' || s.isEmpty) return 'قيد الانتظار';
+    return s;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final id = (row['id'] as num?)?.toInt() ?? 0;
+    final plate = oilFormatPlate(row);
+    final car = (row['deviceName'] ?? row['carModel'] ?? '').toString().trim();
+    final oil = (row['oilType'] ?? '').toString().trim();
+    final dateIso = (row['createdAt'] ?? row['updatedAt'] ?? '').toString();
+    final dateLabel = oilFormatDate(dateIso);
+    final price = oilFormatPrice(row);
+    final status = _statusLabel(row);
+    final odo = oilFormatOdo((row['odometerCurrent'] ?? '').toString());
+
+    final subtitleParts = <String>[
+      if (plate != '—') 'لوحة $plate',
+      if (car.isNotEmpty) car,
+      if (oil.isNotEmpty) oil,
+      if (odo != '—') 'عداد $odo',
+    ];
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Material(
+        color: cs.surface,
+        shape: RoundedRectangleBorder(
+          side: BorderSide(color: const Color(0xFF0EA5E9).withValues(alpha: 0.35)),
+          borderRadius: AppShape.none,
+        ),
+        child: InkWell(
+          onTap: onOpen,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+            child: Row(
+              children: [
+                Container(
+                  width: 40,
+                  height: 40,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0EA5E9).withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(
+                    Icons.opacity_rounded,
+                    color: Color(0xFF0EA5E9),
+                    size: 22,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        id > 0 ? 'بطاقة غيار #$id' : 'بطاقة غيار زيت',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w800,
+                          fontSize: 14,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        subtitleParts.isEmpty
+                            ? '—'
+                            : subtitleParts.join(' · '),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          color: cs.onSurfaceVariant,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        '$dateLabel · $status · $price',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: cs.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Icon(
+                  Icons.chevron_left_rounded,
+                  color: cs.onSurfaceVariant,
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );

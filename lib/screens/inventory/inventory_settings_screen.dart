@@ -9,8 +9,7 @@ import 'categories_settings_screen.dart';
 import 'brands_settings_screen.dart';
 import 'unit_templates_settings_screen.dart';
 
-// ── ألوان الواجهة ─────────────────────────────────────────────────────────────
-const _kAccent = Color(0xFF1E3A5F);
+import '../../theme/design_tokens.dart';
 
 class InventorySettingsScreen extends StatefulWidget {
   const InventorySettingsScreen({super.key});
@@ -25,32 +24,21 @@ class _InventorySettingsScreenState extends State<InventorySettingsScreen> {
   Widget build(BuildContext context) {
     return Consumer<ThemeProvider>(
       builder: (context, tp, _) {
-        final isDark = tp.isDarkMode;
-        final bg = isDark ? const Color(0xFF0F0F0F) : const Color(0xFFF2F5F9);
-        final surface = isDark ? const Color(0xFF1C1C1E) : Colors.white;
-        final textPrimary = isDark ? Colors.white : const Color(0xFF1E293B);
-        final textMuted = isDark ? Colors.grey.shade500 : Colors.grey.shade500;
-        final divColor = isDark ? Colors.grey.shade800 : Colors.grey.shade200;
+        final cs = Theme.of(context).colorScheme;
 
         return Directionality(
           textDirection: TextDirection.rtl,
           child: Scaffold(
-            backgroundColor: bg,
+            backgroundColor: cs.surface,
             appBar: AppBar(
-              backgroundColor: _kAccent,
+              backgroundColor: cs.surfaceContainerHighest,
+              foregroundColor: cs.onSurface,
+              iconTheme: IconThemeData(color: cs.onSurface),
               elevation: 0,
-              leading: IconButton(
-                icon: const Icon(
-                  Icons.arrow_back_ios,
-                  color: Colors.white,
-                  size: 18,
-                ),
-                onPressed: () => Navigator.pop(context),
-              ),
-              title: const Text(
+              title: Text(
                 'إعدادات المخزون',
                 style: TextStyle(
-                  color: Colors.white,
+                  color: cs.onSurface,
                   fontWeight: FontWeight.bold,
                   fontSize: 16,
                 ),
@@ -68,19 +56,19 @@ class _InventorySettingsScreenState extends State<InventorySettingsScreen> {
                   icon: Icons.tune_outlined,
                   title: 'الإعدادات الفرعية',
                   subtitle: 'إعدادات تفصيلية لكل جانب من جوانب المخزون',
-                  textPrimary: textPrimary,
-                  textMuted: textMuted,
+                  textPrimary: cs.onSurface,
+                  textMuted: cs.onSurfaceVariant,
                 ),
                 const SizedBox(height: 10),
                 _SubSettingsGrid(
-                  surface: surface,
-                  divColor: divColor,
+                  surface: cs.surfaceContainerHighest.withValues(alpha: 0.3),
+                  divColor: cs.outlineVariant.withValues(alpha: 0.5),
                   items: [
                     _SubSettingItem(
                       icon: Icons.add_box_outlined,
                       title: 'إعدادات إضافة منتج',
                       desc: 'الحقول الافتراضية، المخزن الافتراضي، حقول إلزامية',
-                      color: _kAccent,
+                      color: AppColors.accentGold,
                       onTap: () => Navigator.push<void>(
                         context,
                         MaterialPageRoute<void>(
@@ -92,7 +80,7 @@ class _InventorySettingsScreenState extends State<InventorySettingsScreen> {
                       icon: Icons.qr_code_outlined,
                       title: 'إعدادات الباركود',
                       desc: 'معيار الباركود، الحقول المدمجة في الباركود',
-                      color: _kAccent,
+                      color: AppColors.accentGold,
                       onTap: () => Navigator.push<void>(
                         context,
                         MaterialPageRoute<void>(
@@ -104,7 +92,7 @@ class _InventorySettingsScreenState extends State<InventorySettingsScreen> {
                       icon: Icons.category_outlined,
                       title: 'الفئات والتصنيفات',
                       desc: 'إضافة وتعديل وحذف فئات المنتجات',
-                      color: _kAccent,
+                      color: AppColors.accentGold,
                       onTap: () => Navigator.push<void>(
                         context,
                         MaterialPageRoute<void>(
@@ -116,7 +104,7 @@ class _InventorySettingsScreenState extends State<InventorySettingsScreen> {
                       icon: Icons.branding_watermark_outlined,
                       title: 'الماركات والعلامات التجارية',
                       desc: 'إضافة وتعديل وحذف الماركات',
-                      color: _kAccent,
+                      color: AppColors.accentGold,
                       onTap: () => Navigator.push<void>(
                         context,
                         MaterialPageRoute<void>(
@@ -128,7 +116,7 @@ class _InventorySettingsScreenState extends State<InventorySettingsScreen> {
                       icon: Icons.straighten_outlined,
                       title: 'قوالب وحدات القياس',
                       desc: 'تعريف وحدات البيع والشراء وعوامل التحويل',
-                      color: _kAccent,
+                      color: AppColors.accentGold,
                       onTap: () => Navigator.push<void>(
                         context,
                         MaterialPageRoute<void>(
@@ -175,10 +163,10 @@ class _SectionHeader extends StatelessWidget {
           width: 36,
           height: 36,
           decoration: BoxDecoration(
-            color: _kAccent.withOpacity(0.08),
-            borderRadius: BorderRadius.zero,
+            color: AppColors.accentGold.withValues(alpha: 0.15),
+            borderRadius: BorderRadius.circular(12),
           ),
-          child: Icon(icon, color: _kAccent, size: 20),
+          child: Icon(icon, color: AppColors.accentGold, size: 20),
         ),
         const SizedBox(width: 10),
         Expanded(
@@ -282,15 +270,15 @@ class _SubSettingCardState extends State<_SubSettingCard> {
           duration: const Duration(milliseconds: 160),
           decoration: BoxDecoration(
             color: _hovered
-                ? widget.item.color.withOpacity(0.06)
+                ? widget.item.color.withValues(alpha: 0.1)
                 : widget.surface,
             border: Border.all(
               color: _hovered
-                  ? widget.item.color.withOpacity(0.5)
+                  ? widget.item.color.withValues(alpha: 0.5)
                   : widget.divColor,
               width: _hovered ? 1.5 : 1,
             ),
-            borderRadius: BorderRadius.zero,
+            borderRadius: BorderRadius.circular(12),
           ),
           padding: const EdgeInsets.all(14),
           child: Row(

@@ -9,6 +9,8 @@ class CreditDebtInvoice {
     required this.date,
     required this.total,
     required this.advancePayment,
+    this.totalFils,
+    this.advancePaymentFils,
   });
 
   final int invoiceId;
@@ -17,11 +19,21 @@ class CreditDebtInvoice {
   final DateTime date;
   final double total;
   final double advancePayment;
+  final int? totalFils;
+  final int? advancePaymentFils;
 
-  double get remaining =>
-      math.max(0.0, total - advancePayment);
+  int get remainingFils {
+    if (totalFils != null || advancePaymentFils != null) {
+      final t = totalFils ?? 0;
+      final a = advancePaymentFils ?? 0;
+      return math.max(0, t - a);
+    }
+    return (math.max(0.0, total - advancePayment) * 1000).round();
+  }
 
-  bool get isSettled => remaining < 0.5;
+  double get remaining => remainingFils / 1000.0;
+
+  bool get isSettled => remainingFils < 500;
 
   /// عدد الأيام منذ تاريخ الفاتورة (تقويمي).
   int daysSinceInvoice(DateTime now) {

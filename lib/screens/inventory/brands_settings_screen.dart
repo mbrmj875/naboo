@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../services/product_repository.dart';
+import '../../theme/design_tokens.dart';
 
 /// إدارة العلامات التجارية — واجهة بحث/قائمة، بدون بيانات وهمية (من قاعدة البيانات فقط).
 class BrandsSettingsScreen extends StatefulWidget {
@@ -67,24 +68,49 @@ class _BrandsSettingsScreenState extends State<BrandsSettingsScreen> {
         return Directionality(
           textDirection: TextDirection.rtl,
           child: AlertDialog(
+            backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.5)),
+            ),
             title: const Text('ماركة جديدة'),
             content: TextField(
               controller: ctrl,
               autofocus: true,
               textAlign: TextAlign.right,
-              decoration: const InputDecoration(
+              style: TextStyle(color: Theme.of(context).colorScheme.onSurface),
+              decoration: InputDecoration(
                 labelText: 'اسم الماركة',
-                border: OutlineInputBorder(),
+                labelStyle: const TextStyle(color: AppColors.accentGold),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.5)),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: AppColors.accentGold, width: 2),
+                ),
+                filled: true,
+                fillColor: Theme.of(context).colorScheme.surface,
               ),
               onSubmitted: (_) => Navigator.pop(ctx, ctrl.text),
             ),
             actions: [
-              TextButton(
+              OutlinedButton(
                 onPressed: () => Navigator.pop(ctx),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppColors.accentGold,
+                  side: const BorderSide(color: AppColors.accentGold),
+                ),
                 child: const Text('إلغاء'),
               ),
               FilledButton(
                 onPressed: () => Navigator.pop(ctx, ctrl.text),
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppColors.accentGold.withValues(alpha: 0.2),
+                  foregroundColor: AppColors.accentGold,
+                ),
                 child: const Text('حفظ'),
               ),
             ],
@@ -123,14 +149,28 @@ class _BrandsSettingsScreenState extends State<BrandsSettingsScreen> {
       builder: (ctx) => Directionality(
         textDirection: TextDirection.rtl,
         child: AlertDialog(
+          backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.5)),
+          ),
           title: const Text('حذف الماركة'),
           content: Text('حذف «${row['name']}»؟'),
           actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('إلغاء')),
+            OutlinedButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppColors.accentGold,
+                side: const BorderSide(color: AppColors.accentGold),
+              ),
+              child: const Text('إلغاء'),
+            ),
             FilledButton(
               onPressed: () => Navigator.pop(ctx, true),
+              style: FilledButton.styleFrom(
+                backgroundColor: Colors.red.withValues(alpha: 0.2),
+                foregroundColor: Colors.redAccent,
+              ),
               child: const Text('حذف'),
             ),
           ],
@@ -161,15 +201,15 @@ class _BrandsSettingsScreenState extends State<BrandsSettingsScreen> {
       child: Scaffold(
         backgroundColor: theme.scaffoldBackgroundColor,
         appBar: AppBar(
-          backgroundColor: cs.primary,
-          foregroundColor: cs.onPrimary,
+          backgroundColor: cs.surfaceContainerHighest,
+          foregroundColor: cs.onSurface,
           elevation: 0,
-          title: const Text(
+          title: Text(
             'العلامات التجارية',
-            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17),
+            style: TextStyle(color: cs.onSurface, fontWeight: FontWeight.bold, fontSize: 17),
           ),
           leading: IconButton(
-            icon: const Icon(Icons.arrow_back_ios_new, size: 18),
+            icon: Icon(Icons.arrow_back_ios_new, size: 18, color: cs.onSurface),
             onPressed: () => Navigator.pop(context),
           ),
         ),
@@ -185,6 +225,8 @@ class _BrandsSettingsScreenState extends State<BrandsSettingsScreen> {
                       icon: const Icon(Icons.add_rounded, size: 20),
                       label: const Text('ماركة جديدة'),
                       style: FilledButton.styleFrom(
+                        backgroundColor: AppColors.accentGold.withValues(alpha: 0.2),
+                        foregroundColor: AppColors.accentGold,
                         padding: const EdgeInsets.symmetric(
                             horizontal: 18, vertical: 12),
                       ),
@@ -239,9 +281,9 @@ class _SearchFilterCard extends StatelessWidget {
 
     return Container(
       decoration: BoxDecoration(
-        color: cs.surface,
-        borderRadius: BorderRadius.zero,
-        border: Border.all(color: cs.outlineVariant),
+        color: cs.surfaceContainerHighest.withValues(alpha: 0.3),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.accentGold.withValues(alpha: 0.5)),
       ),
       child: Padding(
         padding: const EdgeInsets.all(14),
@@ -259,6 +301,7 @@ class _SearchFilterCard extends StatelessWidget {
                 const Spacer(),
                 TextButton.icon(
                   onPressed: onToggleExpand,
+                  style: TextButton.styleFrom(foregroundColor: AppColors.accentGold),
                   icon: Icon(
                     expanded ? Icons.horizontal_rule : Icons.add,
                     size: 18,
@@ -276,13 +319,22 @@ class _SearchFilterCard extends StatelessWidget {
                     child: TextField(
                       controller: nameController,
                       textAlign: TextAlign.right,
-                      decoration: const InputDecoration(
+                      style: TextStyle(color: cs.onSurface),
+                      decoration: InputDecoration(
                         hintText: 'الاسم',
+                        hintStyle: const TextStyle(color: AppColors.accentGold),
                         filled: true,
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.zero,
+                        fillColor: cs.surface,
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.5)),
                         ),
-                        contentPadding: EdgeInsets.symmetric(
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: const BorderSide(color: AppColors.accentGold, width: 2),
+                        ),
+                        contentPadding: const EdgeInsets.symmetric(
                             horizontal: 12, vertical: 12),
                       ),
                       onSubmitted: (_) => onSearch(),
@@ -292,16 +344,20 @@ class _SearchFilterCard extends StatelessWidget {
                   FilledButton(
                     onPressed: onSearch,
                     style: FilledButton.styleFrom(
-                      backgroundColor: cs.primaryContainer,
-                      foregroundColor: cs.onPrimaryContainer,
+                      backgroundColor: AppColors.accentGold.withValues(alpha: 0.2),
+                      foregroundColor: AppColors.accentGold,
                       padding: const EdgeInsets.symmetric(
                           horizontal: 18, vertical: 14),
                     ),
                     child: const Text('بحث'),
                   ),
                   const SizedBox(width: 8),
-                  TextButton(
+                  OutlinedButton(
                     onPressed: onReset,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppColors.accentGold,
+                      side: const BorderSide(color: AppColors.accentGold),
+                    ),
                     child: const Text('إعادة تعيين'),
                   ),
                 ],
@@ -334,9 +390,9 @@ class _BrandsTableCard extends StatelessWidget {
 
     return Container(
       decoration: BoxDecoration(
-        color: cs.surface,
-        borderRadius: BorderRadius.zero,
-        border: Border.all(color: cs.outlineVariant),
+        color: cs.surfaceContainerHighest.withValues(alpha: 0.3),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.accentGold.withValues(alpha: 0.5)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -359,14 +415,14 @@ class _BrandsTableCard extends StatelessWidget {
                               ? Icons.arrow_upward_rounded
                               : Icons.arrow_downward_rounded,
                           size: 18,
-                          color: cs.primary,
+                          color: AppColors.accentGold,
                         ),
                         const SizedBox(width: 4),
-                        Text(
+                        const Text(
                           'ترتيب',
                           style: TextStyle(
                             fontWeight: FontWeight.w600,
-                            color: cs.primary,
+                            color: AppColors.accentGold,
                           ),
                         ),
                       ],
@@ -411,12 +467,12 @@ class _BrandsTableCard extends StatelessWidget {
                   child: Row(
                     children: [
                       Material(
-                        color: cs.primaryContainer.withValues(alpha: 0.35),
-                        borderRadius: BorderRadius.zero,
+                        color: cs.surfaceContainerHighest.withValues(alpha: 0.5),
+                        borderRadius: BorderRadius.circular(8),
                         child: PopupMenuButton<String>(
                           padding: const EdgeInsets.all(8),
-                          child: Icon(Icons.more_horiz,
-                              color: cs.primary, size: 20),
+                          child: const Icon(Icons.more_horiz,
+                              color: AppColors.accentGold, size: 20),
                           onSelected: (v) {
                             if (v == 'delete') onMenuDelete(row);
                           },

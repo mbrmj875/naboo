@@ -4,9 +4,13 @@ import '../services/database_helper.dart';
 
 /// حالة الوردية المفتوحة (جلسة عمل الصندوق).
 class ShiftProvider extends ChangeNotifier {
-  ShiftProvider() {
+  ShiftProvider() : _active = null {
     refresh();
   }
+
+  @visibleForTesting
+  ShiftProvider.testing({Map<String, dynamic>? activeShift})
+    : _active = activeShift;
 
   final DatabaseHelper _db = DatabaseHelper();
   Map<String, dynamic>? _active;
@@ -15,8 +19,30 @@ class ShiftProvider extends ChangeNotifier {
 
   bool get hasOpenShift => _active != null;
 
-  Future<void> refresh() async {
-    _active = await _db.getOpenWorkShift();
+  /// موظف الجلسة — المتجر قد يضم ورديات نشطة لعدة موظفين، فالقراءة بلا نطاق
+  /// تعيد أحدثها وقد تكون لزميل. `null` للمالك.
+  int? _sessionStaffUserId;
+  int _refreshGeneration = 0;
+
+  void syncSessionStaff(int? staffUserId) {
+    final scoped = staffUserId != null && staffUserId > 0 ? staffUserId : null;
+    if (scoped == _sessionStaffUserId) return;
+    _sessionStaffUserId = scoped;
+    refresh();
+  }
+
+  Future<void> refresh({int? forStaffUserId}) async {
+    final generation = ++_refreshGeneration;
+    final staffId = forStaffUserId ?? _sessionStaffUserId;
+    final Map<String, dynamic>? active;
+    if (staffId != null && staffId > 0) {
+      active = await _db.getOpenWorkShiftForStaff(staffId);
+    } else {
+      active = await _db.getOpenWorkShift();
+    }
+    // قراءة أقدم انتهت متأخرة لا تكتب فوق قراءة موظف الجلسة الحالي.
+    if (generation != _refreshGeneration) return;
+    _active = active;
     notifyListeners();
   }
 
@@ -38,7 +64,7 @@ class ShiftProvider extends ChangeNotifier {
       shiftStaffName: shiftStaffName,
       shiftStaffPin: shiftStaffPin,
     );
-    await refresh();
+    await refresh(forStaffUserId: shiftStaffUserId);
     return id;
   }
 
@@ -49,6 +75,7 @@ class ShiftProvider extends ChangeNotifier {
     required double withdrawnAmount,
     required double declaredClosingCash,
   }) async {
+    final staffId = (_active?['shiftStaffUserId'] as num?)?.toInt();
     await _db.closeWorkShift(
       shiftId: shiftId,
       systemBalanceAtCloseMoment: systemBalanceAtCloseMoment,
@@ -56,7 +83,10 @@ class ShiftProvider extends ChangeNotifier {
       withdrawnAmount: withdrawnAmount,
       declaredClosingCash: declaredClosingCash,
     );
-    await refresh();
+    await refresh(forStaffUserId: staffId);
+    if (_active != null) {
+      throw StateError('تعذّر إغلاق الوردية — ما زالت وردية مفتوحة');
+    }
   }
 
   Future<Map<String, int>> invoiceCountsForShift(int shiftId) =>

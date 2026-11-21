@@ -1,0 +1,432 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
+
+import '../../../theme/design_tokens.dart';
+import '../models/whatsapp_connect_method.dart';
+import 'oil_change_form_theme.dart';
+
+/// لوحة حالة الربط الرسمي (Meta مباشرة أو رقم نابو الرسمي).
+class WhatsappOfficialConnectPanel extends StatefulWidget {
+  const WhatsappOfficialConnectPanel({
+    super.key,
+    required this.method,
+    required this.preparing,
+    required this.messageAr,
+    this.onboardingUrl,
+    this.onOpenOnboarding,
+    this.onRefresh,
+    this.onBack,
+    this.onContinue,
+    this.onOpenMeta,
+    this.stopsCurrentSending = false,
+  });
+
+  final WhatsappConnectMethod method;
+  final bool preparing;
+  final String messageAr;
+  final String? onboardingUrl;
+  final void Function(String phoneDigits)? onOpenOnboarding;
+  final VoidCallback? onRefresh;
+  final VoidCallback? onBack;
+  final VoidCallback? onContinue;
+
+  /// يبدأ الربط عند Meta. true إذا كان الرقم عليه تطبيق واتساب الأعمال.
+  final Future<void> Function(bool numberHasBusinessApp)? onOpenMeta;
+
+  /// المتجر يرسل الآن بطريقة أخرى، وتتوقف رسائله حتى يكتمل الربط.
+  final bool stopsCurrentSending;
+
+  @override
+  State<WhatsappOfficialConnectPanel> createState() =>
+      _WhatsappOfficialConnectPanelState();
+}
+
+class _WhatsappOfficialConnectPanelState
+    extends State<WhatsappOfficialConnectPanel> {
+  bool _numberHasBusinessApp = true;
+  bool _metaOpened = false;
+
+  Future<void> _openMeta() async {
+    await widget.onOpenMeta!(_numberHasBusinessApp);
+    if (mounted) setState(() => _metaOpened = true);
+  }
+
+  Future<void> _openStore() async {
+    final url = defaultTargetPlatform == TargetPlatform.iOS
+        ? 'https://apps.apple.com/app/whatsapp-business/id1386412985'
+        : 'https://play.google.com/store/apps/details?id=com.whatsapp.w4b';
+    await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+  }
+
+  Future<void> _showPermissionHelp() {
+    return showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('كيف أحصل على الصلاحية'),
+        content: const Text(
+          'يجب أن تكون مديرًا في حساب Meta للأعمال الخاص بمتجرك.\n\n'
+          '1. اطلب من مدير الحساب فتح business.facebook.com.\n'
+          '2. يذهب إلى الإعدادات ثم الأشخاص.\n'
+          '3. يضيف بريدك ويختار صلاحية المدير الكاملة.\n'
+          '4. اقبل الدعوة من بريدك ثم ارجع إلى هنا.\n\n'
+          'إذا لم يكن لديك حساب أعمال، تنشئه Meta أثناء الربط.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('حسنًا'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final method = widget.method;
+    final preparing = widget.preparing;
+    final hasUrl = (widget.onboardingUrl ?? '').trim().isNotEmpty;
+    final isMetaDirect = method == WhatsappConnectMethod.metaDirect;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(22),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(20),
+            gradient: LinearGradient(
+              begin: AlignmentDirectional.topStart,
+              end: AlignmentDirectional.bottomEnd,
+              colors: [
+                AppColors.primary.withValues(alpha: 0.95),
+                AppColors.primary.withValues(alpha: 0.78),
+                OilChangeFormTheme.gold.withValues(alpha: 0.28),
+              ],
+            ),
+            border: Border.all(
+              color: OilChangeFormTheme.gold.withValues(alpha: 0.45),
+            ),
+          ),
+          child: Column(
+            children: [
+              Container(
+                width: 76,
+                height: 76,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: OilChangeFormTheme.gold.withValues(alpha: 0.18),
+                  border: Border.all(
+                    color: OilChangeFormTheme.gold.withValues(alpha: 0.5),
+                  ),
+                ),
+                child: preparing
+                    ? const Padding(
+                        padding: EdgeInsets.all(20),
+                        child: CircularProgressIndicator(
+                          strokeWidth: 3,
+                          color: OilChangeFormTheme.gold,
+                        ),
+                      )
+                    : Icon(
+                        method.icon,
+                        size: 36,
+                        color: OilChangeFormTheme.gold,
+                      ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                preparing ? 'جاري تجهيز واتساب…' : method.titleAr,
+                style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w800,
+                      color: Colors.white,
+                    ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                widget.messageAr,
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.86),
+                  height: 1.45,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 14),
+              _StepDots(
+                labels: const ['الربط', 'التأكيد', 'الجاهزية'],
+                activeIndex: preparing ? 1 : 0,
+              ),
+            ],
+          ),
+        ),
+        if (isMetaDirect) ...[
+          const SizedBox(height: 16),
+          _MetaStep(
+            number: 1,
+            title: 'ما نوع الرقم؟',
+            child: SegmentedButton<bool>(
+              segments: const [
+                ButtonSegment(value: true, label: Text('عليه واتساب الأعمال')),
+                ButtonSegment(value: false, label: Text('رقم جديد')),
+              ],
+              selected: {_numberHasBusinessApp},
+              onSelectionChanged: (v) =>
+                  setState(() => _numberHasBusinessApp = v.first),
+            ),
+          ),
+          _MetaStep(
+            number: 2,
+            title: 'جهّز قبل أن تبدأ',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _numberHasBusinessApp
+                      ? '• الهاتف الذي عليه الرقم بين يديك.\n'
+                          '• واتساب الأعمال إصدار 2.24.17 أو أحدث.\n'
+                          '• صلاحية مدير في حساب Meta للأعمال.'
+                      : '• هاتف يستقبل رسالة أو مكالمة على الرقم.\n'
+                          '• الرقم غير مسجل على تطبيق واتساب.\n'
+                          '• صلاحية مدير في حساب Meta للأعمال.',
+                  style: TextStyle(
+                    fontSize: 13,
+                    height: 1.6,
+                    color: cs.onSurfaceVariant,
+                  ),
+                ),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    TextButton(
+                      onPressed: () => unawaited(_showPermissionHelp()),
+                      child: const Text('كيف أحصل على الصلاحية'),
+                    ),
+                    if (_numberHasBusinessApp)
+                      TextButton(
+                        onPressed: () => unawaited(_openStore()),
+                        child: const Text('تحديث التطبيق'),
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          _MetaStep(
+            number: 3,
+            title: 'أكمل الربط في نافذة Meta',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  _numberHasBusinessApp
+                      ? 'اختر ربط الحساب الموجود، ثم امسح رمز QR من واتساب الأعمال. إذا طلبت منك Meta إدخال رقم جديد فاضغط «عودة»، ولا تكتب رقمك هنا.'
+                      : 'اختر دولة الرقم (العراق +964)، ثم اكتب الرقم وأدخل الرمز الذي يصلك داخل نافذة Meta. لا تدخل رقمًا يعمل الآن على تطبيق واتساب، فقد يخرج منه.',
+                  style: TextStyle(
+                    fontSize: 13,
+                    height: 1.5,
+                    color: cs.onSurfaceVariant,
+                  ),
+                ),
+                if (widget.stopsCurrentSending) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    'تتوقف رسائل متجرك الحالية بعد فتح Meta حتى يكتمل الربط.',
+                    style: TextStyle(
+                      fontSize: 13,
+                      height: 1.5,
+                      fontWeight: FontWeight.w700,
+                      color: cs.error,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 10),
+                FilledButton.icon(
+                  onPressed: preparing || widget.onOpenMeta == null
+                      ? null
+                      : () => unawaited(_openMeta()),
+                  icon: const Icon(Icons.open_in_new_rounded),
+                  label: Text(_metaOpened ? 'فتح Meta مرة أخرى' : 'فتح Meta'),
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size.fromHeight(50),
+                    backgroundColor: AppColors.primary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          _MetaStep(
+            number: 4,
+            title: 'ارجع إلى هنا',
+            child: Text(
+              'نتأكد من الربط تلقائيًا بعد رجوعك، ويظهر «جاهز» هنا فقط إذا أكدته Meta.',
+              style: TextStyle(
+                fontSize: 13,
+                height: 1.5,
+                color: cs.onSurfaceVariant,
+              ),
+            ),
+          ),
+        ],
+        const SizedBox(height: 16),
+        if (isMetaDirect) ...[
+          // زر Meta داخل الخطوة 3.
+        ] else if (hasUrl && widget.onOpenOnboarding != null) ...[
+          FilledButton.icon(
+            onPressed: () => widget.onOpenOnboarding!(''),
+            icon: const Icon(Icons.open_in_new_rounded),
+            label: const Text('إكمال الربط في Meta'),
+            style: FilledButton.styleFrom(
+              minimumSize: const Size.fromHeight(50),
+              backgroundColor: AppColors.primary,
+            ),
+          ),
+          const SizedBox(height: 10),
+        ] else if (!preparing && widget.onContinue != null) ...[
+          FilledButton.icon(
+            onPressed: widget.onContinue,
+            icon: const Icon(Icons.rocket_launch_rounded),
+            label: const Text('بدء الربط الرسمي'),
+            style: FilledButton.styleFrom(
+              minimumSize: const Size.fromHeight(50),
+              backgroundColor: AppColors.primary,
+            ),
+          ),
+          const SizedBox(height: 10),
+        ],
+        if (widget.onRefresh != null && (!isMetaDirect || _metaOpened))
+          OutlinedButton.icon(
+            onPressed: widget.onRefresh,
+            icon: const Icon(Icons.refresh_rounded),
+            label: const Text('تحديث الحالة'),
+            style: OutlinedButton.styleFrom(
+              minimumSize: const Size.fromHeight(48),
+              foregroundColor: OilChangeFormTheme.gold,
+            ),
+          ),
+        if (widget.onBack != null) ...[
+          const SizedBox(height: 4),
+          TextButton(
+            onPressed: widget.onBack,
+            child: const Text('العودة لاختيار طريقة أخرى'),
+          ),
+        ],
+        if (!isMetaDirect) ...[
+          const SizedBox(height: 8),
+          Text(
+            preparing
+                ? 'نابو يجهّز القوالب والرقم تلقائياً — لا تحتاج إنشاء قالب يدوياً.'
+                : 'بعد الإكمال ستظهر حالة «جاهز» عند اكتمال الإعداد على السحابة.',
+            style: TextStyle(
+              fontSize: 12,
+              color: cs.onSurfaceVariant,
+              height: 1.4,
+            ),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _MetaStep extends StatelessWidget {
+  const _MetaStep({
+    required this.number,
+    required this.title,
+    required this.child,
+  });
+
+  final int number;
+  final String title;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              CircleAvatar(
+                radius: 12,
+                backgroundColor: AppColors.primary,
+                child: Text(
+                  '$number',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  title,
+                  style: theme.textTheme.titleSmall
+                      ?.copyWith(fontWeight: FontWeight.w800),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          child,
+        ],
+      ),
+    );
+  }
+}
+
+class _StepDots extends StatelessWidget {
+  const _StepDots({required this.labels, required this.activeIndex});
+
+  final List<String> labels;
+  final int activeIndex;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        for (var i = 0; i < labels.length; i++) ...[
+          Expanded(
+            child: Column(
+              children: [
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 220),
+                  height: 4,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(999),
+                    color: i <= activeIndex
+                        ? OilChangeFormTheme.gold
+                        : Colors.white.withValues(alpha: 0.22),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  labels[i],
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight:
+                        i == activeIndex ? FontWeight.w800 : FontWeight.w500,
+                    color: Colors.white.withValues(
+                      alpha: i <= activeIndex ? 0.95 : 0.55,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (i < labels.length - 1) const SizedBox(width: 8),
+        ],
+      ],
+    );
+  }
+}

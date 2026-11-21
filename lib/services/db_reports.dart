@@ -8,6 +8,7 @@ extension DbReports on DatabaseHelper {
     int days = 7,
   }) async {
     final db = await database;
+    final tid = await _resolveActiveTenantIdForLocalDb(db);
     final n = DateTime.now();
     final today = DateTime(n.year, n.month, n.day);
     final startDay = today.subtract(Duration(days: days - 1));
@@ -26,35 +27,32 @@ extension DbReports on DatabaseHelper {
       '''
       SELECT
         substr(date, 1, 10) AS d,
-        IFNULL(
-          SUM(CASE WHEN totalFils != 0 THEN totalFils ELSE ROUND(total * 1000) END) / 1000.0,
-          0
-        ) AS v
+        IFNULL(SUM(${MoneySql.invoiceTotalFils}) / 1000.0, 0) AS v
       FROM invoices
-      WHERE IFNULL(isReturned, 0) = 0
+      WHERE tenantId = ?
+        AND IFNULL(isReturned, 0) = 0
         AND datetime(date) >= datetime(?)
         AND datetime(date) <= datetime(?)
       GROUP BY substr(date, 1, 10)
       ORDER BY d ASC
       ''',
-      [start, end],
+      [tid, start, end],
     );
     final expenseRows = await db.rawQuery(
       '''
       SELECT
         substr(createdAt, 1, 10) AS d,
-        IFNULL(
-          SUM(ABS(CASE WHEN amountFils != 0 THEN amountFils ELSE ROUND(amount * 1000) END)) / 1000.0,
-          0
-        ) AS v
+        IFNULL(SUM(ABS(${MoneySql.expenseAmountFils})) / 1000.0, 0) AS v
       FROM cash_ledger
-      WHERE (CASE WHEN amountFils != 0 THEN amountFils ELSE ROUND(amount * 1000) END) < 0
+      WHERE tenantId = ?
+        AND deleted_at IS NULL
+        AND ${MoneySql.expenseAmountFils} < 0
         AND datetime(createdAt) >= datetime(?)
         AND datetime(createdAt) <= datetime(?)
       GROUP BY substr(createdAt, 1, 10)
       ORDER BY d ASC
       ''',
-      [start, end],
+      [tid, start, end],
     );
 
     final salesByDay = <String, double>{
@@ -136,10 +134,7 @@ extension DbReports on DatabaseHelper {
     Future<double> sumShiftSalesTotal(int sid) async {
       final rows = await db.rawQuery(
         '''
-        SELECT IFNULL(
-          SUM(CASE WHEN totalFils != 0 THEN totalFils ELSE ROUND(total * 1000) END) / 1000.0,
-          0
-        ) AS s
+        SELECT IFNULL(SUM(${MoneySql.invoiceTotalFils}) / 1000.0, 0) AS s
         FROM invoices
         WHERE IFNULL(isReturned, 0) = 0
           AND type IN (0, 1, 2, 3)
@@ -175,14 +170,24 @@ extension DbReports on DatabaseHelper {
 
   /// دمج أنشطة حديثة من عدة جداول — مرتّب زمنياً للوحة التحكم.
   Future<List<RecentActivityEntry>> getRecentActivityFeed({
-    int perSource = 120,
-    int maxTotal = 280,
+    int perSource = 500,
+    int? maxTotal = 280,
+    String? staffName,
+    int? staffUserId,
   }) async {
     final db = await database;
+    final staffFilter = await _resolveStaffActivityFilter(
+      db,
+      staffName: staffName,
+      staffUserId: staffUserId,
+    );
+    final invoiceActorCols = await _tableHasColumn(db, 'invoices', 'createdByUserId')
+        ? 'createdByUserName, createdByUserId'
+        : 'createdByUserName';
     final futures = await Future.wait(<Future<List<Map<String, dynamic>>>>[
       db.rawQuery(
         '''
-      SELECT id, customerName, total, type, date, isReturned, createdByUserName
+      SELECT id, customerName, total, type, date, isReturned, $invoiceActorCols
       FROM invoices
       ORDER BY datetime(date) DESC
       LIMIT ?
@@ -253,7 +258,7 @@ extension DbReports on DatabaseHelper {
       ),
       db.rawQuery(
         '''
-      SELECT id, shiftStaffName, openedAt, closedAt
+      SELECT id, shiftStaffName, shiftStaffUserId, openedAt, closedAt
       FROM work_shifts
       ORDER BY datetime(COALESCE(closedAt, openedAt)) DESC
       LIMIT ?
@@ -294,7 +299,46 @@ extension DbReports on DatabaseHelper {
     }
 
     out.sort((a, b) => b.at.compareTo(a.at));
-    if (out.length <= maxTotal) return out;
-    return out.sublist(0, maxTotal);
+
+    List<RecentActivityEntry> filtered = out;
+    if (staffFilter.isActive) {
+      filtered = out
+          .where((e) => activityMatchesStaffFilter(e, staffFilter))
+          .toList();
+    }
+
+    if (maxTotal == null || filtered.length <= maxTotal) return filtered;
+    return filtered.sublist(0, maxTotal);
+  }
+
+  Future<StaffActivityFilter> _resolveStaffActivityFilter(
+    Database db, {
+    String? staffName,
+    int? staffUserId,
+  }) async {
+    final names = <String>{};
+    int? uid = staffUserId != null && staffUserId > 0 ? staffUserId : null;
+
+    if (staffName != null) {
+      addStaffActivityNameKey(names, staffName);
+    }
+
+    if (uid != null) {
+      final userRows = await db.query(
+        'users',
+        columns: const ['displayName', 'username'],
+        where: 'id = ?',
+        whereArgs: [uid],
+        limit: 1,
+      );
+      if (userRows.isNotEmpty) {
+        for (final col in ['displayName', 'username']) {
+          final raw = userRows.first[col] as String?;
+          if (raw != null) addStaffActivityNameKey(names, raw);
+        }
+      }
+    }
+
+    return StaffActivityFilter(userId: uid, names: names);
   }
 }

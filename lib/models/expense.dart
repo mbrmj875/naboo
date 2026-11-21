@@ -193,7 +193,7 @@ Color expenseCategoryColor(String name, ColorScheme cs) {
     case 'ضرائب':
       return const Color(0xFF64748B);
     default:
-      return cs.primary;
+      return const Color(0xFFB8960C); // AppColors.accentGold
   }
 }
 

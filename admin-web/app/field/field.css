@@ -1,0 +1,925 @@
+/* Naboo Field — واجهة مندوب نظيفة + تجانس iOS / Android */
+
+.field-root {
+  --field-bg: #f0f3f7;
+  --field-surface: #ffffff;
+  --field-surface-2: #f7f9fc;
+  --field-border: #dbe3ee;
+  --field-text: #0b1f33;
+  --field-muted: #64788f;
+  --field-primary: #0b1f33;
+  --field-primary-fg: #ffffff;
+  --field-danger: #dc2626;
+  --field-warm: #ea580c;
+  --field-ok: #16a34a;
+  --field-purchased: #2563eb;
+  --field-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --field-safe-top: env(safe-area-inset-top, 0px);
+  --field-radius: 14px;
+  --field-radius-sm: 12px;
+  --field-nav-h: 64px;
+  --field-shadow: 0 1px 2px rgba(11, 31, 51, 0.05);
+  --field-font: Tajawal, system-ui, -apple-system, "Segoe UI", sans-serif;
+  min-height: 100dvh;
+  min-height: 100svh;
+  background: var(--field-bg);
+  color: var(--field-text);
+  font-family: var(--field-font);
+  display: flex;
+  flex-direction: column;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+}
+
+.field-root.platform-ios {
+  --field-bg: #f2f2f7;
+  --field-surface: #ffffff;
+  --field-border: rgba(60, 60, 67, 0.14);
+  --field-radius: 16px;
+  --field-radius-sm: 12px;
+  --field-primary: #007aff;
+  --field-primary-fg: #fff;
+  --field-nav-h: 58px;
+  --field-font: Tajawal, -apple-system, BlinkMacSystemFont, "SF Pro Text",
+    system-ui, sans-serif;
+  --field-shadow: none;
+}
+
+.field-root.platform-android {
+  --field-bg: #f5f7fa;
+  --field-surface: #ffffff;
+  --field-border: #e2e8f0;
+  --field-radius: 16px;
+  --field-radius-sm: 12px;
+  --field-primary: #1565c0;
+  --field-primary-fg: #fff;
+  --field-nav-h: 68px;
+  --field-font: Tajawal, "Roboto", "Noto Sans Arabic", system-ui, sans-serif;
+  --field-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+}
+
+.field-root a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.field-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: calc(10px + var(--field-safe-top)) 16px 10px;
+  border-bottom: 1px solid var(--field-border);
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: saturate(1.4) blur(16px);
+  -webkit-backdrop-filter: saturate(1.4) blur(16px);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+
+.platform-ios .field-topbar {
+  background: rgba(242, 242, 247, 0.82);
+  border-bottom-color: rgba(60, 60, 67, 0.12);
+}
+
+.platform-android .field-topbar {
+  background: #fff;
+  backdrop-filter: none;
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.06);
+  border-bottom: none;
+}
+
+.field-topbar h1 {
+  margin: 0;
+  font-size: 1.12rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.field-sync-chip {
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--field-border);
+  color: var(--field-muted);
+  background: var(--field-surface-2);
+  white-space: nowrap;
+  max-width: 46vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.field-sync-chip.pending {
+  color: var(--field-warm);
+  border-color: #fdba74;
+  background: #fff7ed;
+}
+
+.field-sync-chip.synced {
+  color: var(--field-ok);
+  border-color: #86efac;
+  background: #f0fdf4;
+}
+
+.field-sync-chip.offline {
+  color: var(--field-danger);
+  border-color: #fca5a5;
+  background: #fef2f2;
+}
+
+.field-main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* مساحة واضحة فوق الشريط السفلي — لا تداخل */
+  padding-bottom: calc(var(--field-nav-h) + var(--field-safe-bottom) + 28px);
+}
+
+.field-nav {
+  position: fixed;
+  inset-inline: 0;
+  bottom: 0;
+  z-index: 30;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 2px;
+  padding: 6px 8px calc(6px + var(--field-safe-bottom));
+  background: rgba(255, 255, 255, 0.94);
+  border-top: 1px solid var(--field-border);
+  backdrop-filter: saturate(1.4) blur(18px);
+  -webkit-backdrop-filter: saturate(1.4) blur(18px);
+}
+
+.platform-ios .field-nav {
+  background: rgba(255, 255, 255, 0.78);
+  border-top-color: rgba(60, 60, 67, 0.18);
+  padding-top: 4px;
+}
+
+.platform-android .field-nav {
+  background: #fff;
+  backdrop-filter: none;
+  box-shadow: 0 -4px 16px rgba(15, 23, 42, 0.08);
+  border-top: none;
+  border-radius: 18px 18px 0 0;
+}
+
+.field-nav a {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 4px;
+  border-radius: 12px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--field-muted);
+  min-height: 48px;
+  justify-content: center;
+}
+
+.platform-ios .field-nav a.active {
+  color: var(--field-primary);
+  background: transparent;
+}
+
+.platform-android .field-nav a.active {
+  color: var(--field-primary);
+  background: rgba(21, 101, 192, 0.1);
+}
+
+.field-nav a.active {
+  color: var(--field-primary);
+  background: #e8eef5;
+}
+
+.field-panel {
+  padding: 14px 16px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(100%, 560px);
+  margin-inline: auto;
+  box-sizing: border-box;
+}
+
+.field-card {
+  background: var(--field-surface);
+  border: 1px solid var(--field-border);
+  border-radius: var(--field-radius);
+  padding: 14px;
+  box-shadow: var(--field-shadow);
+}
+
+.platform-ios .field-card {
+  border: none;
+  box-shadow: 0 0 0 1px rgba(60, 60, 67, 0.08);
+}
+
+.field-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 14px;
+}
+
+.field-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field-label {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--field-muted);
+  margin-bottom: 0;
+}
+
+.field-hint {
+  margin: 0;
+  color: var(--field-muted);
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.field-inline-status {
+  margin: 4px 0 0;
+  font-size: 0.78rem;
+  color: var(--field-muted);
+}
+
+.field-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--field-radius-sm);
+  background: #fff7ed;
+  color: #9a3412;
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.field-banner-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.field-text-btn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--field-muted);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 800;
+  padding: 6px 4px;
+  cursor: pointer;
+}
+
+.field-text-btn.primary {
+  color: var(--field-primary);
+}
+
+.field-confirm-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 12px 14px;
+  border-radius: var(--field-radius-sm);
+  background: var(--field-surface);
+  border: 1px solid var(--field-border);
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.field-loc-row {
+  appearance: none;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-align: start;
+  border: none;
+  background: transparent;
+  padding: 4px 2px;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.field-loc-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--field-muted);
+}
+
+.field-loc-dot.ok {
+  background: var(--field-ok);
+  box-shadow: 0 0 0 4px rgba(22, 163, 74, 0.15);
+}
+
+.field-loc-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.field-loc-text strong {
+  font-size: 0.95rem;
+}
+
+.field-loc-text small {
+  color: var(--field-muted);
+  font-size: 0.78rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.field-loc-edit {
+  color: var(--field-primary);
+  font-size: 0.85rem;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+
+.field-voice-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.field-voice-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.field-mic-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--field-border);
+  background: var(--field-surface-2);
+  color: var(--field-text);
+  border-radius: 50%;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.field-mic-btn.listening {
+  background: #fef2f2;
+  border-color: #fca5a5;
+  color: #991b1b;
+  animation: field-mic-glow 1.2s ease-in-out infinite;
+}
+
+.field-voice-box {
+  position: relative;
+}
+
+.field-voice-box .field-textarea {
+  padding-bottom: 24px;
+  min-height: 72px;
+}
+
+.field-voice-pulse {
+  position: absolute;
+  inset-inline-start: 12px;
+  bottom: 10px;
+  display: flex;
+  gap: 4px;
+  align-items: flex-end;
+  height: 14px;
+  pointer-events: none;
+}
+
+.field-voice-pulse span {
+  width: 3px;
+  border-radius: 2px;
+  background: var(--field-danger);
+  animation: field-voice-bar 0.9s ease-in-out infinite;
+}
+
+.field-voice-pulse span:nth-child(1) {
+  height: 6px;
+}
+.field-voice-pulse span:nth-child(2) {
+  height: 12px;
+  animation-delay: 0.15s;
+}
+.field-voice-pulse span:nth-child(3) {
+  height: 8px;
+  animation-delay: 0.3s;
+}
+
+@keyframes field-mic-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.25);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(220, 38, 38, 0);
+  }
+}
+
+@keyframes field-voice-bar {
+  0%,
+  100% {
+    transform: scaleY(0.55);
+    opacity: 0.7;
+  }
+  50% {
+    transform: scaleY(1);
+    opacity: 1;
+  }
+}
+
+.field-input,
+.field-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border-radius: var(--field-radius-sm);
+  border: 1px solid var(--field-border);
+  background: #fff;
+  color: var(--field-text);
+  padding: 12px 13px;
+  font: inherit;
+  font-size: 1rem;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.platform-ios .field-input,
+.platform-ios .field-textarea {
+  background: #f2f2f7;
+  border-color: transparent;
+}
+
+.platform-ios .field-input:focus,
+.platform-ios .field-textarea:focus {
+  background: #fff;
+  border-color: var(--field-primary);
+  box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.18);
+}
+
+.field-input:focus,
+.field-textarea:focus {
+  outline: none;
+  border-color: var(--field-primary);
+  box-shadow: 0 0 0 3px rgba(11, 31, 51, 0.08);
+}
+
+.platform-android .field-input:focus,
+.platform-android .field-textarea:focus {
+  box-shadow: 0 0 0 3px rgba(21, 101, 192, 0.16);
+}
+
+.field-textarea {
+  min-height: 72px;
+  resize: vertical;
+}
+
+.field-btn {
+  appearance: none;
+  border: 1px solid var(--field-border);
+  background: #fff;
+  color: var(--field-text);
+  border-radius: var(--field-radius-sm);
+  padding: 12px 16px;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+  min-height: 48px;
+}
+
+.platform-ios .field-btn {
+  border-radius: 14px;
+}
+
+.platform-android .field-btn {
+  border-radius: 24px;
+  text-transform: none;
+  letter-spacing: 0.01em;
+}
+
+.field-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.field-btn.primary {
+  background: var(--field-primary);
+  color: var(--field-primary-fg);
+  border-color: var(--field-primary);
+}
+
+.field-btn.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--field-muted);
+  box-shadow: none;
+  min-height: 44px;
+}
+
+.field-btn.block {
+  width: 100%;
+}
+
+.field-save {
+  margin-top: 4px;
+  margin-bottom: 8px;
+}
+
+.field-actions-col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.field-interest-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.field-interest-btn {
+  border: 1.5px solid var(--field-border);
+  background: #fff;
+  color: var(--field-text);
+  border-radius: var(--field-radius-sm);
+  padding: 12px 8px;
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 800;
+  cursor: pointer;
+  min-height: 52px;
+}
+
+.platform-ios .field-interest-btn {
+  border-radius: 12px;
+  background: #f2f2f7;
+  border-color: transparent;
+}
+
+.platform-android .field-interest-btn {
+  border-radius: 16px;
+}
+
+.field-interest-btn.active.rejected {
+  background: var(--field-danger);
+  border-color: var(--field-danger);
+  color: #fff;
+}
+.field-interest-btn.active.warm {
+  background: var(--field-warm);
+  border-color: var(--field-warm);
+  color: #fff;
+}
+.field-interest-btn.active.interested {
+  background: var(--field-ok);
+  border-color: var(--field-ok);
+  color: #fff;
+}
+.field-interest-btn.active.purchased {
+  background: var(--field-purchased);
+  border-color: var(--field-purchased);
+  color: #fff;
+}
+
+.field-alert {
+  border-radius: var(--field-radius-sm);
+  padding: 10px 12px;
+  font-size: 0.88rem;
+  border: 1px solid var(--field-border);
+  background: #fff;
+  line-height: 1.4;
+  font-weight: 600;
+}
+
+.field-alert.warn {
+  border-color: #fdba74;
+  background: #fff7ed;
+  color: #9a3412;
+}
+
+.field-alert.err {
+  border-color: #fca5a5;
+  background: #fef2f2;
+  color: #991b1b;
+}
+
+.field-alert.ok {
+  border-color: #86efac;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.field-login-page {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 24px 16px;
+  background: var(--field-bg);
+}
+
+.field-login-card {
+  width: min(100%, 380px);
+  background: #fff;
+  border: 1px solid var(--field-border);
+  border-radius: 20px;
+  padding: 28px 22px;
+  box-shadow: var(--field-shadow);
+}
+
+.platform-ios .field-login-card {
+  border: none;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.06);
+}
+
+.field-login-card h1 {
+  margin: 0 0 4px;
+  font-size: 1.4rem;
+  font-weight: 800;
+}
+
+.field-login-card p {
+  margin: 0 0 18px;
+  color: var(--field-muted);
+  font-size: 0.9rem;
+}
+
+.field-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.field-list-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 14px;
+  border-radius: var(--field-radius);
+  border: 1px solid var(--field-border);
+  background: #fff;
+  box-shadow: var(--field-shadow);
+}
+
+.platform-ios .field-list-item {
+  border: none;
+  box-shadow: 0 0 0 1px rgba(60, 60, 67, 0.08);
+}
+
+.field-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 5px;
+}
+
+.field-dot.rejected {
+  background: var(--field-danger);
+}
+.field-dot.warm {
+  background: var(--field-warm);
+}
+.field-dot.interested {
+  background: var(--field-ok);
+}
+.field-dot.purchased {
+  background: var(--field-purchased);
+}
+
+.field-filter-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.field-filter-row {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+
+.field-filter-row::-webkit-scrollbar {
+  display: none;
+}
+
+.field-filter-chip {
+  flex: 0 0 auto;
+  border: 1px solid var(--field-border);
+  background: #fff;
+  color: var(--field-muted);
+  border-radius: 999px;
+  padding: 8px 14px;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.field-filter-chip.active {
+  background: var(--field-primary);
+  border-color: var(--field-primary);
+  color: #fff;
+}
+
+.field-filter-chip.active.rejected {
+  background: var(--field-danger);
+  border-color: var(--field-danger);
+}
+.field-filter-chip.active.warm {
+  background: var(--field-warm);
+  border-color: var(--field-warm);
+}
+.field-filter-chip.active.interested {
+  background: var(--field-ok);
+  border-color: var(--field-ok);
+}
+.field-filter-chip.active.purchased {
+  background: var(--field-purchased);
+  border-color: var(--field-purchased);
+}
+
+.field-empty {
+  text-align: center;
+  color: var(--field-muted);
+  padding: 40px 16px;
+  background: #fff;
+  border-radius: var(--field-radius);
+}
+
+.field-marker-icon {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+}
+
+.field-map-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  padding-top: var(--field-safe-top);
+}
+
+.field-map-modal-bar {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--field-border);
+  background: #fff;
+}
+
+.field-map-bar-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.field-map-modal-body {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+
+.field-map-modal-body .leaflet-container {
+  width: 100%;
+  height: 100%;
+  min-height: 50dvh;
+}
+
+.field-map-address {
+  flex: 1;
+  min-width: 0;
+  font-weight: 700;
+  font-size: 0.9rem;
+  color: var(--field-text);
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.field-map-locate {
+  position: absolute;
+  left: 14px;
+  right: auto;
+  bottom: calc(18px + var(--field-safe-bottom));
+  z-index: 1000;
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  border: 1px solid var(--field-border);
+  border-radius: 50%;
+  background: #fff;
+  color: var(--field-primary);
+  box-shadow: 0 6px 18px rgba(11, 31, 51, 0.18);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+
+.platform-android .field-map-locate {
+  border-radius: 16px;
+}
+
+.field-map-locate:disabled {
+  opacity: 0.65;
+}
+
+.field-map-locate-ico {
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.field-map-modal-body .leaflet-bottom.leaflet-right {
+  margin-bottom: 12px;
+  margin-right: 12px;
+}
+
+.field-pick-pin-wrap {
+  background: transparent !important;
+  border: none !important;
+}
+
+.field-pick-pin {
+  width: 22px;
+  height: 22px;
+  border-radius: 50% 50% 50% 0;
+  background: #2563eb;
+  border: 3px solid #fff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  transform: rotate(-45deg);
+  margin: 3px auto 0;
+}
+
+.field-loc-coords {
+  direction: ltr;
+  font-variant-numeric: tabular-nums;
+  color: var(--field-muted);
+  font-size: 0.82rem;
+  margin-top: 4px;
+}
+
+.field-section-title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 800;
+}
+
+@media (min-width: 768px) {
+  .field-panel {
+    padding: 20px 24px;
+    gap: 14px;
+  }
+
+  .field-topbar {
+    padding-inline: 24px;
+  }
+
+  .field-interest-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+
+  .field-nav {
+    max-width: 560px;
+    margin-inline: auto;
+    inset-inline: max(0px, calc((100% - 560px) / 2));
+    border-radius: 16px 16px 0 0;
+  }
+}

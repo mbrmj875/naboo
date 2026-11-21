@@ -1,0 +1,43 @@
+{
+  "id": "baqir_463_to_401",
+  "user_id": "76c7e447-f2bc-4c3d-bfb6-0bdca194282b",
+  "session_name": "shop_76c7e447_f2bc_4c3d_bfb6_0bdca194282b",
+  "description_ar": "نمط باقر: إرسال مقبول ثم 463 ثم 401 وrepair_needed",
+  "facts": [
+    {
+      "fact_type": "send_accepted",
+      "code": null,
+      "created_at": "2026-07-22T00:04:30.000Z"
+    },
+    {
+      "fact_type": "send_error",
+      "code": "463",
+      "created_at": "2026-07-22T00:04:31.000Z"
+    },
+    {
+      "fact_type": "send_error",
+      "code": "463",
+      "created_at": "2026-07-22T00:04:32.000Z"
+    },
+    {
+      "fact_type": "auth_401",
+      "code": "401",
+      "created_at": "2026-07-22T00:04:33.000Z"
+    },
+    {
+      "fact_type": "session_down",
+      "code": "FAILED",
+      "created_at": "2026-07-22T00:04:34.000Z"
+    },
+    {
+      "fact_type": "repair_needed",
+      "code": "repair_needed",
+      "created_at": "2026-07-22T00:04:35.000Z"
+    }
+  ],
+  "expected": {
+    "pattern_keys": ["number_activity_lock", "repair_needed"],
+    "severity_at_least": "P1",
+    "immediate": true
+  }
+}

@@ -5,6 +5,7 @@ import 'package:intl/intl.dart' hide TextDirection;
 import 'package:provider/provider.dart';
 
 import '../../services/database_helper.dart';
+import '../../services/supplier_statement.dart';
 import '../../theme/design_tokens.dart';
 import '../../utils/screen_layout.dart';
 import '../../providers/suppliers_ap_provider.dart';
@@ -41,69 +42,12 @@ class _SupplierApTabState extends State<SupplierApTab> {
   }
 
   Future<void> _addSupplierDialog() async {
-    final nameCtrl = TextEditingController();
-    final phoneCtrl = TextEditingController();
-    final noteCtrl = TextEditingController();
-    final ok = await showDialog<bool>(
+    final result = await showDialog<_NewSupplierDraft>(
       context: context,
-      builder: (ctx) => Directionality(
-        textDirection: TextDirection.rtl,
-        child: AlertDialog(
-          shape: const RoundedRectangleBorder(borderRadius: AppShape.none),
-          title: const Text('مورد جديد'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: nameCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'اسم المورد *',
-                    border: OutlineInputBorder(borderRadius: AppShape.none),
-                  ),
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: phoneCtrl,
-                  keyboardType: TextInputType.phone,
-                  decoration: const InputDecoration(
-                    labelText: 'هاتف (اختياري)',
-                    border: OutlineInputBorder(borderRadius: AppShape.none),
-                  ),
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: noteCtrl,
-                  maxLines: 2,
-                  decoration: const InputDecoration(
-                    labelText: 'ملاحظات',
-                    border: OutlineInputBorder(borderRadius: AppShape.none),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('إلغاء'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('حفظ'),
-            ),
-          ],
-        ),
-      ),
+      builder: (ctx) => const _NewSupplierDialog(),
     );
-    final name = nameCtrl.text.trim();
-    final phone = phoneCtrl.text.trim();
-    final note = noteCtrl.text.trim();
-    nameCtrl.dispose();
-    phoneCtrl.dispose();
-    noteCtrl.dispose();
-    if (ok != true || !mounted) return;
-    if (name.isEmpty) {
+    if (result == null || !mounted) return;
+    if (result.name.isEmpty) {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text('أدخل اسم المورد')));
@@ -111,9 +55,9 @@ class _SupplierApTabState extends State<SupplierApTab> {
     }
     try {
       await DatabaseHelper().insertSupplier(
-        name: name,
-        phone: phone.isEmpty ? null : phone,
-        notes: note.isEmpty ? null : note,
+        name: result.name,
+        phone: result.phone.isEmpty ? null : result.phone,
+        notes: result.notes.isEmpty ? null : result.notes,
       );
     } catch (_) {
       if (mounted) {
@@ -139,6 +83,17 @@ class _SupplierApTabState extends State<SupplierApTab> {
         final gap = ScreenLayout.of(context).pageHorizontalGap;
         final filtered = prov.items;
         final totalOpen = prov.totalOpen;
+        final dueById = prov.dueById;
+        Future<void> openSupplier(int id) async {
+          await Navigator.push<void>(
+            context,
+            MaterialPageRoute<void>(
+              builder: (_) => SupplierDetailScreen(supplierId: id),
+            ),
+          );
+          if (context.mounted) unawaited(prov.refresh());
+        }
+
         if (prov.isLoading && filtered.isEmpty) {
           return const Center(child: CircularProgressIndicator());
         }
@@ -168,9 +123,9 @@ class _SupplierApTabState extends State<SupplierApTab> {
                     width: double.infinity,
                     padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
-                      color: card,
+                      color: cs.surfaceContainerHighest.withValues(alpha: 0.3),
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: cs.outlineVariant),
+                      border: Border.all(color: AppColors.accentGold.withValues(alpha: 0.5)),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -203,20 +158,35 @@ class _SupplierApTabState extends State<SupplierApTab> {
                       ],
                     ),
                   ),
+                  if (prov.due.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    _DueSection(entries: prov.due, onOpen: openSupplier),
+                  ],
                   const SizedBox(height: 12),
                   TextField(
                     controller: _search,
                     decoration: InputDecoration(
                       hintText: 'بحث باسم المورد…',
-                      prefixIcon: const Icon(Icons.search_rounded),
+                      prefixIcon: const Icon(Icons.search_rounded, color: AppColors.accentGold),
                       suffixIcon: _search.text.isNotEmpty
                           ? IconButton(
                               icon: const Icon(Icons.clear_rounded),
                               onPressed: () => _search.clear(),
                             )
                           : null,
-                      border: const OutlineInputBorder(
-                        borderRadius: AppShape.none,
+                      filled: true,
+                      fillColor: isDark ? AppColors.surfaceDark : cs.surface,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.5)),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.5)),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(color: AppColors.accentGold, width: 2),
                       ),
                     ),
                   ),
@@ -236,11 +206,11 @@ class _SupplierApTabState extends State<SupplierApTab> {
                       Padding(
                         padding: const EdgeInsets.only(bottom: 10),
                         child: Material(
-                          color: card,
-                          elevation: isDark ? 2 : 0.5,
+                          color: cs.surfaceContainerHighest.withValues(alpha: 0.3),
+                          elevation: 0,
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(12),
-                            side: BorderSide(color: cs.outlineVariant),
+                            side: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.5)),
                           ),
                           clipBehavior: Clip.antiAlias,
                           child: InkWell(
@@ -283,6 +253,17 @@ class _SupplierApTabState extends State<SupplierApTab> {
                                             color: cs.onSurfaceVariant,
                                           ),
                                         ),
+                                        if (dueById[s.supplier.id] != null)
+                                          Text(
+                                            supplierDueLabel(
+                                              dueById[s.supplier.id]!,
+                                            ),
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w700,
+                                              color: cs.error,
+                                            ),
+                                          ),
                                         const SizedBox(height: 8),
                                         Wrap(
                                           spacing: 6,
@@ -408,6 +389,8 @@ class _SupplierApTabState extends State<SupplierApTab> {
           ),
           floatingActionButton: FloatingActionButton.extended(
             onPressed: _addSupplierDialog,
+            backgroundColor: AppColors.accentGold,
+            foregroundColor: Colors.white,
             icon: const Icon(Icons.add_rounded),
             label: const Text('مورد'),
           ),
@@ -429,4 +412,155 @@ Widget _quickActionChip(
     onPressed: onTap,
     materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
   );
+}
+
+class _NewSupplierDraft {
+  const _NewSupplierDraft({
+    required this.name,
+    required this.phone,
+    required this.notes,
+  });
+
+  final String name;
+  final String phone;
+  final String notes;
+}
+
+/// حوار إنشاء مورد — يملك الـ controllers حتى لا تُتلف أثناء إغلاق الـ Route.
+class _NewSupplierDialog extends StatefulWidget {
+  const _NewSupplierDialog();
+
+  @override
+  State<_NewSupplierDialog> createState() => _NewSupplierDialogState();
+}
+
+class _NewSupplierDialogState extends State<_NewSupplierDialog> {
+  final _nameCtrl = TextEditingController();
+  final _phoneCtrl = TextEditingController();
+  final _noteCtrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _phoneCtrl.dispose();
+    _noteCtrl.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    FocusManager.instance.primaryFocus?.unfocus();
+    Navigator.pop(
+      context,
+      _NewSupplierDraft(
+        name: _nameCtrl.text.trim(),
+        phone: _phoneCtrl.text.trim(),
+        notes: _noteCtrl.text.trim(),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: AlertDialog(
+        shape: const RoundedRectangleBorder(borderRadius: AppShape.none),
+        title: const Text('مورد جديد'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: _nameCtrl,
+                textInputAction: TextInputAction.next,
+                decoration: const InputDecoration(
+                  labelText: 'اسم المورد *',
+                  border: OutlineInputBorder(borderRadius: AppShape.none),
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: _phoneCtrl,
+                keyboardType: TextInputType.phone,
+                textInputAction: TextInputAction.next,
+                decoration: const InputDecoration(
+                  labelText: 'هاتف (اختياري)',
+                  border: OutlineInputBorder(borderRadius: AppShape.none),
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: _noteCtrl,
+                maxLines: 2,
+                textInputAction: TextInputAction.done,
+                onSubmitted: (_) => _submit(),
+                decoration: const InputDecoration(
+                  labelText: 'ملاحظات',
+                  border: OutlineInputBorder(borderRadius: AppShape.none),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              FocusManager.instance.primaryFocus?.unfocus();
+              Navigator.pop(context);
+            },
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            onPressed: _submit,
+            child: const Text('حفظ'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// قسم «حان دفعهم»: موردون وصل موعد «يُدفع قبل» لوصل لهم.
+class _DueSection extends StatelessWidget {
+  const _DueSection({required this.entries, required this.onOpen});
+
+  final List<SupplierDueEntry> entries;
+  final Future<void> Function(int supplierId) onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final total = entries.fold<int>(0, (s, e) => s + e.status.dueFils);
+    return Container(
+      key: const Key('supplierDueSection'),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: cs.errorContainer.withValues(alpha: 0.35),
+        border: Border.all(color: cs.error.withValues(alpha: 0.5)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'حان دفعهم (${entries.length}) · ${_numFmt.format(total / 1000.0)} د.ع',
+            style: TextStyle(fontWeight: FontWeight.w800, color: cs.error),
+          ),
+          const SizedBox(height: 4),
+          for (final e in entries)
+            ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(Icons.event_busy_rounded, color: cs.error),
+              title: Text(
+                e.name,
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+              subtitle: Text(supplierDueLabel(e.status)),
+              trailing: const Icon(Icons.chevron_left_rounded),
+              onTap: () => onOpen(e.supplierId),
+            ),
+        ],
+      ),
+    );
+  }
 }

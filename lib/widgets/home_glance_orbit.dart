@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -10,6 +9,7 @@ import '../services/cloud_sync_service.dart';
 import '../services/database_helper.dart';
 import '../services/tenant_context_service.dart';
 import '../utils/iraqi_currency_format.dart';
+import '../theme/design_tokens.dart';
 import '../utils/screen_layout.dart';
 
 /// أهداف البطاقات المصغّرة في الرئيسية — تُمرَّر إلى [HomeScreen] للتنقّل.
@@ -35,9 +35,16 @@ const List<String> _kAllGlanceIds = [
 
 /// شريط بطاقات مصغّرة (bento) — أرقام حيّة، إعادة ترتيب، واتصال بالوردية.
 class HomeGlanceOrbit extends StatefulWidget {
-  const HomeGlanceOrbit({super.key, required this.onAction});
+  const HomeGlanceOrbit({
+    super.key,
+    required this.onAction,
+    this.hideGlanceIds = const {},
+    this.extraGlanceIds = const {},
+  });
 
   final void Function(HomeGlanceAction action) onAction;
+  final Set<String> hideGlanceIds;
+  final Set<String> extraGlanceIds;
 
   @override
   State<HomeGlanceOrbit> createState() => _HomeGlanceOrbitState();
@@ -91,9 +98,40 @@ class _HomeGlanceOrbitState extends State<HomeGlanceOrbit> {
       for (final id in _kAllGlanceIds) {
         if (!merged.contains(id)) merged.add(id);
       }
-      _order = merged;
+      _order = _applyGlanceFilters(merged);
     }
+    _order = _applyGlanceFilters(_order);
     await _loadStats();
+  }
+
+  List<String> _applyGlanceFilters(List<String> source) {
+    final hide = widget.hideGlanceIds;
+    final extra = widget.extraGlanceIds;
+    final out = <String>[];
+    for (final id in source) {
+      if (hide.contains(id)) continue;
+      out.add(id);
+    }
+    for (final id in extra) {
+      if (_kAllGlanceIds.contains(id) && !out.contains(id)) {
+        out.add(id);
+      }
+    }
+    if (out.isEmpty) {
+      for (final id in _kAllGlanceIds) {
+        if (!hide.contains(id)) out.add(id);
+      }
+    }
+    return out;
+  }
+
+  @override
+  void didUpdateWidget(covariant HomeGlanceOrbit oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.hideGlanceIds != widget.hideGlanceIds ||
+        oldWidget.extraGlanceIds != widget.extraGlanceIds) {
+      setState(() => _order = _applyGlanceFilters(_order));
+    }
   }
 
   Future<void> _loadStats() async {
@@ -261,6 +299,11 @@ class _HomeGlanceOrbitState extends State<HomeGlanceOrbit> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final titleColor = isDark ? cs.onSurface : AppColors.primaryDark;
+    final mutedColor = isDark
+        ? cs.onSurfaceVariant
+        : AppColors.primaryDark.withValues(alpha: 0.75);
     return LayoutBuilder(
       builder: (context, c) {
         final w = c.maxWidth;
@@ -268,10 +311,9 @@ class _HomeGlanceOrbitState extends State<HomeGlanceOrbit> {
         // بدل breakpoints رقمية. صف واحد في tabletLG+ (≥840dp)، عمودان في
         // phoneSM/tabletSM (360-839dp)، وعمود واحد في phoneXS (<360dp).
         final variant = context.screenLayout.layoutVariant;
-        final useSingleRow =
-            variant.index >= DeviceVariant.tabletLG.index;
-        final useTwoColumnWrap = !useSingleRow &&
-            variant != DeviceVariant.phoneXS;
+        final useSingleRow = variant.index >= DeviceVariant.tabletLG.index;
+        final useTwoColumnWrap =
+            !useSingleRow && variant != DeviceVariant.phoneXS;
         final cellGap = w < 400 ? 8.0 : 10.0;
         // ارتفاع موحّد للبطاقات حتى لا تختلف بطاقة عن أخرى بسبب طول النص/الشارة.
         // (خصوصاً "الطلبات المنجزة" التي قد تضيف شارة + سطر نص أطول).
@@ -288,14 +330,17 @@ class _HomeGlanceOrbitState extends State<HomeGlanceOrbit> {
                     style: TextStyle(
                       fontSize: w < 360 ? 14 : 15,
                       fontWeight: FontWeight.w800,
-                      color: cs.onSurface,
+                      color: titleColor,
                     ),
                   ),
                 ),
                 IconButton(
                   tooltip: 'إعادة ترتيب البطاقات',
                   onPressed: _openReorderSheet,
-                  icon: Icon(Icons.swap_vert_rounded, color: cs.primary),
+                  icon: const Icon(
+                    Icons.swap_vert_rounded,
+                    color: AppColors.accentGold,
+                  ),
                 ),
                 IconButton(
                   tooltip: 'تحديث الأرقام',
@@ -303,7 +348,7 @@ class _HomeGlanceOrbitState extends State<HomeGlanceOrbit> {
                     setState(() => _loading = true);
                     _loadStats();
                   },
-                  icon: Icon(Icons.refresh_rounded, color: cs.onSurfaceVariant),
+                  icon: Icon(Icons.refresh_rounded, color: mutedColor),
                 ),
               ],
             ),
@@ -348,10 +393,7 @@ class _HomeGlanceOrbitState extends State<HomeGlanceOrbit> {
                 children: [
                   for (var i = 0; i < _order.length; i++) ...[
                     if (i > 0) SizedBox(height: cellGap),
-                    SizedBox(
-                      height: cardH,
-                      child: _cardFor(_order[i], cs),
-                    ),
+                    SizedBox(height: cardH, child: _cardFor(_order[i], cs)),
                   ],
                 ],
               ),
@@ -510,13 +552,15 @@ class _GlanceCard extends StatelessWidget {
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(12),
         child: Ink(
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: BorderRadius.circular(12),
             color: cs.surface,
             border: Border.all(
-              color: cs.outlineVariant.withValues(alpha: isDark ? 0.4 : 0.55),
+              color: AppColors.accentGold.withValues(
+                alpha: isDark ? 0.4 : 0.28,
+              ),
               width: 1,
             ),
             boxShadow: [
@@ -594,10 +638,13 @@ class _GlanceCard extends StatelessWidget {
                                           textAlign: TextAlign.right,
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
-                                          style: GoogleFonts.tajawal(
+                                          style: TextStyle(
+                                            fontFamily: 'Tajawal',
                                             fontWeight: FontWeight.w700,
                                             fontSize: 13,
-                                            color: cs.onSurface,
+                                            color: isDark
+                                                ? cs.onSurface
+                                                : AppColors.primaryDark,
                                           ),
                                         ),
                                       ),
@@ -613,7 +660,9 @@ class _GlanceCard extends StatelessWidget {
                                     style: TextStyle(
                                       fontWeight: FontWeight.w800,
                                       fontSize: 12.5,
-                                      color: cs.onSurface,
+                                      color: isDark
+                                          ? cs.onSurface
+                                          : AppColors.primaryDark,
                                       height: 1.2,
                                     ),
                                   ),
@@ -634,7 +683,11 @@ class _GlanceCard extends StatelessWidget {
                               style: TextStyle(
                                 fontSize: 10.5,
                                 height: 1.25,
-                                color: cs.onSurfaceVariant,
+                                color: isDark
+                                    ? cs.onSurfaceVariant
+                                    : AppColors.primaryDark.withValues(
+                                        alpha: 0.75,
+                                      ),
                               ),
                             ),
                           ),

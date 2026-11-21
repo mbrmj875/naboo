@@ -86,6 +86,7 @@ void navigateFromAppNotification(NavigatorState nav, AppNotification n) {
     case NotificationType.debtInvoiceAged:
     case NotificationType.debtCustomerCeiling:
     case NotificationType.debtInvoiceCeiling:
+    case NotificationType.supplierBillDue:
       nav.push(
         contentMaterialRoute(
           routeId: AppContentRoutes.debts,

@@ -5,6 +5,8 @@ import '../services/screen_security_service.dart';
 /// غلاف خفيف يفعّل `FLAG_SECURE` على Android طوال عمر الشاشة، ويلغيه عند
 /// الـ dispose.
 ///
+/// حالياً معطّل عبر [ScreenSecurityService.enabled] — يمرّر [child] فقط.
+///
 /// طريقة الاستعمال:
 ///
 /// ```dart

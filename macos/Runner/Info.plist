@@ -28,9 +28,19 @@
 	<string>MainMenu</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<!-- إملاء الصوت في بطاقة غيار الزيت — بدونهما macOS يُنهي التطبيق (TCC SIGABRT) -->
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>يُستخدم التعرف على الكلام لإملاء رقم اللوحة واسم العميل والملاحظات داخل بطاقة غيار الزيت.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>يُستخدم الميكروفون لإملاء الحقول بالصوت داخل بطاقة غيار الزيت.</string>
 	<!-- Some macOS builds show a blank Flutter layer with merged UI+platform thread; opt out until stable. -->
 	<key>FLTEnableMergedPlatformUIThread</key>
 	<false/>
+	<!-- مطلوب من GoogleSignIn على macOS — بدونه: NSInvalidArgumentException ويُغلق التطبيق -->
+	<key>GIDClientID</key>
+	<string>281392172783-rpnh4q1n0vuvjb3lv96sl48rkg1iu8ld.apps.googleusercontent.com</string>
+	<key>GIDServerClientID</key>
+	<string>281392172783-s4hvsidll33hgvt75tilm0okg5epb0ep.apps.googleusercontent.com</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -39,6 +49,14 @@
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>io.supabase.naboo</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>google.signin.reversed.client.id</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.281392172783-rpnh4q1n0vuvjb3lv96sl48rkg1iu8ld</string>
 			</array>
 		</dict>
 	</array>

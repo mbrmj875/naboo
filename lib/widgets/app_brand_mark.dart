@@ -35,13 +35,16 @@ class AppBrandMark extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final word = title.trim().isEmpty ? 'NABOO' : title.trim();
-    final baseTextStyle = GoogleFonts.playfairDisplay(
-      fontWeight: FontWeight.w800,
-      fontStyle: FontStyle.italic,
-      fontSize: titleFontSize,
-      height: 1.0,
-      letterSpacing: 2.2,
-    );
+    // الخط يُنزَّل عند أول طلب — لا نطلبه إن لم يُعرض العنوان، خصوصاً بلا إنترنت.
+    final baseTextStyle = showTitle
+        ? GoogleFonts.playfairDisplay(
+            fontWeight: FontWeight.w800,
+            fontStyle: FontStyle.italic,
+            fontSize: titleFontSize,
+            height: 1.0,
+            letterSpacing: 2.2,
+          )
+        : const TextStyle();
 
     return Row(
       mainAxisSize: MainAxisSize.min,
@@ -60,8 +63,8 @@ class AppBrandMark extends StatelessWidget {
             child: Image.asset(logoAssetPath, fit: BoxFit.cover),
           ),
         ),
-        SizedBox(width: gap),
-        if (showTitle)
+        if (showTitle) ...[
+          SizedBox(width: gap),
           (useGoldGradient
               ? ShaderMask(
                   blendMode: BlendMode.srcIn,
@@ -119,6 +122,7 @@ class AppBrandMark extends StatelessWidget {
                     ),
                   ],
                 )),
+        ],
       ],
     );
   }

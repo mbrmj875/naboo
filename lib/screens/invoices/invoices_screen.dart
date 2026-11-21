@@ -4,10 +4,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart' hide TextDirection;
+import '../../core/widgets/invoices/invoice_list_mode.dart';
+import '../../providers/invoice_list_controller.dart';
 import '../../providers/invoice_provider.dart';
 import '../../providers/product_provider.dart';
 import '../../models/invoice.dart';
+import '../../printing/invoice_receipt_screen.dart';
+import '../../printing/receipt_builders.dart';
+import '../../printing/receipt_model.dart';
 import '../../services/database_helper.dart';
+import '../../utils/app_logger.dart';
 import '../../utils/sale_receipt_pdf.dart';
 import '../../utils/screen_layout.dart';
 import '../../widgets/adaptive/master_detail_layout.dart';
@@ -89,10 +95,25 @@ final _dateTimeFmt = DateFormat('dd/MM/yyyy HH:mm', 'ar');
 
 // ═════════════════════════════════════════════════════════════════════════════
 class InvoicesScreen extends StatefulWidget {
-  const InvoicesScreen({super.key, this.openInvoiceIdAfterLoad});
+  const InvoicesScreen({
+    super.key,
+    this.openInvoiceIdAfterLoad,
+    this.mode = InvoiceListMode.full,
+    this.listController,
+    this.appBarTitle,
+  });
 
   /// بعد التحميل (مثلاً من تنبيه «بيع سالب») — فتح تفاصيل الفاتورة تلقائياً.
   final int? openInvoiceIdAfterLoad;
+
+  /// `viewOnly` — عارض بدون CTA بيع (فواتير غيار الزيت).
+  final InvoiceListMode mode;
+
+  /// مصدر بيانات بديل (مثلاً [OilChangeInvoiceProvider]).
+  final InvoiceListController? listController;
+
+  /// عنوان مخصّص لشريط التطبيق؛ الافتراضي «الفواتير».
+  final String? appBarTitle;
 
   @override
   State<InvoicesScreen> createState() => _InvoicesScreenState();
@@ -111,11 +132,27 @@ class _InvoicesScreenState extends State<InvoicesScreen>
   Map<int, Map<String, dynamic>> _shiftById = {};
   String _shiftIdsSig = '';
 
+  /// نوع العمل لكل فاتورة (غيار زيت، غسيل، بيع مباشر، استرجاع، بيع).
+  Map<int, ReceiptKind> _kindById = {};
+  String _kindIdsSig = '';
+
   /// الفاتورة المحدّدة لعرض تفاصيلها في الـ Detail Panel
   /// (وضع `MasterDetailLayout` على `tabletLG+` فقط).
   int? _selectedInvoiceId;
 
-  static const _tabLabels = ['الكل', 'مدفوعة', 'غير مدفوعة', 'مرتجع', 'تقسيط'];
+  static const _tabLabelsFull =
+      ['الكل', 'مدفوعة', 'غير مدفوعة', 'مرتجع', 'تقسيط'];
+  static const _tabLabelsViewOnly =
+      ['الكل', 'مدفوعة', 'غير مدفوعة', 'مرتجع'];
+
+  List<String> get _tabLabels => widget.mode == InvoiceListMode.viewOnly
+      ? _tabLabelsViewOnly
+      : _tabLabelsFull;
+
+  bool get _isViewOnly => widget.mode == InvoiceListMode.viewOnly;
+
+  InvoiceListController _listController(BuildContext context) =>
+      widget.listController ?? context.read<InvoiceProvider>();
 
   @override
   void initState() {
@@ -151,7 +188,7 @@ class _InvoicesScreenState extends State<InvoicesScreen>
 
   void _syncFiltersToProvider({bool initial = false}) {
     if (!mounted) return;
-    final prov = Provider.of<InvoiceProvider>(context, listen: false);
+    final prov = _listController(context);
     unawaited(
       prov.setFilters(
         tabIndex: _tabs.index,
@@ -188,6 +225,30 @@ class _InvoicesScreenState extends State<InvoicesScreen>
       );
       return;
     }
+    // غيار زيت / غسيل / بيع مباشر / استرجاع: إيصال نوع العمل نفسه الذي يُطبع بعد الحفظ.
+    Map<String, dynamic>? order;
+    try {
+      order = await ReceiptBuilders.linkedOrder(id);
+    } catch (e, st) {
+      AppLogger.error('Invoices', 'تعذّر جلب بطاقة الخدمة للفاتورة', e, st);
+    }
+    final balanceFils = await ReceiptBuilders.accountBalanceFilsFor(full);
+    if (!mounted) return;
+    if (ReceiptBuilders.kindOf(full, order: order).isWorkSpecific) {
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => InvoiceReceiptScreen(
+            document: ReceiptBuilders.fromInvoice(
+              full,
+              order: order,
+              accountBalanceFils: balanceFils,
+            ),
+            onOpenDetails: (c) => showInvoiceDetailSheet(c, _db, id),
+          ),
+        ),
+      );
+      return;
+    }
     final subtotalBeforeDiscount =
         full.items.fold<double>(0, (sum, e) => sum + e.total);
     try {
@@ -200,7 +261,9 @@ class _InvoicesScreenState extends State<InvoicesScreen>
           showInvoiceDetailSheet(pdfCtx, _db, id);
         },
       );
-    } catch (_) {}
+    } catch (e, st) {
+      AppLogger.error('Invoices', 'فشل عرض إيصال PDF', e, st);
+    }
   }
 
   Future<void> _tryOpenInvoiceAfterLoad() async {
@@ -225,6 +288,27 @@ class _InvoicesScreenState extends State<InvoicesScreen>
     final map = await _db.getWorkShiftsMapByIds(ids);
     if (!mounted) return;
     setState(() => _shiftById = map);
+  }
+
+  Future<void> _ensureKindsLoaded(List<Invoice> invoices) async {
+    final ids = invoices.map((e) => e.id).whereType<int>().toSet();
+    final sig = ids.join(',');
+    if (sig == _kindIdsSig) return;
+    _kindIdsSig = sig;
+    Map<int, Map<String, dynamic>> orders = const {};
+    try {
+      orders = await ReceiptBuilders.linkedOrderKinds(ids);
+    } catch (e, st) {
+      AppLogger.error('Invoices', 'تعذّر جلب أنواع الفواتير', e, st);
+    }
+    if (!mounted) return;
+    setState(() {
+      _kindById = {
+        for (final inv in invoices)
+          if (inv.id != null)
+            inv.id!: ReceiptBuilders.kindOf(inv, order: orders[inv.id]),
+      };
+    });
   }
 
   int _compareShiftKeys(
@@ -262,10 +346,14 @@ class _InvoicesScreenState extends State<InvoicesScreen>
           if (p['id'] is int) p['id'] as int,
     };
 
-    final listBody = Consumer<InvoiceProvider>(
-      builder: (_, provider, __) {
+    final listController = _listController(context);
+    final listBody = ListenableBuilder(
+      listenable: listController,
+      builder: (context, _) {
+        final provider = listController;
         final all = provider.invoices;
         Future.microtask(() => _ensureShiftMetaLoaded(all));
+        Future.microtask(() => _ensureKindsLoaded(all));
         // NestedScrollView: يجعل شريط الإحصاء والبحث يطويان عند التمرير
         // بينما تبقى التبويبات ثابتة في الأعلى (Sticky). عند العودة للأعلى،
         // تعود كل الأقسام طبيعياً.
@@ -303,10 +391,15 @@ class _InvoicesScreenState extends State<InvoicesScreen>
               _tabLabels.length,
               (_) => _InvoiceList(
                 invoices: all,
-                onAdd: () => _addInvoice(),
+                onAdd: _isViewOnly ? null : () => _addInvoice(),
+                emptyMessage: _isViewOnly
+                    ? 'لا توجد فواتير مرتبطة ببطاقات غيار الزيت'
+                    : null,
+                hideReturnAction: _isViewOnly,
                 isDark: isDark,
                 groupByShift: _groupByShift,
                 shiftById: _shiftById,
+                kindById: _kindById,
                 compareShiftKeys: _compareShiftKeys,
                 dateTimeFmt: _dateTimeFmt,
                 onInvoiceTap: _openInvoiceDetails,
@@ -338,44 +431,54 @@ class _InvoicesScreenState extends State<InvoicesScreen>
           )
         : listBody;
 
-    return Directionality(
-      textDirection: TextDirection.rtl,
-      child: Shortcuts(
-        shortcuts: <ShortcutActivator, Intent>{
-          const SingleActivator(LogicalKeyboardKey.keyN, control: true):
-              const _NewInvoiceIntent(),
-          const SingleActivator(LogicalKeyboardKey.keyN, meta: true):
-              const _NewInvoiceIntent(),
-          const SingleActivator(LogicalKeyboardKey.keyF, control: true):
-              const _FocusSearchIntent(),
-          const SingleActivator(LogicalKeyboardKey.keyF, meta: true):
-              const _FocusSearchIntent(),
-          const SingleActivator(LogicalKeyboardKey.escape):
-              const _CloseDetailIntent(),
-        },
-        child: Actions(
-          actions: <Type, Action<Intent>>{
-            _NewInvoiceIntent: CallbackAction<_NewInvoiceIntent>(
-              onInvoke: (_) {
-                _addInvoice();
-                return null;
-              },
-            ),
-            _FocusSearchIntent: CallbackAction<_FocusSearchIntent>(
+    final shortcuts = <ShortcutActivator, Intent>{
+      const SingleActivator(LogicalKeyboardKey.keyF, control: true):
+          const _FocusSearchIntent(),
+      const SingleActivator(LogicalKeyboardKey.keyF, meta: true):
+          const _FocusSearchIntent(),
+      const SingleActivator(LogicalKeyboardKey.escape):
+          const _CloseDetailIntent(),
+    };
+    if (!_isViewOnly) {
+      shortcuts.addAll({
+        const SingleActivator(LogicalKeyboardKey.keyN, control: true):
+            const _NewInvoiceIntent(),
+        const SingleActivator(LogicalKeyboardKey.keyN, meta: true):
+            const _NewInvoiceIntent(),
+      });
+    }
+
+    final actions = <Type, Action<Intent>>{
+      _FocusSearchIntent: CallbackAction<_FocusSearchIntent>(
               onInvoke: (_) {
                 _searchFocus.requestFocus();
                 return null;
               },
             ),
-            _CloseDetailIntent: CallbackAction<_CloseDetailIntent>(
-              onInvoke: (_) {
-                if (_selectedInvoiceId != null) {
-                  setState(() => _selectedInvoiceId = null);
-                }
-                return null;
-              },
-            ),
-          },
+      _CloseDetailIntent: CallbackAction<_CloseDetailIntent>(
+        onInvoke: (_) {
+          if (_selectedInvoiceId != null) {
+            setState(() => _selectedInvoiceId = null);
+          }
+          return null;
+        },
+      ),
+    };
+    if (!_isViewOnly) {
+      actions[_NewInvoiceIntent] = CallbackAction<_NewInvoiceIntent>(
+        onInvoke: (_) {
+          _addInvoice();
+          return null;
+        },
+      );
+    }
+
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: Shortcuts(
+        shortcuts: shortcuts,
+        child: Actions(
+          actions: actions,
           child: Focus(
             autofocus: true,
             child: Scaffold(
@@ -392,6 +495,9 @@ class _InvoicesScreenState extends State<InvoicesScreen>
 
   PreferredSizeWidget _buildAppBar(ColorScheme cs) {
     final isPhone = context.screenLayout.isPhoneVariant;
+    final isLight = Theme.of(context).brightness == Brightness.light;
+    final appBarBg = isLight ? Colors.white : AppColors.primary;
+    final appBarFg = isLight ? AppColors.primaryDark : Colors.white;
     final toggleGroup = IconButton(
       icon: Icon(
         _groupByShift ? Icons.view_agenda_rounded : Icons.view_list_rounded,
@@ -435,13 +541,29 @@ class _InvoicesScreenState extends State<InvoicesScreen>
       tooltip: 'فواتير معلّقة مؤقتاً',
       onPressed: openParked,
     );
+    final showParked = !_isViewOnly;
 
     return AppBar(
-      backgroundColor: cs.primary,
-      foregroundColor: cs.onPrimary,
+      backgroundColor: appBarBg,
+      foregroundColor: appBarFg,
+      iconTheme: const IconThemeData(color: AppColors.accentGold),
+      actionsIconTheme: const IconThemeData(color: AppColors.accentGold),
       elevation: 0,
-      title: const Text('الفواتير',
-          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+      title: Text(
+        widget.appBarTitle ?? 'الفواتير',
+        style: TextStyle(
+          fontWeight: FontWeight.bold,
+          fontSize: 18,
+          color: appBarFg,
+        ),
+      ),
+      bottom: PreferredSize(
+        preferredSize: const Size.fromHeight(1.2),
+        child: Container(
+          height: 1.2,
+          color: AppColors.accentGold.withValues(alpha: 0.55),
+        ),
+      ),
       actions: isPhone
           ? [
               // على الهواتف: تجميع + تصفية (الأكثر استخداماً) + قائمة المزيد.
@@ -455,11 +577,11 @@ class _InvoicesScreenState extends State<InvoicesScreen>
                     case 'calendar':
                       openCalendar();
                     case 'parked':
-                      openParked();
+                      if (showParked) openParked();
                   }
                 },
-                itemBuilder: (_) => const [
-                  PopupMenuItem(
+                itemBuilder: (_) => [
+                  const PopupMenuItem(
                     value: 'calendar',
                     child: Row(
                       children: [
@@ -469,23 +591,24 @@ class _InvoicesScreenState extends State<InvoicesScreen>
                       ],
                     ),
                   ),
-                  PopupMenuItem(
-                    value: 'parked',
-                    child: Row(
-                      children: [
-                        Icon(Icons.pause_circle_outline_rounded, size: 20),
-                        SizedBox(width: 10),
-                        Text('فواتير معلّقة'),
-                      ],
+                  if (showParked)
+                    const PopupMenuItem(
+                      value: 'parked',
+                      child: Row(
+                        children: [
+                          Icon(Icons.pause_circle_outline_rounded, size: 20),
+                          SizedBox(width: 10),
+                          Text('فواتير معلّقة'),
+                        ],
+                      ),
                     ),
-                  ),
                 ],
               ),
             ]
           : [
               toggleGroup,
               calendarBtn,
-              parkedBtn,
+              if (showParked) parkedBtn,
               filterBtn,
             ],
     );
@@ -493,15 +616,25 @@ class _InvoicesScreenState extends State<InvoicesScreen>
 
   Widget _buildTabBar(ColorScheme cs) {
     final narrow = ScreenLayout.of(context).isNarrowWidth;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
-      color: cs.surface,
+      decoration: BoxDecoration(
+        color: cs.surface,
+        border: Border(
+          bottom: BorderSide(
+            color: AppColors.accentGold.withValues(alpha: isDark ? 0.45 : 0.35),
+          ),
+        ),
+      ),
       child: TabBar(
         controller: _tabs,
         onTap: (_) => setState(() {}),
         isScrollable: true,
-        labelColor: cs.secondary,
-        unselectedLabelColor: cs.onSurfaceVariant,
-        indicatorColor: cs.secondary,
+        labelColor: AppColors.accentGold,
+        unselectedLabelColor: isDark
+            ? cs.onSurfaceVariant
+            : AppColors.primaryDark,
+        indicatorColor: AppColors.accentGold,
         indicatorWeight: 3,
         labelStyle: TextStyle(
           fontWeight: FontWeight.bold,
@@ -516,6 +649,7 @@ class _InvoicesScreenState extends State<InvoicesScreen>
   /// على الهاتف (phoneXS + phoneSM) لا نعرض زر البيع العائم — يشغل زاوية الشاشة فوق القائمة.
   /// يبقى [FloatingActionButton.extended] على التابلت والشاشات العريضة.
   Widget? _buildFAB(ColorScheme cs) {
+    if (_isViewOnly) return null;
     final variant = context.screenLayout.layoutVariant;
     final isPhone = variant == DeviceVariant.phoneXS ||
         variant == DeviceVariant.phoneSM;
@@ -723,25 +857,36 @@ class _StatChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final primaryText = isDark ? Colors.white : AppColors.primaryDark;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.09),
-        borderRadius: BorderRadius.zero,
-        border: Border.all(color: color.withValues(alpha: 0.22)),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isDark
+              ? AppColors.accentGold.withValues(alpha: 0.35)
+              : color.withValues(alpha: 0.35),
+          width: 1.2,
+        ),
       ),
       child: Column(
         children: [
-          Icon(icon, size: 18, color: color),
+          Icon(icon, size: 18, color: AppColors.accentGold),
           const SizedBox(height: 3),
           Text(value,
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: color),
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: 13,
+                color: primaryText,
+              ),
               overflow: TextOverflow.ellipsis),
           Text(
             label,
             style: TextStyle(
               fontSize: 10,
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
+              color: primaryText.withValues(alpha: 0.82),
             ),
           ),
         ],
@@ -768,6 +913,7 @@ class _SearchSortBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final gap = ScreenLayout.of(context).pageHorizontalGap;
     return Container(
       color: cs.surface,
@@ -783,9 +929,16 @@ class _SearchSortBar extends StatelessWidget {
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
                 color: cs.primary.withValues(alpha: 0.08),
-                borderRadius: AppShape.none,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: AppColors.accentGold.withValues(alpha: 0.55),
+                ),
               ),
-              child: Icon(Icons.sort_rounded, size: 20, color: cs.primary),
+              child: const Icon(
+                Icons.sort_rounded,
+                size: 20,
+                color: AppColors.primaryDark,
+              ),
             ),
             itemBuilder: (_) => [
               const PopupMenuItem(value: 'date_desc',   child: Text('الأحدث أولاً')),
@@ -800,14 +953,37 @@ class _SearchSortBar extends StatelessWidget {
               textDirection: TextDirection.rtl,
               decoration: InputDecoration(
                 hintText: 'بحث باسم العميل أو رقم الفاتورة أو هاتف العميل...',
-                hintStyle: TextStyle(fontSize: 13, color: cs.onSurfaceVariant),
-                prefixIcon: Icon(Icons.search_rounded, size: 20, color: cs.onSurfaceVariant),
+                hintStyle: TextStyle(
+                  fontSize: 13,
+                  color: isDark
+                      ? cs.onSurfaceVariant
+                      : AppColors.primaryDark.withValues(alpha: 0.68),
+                ),
+                prefixIcon: Icon(
+                  Icons.search_rounded,
+                  size: 20,
+                  color: isDark
+                      ? cs.onSurfaceVariant
+                      : AppColors.primaryDark.withValues(alpha: 0.72),
+                ),
                 contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                 filled: true,
                 fillColor: cs.surfaceContainerHighest.withValues(alpha: 0.65),
-                border: const OutlineInputBorder(
-                  borderRadius: AppShape.none,
-                  borderSide: BorderSide.none,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(
+                    color: AppColors.accentGold.withValues(alpha: 0.45),
+                  ),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(
+                    color: AppColors.accentGold.withValues(alpha: isDark ? 0.4 : 0.28),
+                  ),
+                ),
+                focusedBorder: const OutlineInputBorder(
+                  borderRadius: BorderRadius.all(Radius.circular(12)),
+                  borderSide: BorderSide(color: AppColors.accentGold, width: 1.4),
                 ),
                 suffixIcon: controller.text.isNotEmpty
                     ? IconButton(
@@ -846,10 +1022,14 @@ class _SearchSortBar extends StatelessWidget {
 // ── قائمة الفواتير ────────────────────────────────────────────────────────────
 class _InvoiceList extends StatelessWidget {
   final List<Invoice> invoices;
-  final VoidCallback onAdd;
+  final VoidCallback? onAdd;
+  final String? emptyMessage;
   final bool isDark;
   final bool groupByShift;
   final Map<int, Map<String, dynamic>> shiftById;
+
+  /// نوع العمل لكل فاتورة (يُكتب على البطاقة).
+  final Map<int, ReceiptKind> kindById;
   final int Function(int? a, int? b) compareShiftKeys;
   final DateFormat dateTimeFmt;
   final Future<void> Function(Invoice) onInvoiceTap;
@@ -862,21 +1042,27 @@ class _InvoiceList extends StatelessWidget {
   /// تُمرَّر إلى البطاقات لتقييم زر "ترجيع" بكفاءة O(1) لكل بند.
   final Set<int> serviceProductIds;
 
+  /// إخفاء زر «ترجيع» (مثلاً فواتير تخصص غيار الزيت).
+  final bool hideReturnAction;
+
   final Future<void> Function()? onLoadMore;
   final bool isLoadingMore;
   final bool isLoading;
 
   const _InvoiceList({
     required this.invoices,
-    required this.onAdd,
+    this.onAdd,
+    this.emptyMessage,
     required this.isDark,
     required this.groupByShift,
     required this.shiftById,
+    this.kindById = const {},
     required this.compareShiftKeys,
     required this.dateTimeFmt,
     required this.onInvoiceTap,
     required this.selectedInvoiceId,
     required this.serviceProductIds,
+    this.hideReturnAction = false,
     required this.onLoadMore,
     required this.isLoadingMore,
     required this.isLoading,
@@ -888,7 +1074,7 @@ class _InvoiceList extends StatelessWidget {
       if (isLoading) {
         return const Center(child: CircularProgressIndicator());
       }
-      return _EmptyState(onAdd: onAdd);
+      return _EmptyState(onAdd: onAdd, message: emptyMessage);
     }
     return NotificationListener<ScrollNotification>(
       onNotification: (n) {
@@ -924,8 +1110,10 @@ class _InvoiceList extends StatelessWidget {
             invoice: inv,
             isDark: isDark,
             shiftStaffLabel: _labelFor(inv.workShiftId),
+            workKind: inv.id == null ? null : kindById[inv.id],
             isSelected: inv.id != null && inv.id == selectedInvoiceId,
             serviceProductIds: serviceProductIds,
+            hideReturnAction: hideReturnAction,
             onTap: () => onInvoiceTap(inv),
           );
         },
@@ -974,8 +1162,10 @@ class _InvoiceList extends StatelessWidget {
           invoice: inv,
           isDark: isDark,
           shiftStaffLabel: _labelFor(inv.workShiftId),
+          workKind: inv.id == null ? null : kindById[inv.id],
           isSelected: inv.id != null && inv.id == selectedInvoiceId,
           serviceProductIds: serviceProductIds,
+          hideReturnAction: hideReturnAction,
           onTap: () => onInvoiceTap(inv),
         );
       },
@@ -1138,12 +1328,20 @@ class _InvoiceCard extends StatelessWidget {
   /// `product.id` لكل المنتجات من نوع خدمة — يُستعمل لتقييم زر "ترجيع".
   final Set<int> serviceProductIds;
 
+  /// إخفاء زر «ترجيع» (تخصص غيار الزيت).
+  final bool hideReturnAction;
+
+  /// نوع العمل (غيار زيت، غسيل…)؛ `null` أو بيع عام = لا علامة.
+  final ReceiptKind? workKind;
+
   const _InvoiceCard({
     required this.invoice,
     required this.isDark,
     this.shiftStaffLabel,
+    this.workKind,
     required this.onTap,
     required this.serviceProductIds,
+    this.hideReturnAction = false,
     this.isSelected = false,
   });
 
@@ -1178,10 +1376,18 @@ class _InvoiceCard extends StatelessWidget {
     }
   }
 
+  /// علامة نوع العمل تظهر فقط لأنواع لها إيصال خاص.
+  ReceiptKind? get _shownKind {
+    final k = workKind;
+    return k != null && k.isWorkSpecific ? k : null;
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final statusColor = _invoiceStatusColor(invoice, cs);
+    final kind = _shownKind;
+    final cardRadius = BorderRadius.circular(12);
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
@@ -1191,12 +1397,13 @@ class _InvoiceCard extends StatelessWidget {
                 cs.surface,
               )
             : cs.surface,
-        borderRadius: AppShape.none,
-        border: isSelected
-            ? Border(
-                right: BorderSide(color: cs.primary, width: 3),
-              )
-            : null,
+        borderRadius: cardRadius,
+        border: Border.all(
+          color: isSelected
+              ? AppColors.accentGold
+              : AppColors.accentGold.withValues(alpha: isDark ? 0.35 : 0.22),
+          width: isSelected ? 1.5 : 1,
+        ),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: isDark ? 0.25 : 0.05),
@@ -1206,9 +1413,9 @@ class _InvoiceCard extends StatelessWidget {
       ),
       child: Material(
         color: Colors.transparent,
-        borderRadius: BorderRadius.zero,
+        borderRadius: cardRadius,
         child: InkWell(
-          borderRadius: BorderRadius.zero,
+          borderRadius: cardRadius,
           onTap: onTap,
           child: Padding(
             padding: const EdgeInsets.all(14),
@@ -1219,9 +1426,13 @@ class _InvoiceCard extends StatelessWidget {
                   width: 46, height: 46,
                   decoration: BoxDecoration(
                     color: statusColor.withValues(alpha: 0.12),
-                    borderRadius: AppShape.none,
+                    borderRadius: BorderRadius.circular(10),
                   ),
-                  child: Icon(_typeIcon, color: statusColor, size: 22),
+                  child: Icon(
+                    kind == null ? _typeIcon : invoiceWorkKindIcon(kind),
+                    color: statusColor,
+                    size: 22,
+                  ),
                 ),
                 const SizedBox(width: 12),
                 // بيانات الفاتورة
@@ -1248,45 +1459,68 @@ class _InvoiceCard extends StatelessWidget {
                           ),
                         ],
                       ),
+                      if (kind != null) ...[
+                        const SizedBox(height: 5),
+                        _WorkKindChip(kind: kind, isDark: isDark),
+                      ],
                       const SizedBox(height: 5),
                       Row(
                         children: [
-                          Text(
-                            '#${invoice.id?.toString().padLeft(5, '0') ?? '-----'}',
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: cs.onSurfaceVariant,
+                          Flexible(
+                            fit: FlexFit.loose,
+                            child: Text(
+                              '#${invoice.id?.toString().padLeft(5, '0') ?? '-----'}',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: cs.onSurfaceVariant,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                             ),
                           ),
-                          const SizedBox(width: 6),
+                          const SizedBox(width: 4),
                           Container(
-                            width: 4, height: 4,
+                            width: 4,
+                            height: 4,
                             decoration: BoxDecoration(
                               color: cs.onSurfaceVariant,
                               shape: BoxShape.circle,
                             ),
                           ),
-                          const SizedBox(width: 6),
-                          Text(
-                            _dateFmt.format(invoice.date),
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: cs.onSurfaceVariant,
+                          const SizedBox(width: 4),
+                          Flexible(
+                            fit: FlexFit.loose,
+                            child: Text(
+                              _dateFmt.format(invoice.date),
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: cs.onSurfaceVariant,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                             ),
                           ),
-                          const Spacer(),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                            decoration: BoxDecoration(
-                              color: statusColor.withValues(alpha: 0.12),
-                              borderRadius: AppShape.none,
-                            ),
-                            child: Text(
-                              _statusLabel,
-                              style: TextStyle(
-                                color: statusColor,
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
+                          const SizedBox(width: 4),
+                          Flexible(
+                            fit: FlexFit.loose,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 7,
+                                vertical: 3,
+                              ),
+                              decoration: BoxDecoration(
+                                color: statusColor.withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Text(
+                                _statusLabel,
+                                style: TextStyle(
+                                  color: statusColor,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                               ),
                             ),
                           ),
@@ -1329,7 +1563,8 @@ class _InvoiceCard extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 8),
-                if (_canReturnInvoice(invoice, serviceProductIds))
+                if (!hideReturnAction &&
+                    _canReturnInvoice(invoice, serviceProductIds))
                   _ReturnActionPill(
                     onPressed: () {
                       Navigator.push<void>(
@@ -1351,6 +1586,61 @@ class _InvoiceCard extends StatelessWidget {
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// أيقونة نوع العمل على بطاقة الفاتورة.
+IconData invoiceWorkKindIcon(ReceiptKind kind) => switch (kind) {
+  ReceiptKind.oilChange => Icons.oil_barrel_rounded,
+  ReceiptKind.carWash => Icons.local_car_wash_rounded,
+  ReceiptKind.directSale => Icons.shopping_bag_rounded,
+  ReceiptKind.saleReturn => Icons.assignment_return_rounded,
+  ReceiptKind.debtPayment => Icons.account_balance_wallet_rounded,
+  ReceiptKind.expense => Icons.money_off_rounded,
+  ReceiptKind.sale => Icons.point_of_sale_rounded,
+};
+
+/// علامة صغيرة باسم نوع العمل: «غيار زيت»، «غسيل سيارة»…
+class _WorkKindChip extends StatelessWidget {
+  const _WorkKindChip({required this.kind, required this.isDark});
+
+  final ReceiptKind kind;
+  final bool isDark;
+
+  @override
+  Widget build(BuildContext context) {
+    final fg = isDark ? AppColors.accentGold : AppColors.primary;
+    return Align(
+      alignment: AlignmentDirectional.centerStart,
+      child: Container(
+        key: ValueKey('invoice-kind-${kind.name}'),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: fg.withValues(alpha: isDark ? 0.16 : 0.08),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: fg.withValues(alpha: 0.25)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ExcludeSemantics(
+              child: Icon(invoiceWorkKindIcon(kind), size: 13, color: fg),
+            ),
+            const SizedBox(width: 4),
+            Flexible(
+              child: Text(
+                kind.shortLabel,
+                style: TextStyle(
+                  color: fg,
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -1406,8 +1696,9 @@ class _ReturnActionPill extends StatelessWidget {
 
 // ── الحالة الفارغة ────────────────────────────────────────────────────────────
 class _EmptyState extends StatelessWidget {
-  final VoidCallback onAdd;
-  const _EmptyState({required this.onAdd});
+  final VoidCallback? onAdd;
+  final String? message;
+  const _EmptyState({this.onAdd, this.message});
 
   @override
   Widget build(BuildContext context) {
@@ -1446,32 +1737,38 @@ class _EmptyState extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'أضف أول فاتورة الآن',
+                  message ??
+                      (onAdd != null
+                          ? 'أضف أول فاتورة الآن'
+                          : 'ستظهر هنا فواتير إقفال بطاقات غيار الزيت'),
+                  textAlign: TextAlign.center,
                   style: TextStyle(
                     color: cs.onSurfaceVariant,
                     fontSize: 14,
                   ),
                 ),
-                const SizedBox(height: 24),
-                FilledButton.icon(
-                  onPressed: onAdd,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: cs.primary,
-                    foregroundColor: cs.onPrimary,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 24,
-                      vertical: 12,
+                if (onAdd != null) ...[
+                  const SizedBox(height: 24),
+                  FilledButton.icon(
+                    onPressed: onAdd,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: cs.primary,
+                      foregroundColor: cs.onPrimary,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 12,
+                      ),
+                      shape: const RoundedRectangleBorder(
+                        borderRadius: AppShape.none,
+                      ),
                     ),
-                    shape: const RoundedRectangleBorder(
-                      borderRadius: AppShape.none,
+                    icon: const Icon(Icons.add_rounded),
+                    label: const Text(
+                      'البيع',
+                      style: TextStyle(fontWeight: FontWeight.bold),
                     ),
                   ),
-                  icon: const Icon(Icons.add_rounded),
-                  label: const Text(
-                    'البيع',
-                    style: TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                ),
+                ],
               ],
             ),
           ),

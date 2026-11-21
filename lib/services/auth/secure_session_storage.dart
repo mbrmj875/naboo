@@ -67,13 +67,55 @@ class SecureLocalStorage extends LocalStorage {
   @override
   Future<void> initialize() async {
     try {
-      await _secure.containsKey(persistSessionKey);
-      await _migrateLegacyTokenIfNeeded();
-    } catch (e, st) {
-      if (kDebugMode) {
-        debugPrint('[SecureLocalStorage] initialization failed, using fallback: $e\n$st');
-      }
+      await _initializeSecureOrFallback()
+          .timeout(const Duration(seconds: 2));
+    } on Object catch (e) {
       _useFallback = true;
+      if (kDebugMode) {
+        debugPrint(
+          '[SecureLocalStorage] init timed out/failed ($e) — SharedPreferences',
+        );
+      }
+    }
+  }
+
+  Future<void> _initializeSecureOrFallback() async {
+    try {
+      await _secure.containsKey(persistSessionKey);
+      // Some platforms (notably unsigned macOS debug builds without a
+      // keychain-access-groups entitlement) fail the secure store SILENTLY:
+      // read/write return normally but values never round-trip, so the session
+      // is lost on every relaunch. Probe with a write/read/delete cycle and
+      // fall back to SharedPreferences when the value does not survive.
+      if (!await _secureStoreRoundTrips()) {
+        _useFallback = true;
+        if (kDebugMode) {
+          debugPrint(
+            '[SecureLocalStorage] Keychain did not round-trip — session fallback to SharedPreferences',
+          );
+        }
+      }
+      await _migrateLegacyTokenIfNeeded();
+    } on Object catch (e) {
+      _useFallback = true;
+      if (kDebugMode) {
+        debugPrint(
+          '[SecureLocalStorage] Keychain unavailable ($e) — session fallback to SharedPreferences',
+        );
+      }
+    }
+  }
+
+  Future<bool> _secureStoreRoundTrips() async {
+    const probeKey = '__secure_local_storage_probe__';
+    final probeValue = DateTime.now().microsecondsSinceEpoch.toString();
+    try {
+      await _secure.write(probeKey, probeValue);
+      final readBack = await _secure.read(probeKey);
+      await _secure.delete(probeKey);
+      return readBack == probeValue;
+    } on Object {
+      return false;
     }
   }
 
@@ -97,12 +139,9 @@ class SecureLocalStorage extends LocalStorage {
       if (legacy == null || legacy.isEmpty) return;
       await _secure.write(persistSessionKey, legacy);
       await prefs.remove(persistSessionKey);
-    } catch (e, st) {
-      if (kDebugMode) {
-        debugPrint('[SecureLocalStorage] migration skipped: $e\n$st');
-      }
-      // Migration is best-effort; if it fails the session may need re-login.
-      rethrow;
+    } on Object catch (_) {
+      // Migration is best-effort; session may need re-login if Keychain fails.
+      _useFallback = true;
     }
   }
 
@@ -138,17 +177,17 @@ class SecureLocalStorage extends LocalStorage {
 
   @override
   Future<void> removePersistedSession() async {
-    if (_useFallback) {
-      final prefs = await _prefsFactory();
-      await prefs.remove(persistSessionKey);
-      return;
-    }
+    // Always clear both stores — fallback mode must not leave JWT in Keychain.
     try {
       await _secure.delete(persistSessionKey);
-    } catch (e) {
-      _useFallback = true;
+    } catch (_) {
+      /* ignore */
+    }
+    try {
       final prefs = await _prefsFactory();
       await prefs.remove(persistSessionKey);
+    } catch (_) {
+      /* ignore */
     }
   }
 
@@ -175,4 +214,69 @@ String supabasePersistSessionKeyFromUrl(String supabaseUrl) {
   final host = Uri.parse(supabaseUrl).host;
   final ref = host.split('.').first;
   return 'sb-$ref-auth-token';
+}
+
+/// تخزين جلسة Supabase على الويب عبر SharedPreferences → localStorage.
+/// يصمد بعد إغلاق التبويب وإعادة فتح PWA (عكس flutter_secure_storage على الويب).
+class WebSharedPreferencesLocalStorage extends LocalStorage {
+  WebSharedPreferencesLocalStorage({required this.persistSessionKey});
+
+  final String persistSessionKey;
+
+  @override
+  Future<void> initialize() async {}
+
+  @override
+  Future<bool> hasAccessToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.containsKey(persistSessionKey);
+  }
+
+  @override
+  Future<String?> accessToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(persistSessionKey);
+  }
+
+  @override
+  Future<void> removePersistedSession() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(persistSessionKey);
+  }
+
+  @override
+  Future<void> persistSession(String persistSessionString) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(persistSessionKey, persistSessionString);
+  }
+}
+
+/// مرة واحدة: انقل رمز الجلسة من flutter_secure_storage إلى SharedPreferences على الويب.
+Future<void> migrateWebSecureSessionToSharedPreferences(
+  String persistSessionKey,
+) async {
+  if (!kIsWeb) return;
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final existing = prefs.getString(persistSessionKey);
+    if (existing != null && existing.isNotEmpty) return;
+
+    final secure = FlutterSecureKvStore();
+    final fromSecure = await secure.read(persistSessionKey);
+    if (fromSecure == null || fromSecure.isEmpty) return;
+
+    await prefs.setString(persistSessionKey, fromSecure);
+    try {
+      await secure.delete(persistSessionKey);
+    } catch (_) {}
+    if (kDebugMode) {
+      debugPrint(
+        '[WebSession] migrated Supabase session secure → SharedPreferences',
+      );
+    }
+  } catch (e) {
+    if (kDebugMode) {
+      debugPrint('[WebSession] migrate skipped: $e');
+    }
+  }
 }

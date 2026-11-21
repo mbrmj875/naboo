@@ -16,8 +16,9 @@ enum InvoiceType {
 
 /// تحويل عمود `type` من SQLite إلى [InvoiceType] بأمان (قيم قديمة أو تالفة).
 InvoiceType invoiceTypeFromDb(Object? raw) {
-  final v =
-      raw is int ? raw : (raw is num ? raw.toInt() : int.tryParse('$raw'));
+  final v = raw is int
+      ? raw
+      : (raw is num ? raw.toInt() : int.tryParse('$raw'));
   final i = v ?? 0;
   if (i < 0 || i >= InvoiceType.values.length) return InvoiceType.cash;
   return InvoiceType.values[i];
@@ -47,8 +48,10 @@ class Invoice {
   bool isReturned;
   int? originalInvoiceId;
   String? deliveryAddress;
+
   /// الموظف الذي سجّل البيع (اسم الدخول أو الاسم المعروض).
   String? createdByUserName;
+
   /// نسبة الخصم % المطبّقة على إجمالي البنود (للطباعة والأرشفة).
   double discountPercent;
 
@@ -78,6 +81,22 @@ class Invoice {
   /// فقط عند [InvoiceType.supplierPayment] وقت الإنشاء: تسجيل خصم من الصندوق.
   bool supplierPaymentAffectsCash;
 
+  /// المعرّف العالمي للفاتورة (UUID موحّد على كل الأجهزة). يُقرأ من القاعدة
+  /// فقط ولا يُكتب عبر [toMap]: يولّده الإدراج.
+  final String? globalId;
+
+  /// معرّف عالمي محدد مسبقاً للإدراج فقط (المرتجع: يُطالَب به الخادم قبل الحفظ).
+  final String? presetGlobalId;
+
+  /// مرتجع: المعرّف العالمي للفاتورة الأصلية (ثابت بين الأجهزة).
+  final String? originalInvoiceGlobalId;
+
+  /// مرتجع: السبب الإلزامي.
+  final String? returnReason;
+
+  /// مرتجع: JSON (المنفّذ، الموافِق، تأكيد السلامة، طريقة الإرجاع…).
+  final String? returnMeta;
+
   Invoice({
     this.id,
     required this.customerName,
@@ -105,6 +124,11 @@ class Invoice {
     this.installmentTotalWithInterest = 0,
     this.installmentSuggestedMonthly = 0,
     this.supplierPaymentAffectsCash = true,
+    this.globalId,
+    this.presetGlobalId,
+    this.originalInvoiceGlobalId,
+    this.returnReason,
+    this.returnMeta,
   });
 
   Map<String, dynamic> toMap() {
@@ -156,7 +180,8 @@ class Invoice {
       workShiftId: map['workShiftId'] as int?,
       customerId: map['customerId'] as int?,
       loyaltyDiscount: (map['loyaltyDiscount'] as num?)?.toDouble() ?? 0,
-      loyaltyPointsRedeemed: (map['loyaltyPointsRedeemed'] as num?)?.toInt() ?? 0,
+      loyaltyPointsRedeemed:
+          (map['loyaltyPointsRedeemed'] as num?)?.toInt() ?? 0,
       loyaltyPointsEarned: (map['loyaltyPointsEarned'] as num?)?.toInt() ?? 0,
       installmentInterestPct:
           (map['installmentInterestPct'] as num?)?.toDouble() ?? 0,
@@ -176,10 +201,12 @@ class Invoice {
 
 class InvoiceItem {
   String productName;
+
   /// كمية المخزون الأساسية المباعة/المرتجعة (مثلاً **كيلوغرامات** عند بيع بالوزن، أو قطع أساسية).
   double quantity;
   double price;
   double total;
+
   /// لربط البند بالمنتج (خصم المخزون عند البيع).
   int? productId;
 
@@ -194,6 +221,9 @@ class InvoiceItem {
   String? variantColorNameSnapshot;
   String? variantSizeSnapshot;
 
+  /// المعرّف العالمي للسطر (يُقرأ من القاعدة فقط؛ مفتاح الاسترجاع بين الأجهزة).
+  final String? globalId;
+
   InvoiceItem({
     required this.productName,
     required this.quantity,
@@ -206,10 +236,11 @@ class InvoiceItem {
     this.productVariantId,
     this.variantColorNameSnapshot,
     this.variantSizeSnapshot,
+    this.globalId,
     double? enteredQty,
     double? baseQty,
-  })  : enteredQty = enteredQty ?? quantity,
-        baseQty = baseQty ?? quantity;
+  }) : enteredQty = enteredQty ?? quantity,
+       baseQty = baseQty ?? quantity;
 
   /// الكمية المعروضة للمستخدم (وحدة البيع)، مع دعم الفواتير القديمة قبل أعمدة اللقطة.
   double get enteredQtyResolved {
@@ -255,8 +286,8 @@ class InvoiceItem {
     final base = (map['baseQty'] as num?)?.toDouble();
 
     final resolvedBase = base ?? legacyQty;
-    final resolvedEntered = entered ??
-        (base != null ? base / factor : legacyQty);
+    final resolvedEntered =
+        entered ?? (base != null ? base / factor : legacyQty);
     return InvoiceItem(
       productName: map['productName'],
       quantity: resolvedBase,
@@ -271,6 +302,7 @@ class InvoiceItem {
       productVariantId: (map['productVariantId'] as num?)?.toInt(),
       variantColorNameSnapshot: map['variantColorNameSnapshot'] as String?,
       variantSizeSnapshot: map['variantSizeSnapshot'] as String?,
+      globalId: (map['global_id'] as String?)?.trim(),
     );
   }
 }

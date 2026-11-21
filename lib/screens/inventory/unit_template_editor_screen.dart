@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../services/product_repository.dart';
+import '../../theme/design_tokens.dart';
 
 /// إنشاء أو تعديل قالب وحدات — الوحدة الأساسية، وحدات أكبر بمعامل تحويل، اسم القالب، نشط.
 class UnitTemplateEditorScreen extends StatefulWidget {
@@ -182,11 +183,11 @@ class _UnitTemplateEditorScreenState extends State<UnitTemplateEditorScreen> {
         child: Scaffold(
           backgroundColor: bg,
           appBar: AppBar(
-            backgroundColor: const Color(0xFF1E3A5F),
-            foregroundColor: Colors.white,
-            title: Text(title),
+            backgroundColor: cs.surfaceContainerHighest,
+            foregroundColor: cs.onSurface,
+            title: Text(title, style: TextStyle(color: cs.onSurface)),
             leading: IconButton(
-              icon: const Icon(Icons.arrow_back_ios_new, size: 18),
+              icon: Icon(Icons.arrow_back_ios_new, size: 18, color: cs.onSurface),
               onPressed: () => Navigator.pop(context),
             ),
           ),
@@ -200,13 +201,13 @@ class _UnitTemplateEditorScreenState extends State<UnitTemplateEditorScreen> {
       child: Scaffold(
         backgroundColor: bg,
         appBar: AppBar(
-          backgroundColor: const Color(0xFF1E3A5F),
-          foregroundColor: Colors.white,
+          backgroundColor: cs.surfaceContainerHighest,
+          foregroundColor: cs.onSurface,
           title: Text(title,
               style:
-                  const TextStyle(fontWeight: FontWeight.bold, fontSize: 17)),
+                  TextStyle(color: cs.onSurface, fontWeight: FontWeight.bold, fontSize: 17)),
           leading: IconButton(
-            icon: const Icon(Icons.arrow_back_ios_new, size: 18),
+            icon: Icon(Icons.arrow_back_ios_new, size: 18, color: cs.onSurface),
             onPressed: () => Navigator.pop(context),
           ),
         ),
@@ -217,9 +218,10 @@ class _UnitTemplateEditorScreenState extends State<UnitTemplateEditorScreen> {
                 children: [
                   Card(
                     elevation: 0,
+                    color: cs.surfaceContainerHighest.withValues(alpha: 0.3),
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.zero,
-                      side: BorderSide(color: cs.outlineVariant),
+                      borderRadius: BorderRadius.circular(12),
+                      side: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.5)),
                     ),
                     child: Padding(
                       padding: const EdgeInsets.all(16),
@@ -250,7 +252,7 @@ class _UnitTemplateEditorScreenState extends State<UnitTemplateEditorScreen> {
                                           child: Text(
                                             'اسم الوحدة الأساسية',
                                             textAlign: TextAlign.right,
-                                            style: theme.textTheme.labelLarge,
+                                            style: theme.textTheme.labelLarge?.copyWith(color: AppColors.accentGold),
                                           ),
                                         ),
                                       ],
@@ -259,6 +261,7 @@ class _UnitTemplateEditorScreenState extends State<UnitTemplateEditorScreen> {
                                     TextField(
                                       controller: _baseNameCtrl,
                                       textAlign: TextAlign.right,
+                                      style: TextStyle(color: cs.onSurface),
                                       decoration: InputDecoration(
                                         hintText: 'مثال: جرام',
                                         hintStyle: TextStyle(
@@ -266,7 +269,17 @@ class _UnitTemplateEditorScreenState extends State<UnitTemplateEditorScreen> {
                                               .withValues(alpha: 0.85),
                                           fontSize: 13,
                                         ),
-                                        border: const OutlineInputBorder(),
+                                        filled: true,
+                                        fillColor: cs.surface,
+                                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                                        enabledBorder: OutlineInputBorder(
+                                          borderRadius: BorderRadius.circular(12),
+                                          borderSide: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.5)),
+                                        ),
+                                        focusedBorder: OutlineInputBorder(
+                                          borderRadius: BorderRadius.circular(12),
+                                          borderSide: const BorderSide(color: AppColors.accentGold, width: 2),
+                                        ),
                                         isDense: true,
                                       ),
                                     ),
@@ -288,8 +301,8 @@ class _UnitTemplateEditorScreenState extends State<UnitTemplateEditorScreen> {
                           Container(
                             padding: const EdgeInsets.all(12),
                             decoration: BoxDecoration(
-                              borderRadius: BorderRadius.zero,
-                              border: Border.all(color: cs.outlineVariant),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: AppColors.accentGold.withValues(alpha: 0.3)),
                             ),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -298,10 +311,14 @@ class _UnitTemplateEditorScreenState extends State<UnitTemplateEditorScreen> {
                                   _conversionRow(context, i),
                                 Align(
                                   alignment: Alignment.centerRight,
-                                  child: FilledButton.tonalIcon(
+                                  child: FilledButton.icon(
                                     onPressed: _addConversionRow,
                                     icon: const Icon(Icons.add_rounded, size: 20),
                                     label: const Text('أضف الوحدة'),
+                                    style: FilledButton.styleFrom(
+                                      backgroundColor: AppColors.accentGold.withValues(alpha: 0.2),
+                                      foregroundColor: AppColors.accentGold,
+                                    ),
                                   ),
                                 ),
                               ],
@@ -318,6 +335,7 @@ class _UnitTemplateEditorScreenState extends State<UnitTemplateEditorScreen> {
                           CheckboxListTile(
                             contentPadding: EdgeInsets.zero,
                             title: const Text('نشط'),
+                            activeColor: AppColors.accentGold,
                             value: _active,
                             onChanged: (v) =>
                                 setState(() => _active = v ?? true),
@@ -332,6 +350,8 @@ class _UnitTemplateEditorScreenState extends State<UnitTemplateEditorScreen> {
                     onPressed: _saving ? null : _save,
                     style: FilledButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 14),
+                      backgroundColor: AppColors.accentGold.withValues(alpha: 0.2),
+                      foregroundColor: AppColors.accentGold,
                     ),
                     child: _saving
                         ? const SizedBox(
@@ -421,20 +441,31 @@ class _UnitTemplateEditorScreenState extends State<UnitTemplateEditorScreen> {
         Text(
           label,
           textAlign: TextAlign.right,
-          style: Theme.of(context).textTheme.labelLarge,
+          style: Theme.of(context).textTheme.labelLarge?.copyWith(color: AppColors.accentGold),
         ),
         const SizedBox(height: 6),
         TextField(
           controller: controller,
           textAlign: TextAlign.right,
           keyboardType: keyboardType,
+          style: TextStyle(color: cs.onSurface),
           decoration: InputDecoration(
             hintText: hint,
             hintStyle: TextStyle(
               color: cs.onSurfaceVariant.withValues(alpha: 0.85),
               fontSize: 13,
             ),
-            border: const OutlineInputBorder(),
+            filled: true,
+            fillColor: cs.surface,
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.5)),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: AppColors.accentGold, width: 2),
+            ),
             isDense: true,
           ),
         ),
