@@ -3,6 +3,7 @@ import 'package:intl/intl.dart' hide TextDirection;
 import '../../../utils/iqd_money.dart';
 import '../../../utils/iraqi_currency_format.dart';
 import 'oil_change_filter_format.dart';
+import 'oil_order_has_oil.dart';
 
 /// دعوة تقييم في نهاية الرسالة — تشجّع الزبون على الرد وبدء محادثة.
 const oilChangeWhatsAppRatingAskText =
@@ -42,6 +43,7 @@ Map<String, String> buildOilChangeCardTemplateParams({
   String storeAddress = '',
   List<String> storePhones = const [],
   String? storeMapsUrl,
+  int priorOpenDebtFils = 0,
 }) {
   String text(Object? raw, {String fallback = oilChangeCardEmptyField}) {
     final v = (raw ?? '').toString().trim();
@@ -110,7 +112,10 @@ Map<String, String> buildOilChangeCardTemplateParams({
     'discount': hasDiscount ? money(discountF) : oilChangeCardEmptyField,
     'total': money(totalF),
     'paid': money(paidF),
-    'remaining': money(remainderF),
+    'remaining': oilCardRemainingWithPriorDebt(
+      remainderFils: remainderF,
+      priorOpenDebtFils: priorOpenDebtFils,
+    ),
     'employee': text(order['technicianName']),
     'notes': text(order['issueDescription']),
   };
@@ -129,6 +134,20 @@ Map<String, String> buildOilChangeCardTemplateParams({
   }
   if (maps.isNotEmpty) params['store_maps'] = maps;
   return params;
+}
+
+/// خانة «المتبقي» في قالب البطاقة: متبقي الزيارة، ومعه الدين السابق والكلي
+/// إن وُجد (سطر واحد؛ القالب نفسه لا يتغيّر فلا يحتاج موافقة ميتا).
+String oilCardRemainingWithPriorDebt({
+  required int remainderFils,
+  required int priorOpenDebtFils,
+}) {
+  String fmt(int f) => IraqiCurrencyFormat.formatIqd(IqdMoney.fromFils(f));
+  final rem = remainderFils > _minMeaningfulFils ? remainderFils : 0;
+  final prior = priorOpenDebtFils > _minMeaningfulFils ? priorOpenDebtFils : 0;
+  if (prior == 0) return rem == 0 ? oilChangeCardEmptyField : fmt(rem);
+  if (rem == 0) return 'لا شيء لهذه الزيارة، ودين سابق ${fmt(prior)}';
+  return '${fmt(rem)} + دين سابق ${fmt(prior)} = الكلي ${fmt(rem + prior)}';
 }
 
 /// يجهّز نصاً لمعامل قالب واتساب الرسمي (سطر واحد بدون أسطر جديدة).
@@ -166,7 +185,7 @@ String buildOilChangeAutoWhatsAppMessage({
 
   final buf = StringBuffer()
     ..writeln('مرحباً $customer،')
-    ..writeln('شكراً لزيارتكم *$shop* لغيار الزيت 🙏')
+    ..writeln('شكراً لزيارتكم *$shop* ل${_autoVisitWork(order)} 🙏')
     ..writeln();
 
   _appendCardDetails(buf, order: order, storeFooter: storeFooter);
@@ -377,4 +396,9 @@ String? _hydraulicText({
   ];
   if (parts.isEmpty) return null;
   return '$label: ${parts.join(' — ')}';
+}
+
+String _autoVisitWork(Map<String, dynamic> order) {
+  final label = oilCardWorkLabel(order);
+  return label == 'غيار زيت' ? 'غيار الزيت' : label;
 }

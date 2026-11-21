@@ -1,3 +1,6 @@
+import '../verticals/oil_change/utils/oil_change_lookup_normalize.dart';
+import '../verticals/oil_change/services/vehicle_registry.dart';
+import 'shared_db_transaction.dart';
 import 'dart:async' show unawaited;
 import 'dart:convert';
 import 'dart:math';
@@ -9,6 +12,8 @@ import 'package:uuid/uuid.dart';
 import 'cloud_sync_service.dart';
 import 'marketplace/marketplace_catalog_sync_service.dart';
 import 'customer_delete_guard.dart';
+import 'supplier_statement.dart';
+import 'cash_ledger_audit.dart';
 import 'password_hashing.dart';
 import 'sync_queue_service.dart';
 import 'tenant_context.dart';
@@ -79,6 +84,8 @@ class DatabaseHelper {
   static Future<Database>? _opening;
 
   Future<Database> get database async {
+    final shared = SharedDbTransaction.current();
+    if (shared != null) return shared;
     if (_database != null) return _database!;
     final opening = _opening;
     if (opening != null) return opening;
@@ -90,6 +97,12 @@ class DatabaseHelper {
     } finally {
       _opening = null;
     }
+  }
+
+  /// ينفّذ [action] في معاملة واحدة: كل ما يكتبه أي مستودع داخلها ينجح معاً
+  /// أو يُلغى معاً. انظر [SharedDbTransaction].
+  Future<T> runInOneTransaction<T>(Future<T> Function() action) async {
+    return SharedDbTransaction.run(await database, action);
   }
 
   /// ترحيلات حرجة وقت الإقلاع، تُنفَّذ صراحةً حتى لو لم يُستدعَ onOpen مبكراً.
@@ -510,6 +523,24 @@ class DatabaseHelper {
     } catch (_) {}
   }
 
+  /// الإصدار 52 — استثناء العميل من إعدادات الدين العامة (من صفحته):
+  /// فترة تسديد وسقف خاصان (null = العام)، و«نقداً فقط» (لا دين جديد).
+  Future<void> _ensureCustomerDebtExceptionColumns(Database db) async {
+    try {
+      for (final (name, type) in const [
+        ('debtPeriodDays', 'INTEGER'),
+        ('debtCapFils', 'INTEGER'),
+        ('cashOnly', 'INTEGER NOT NULL DEFAULT 0'),
+      ]) {
+        if (!await _tableHasColumn(db, 'customers', name)) {
+          await db.execute('ALTER TABLE customers ADD COLUMN $name $type');
+        }
+      }
+    } catch (e, st) {
+      AppLogger.error('DatabaseHelper', 'customer debt exception columns', e, st);
+    }
+  }
+
   Future<void> _ensureServiceOrdersOilChangeFilterColumns(Database db) async {
     try {
       final cols = <(String, String)>[
@@ -519,8 +550,15 @@ class DatabaseHelper {
         ('airFilterPriceFils', 'INTEGER'),
         ('gearFilterName', 'TEXT'),
         ('gearFilterPriceFils', 'INTEGER'),
-        // JSON: [{code,name,priceFils,catalogEntryId?}, ...] — فئات ديناميكية.
+        // JSON: [{code,name,priceFils,catalogEntryId?,customerProvided?,laborFils?}]
         ('oilFiltersJson', 'TEXT'),
+        // الإصدار 51: أجور اليد المحفوظة في البطاقة، وسعر لتر هيدروليك الكتالوج
+        // (null في البطاقات القديمة: تُحسب الأجرة من الإعدادات كما كانت).
+        ('oilLaborFils', 'INTEGER'),
+        ('hydraulicLaborFils', 'INTEGER'),
+        ('powerHydraulicLaborFils', 'INTEGER'),
+        ('hydraulicSellPerLiterFils', 'INTEGER'),
+        ('powerHydraulicSellPerLiterFils', 'INTEGER'),
       ];
       for (final (col, type) in cols) {
         if (!await _tableHasColumn(db, 'service_orders', col)) {
@@ -534,7 +572,7 @@ class DatabaseHelper {
     String path = join(await getDatabasesPath(), 'business_app.db');
     return await openDatabase(
       path,
-      version: 50,
+      version: 52,
       onConfigure: (db) async {
         await db.execute('PRAGMA foreign_keys = ON');
         // Reduce "database locked" warnings under concurrent access.
@@ -609,11 +647,19 @@ class DatabaseHelper {
     await _ensureOilChangeHydraulicCatalogTable(db);
     await _ensureOilChangeFilterCatalogTable(db);
     await _ensureServiceOrdersOilChangeFilterColumns(db);
+    await _ensureCustomerDebtExceptionColumns(db);
     await ensureOilProductGradesSchema(db);
     await ensureBusinessAuditEventsTable(db);
     await ensureOwnerDashboardQueryIndexes(db);
     await ensurePharmacyCatalogTables(db);
     await ensureRestaurantTables(db);
+    // سجل السيارات: الجدول، ثم ربط البطاقات القديمة (مرة واحدة فعلياً).
+    try {
+      await VehicleRegistry.ensureSchema(db);
+      await VehicleRegistry.reconcile(db);
+    } catch (e, st) {
+      AppLogger.error('DatabaseHelper', 'vehicle registry setup failed', e, st);
+    }
   }
 
   /// ربط بطاقة الغيار بصرف المخزون (زيت المحل).
@@ -2442,6 +2488,12 @@ class DatabaseHelper {
     if (oldVersion < 50) {
       await ensureRestaurantTables(db);
     }
+    if (oldVersion < 51) {
+      await _ensureServiceOrdersOilChangeFilterColumns(db);
+    }
+    if (oldVersion < 52) {
+      await _ensureCustomerDebtExceptionColumns(db);
+    }
     await _ensureRbacFoundation(db);
     await _ensureBranchTopology(db);
   }
@@ -2991,6 +3043,12 @@ class DatabaseHelper {
     await addCol('customer_global_id', 'TEXT');
     await addCol('updatedAt', 'TEXT');
     await addCol('tenantId', 'INTEGER NOT NULL DEFAULT 1');
+    // المرحلة 5 — الشريحة 3: توزيع الدفعة على الفواتير (JSON) وحالة الإلغاء.
+    await addCol('allocationsJson', 'TEXT');
+    await addCol('receipt_invoice_global_id', 'TEXT');
+    await addCol('voidedAt', 'TEXT');
+    await addCol('voidedByUserName', 'TEXT');
+    await addCol('voidReason', 'TEXT');
     try {
       await db.execute(
         'CREATE UNIQUE INDEX IF NOT EXISTS ux_customer_debt_payments_global_id '
@@ -3048,6 +3106,14 @@ class DatabaseHelper {
       'CREATE INDEX IF NOT EXISTS ix_supplier_payouts_supplierId ON supplier_payouts(supplierId)',
     );
     await _ensureSupplierPayoutReceiptInvoiceColumn(db);
+    // المرحلة 5 — الشريحة 3: الدفعة المعكوسة تبقى ظاهرة «ملغاة».
+    for (final col in const ['voidedAt', 'voidedByUserName', 'voidReason']) {
+      if (!await _tableHasColumn(db, 'supplier_payouts', col)) {
+        try {
+          await db.execute('ALTER TABLE supplier_payouts ADD COLUMN $col TEXT');
+        } catch (_) {}
+      }
+    }
   }
 
   Future<void> _ensureSupplierPayoutReceiptInvoiceColumn(Database db) async {
@@ -3061,6 +3127,12 @@ class DatabaseHelper {
   }
 
   Future<void> _ensureSupplierBillStockLinkColumns(Database db) async {
+    // المرحلة 5 — الشريحة 4: «يُدفع قبل» اختياري على الوصل (تاريخ yyyy-MM-dd).
+    if (!await _tableHasColumn(db, 'supplier_bills', 'dueDate')) {
+      try {
+        await db.execute('ALTER TABLE supplier_bills ADD COLUMN dueDate TEXT');
+      } catch (_) {}
+    }
     if (!await _tableHasColumn(db, 'supplier_bills', 'linkedStockVoucherId')) {
       try {
         await db.execute(

@@ -17,6 +17,11 @@ import '../../utils/sale_receipt_pdf.dart';
 import '../../utils/shift_actor_conflict_guard.dart';
 import '../../theme/design_tokens.dart';
 import '../../widgets/product_media_image.dart';
+import 'void_payment_dialog.dart';
+import '../../printing/receipt_printer.dart';
+import '../../services/effective_store_branding.dart';
+import '../../services/supplier_statement.dart';
+import '../../utils/customer_phone_launch.dart';
 
 final _numFmt = NumberFormat('#,##0', 'ar');
 final _dateFmt = DateFormat('dd/MM/yyyy', 'ar');
@@ -48,10 +53,84 @@ class _SupplierDetailScreenState extends State<SupplierDetailScreen> {
   bool _loading = true;
   bool _didRunInitialAction = false;
 
+  int get _paidFils => _payouts
+      .where((e) => !e.isVoided)
+      .fold<int>(0, (s, e) => s + supplierFils(e.amount));
+
+  /// بالفلس ثم بالدينار، حتى لا تتراكم كسور الجمع العشري.
   double get _openPayable {
-    final b = _bills.fold<double>(0, (s, e) => s + e.amount);
-    final p = _payouts.fold<double>(0, (s, e) => s + e.amount);
-    return b - p;
+    final b = _bills.fold<int>(0, (s, e) => s + supplierFils(e.amount));
+    return (b - _paidFils) / 1000.0;
+  }
+
+  SupplierDueStatus get _due =>
+      computeSupplierDue(bills: _bills, paidFils: _paidFils);
+
+  Future<String> _storeName() async {
+    try {
+      final s = await EffectiveStoreBranding.resolveFromContext(context);
+      return s.storeTitleLine;
+    } catch (_) {
+      return '';
+    }
+  }
+
+  Future<void> _openStatement() async {
+    final phone = (_supplier?.phone ?? '').trim();
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => Directionality(
+        textDirection: TextDirection.rtl,
+        child: SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const ListTile(
+                title: Text(
+                  'كشف حساب المورد',
+                  style: TextStyle(fontWeight: FontWeight.w800),
+                ),
+                subtitle: Text(
+                  'كل وصل ودفعة ومرتجع بالتاريخ، والرصيد بعد كل سطر.',
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.print_rounded),
+                title: const Text('طباعة الكشف'),
+                onTap: () => Navigator.pop(ctx, 'print'),
+              ),
+              ListTile(
+                enabled: phone.isNotEmpty,
+                leading: const Icon(Icons.chat_rounded),
+                title: const Text('إرسال الكشف بالواتساب'),
+                subtitle: phone.isEmpty
+                    ? const Text('لا يوجد رقم هاتف لهذا المورد')
+                    : null,
+                onTap: () => Navigator.pop(ctx, 'whatsapp'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (!mounted || choice == null) return;
+    final st = SupplierStatement(
+      supplierName: _supplier?.name ?? '',
+      bills: _bills,
+      payouts: _payouts,
+    );
+    if (choice == 'print') {
+      await ReceiptPrinter.printWithFeedback(context, () async => st.toReceipt());
+    } else {
+      final store = await _storeName();
+      if (!mounted) return;
+      await launchCustomerWhatsApp(
+        context,
+        [phone],
+        message: st.toWhatsAppText(storeName: store),
+      );
+    }
   }
 
   @override
@@ -162,6 +241,7 @@ class _SupplierDetailScreenState extends State<SupplierDetailScreen> {
     final amountCtrl = TextEditingController();
     final noteCtrl = TextEditingController();
     DateTime? theirDate = DateTime.now();
+    DateTime? dueDate;
     XFile? pickedFile;
 
     final ok = await showDialog<bool>(
@@ -203,6 +283,43 @@ class _SupplierDetailScreenState extends State<SupplierDetailScreen> {
                         );
                         if (d != null) setLocal(() => theirDate = d);
                       },
+                    ),
+                  ),
+                  ListTile(
+                    key: const Key('supplierBillDueDate'),
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(
+                      dueDate != null
+                          ? 'يُدفع قبل: ${_dateFmt.format(dueDate!)}'
+                          : 'يُدفع قبل (اختياري)',
+                    ),
+                    subtitle: const Text(
+                      'بعد هذا التاريخ يظهر المورد في «حان دفعهم».',
+                      style: TextStyle(fontSize: 11),
+                    ),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (dueDate != null)
+                          IconButton(
+                            tooltip: 'بلا موعد',
+                            icon: const Icon(Icons.close_rounded),
+                            onPressed: () => setLocal(() => dueDate = null),
+                          ),
+                        IconButton(
+                          icon: const Icon(Icons.event_rounded),
+                          onPressed: () async {
+                            final d = await showDatePicker(
+                              context: ctx,
+                              initialDate: dueDate ??
+                                  DateTime.now().add(const Duration(days: 30)),
+                              firstDate: DateTime(2000),
+                              lastDate: DateTime(2100),
+                            );
+                            if (d != null) setLocal(() => dueDate = d);
+                          },
+                        ),
+                      ],
                     ),
                   ),
                   TextField(
@@ -296,6 +413,7 @@ class _SupplierDetailScreenState extends State<SupplierDetailScreen> {
         supplierId: widget.supplierId,
         theirReference: ref.isEmpty ? null : ref,
         theirBillDate: theirDate,
+        dueDate: dueDate,
         amount: amt,
         note: note.isEmpty ? null : note,
         imagePath: null,
@@ -549,47 +667,45 @@ class _SupplierDetailScreenState extends State<SupplierDetailScreen> {
   }
 
   Future<void> _confirmReversePayout(SupplierPayout p) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => Directionality(
-        textDirection: TextDirection.rtl,
-        child: AlertDialog(
-          shape: const RoundedRectangleBorder(borderRadius: AppShape.none),
-          title: const Text('عكس الدفعة؟'),
-          content: Text(
-            p.affectsCash
-                ? 'سيُحذف سجل الدفعة ويُسجَّل في الصندوق إيداع قدره ${_numFmt.format(p.amount)} د.ع (عكس الخصم السابق).'
-                : 'سيُحذف سجل الدفعة فقط (لم تكن مرتبطة بالصندوق).',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('إلغاء'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('تأكيد العكس'),
-            ),
-          ],
-        ),
-      ),
+    if (p.isVoided) return;
+    if (_blockIfShiftConflict('إلغاء دفعة المورد')) return;
+    final amount = '${_numFmt.format(p.amount)} د.ع';
+    final reason = await confirmVoidPayment(
+      context,
+      title: 'إلغاء دفعة مورد',
+      amountLabel: amount,
+      effect: p.affectsCash
+          ? 'يعود المبلغ ديناً للمورد، ويُعاد إلى الصندوق بقيد عكسي، '
+                'وتبقى الدفعة في السجل بعلامة «ملغاة».'
+          : 'يعود المبلغ ديناً للمورد (لم تكن الدفعة من الصندوق)، '
+                'وتبقى الدفعة في السجل بعلامة «ملغاة».',
     );
-    if (ok != true || !mounted) return;
-    if (_blockIfShiftConflict('عكس دفعة المورد')) return;
-    final done = await _db.deleteSupplierPayoutReversingCash(
-      payoutId: p.id,
-      supplierId: widget.supplierId,
-    );
+    if (reason == null || !mounted) return;
+    final bool done;
+    try {
+      done = await _db.voidSupplierPayout(
+        payoutId: p.id,
+        supplierId: widget.supplierId,
+        reason: reason,
+        reversedByUserName: _userName(context),
+      );
+    } on StateError catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.message)));
+      return;
+    }
     if (!mounted) return;
     if (!done) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('تعذّر العكس')));
+      ).showSnackBar(const SnackBar(content: Text('تعذّر الإلغاء')));
       return;
     }
     ScaffoldMessenger.of(
       context,
-    ).showSnackBar(const SnackBar(content: Text('تم عكس الدفعة')));
+    ).showSnackBar(const SnackBar(content: Text('أُلغيت الدفعة وعاد الدين للمورد')));
     unawaited(context.read<InvoiceProvider>().refresh());
     await _load();
   }
@@ -1001,7 +1117,7 @@ class _SupplierDetailScreenState extends State<SupplierDetailScreen> {
                         if (_openPayable < -1e-6) ...[
                           const SizedBox(height: 8),
                           Text(
-                            'لا يوجد وصل مورد يغطّي هذه الدفعة — استخدم «عكس الدفعة» بجانب الدفعة لاسترجاع الصندوق، أو سجّل وصل المورد إن كان صحيحاً.',
+                            'لا يوجد وصل مورد يغطّي هذه الدفعة — استخدم «إلغاء» بجانب الدفعة لاسترجاع الصندوق، أو سجّل وصل المورد إن كان صحيحاً.',
                             style: TextStyle(
                               fontSize: 12,
                               height: 1.4,
@@ -1013,6 +1129,30 @@ class _SupplierDetailScreenState extends State<SupplierDetailScreen> {
                           const SizedBox(height: 8),
                           Text('هاتف: ${_supplier!.phone}'),
                         ],
+                        if (_due.isDue) ...[
+                          const SizedBox(height: 8),
+                          Text(
+                            supplierDueLabel(_due),
+                            key: const Key('supplierDueLabel'),
+                            style: TextStyle(
+                              color: cs.error,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ] else if (_due.nextDueDate != null) ...[
+                          const SizedBox(height: 8),
+                          Text(
+                            'أقرب موعد دفع: ${_dateFmt.format(_due.nextDueDate!)}',
+                            style: TextStyle(color: cs.onSurfaceVariant),
+                          ),
+                        ],
+                        const SizedBox(height: 10),
+                        OutlinedButton.icon(
+                          key: const Key('supplierStatementButton'),
+                          onPressed: _openStatement,
+                          icon: const Icon(Icons.description_outlined),
+                          label: const Text('كشف الحساب'),
+                        ),
                       ],
                     ),
                   ),
@@ -1201,6 +1341,11 @@ class _BillTile extends StatelessWidget {
                 ),
             ],
           ),
+          if (bill.dueDate != null)
+            Text(
+              'يُدفع قبل: ${_dateFmt.format(bill.dueDate!)}',
+              style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+            ),
           if (linked) ...[
             const SizedBox(height: 4),
             Row(
@@ -1285,21 +1430,43 @@ class _PayoutTile extends StatelessWidget {
             children: [
               Expanded(
                 child: Text(
-                  'دفعة #${payout.id}',
-                  style: const TextStyle(fontWeight: FontWeight.w800),
+                  payout.isVoided
+                      ? 'دفعة #${payout.id} · ملغاة'
+                      : 'دفعة #${payout.id}',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    color: payout.isVoided ? cs.error : null,
+                  ),
                 ),
               ),
               Text(
                 '${_numFmt.format(payout.amount)} د.ع',
-                style: const TextStyle(fontWeight: FontWeight.w700),
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  decoration:
+                      payout.isVoided ? TextDecoration.lineThrough : null,
+                ),
               ),
-              IconButton(
-                tooltip: 'عكس الدفعة (خطأ / دفعة زائدة)',
-                icon: const Icon(Icons.undo_rounded),
-                onPressed: onReverse,
-              ),
+              if (!payout.isVoided)
+                IconButton(
+                  key: Key('supplierPayoutVoid_${payout.id}'),
+                  tooltip: 'إلغاء دفعة خاطئة',
+                  icon: const Icon(Icons.undo_rounded),
+                  onPressed: onReverse,
+                ),
             ],
           ),
+          if (payout.isVoided)
+            Text(
+              [
+                'ملغاة ${_dateFmt.format(payout.voidedAt!)}',
+                if ((payout.voidedByUserName ?? '').isNotEmpty)
+                  'ألغاها ${payout.voidedByUserName}',
+                if ((payout.voidReason ?? '').isNotEmpty)
+                  'السبب: ${payout.voidReason}',
+              ].join(' · '),
+              style: TextStyle(fontSize: 12, color: cs.error),
+            ),
           Text(
             _dateFmt.format(payout.createdAt),
             style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),

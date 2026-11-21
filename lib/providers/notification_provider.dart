@@ -57,6 +57,8 @@ enum NotificationType {
   debtCustomerCeiling,
   /// متبقٍ لفاتورة آجل واحدة وصل أو تجاوز السقف في إعدادات الدين.
   debtInvoiceCeiling,
+  /// وصل مورد حلّ موعد «يُدفع قبل» وما زال عليه باقٍ.
+  supplierBillDue,
   /// تم تسجيل بيع بالدين أو بالتقسيط من شاشة البيع.
   financedSale,
   systemInfo,
@@ -107,6 +109,8 @@ class AppNotification {
         return Icons.groups_outlined;
       case NotificationType.debtInvoiceCeiling:
         return Icons.receipt_long_outlined;
+      case NotificationType.supplierBillDue:
+        return Icons.local_shipping_outlined;
       case NotificationType.financedSale:
         return Icons.point_of_sale_outlined;
       case NotificationType.systemInfo:
@@ -142,6 +146,8 @@ class AppNotification {
         return const Color(0xFFEA580C);
       case NotificationType.debtInvoiceCeiling:
         return const Color(0xFFDB2777);
+      case NotificationType.supplierBillDue:
+        return const Color(0xFFDC2626);
       case NotificationType.financedSale:
         return const Color(0xFF6366F1);
       case NotificationType.systemInfo:
@@ -177,6 +183,8 @@ class AppNotification {
         return 'سقف عميل';
       case NotificationType.debtInvoiceCeiling:
         return 'سقف فاتورة';
+      case NotificationType.supplierBillDue:
+        return 'دفع مورد';
       case NotificationType.financedSale:
         return 'بيع مموّل';
       case NotificationType.systemInfo:
@@ -260,6 +268,7 @@ class NotificationProvider extends ChangeNotifier {
     NotificationType.debtInvoiceAged,
     NotificationType.debtCustomerCeiling,
     NotificationType.debtInvoiceCeiling,
+    NotificationType.supplierBillDue,
     NotificationType.financedSale,
   };
 
@@ -967,6 +976,29 @@ class NotificationProvider extends ChangeNotifier {
               ),
             );
           }
+        }
+
+        try {
+          final dueSuppliers = await _db.getSupplierDueEntries();
+          for (final e in dueSuppliers) {
+            final nid =
+                'supplier_due_${e.supplierId}_${e.status.oldestDueDate?.toIso8601String() ?? ''}';
+            final st = e.status;
+            built.add(
+              AppNotification(
+                id: nid,
+                title: 'حان دفع مورد',
+                body:
+                    '${e.name} — ${numFmt.format(st.dueFils / 1000.0)} د.ع '
+                    '${st.daysLate == 0 ? '(موعده اليوم)' : '(متأخر ${st.daysLate} يوماً)'}',
+                type: NotificationType.supplierBillDue,
+                time: st.oldestDueDate ?? now,
+                isRead: _readIds.contains(nid),
+              ),
+            );
+          }
+        } catch (e, st) {
+          AppLogger.error('Notifications', 'supplier due', e, st);
         }
 
         final capC = debtSettings.maxTotalOpenDebtPerCustomer;

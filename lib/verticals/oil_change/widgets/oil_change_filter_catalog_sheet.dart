@@ -7,6 +7,7 @@ import '../models/oil_change_filter_catalog_entry.dart';
 import '../models/oil_change_filter_kind.dart';
 import '../services/oil_change_filter_catalog_repository.dart';
 import '../services/oil_change_filter_kinds_repository.dart';
+import '../services/oil_filter_stock_catalog.dart';
 import '../../../utils/iraqi_currency_format.dart';
 import '../../../utils/iqd_money.dart';
 import '../utils/oil_field_select_all.dart';
@@ -185,6 +186,19 @@ class _OilChangeFilterCatalogSheetBodyState
       );
       if (!mounted) return;
       await _load(silent: true);
+      if (!mounted) return;
+      if (OilFilterStockCatalog.normalizedKey(kind.label) !=
+          OilFilterStockCatalog.normalizedKey(label)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            duration: const Duration(seconds: 8),
+            content: Text(
+              'تغيّر اسم الفئة فقط. أصناف المخزون التي صنفها «${kind.label}» '
+              'لن تظهر في هذه الخانة حتى تغيّر صنفها إلى «$label» أو «فلتر».',
+            ),
+          ),
+        );
+      }
     } on StateError catch (e) {
       if (!mounted) return;
       final msg = e.message == 'duplicate_label'

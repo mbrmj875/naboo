@@ -5,6 +5,7 @@ import 'package:intl/intl.dart' hide TextDirection;
 import 'package:provider/provider.dart';
 
 import '../../services/database_helper.dart';
+import '../../services/supplier_statement.dart';
 import '../../theme/design_tokens.dart';
 import '../../utils/screen_layout.dart';
 import '../../providers/suppliers_ap_provider.dart';
@@ -82,6 +83,17 @@ class _SupplierApTabState extends State<SupplierApTab> {
         final gap = ScreenLayout.of(context).pageHorizontalGap;
         final filtered = prov.items;
         final totalOpen = prov.totalOpen;
+        final dueById = prov.dueById;
+        Future<void> openSupplier(int id) async {
+          await Navigator.push<void>(
+            context,
+            MaterialPageRoute<void>(
+              builder: (_) => SupplierDetailScreen(supplierId: id),
+            ),
+          );
+          if (context.mounted) unawaited(prov.refresh());
+        }
+
         if (prov.isLoading && filtered.isEmpty) {
           return const Center(child: CircularProgressIndicator());
         }
@@ -146,6 +158,10 @@ class _SupplierApTabState extends State<SupplierApTab> {
                       ],
                     ),
                   ),
+                  if (prov.due.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    _DueSection(entries: prov.due, onOpen: openSupplier),
+                  ],
                   const SizedBox(height: 12),
                   TextField(
                     controller: _search,
@@ -237,6 +253,17 @@ class _SupplierApTabState extends State<SupplierApTab> {
                                             color: cs.onSurfaceVariant,
                                           ),
                                         ),
+                                        if (dueById[s.supplier.id] != null)
+                                          Text(
+                                            supplierDueLabel(
+                                              dueById[s.supplier.id]!,
+                                            ),
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w700,
+                                              color: cs.error,
+                                            ),
+                                          ),
                                         const SizedBox(height: 8),
                                         Wrap(
                                           spacing: 6,
@@ -487,6 +514,51 @@ class _NewSupplierDialogState extends State<_NewSupplierDialog> {
             onPressed: _submit,
             child: const Text('حفظ'),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+/// قسم «حان دفعهم»: موردون وصل موعد «يُدفع قبل» لوصل لهم.
+class _DueSection extends StatelessWidget {
+  const _DueSection({required this.entries, required this.onOpen});
+
+  final List<SupplierDueEntry> entries;
+  final Future<void> Function(int supplierId) onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final total = entries.fold<int>(0, (s, e) => s + e.status.dueFils);
+    return Container(
+      key: const Key('supplierDueSection'),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: cs.errorContainer.withValues(alpha: 0.35),
+        border: Border.all(color: cs.error.withValues(alpha: 0.5)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'حان دفعهم (${entries.length}) · ${_numFmt.format(total / 1000.0)} د.ع',
+            style: TextStyle(fontWeight: FontWeight.w800, color: cs.error),
+          ),
+          const SizedBox(height: 4),
+          for (final e in entries)
+            ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(Icons.event_busy_rounded, color: cs.error),
+              title: Text(
+                e.name,
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+              subtitle: Text(supplierDueLabel(e.status)),
+              trailing: const Icon(Icons.chevron_left_rounded),
+              onTap: () => onOpen(e.supplierId),
+            ),
         ],
       ),
     );

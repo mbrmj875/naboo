@@ -2,7 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 
+import '../../models/customer_debt_models.dart';
 import '../../models/customer_record.dart';
+import '../../utils/iqd_money.dart';
+import '../../verticals/oil_change/widgets/oil_change_owner_pin_confirm_dialog.dart';
 import '../../utils/app_logger.dart';
 import '../../utils/screen_layout.dart';
 import '../../services/database_helper.dart';
@@ -46,6 +49,12 @@ class _CustomerFormScreenState extends State<CustomerFormScreen> {
 
   bool get _isEdit => widget.existing != null;
 
+  /// استثناء الدين (فترة وسقف خاصان، «نقداً فقط»): الفارغ = العام.
+  final _debtPeriodCtrl = TextEditingController();
+  final _debtCapCtrl = TextEditingController();
+  bool _cashOnly = false;
+  CustomerDebtException _loadedDebtException = CustomerDebtException.none;
+
   @override
   void initState() {
     super.initState();
@@ -68,6 +77,56 @@ class _CustomerFormScreenState extends State<CustomerFormScreen> {
     }
     _loadPriceLists();
     _loadTenantId();
+    if (e != null) _loadDebtException(e.id);
+  }
+
+  Future<void> _loadDebtException(int customerId) async {
+    try {
+      final ex = await _db.getCustomerDebtException(customerId);
+      if (!mounted) return;
+      setState(() {
+        _loadedDebtException = ex;
+        _debtPeriodCtrl.text = ex.periodDays == null ? '' : '${ex.periodDays}';
+        _debtCapCtrl.text = ex.capFils == null
+            ? ''
+            : IqdMoney.fromFils(ex.capFils!).round().toString();
+        _cashOnly = ex.cashOnly;
+      });
+    } catch (e, st) {
+      AppLogger.error('CustomerForm', 'load debt exception failed', e, st);
+    }
+  }
+
+  CustomerDebtException _debtExceptionFromForm() {
+    final p = int.tryParse(_debtPeriodCtrl.text.trim());
+    final cap = double.tryParse(_debtCapCtrl.text.replaceAll(',', '').trim());
+    return CustomerDebtException(
+      periodDays: p == null || p < 0 ? null : p.clamp(0, 3650),
+      capFils: cap == null || cap < 0 ? null : IqdMoney.toFils(cap),
+      cashOnly: _cashOnly,
+    );
+  }
+
+  bool _sameException(CustomerDebtException a, CustomerDebtException b) =>
+      a.periodDays == b.periodDays &&
+      a.capFils == b.capFils &&
+      a.cashOnly == b.cashOnly;
+
+  /// تغيير الاستثناء برمز المالك: لا يرفع موظف المنع عن زبون بنفسه.
+  Future<bool> _saveDebtExceptionIfChanged(int customerId) async {
+    final next = _debtExceptionFromForm();
+    if (_sameException(next, _loadedDebtException)) return true;
+    final ok = await confirmOwnerPinForSensitiveAction(
+      context,
+      title: 'استثناء دين العميل',
+      message: 'تغيير فترة التسديد أو السقف الخاص أو «نقداً فقط» لهذا العميل.',
+      confirmLabel: 'حفظ الاستثناء',
+      bypassIfElevatedAccess: true,
+    );
+    if (!ok) return false;
+    await _db.setCustomerDebtException(customerId, next);
+    _loadedDebtException = next;
+    return true;
   }
 
   Future<void> _loadTenantId() async {
@@ -106,6 +165,8 @@ class _CustomerFormScreenState extends State<CustomerFormScreen> {
 
   @override
   void dispose() {
+    _debtPeriodCtrl.dispose();
+    _debtCapCtrl.dispose();
     _nameCtrl.dispose();
     for (final c in _phoneCtrls) {
       c.dispose();
@@ -176,6 +237,16 @@ class _CustomerFormScreenState extends State<CustomerFormScreen> {
           extraPhones: normalizedExtra,
           priceListId: _selectedPriceListId,
         );
+        if (!mounted) return;
+        if (!await _saveDebtExceptionIfChanged(id)) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('حُفظت بيانات العميل، ولم يُحفظ استثناء الدين.'),
+              ),
+            );
+          }
+        }
       } else {
         final newId = await _db.insertCustomer(
           name: data['name'] as String,
@@ -192,6 +263,8 @@ class _CustomerFormScreenState extends State<CustomerFormScreen> {
           extraPhones: normalizedExtra,
           priceListId: _selectedPriceListId,
         );
+        if (!mounted) return;
+        await _saveDebtExceptionIfChanged(newId);
         final row = await _db.getCustomerById(newId);
         if (!mounted) return;
         if (row == null) {
@@ -218,6 +291,67 @@ class _CustomerFormScreenState extends State<CustomerFormScreen> {
     } finally {
       if (mounted) setState(() => _saving = false);
     }
+  }
+
+  Widget _buildDebtExceptionSection(ColorScheme cs) {
+    final hasAny = !_debtExceptionFromForm().isNone;
+    return Card(
+      margin: EdgeInsets.zero,
+      child: ExpansionTile(
+        key: const ValueKey('customerDebtException'),
+        initiallyExpanded: hasAny,
+        leading: Icon(
+          Icons.rule_rounded,
+          color: hasAny ? cs.error : cs.onSurfaceVariant,
+        ),
+        title: const Text('استثناء الدين لهذا العميل'),
+        subtitle: Text(
+          hasAny ? 'مضبوط له استثناء' : 'يتبع إعدادات الدين العامة',
+          style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+        ),
+        childrenPadding: const EdgeInsetsDirectional.fromSTEB(16, 0, 16, 16),
+        children: [
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('نقداً فقط'),
+            subtitle: const Text(
+              'لا دين جديد له إلا برمز المالك.',
+              style: TextStyle(fontSize: 12),
+            ),
+            value: _cashOnly,
+            onChanged: _saving
+                ? null
+                : (v) => setState(() => _cashOnly = v),
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            key: const ValueKey('customerDebtPeriod'),
+            controller: _debtPeriodCtrl,
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(
+              labelText: 'فترة تسديد خاصة (أيام)',
+              helperText: 'فارغ = الفترة العامة. 0 = بلا فترة له.',
+              border: OutlineInputBorder(),
+              isDense: true,
+            ),
+            onChanged: (_) => setState(() {}),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            key: const ValueKey('customerDebtCap'),
+            controller: _debtCapCtrl,
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(
+              labelText: 'سقف دين خاص (د.ع)',
+              helperText: 'فارغ = السقف العام. 0 = بلا سقف له.',
+              border: OutlineInputBorder(),
+              isDense: true,
+            ),
+            onChanged: (_) => setState(() {}),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -379,6 +513,8 @@ class _CustomerFormScreenState extends State<CustomerFormScreen> {
                             ? null
                             : (id) => setState(() => _selectedPriceListId = id),
                       ),
+                      const SizedBox(height: 14),
+                      _buildDebtExceptionSection(cs),
                       if (_isEdit && widget.existing!.id > 0 && _tenantId != null)
                         ...[
                           const SizedBox(height: 14),

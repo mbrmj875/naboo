@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../../../utils/iqd_money.dart';
+import '../services/oil_change_ratings_repository.dart';
 import '../services/oil_change_reports_repository.dart';
+import '../services/oil_change_technicians_store.dart';
 import '../utils/oil_change_log_format.dart';
 import 'kit/report_kit.dart';
 import 'kit/report_math.dart';
@@ -188,6 +190,12 @@ class OilChangeReportsPanel extends StatelessWidget {
                   data.customerOilCount.toDouble(),
                   cs.tertiary,
                 ),
+                if (data.noOilCount > 0)
+                  ReportSlice(
+                    'بلا زيت',
+                    data.noOilCount.toDouble(),
+                    cs.outline,
+                  ),
               ],
             ),
           ),
@@ -229,21 +237,10 @@ class OilChangeReportsPanel extends StatelessWidget {
               ],
             ),
           ),
-          second: ReportCard(
-            title: 'الفنيون',
-            subtitle: 'مرتبون بعدد السيارات، والمبلغ يشمل المواد',
+          second: OilTechniciansReportCard(
+            rows: data.topTechnicians,
+            stopped: data.stoppedTechnicians,
             accent: _accent,
-            child: ReportRankBars(
-              accent: _accent,
-              rows: [
-                for (final e in data.topTechnicians)
-                  (
-                    e.name,
-                    e.count.toDouble(),
-                    '${e.count} سيارة · ${reportMoneyCompact(IqdMoney.toFils(e.amountIqd))}',
-                  ),
-              ],
-            ),
           ),
         ),
         ReportCard(
@@ -306,5 +303,122 @@ class OilChangeReportsPanel extends StatelessWidget {
   static String _rangeLabel(OilChangeReportsSnapshot d) {
     final p = ReportMath.previousRange(d.range);
     return 'الفترة السابقة (${p.from.day}/${p.from.month} – ${p.to.day}/${p.to.month})';
+  }
+}
+
+/// ما يُضاف لتقرير الفنيين من خارج البطاقات: التقييم من الخادم والموقوفون.
+class OilTechReportExtras {
+  const OilTechReportExtras({
+    this.ratings = const {},
+    this.stopped = const {},
+    this.ratingsAvailable = true,
+  });
+
+  /// متوسط التقييم (من 10) وعدد البطاقات المقيَّمة، بمفتاح الاسم.
+  final Map<String, ({double avg, int count})> ratings;
+  final Set<String> stopped;
+
+  /// false بلا إنترنت أو بلا تسجيل دخول: التقرير يظهر بلا تقييم.
+  final bool ratingsAvailable;
+}
+
+/// بطاقة «الفنيون» في تقرير الغيار (المرحلة 7 — الشريحة 3): عدد السيارات
+/// والمبلغ من البطاقات، والتقييم من ردود العملاء، وعلامة الموقوف.
+class OilTechniciansReportCard extends StatefulWidget {
+  const OilTechniciansReportCard({
+    super.key,
+    required this.rows,
+    required this.accent,
+    this.stopped = const {},
+  });
+
+  final List<OilChangeNamedRow> rows;
+  final Color accent;
+
+  /// مفاتيح الموقوفين (`OilChangeTechniciansStore.keyOf`)، من لقطة التقرير.
+  final Set<String> stopped;
+
+  /// للاختبار: بديل لجلب التقييم والموقوفين.
+  static Future<OilTechReportExtras> Function()? debugExtrasLoader;
+
+  @override
+  State<OilTechniciansReportCard> createState() =>
+      _OilTechniciansReportCardState();
+}
+
+class _OilTechniciansReportCardState extends State<OilTechniciansReportCard> {
+  OilTechReportExtras _extras = const OilTechReportExtras();
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final loader = OilTechniciansReportCard.debugExtrasLoader ?? _loadExtras;
+    try {
+      final extras = await loader();
+      if (mounted) setState(() => _extras = extras);
+    } catch (_) {
+      // التقرير يبقى بأرقام البطاقات.
+    }
+  }
+
+  /// التقييم فقط؛ الموقوفون يأتون مع لقطة التقرير.
+  static Future<OilTechReportExtras> _loadExtras() async {
+    try {
+      final repo = OilChangeRatingsRepository.instance;
+      if (!repo.isSignedIn) {
+        return const OilTechReportExtras(ratingsAvailable: false);
+      }
+      final rows = await repo.loadEmployeeSummary();
+      return OilTechReportExtras(
+        ratings: {
+          for (final r in rows)
+            if (r.averageScore != null && r.ratingsCount > 0)
+              OilChangeTechniciansStore.keyOf(r.employeeName): (
+                avg: r.averageScore!,
+                count: r.ratingsCount,
+              ),
+        },
+      );
+    } catch (_) {
+      return const OilTechReportExtras(ratingsAvailable: false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final x = _extras;
+    return ReportCard(
+      title: 'الفنيون',
+      subtitle: x.ratingsAvailable
+          ? 'مرتبون بعدد السيارات، والمبلغ يشمل المواد. التقييم من 10 '
+                'من ردود العملاء في كل الفترات'
+          : 'مرتبون بعدد السيارات، والمبلغ يشمل المواد. التقييم غير متاح '
+                'الآن (يحتاج إنترنت)',
+      accent: widget.accent,
+      child: ReportRankBars(
+        accent: widget.accent,
+        limit: 20,
+        rows: [
+          for (final e in widget.rows)
+            () {
+              final k = OilChangeTechniciansStore.keyOf(e.name);
+              final r = x.ratings[k];
+              final name = widget.stopped.contains(k) || x.stopped.contains(k)
+                  ? '${e.name} · موقوف'
+                  : e.name;
+              final parts = [
+                '${e.count} سيارة',
+                reportMoneyCompact(IqdMoney.toFils(e.amountIqd)),
+                if (r != null) 'تقييم ${r.avg.toStringAsFixed(1)} (${r.count})',
+              ];
+              return (name, e.count.toDouble(), parts.join(' · '));
+            }(),
+        ],
+      ),
+    );
   }
 }

@@ -1,3 +1,4 @@
+import 'vehicle_registry.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../../../services/database_helper.dart';
@@ -47,6 +48,85 @@ class OilChangeOrdersRepository {
       tid,
       deviceSerial: deviceSerial,
       excludeOrderId: excludeOrderId,
+    );
+  }
+
+  /// سيارات قديمة بلوحة ناقصة رقمها = رقم [plate] (يُسأل الموظف عنها).
+  Future<List<Map<String, dynamic>>> legacyVehicleCandidates(
+    String plate,
+  ) async {
+    return VehicleRegistry.legacyCandidates(await _db, await _tenantId(), plate);
+  }
+
+  /// آخر زيارة غيار للسيارة [vehicleGlobalId].
+  Future<Map<String, dynamic>?> getLatestOilChangeForVehicle(
+    String vehicleGlobalId,
+  ) async {
+    return VehicleRegistry.latestOrderForVehicle(
+      await _db,
+      await _tenantId(),
+      vehicleGlobalId: vehicleGlobalId,
+      orderKind: ServiceOrderKinds.oilChange,
+    );
+  }
+
+  /// آخر قراءة عداد للسيارة قبل هذه البطاقة (انظر [VehicleRegistry.previousReading]).
+  Future<({int? km, String? at})?> previousOdometerReading(
+    String plate, {
+    int? excludeOrderId,
+  }) async {
+    return VehicleRegistry.previousReading(
+      await _db,
+      await _tenantId(),
+      plate: plate,
+      excludeOrderId: excludeOrderId,
+    );
+  }
+
+  // ── سجل السيارات (المرحلة 6 — الشريحة 4) ──
+
+  Future<List<Map<String, dynamic>>> listVehicles({
+    String query = '',
+    int limit = 50,
+    int offset = 0,
+  }) async {
+    return VehicleRegistry.listVehicles(
+      await _db,
+      await _tenantId(),
+      query: query,
+      limit: limit,
+      offset: offset,
+    );
+  }
+
+  /// سيارات العميل الحالية (هو صاحب آخر بطاقة لكل منها).
+  Future<List<Map<String, dynamic>>> vehiclesForCustomer(int customerId) async {
+    return VehicleRegistry.vehiclesForCustomer(
+      await _db,
+      await _tenantId(),
+      customerId,
+    );
+  }
+
+  Future<Map<String, dynamic>?> getVehicle(String vehicleGlobalId) async {
+    return VehicleRegistry.getByGlobalId(
+      await _db,
+      await _tenantId(),
+      vehicleGlobalId,
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> vehicleVisits(String vehicleGlobalId) async {
+    return VehicleRegistry.visits(await _db, await _tenantId(), vehicleGlobalId);
+  }
+
+  /// الموظف أكّد أن [plate] لوحة السيارة القديمة [vehicleGlobalId].
+  Future<bool> adoptVehiclePlate(String vehicleGlobalId, String plate) async {
+    return VehicleRegistry.adoptPlate(
+      await _db,
+      await _tenantId(),
+      vehicleGlobalId,
+      plate,
     );
   }
 
@@ -200,6 +280,7 @@ class OilChangeOrdersRepository {
     bool powerHydraulicCustomerProvided = false,
     int? powerHydraulicWarehouseId,
     int? powerHydraulicStockVoucherId,
+    Map<String, Object?>? extraColumns,
   }) {
     return _serviceOrders.createServiceOrder(
       customerNameSnapshot: customerNameSnapshot,
@@ -256,6 +337,7 @@ class OilChangeOrdersRepository {
       powerHydraulicCustomerProvided: powerHydraulicCustomerProvided,
       powerHydraulicWarehouseId: powerHydraulicWarehouseId,
       powerHydraulicStockVoucherId: powerHydraulicStockVoucherId,
+      extraColumns: extraColumns,
     );
   }
 
@@ -324,6 +406,7 @@ class OilChangeOrdersRepository {
     bool? powerHydraulicCustomerProvided,
     int? powerHydraulicWarehouseId,
     int? powerHydraulicStockVoucherId,
+    Map<String, Object?>? extraColumns,
   }) {
     return _serviceOrders.updateServiceOrderById(
       id,
@@ -390,6 +473,7 @@ class OilChangeOrdersRepository {
       powerHydraulicCustomerProvided: powerHydraulicCustomerProvided,
       powerHydraulicWarehouseId: powerHydraulicWarehouseId,
       powerHydraulicStockVoucherId: powerHydraulicStockVoucherId,
+      extraColumns: extraColumns,
     );
   }
 

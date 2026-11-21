@@ -279,6 +279,7 @@ class InMemoryFinancialDb {
         updatedAt TEXT,
         createdByUserName TEXT,
         linkedStockVoucherId INTEGER,
+        dueDate TEXT,
         deleted_at TEXT,
         FOREIGN KEY(supplierId) REFERENCES suppliers(id) ON DELETE CASCADE
       )
@@ -305,6 +306,9 @@ class InMemoryFinancialDb {
         createdByUserName TEXT,
         affectsCash INTEGER NOT NULL DEFAULT 1,
         receiptInvoiceId INTEGER,
+        voidedAt TEXT,
+        voidedByUserName TEXT,
+        voidReason TEXT,
         deleted_at TEXT,
         FOREIGN KEY(supplierId) REFERENCES suppliers(id) ON DELETE CASCADE
       )

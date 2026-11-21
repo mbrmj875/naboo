@@ -12,6 +12,8 @@ import '../../../services/service_order_kinds.dart';
 import '../../../services/tenant_context_service.dart';
 import 'oil_change_services_repository.dart';
 import 'oil_change_settings.dart';
+import 'oil_change_technicians_store.dart';
+import '../utils/oil_order_has_oil.dart';
 
 class OilChangeDailyPoint {
   const OilChangeDailyPoint({
@@ -147,6 +149,7 @@ class OilChangeReportsSnapshot {
     required this.invoicedCount,
     required this.shopOilCount,
     required this.customerOilCount,
+    this.noOilCount = 0,
     required this.totalShopLiters,
     required this.revenueTotalIqd,
     required this.revenueInvoicedIqd,
@@ -161,13 +164,21 @@ class OilChangeReportsSnapshot {
     this.previous = OilChangePeriodTotals.empty,
     this.costCoverage = const ReportCostCoverage(),
     this.costGaps = const OilCostGaps(),
+    this.stoppedTechnicians = const {},
   });
+
+  /// مفاتيح الفنيين الموقوفين (`OilChangeTechniciansStore.keyOf`).
+  final Set<String> stoppedTechnicians;
 
   final ReportDateRange range;
   final int visitCount;
   final int invoicedCount;
   final int shopOilCount;
   final int customerOilCount;
+
+  /// بطاقات بلا زيت (فلتر أو هيدروليك أو خدمة فقط): ضمن البطاقات والإيراد،
+  /// لا ضمن «زيت المحل» ولا «زيت العميل».
+  final int noOilCount;
   final double totalShopLiters;
   final double revenueTotalIqd;
   final double revenueInvoicedIqd;
@@ -246,6 +257,7 @@ class OilChangeReportsRepository {
     var invoicedCount = 0;
     var shopOilCount = 0;
     var customerOilCount = 0;
+    var noOilCount = 0;
     var totalLiters = 0.0;
     var revenueTotal = 0;
     var revenueInvoiced = 0;
@@ -265,7 +277,10 @@ class OilChangeReportsRepository {
           ((r['oilCustomerProvided'] as num?)?.toInt() ?? 0) != 0;
       final liters = (r['oilLitersUsed'] as num?)?.toDouble() ?? 0;
       final pid = (r['oilProductId'] as num?)?.toInt();
-      if (customerOil) {
+      final hasOil = oilOrderHasOil(r);
+      if (!hasOil) {
+        noOilCount++;
+      } else if (customerOil) {
         customerOilCount++;
       } else {
         shopOilCount++;
@@ -293,12 +308,18 @@ class OilChangeReportsRepository {
         dayAmounts[k] = (dayAmounts[k] ?? 0) + revenueFils;
       }
 
-      if (baseServiceFils > 0) {
-        const baseName = 'تبديل الزيت';
+      // الأجرة المحفوظة في البطاقة (الإصدار 51)، وإلا الأساسية من الإعدادات.
+      final laborFils =
+          (r['oilLaborFils'] as num?)?.toInt() ?? baseServiceFils;
+      if (laborFils > 0) {
+        final baseName = !hasOil
+            ? 'أجرة اليد (بلا زيت)'
+            : customerOil
+                ? 'أجرة التبديل (زيت العميل)'
+                : 'تبديل الزيت';
         serviceCounts[baseName] = (serviceCounts[baseName] ?? 0) + 1;
         serviceAmounts[baseName] =
-            (serviceAmounts[baseName] ?? 0) +
-            IqdMoney.fromFils(baseServiceFils);
+            (serviceAmounts[baseName] ?? 0) + IqdMoney.fromFils(laborFils);
       }
       for (final s in parseOilRequestedServices(
         r['requestedServices']?.toString(),
@@ -374,12 +395,22 @@ class OilChangeReportsRepository {
       ];
     }
 
+    var stoppedTechs = const <String>{};
+    try {
+      stoppedTechs = {
+        for (final t in await OilChangeTechniciansStore.instance.loadAll())
+          if (t.stopped) OilChangeTechniciansStore.keyOf(t.name),
+      };
+    } catch (_) {}
+
     return OilChangeReportsSnapshot(
+      stoppedTechnicians: stoppedTechs,
       range: range,
       visitCount: rows.length,
       invoicedCount: invoicedCount,
       shopOilCount: shopOilCount,
       customerOilCount: customerOilCount,
+      noOilCount: noOilCount,
       totalShopLiters: totalLiters,
       revenueTotalIqd: IqdMoney.fromFils(revenueTotal),
       revenueInvoicedIqd: IqdMoney.fromFils(revenueInvoiced),

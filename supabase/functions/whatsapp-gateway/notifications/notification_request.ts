@@ -5,6 +5,7 @@
 export enum TemplateKey {
   oilChangeCard = 'oil_change_card',
   oilChangeFollowup = 'oil_change_followup',
+  debtReminder = 'debt_reminder',
 }
 
 export type NotificationChannel = 'whatsapp' | 'push' | 'email' | 'sms';

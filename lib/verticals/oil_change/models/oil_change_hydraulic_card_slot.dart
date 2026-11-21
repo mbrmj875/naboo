@@ -10,6 +10,10 @@ class OilChangeHydraulicCardSlot {
   final String rowKeyPrefix;
 
   bool customerProvided = false;
+
+  /// أجرة اليد التي كتبها الموظف لهذه البطاقة حين يُحضر العميل الهيدروليك
+  /// (null = من الإعدادات).
+  int? laborCardFils;
   final type = TextEditingController();
   String? selectedGrade;
   String? selectedBrand;
@@ -46,6 +50,11 @@ class OilChangeHydraulicCardSlot {
     final gradeRaw = row[col('Grade')]?.toString();
     selectedGrade = gradeRaw == null || gradeRaw.isEmpty ? null : gradeRaw;
     customerProvided = ((row[col('CustomerProvided')] as num?)?.toInt() ?? 0) != 0;
+    laborCardFils = (row[col('LaborFils')] as num?)?.toInt();
+    final catalogSell = (row[col('SellPerLiterFils')] as num?)?.toInt();
+    if (catalogSell != null && catalogSell > 0) {
+      catalogSellPerLiterFils = catalogSell;
+    }
     stockProductId = (row[col('ProductId')] as num?)?.toInt();
     warehouseId = (row[col('WarehouseId')] as num?)?.toInt();
     final liters = (row[col('LitersUsed')] as num?)?.toDouble();
@@ -118,6 +127,7 @@ class OilChangeHydraulicCardSlot {
   /// تفريغ كامل لبطاقة جديدة (حقول + اختيار مخزون/كتالوج).
   void clear() {
     customerProvided = false;
+    laborCardFils = null;
     type.clear();
     sizeAmount.clear();
     litersStock.clear();

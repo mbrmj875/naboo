@@ -43,7 +43,18 @@ class _StockVoucherScreenState extends State<StockVoucherScreen> {
   String _sourceType = 'supplier';
 
   // ── Other info ────────────────────────────────────────────────────────
+  /// رقم المورد المختار من القائمة كنص ('' = بلا مورد). المرحلة 5 — الشريحة 4:
+  /// كان الاسم يُطابَق نصاً ويُنشأ مورد جديد عند أي اختلاف إملائي.
   String _supplier = '';
+  List<({int id, String name})> _suppliers = const [];
+
+  String get _supplierName {
+    final id = int.tryParse(_supplier);
+    for (final s in _suppliers) {
+      if (s.id == id) return s.name;
+    }
+    return '';
+  }
   final _notesCtrl = TextEditingController();
 
   // ── Items table ───────────────────────────────────────────────────────
@@ -71,12 +82,10 @@ class _StockVoucherScreenState extends State<StockVoucherScreen> {
   List<Map<String, dynamic>> _products = const [];
   int? _warehouseToId;
   int? _warehouseFromId;
-  List<String> _supplierItems = const [
-    '',
-    'mbw',
-    'مورد رئيسي',
-    'مورد 1',
-    'مورد 2',
+  List<String> get _supplierItems => ['', for (final s in _suppliers) '${s.id}'];
+  List<String> get _supplierHints => [
+    '— اختر المورد —',
+    for (final s in _suppliers) s.name,
   ];
   bool _metaLoaded = false;
   bool _saving = false;
@@ -96,9 +105,9 @@ class _StockVoucherScreenState extends State<StockVoucherScreen> {
     final wh = await _db.listWarehousesActive(
       tenantId: TenantContextService.instance.activeTenantId,
     );
-    List<String> sup = const ['', 'mbw', 'مورد رئيسي', 'مورد 1', 'مورد 2'];
+    var sup = const <({int id, String name})>[];
     try {
-      sup = await _db.listActiveSupplierNamesForStockUi();
+      sup = await _db.listActiveSuppliersForPicker();
     } catch (e, st) {
       AppLogger.error('StockVoucher', 'فشل تحميل أسماء الموردين', e, st);
     }
@@ -114,11 +123,9 @@ class _StockVoucherScreenState extends State<StockVoucherScreen> {
       final firstId = wh.isEmpty ? null : wh.first['id'] as int;
       _warehouseToId = firstId;
       _warehouseFromId = firstId;
-      _supplierItems = sup;
-      if (!_supplierItems.contains(_supplier)) {
-        _supplier = _supplierItems.isNotEmpty ? _supplierItems.first : '';
-      }
-      _sourceNameCtrl.text = _supplier;
+      _suppliers = sup;
+      if (!_supplierItems.contains(_supplier)) _supplier = '';
+      _sourceNameCtrl.text = _supplierName;
       _policy = policy;
       _products = products;
       _metaLoaded = true;
@@ -142,28 +149,71 @@ class _StockVoucherScreenState extends State<StockVoucherScreen> {
     return 'SV-${DateTime.now().microsecondsSinceEpoch}';
   }
 
+  /// إضافة مورد من الإذن: إن وُجد مورد بالاسم نفسه يُختار بدل إنشاء مكرر.
+  Future<void> _addSupplierFromVoucher() async {
+    final ctrl = TextEditingController();
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => Directionality(
+        textDirection: TextDirection.rtl,
+        child: AlertDialog(
+          title: const Text('مورد جديد'),
+          content: TextField(
+            key: const Key('voucherNewSupplierName'),
+            controller: ctrl,
+            autofocus: true,
+            decoration: const InputDecoration(labelText: 'اسم المورد'),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('إلغاء'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+              child: const Text('إضافة'),
+            ),
+          ],
+        ),
+      ),
+    );
+    ctrl.dispose();
+    if (name == null || name.isEmpty || !mounted) return;
+    var id = await _db.findActiveSupplierIdByName(name);
+    final existed = id != null;
+    id ??= await _db.insertSupplier(name: name);
+    final list = await _db.listActiveSuppliersForPicker();
+    if (!mounted) return;
+    setState(() {
+      _suppliers = list;
+      _supplier = '$id';
+      if (_sourceType == 'supplier') _sourceNameCtrl.text = _supplierName;
+    });
+    if (existed) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('«$name» موجود من قبل، فاخترناه.')),
+      );
+    }
+  }
+
   // ── Actions ───────────────────────────────────────────────────────────
   Future<void> _maybeCreateSupplierBillLink({
     required int voucherId,
     required String voucherNo,
-    required String supplierName,
+    required int? supplierId,
     required String? referenceNo,
     required double amount,
     required String? note,
     required int tenantId,
     required String? createdByUserName,
   }) async {
-    final cleanSupplier = supplierName.trim();
-    if (cleanSupplier.isEmpty ||
+    if (supplierId == null ||
         !_createSupplierBillOnInbound ||
         _voucherType != 'إذن إضافة مخزن' ||
         _sourceType != 'supplier' ||
         amount <= 0) {
       return;
     }
-
-    var supplierId = await _db.findActiveSupplierIdByName(cleanSupplier);
-    supplierId ??= await _db.insertSupplier(name: cleanSupplier);
 
     final billId = await _db.insertSupplierBill(
       supplierId: supplierId,
@@ -189,22 +239,18 @@ class _StockVoucherScreenState extends State<StockVoucherScreen> {
 
   Future<void> _maybeCreateSupplierReturnPayout({
     required String voucherNo,
-    required String supplierName,
+    required int? supplierId,
     required double amount,
     required int tenantId,
     required String? createdByUserName,
   }) async {
-    final cleanSupplier = supplierName.trim();
-    if (cleanSupplier.isEmpty ||
+    if (supplierId == null ||
         !_createSupplierReturnPayoutOnOutbound ||
         _voucherType != 'إذن صرف مخزن' ||
         _sourceType != 'supplier' ||
         amount <= 0) {
       return;
     }
-
-    var supplierId = await _db.findActiveSupplierIdByName(cleanSupplier);
-    supplierId ??= await _db.insertSupplier(name: cleanSupplier);
     await _db.recordSupplierPayout(
       supplierId: supplierId,
       amount: amount,
@@ -335,7 +381,22 @@ class _StockVoucherScreenState extends State<StockVoucherScreen> {
     if (!mounted) return;
     final ref = _referenceCtrl.text.trim();
     final notes = _notesCtrl.text.trim();
-    final sup = _supplier.trim();
+    final sup = _supplierName;
+    final supplierId = int.tryParse(_supplier);
+    final needsSupplier = _sourceType == 'supplier' &&
+        ((_voucherType == 'إذن إضافة مخزن' && _createSupplierBillOnInbound) ||
+            (_voucherType == 'إذن صرف مخزن' &&
+                _createSupplierReturnPayoutOnOutbound));
+    if (needsSupplier && supplierId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'اختر المورد من القائمة (أو أضفه بزر «مورد جديد») حتى يُسجَّل الوصل في ذمته.',
+          ),
+        ),
+      );
+      return;
+    }
     final sourceName = _sourceNameCtrl.text.trim().isEmpty
         ? (_sourceType == 'supplier' ? sup : '')
         : _sourceNameCtrl.text.trim();
@@ -426,7 +487,7 @@ class _StockVoucherScreenState extends State<StockVoucherScreen> {
           await _maybeCreateSupplierBillLink(
             voucherId: res.voucherId!,
             voucherNo: voucherNo,
-            supplierName: sup,
+            supplierId: supplierId,
             referenceNo: ref.isEmpty ? null : ref,
             amount: _grandTotal,
             note: notes.isEmpty ? null : notes,
@@ -436,7 +497,7 @@ class _StockVoucherScreenState extends State<StockVoucherScreen> {
         }
         await _maybeCreateSupplierReturnPayout(
           voucherNo: voucherNo,
-          supplierName: sup,
+          supplierId: supplierId,
           amount: _grandTotal,
           tenantId: tenantId,
           createdByUserName: currentUserName.isEmpty ? null : currentUserName,
@@ -808,7 +869,7 @@ class _StockVoucherScreenState extends State<StockVoucherScreen> {
                       setState(() {
                         _sourceType = v;
                         if (v == 'supplier') {
-                          _sourceNameCtrl.text = _supplier;
+                          _sourceNameCtrl.text = _supplierName;
                         }
                       });
                     },
@@ -908,17 +969,28 @@ class _StockVoucherScreenState extends State<StockVoucherScreen> {
               Expanded(
                 child: _fieldCol(
                   label: 'المورد',
-                  child: _dropdown(
-                    value: _supplier,
-                    items: _supplierItems,
-                    hints: _supplierItems,
-                    onChange: (v) => setState(() {
-                      _supplier = v!;
-                      if (_sourceType == 'supplier' &&
-                          _sourceNameCtrl.text.trim().isEmpty) {
-                        _sourceNameCtrl.text = _supplier;
-                      }
-                    }),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _dropdown(
+                        key: const Key('voucherSupplierPicker'),
+                        value: _supplier,
+                        items: _supplierItems,
+                        hints: _supplierHints,
+                        onChange: (v) => setState(() {
+                          _supplier = v ?? '';
+                          if (_sourceType == 'supplier') {
+                            _sourceNameCtrl.text = _supplierName;
+                          }
+                        }),
+                      ),
+                      TextButton.icon(
+                        key: const Key('voucherNewSupplier'),
+                        onPressed: _addSupplierFromVoucher,
+                        icon: const Icon(Icons.add_rounded, size: 18),
+                        label: const Text('مورد جديد'),
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -1525,6 +1597,7 @@ class _StockVoucherScreenState extends State<StockVoucherScreen> {
   }
 
   Widget _dropdown({
+    Key? key,
     required String value,
     required List<String> items,
     List<String>? hints,
@@ -1542,6 +1615,7 @@ class _StockVoucherScreenState extends State<StockVoucherScreen> {
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String>(
+          key: key,
           value: value,
           isExpanded: true,
           style: TextStyle(fontSize: 13, color: cs.onSurface),

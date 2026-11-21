@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 
 import '../../../navigation/content_navigation.dart';
 import '../../../services/effective_store_branding.dart';
-import '../../../services/service_order_invoice_bridge.dart';
 import '../../../services/service_order_kinds.dart';
 import '../../../services/service_orders_repository.dart';
 import '../../../utils/customer_phone_launch.dart';
@@ -12,6 +11,7 @@ import '../../../utils/iqd_money.dart';
 import '../../../utils/iraqi_currency_format.dart';
 import '../services/oil_change_settings.dart';
 import '../utils/oil_change_finance.dart';
+import '../utils/oil_change_order_status.dart';
 import '../utils/oil_change_filter_format.dart';
 import '../utils/oil_change_log_format.dart';
 import '../models/oil_change_filter_kind.dart';
@@ -125,24 +125,6 @@ class _OilChangeDetailScreenState extends State<OilChangeDetailScreen> {
     );
     if (!mounted) return;
     await launchWhatsAppWithMessage(context, phone: phone, message: msg);
-  }
-
-  Future<void> _openInvoice() async {
-    final o = _order;
-    if (o == null) return;
-    final invId = (o['invoiceId'] as num?)?.toInt() ?? 0;
-    if (invId > 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('هذه البطاقة مرتبطة بفاتورة مسبقاً')),
-      );
-      return;
-    }
-    await ServiceOrderInvoiceBridge.openInvoiceFromOrder(
-      context,
-      order: o,
-      orderId: widget.orderId,
-      items: const [],
-    );
   }
 
   Widget _row(BuildContext context, String label, String value) {
@@ -395,11 +377,15 @@ class _OilChangeDetailScreenState extends State<OilChangeDetailScreen> {
               _row(context, 'ملاحظات', (o['issueDescription'] ?? '').toString()),
           ]),
           const SizedBox(height: 12),
-          FilledButton.icon(
-            onPressed: _openInvoice,
-            icon: const Icon(Icons.point_of_sale_rounded),
-            label: const Text('إصدار فاتورة بيع'),
-          ),
+          // البيع من البطاقة نفسها فقط، فيمر بفحص الرصيد والأجرة والخصم
+          // والعربون وسقف الدين كما يبيعها الموظف.
+          if (invId <= 0 &&
+              (o['status'] ?? '').toString() != OilChangeOrderStatus.cancelled)
+            FilledButton.icon(
+              onPressed: _openEdit,
+              icon: const Icon(Icons.point_of_sale_rounded),
+              label: const Text('فتح البطاقة للبيع'),
+            ),
         ],
       ),
       ),

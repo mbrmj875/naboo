@@ -139,6 +139,45 @@ class OilChangeWhatsappGatewayService {
     );
   }
 
+  /// تذكير الدين التلقائي: يرفع القالب لمراجعة ميتا (المعتمد لا يُعاد).
+  /// الحالة: approved | pending | rejected | none | not_official، أو null
+  /// إن تعذّر الاتصال.
+  Future<String?> submitDebtReminderTemplate() async {
+    final data = await _invoke({'action': 'submit_debt_reminder_template'});
+    return data?['status']?.toString();
+  }
+
+  Future<String?> debtReminderTemplateStatus() async {
+    final data = await _invoke({'action': 'debt_reminder_status'});
+    if (data?['ok'] != true) return null;
+    return data?['status']?.toString();
+  }
+
+  /// [reminderKey] ثابت لكل تذكير فلا يُرسل ولا يُخصم مرتين.
+  Future<({String status, bool retryLater})> sendDebtReminder({
+    required String customerPhone,
+    required String reminderKey,
+    required String customerName,
+    required String amountText,
+    required String sinceText,
+    required String shopName,
+  }) async {
+    final data = await _invoke({
+      'action': 'send_debt_reminder',
+      'customer_phone': customerPhone,
+      'reminder_key': reminderKey,
+      'customer_name': customerName,
+      'amount_text': amountText,
+      'since_text': sinceText,
+      'shop_name': shopName,
+    });
+    final status = data?['status']?.toString() ?? 'failed';
+    return (
+      status: status,
+      retryLater: data?['status'] == null || data?['retry_later'] == true,
+    );
+  }
+
   Future<({bool ok, String? messageAr})> completeOfficialConnect({
     String? wabaId,
     String? phoneNumberId,

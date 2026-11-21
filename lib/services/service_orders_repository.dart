@@ -1,7 +1,9 @@
 import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 
+import '../models/invoice.dart';
 import '../utils/app_logger.dart';
+import '../utils/money_sql.dart';
 import '../verticals/oil_change/utils/oil_change_order_status.dart';
 import 'database_helper.dart';
 import 'service_orders_sql_ops.dart';
@@ -186,7 +188,7 @@ class ServiceOrdersRepository {
     final tid = await _tenantId();
     final db = await _db;
     await _dbHelper.ensureServiceOrdersReadRepair();
-    return ServiceOrdersSqlOps.listOilChangeLogPage(
+    final rows = await ServiceOrdersSqlOps.listOilChangeLogPage(
       db,
       tid,
       searchQuery: searchQuery,
@@ -194,6 +196,50 @@ class ServiceOrdersRepository {
       limit: limit,
       statusFilter: statusFilter,
     );
+    return _withOpenDebt(db, tid, rows);
+  }
+
+  /// مفتاح متبقي فاتورة البطاقة الآجلة غير المسدَّد في صف السجل.
+  static const openDebtFilsKey = 'openDebtFils';
+
+  /// يضيف لكل صف [openDebtFils]: متبقي فاتورته الآجلة الآن (باستعلام واحد).
+  Future<List<Map<String, dynamic>>> _withOpenDebt(
+    DatabaseExecutor db,
+    int tenantId,
+    List<Map<String, dynamic>> rows,
+  ) async {
+    final ids = <int>{
+      for (final r in rows)
+        if (((r['invoiceId'] as num?)?.toInt() ?? 0) > 0)
+          (r['invoiceId'] as num).toInt(),
+    };
+    if (ids.isEmpty) return rows;
+    final debt = <int, int>{};
+    try {
+      final marks = List.filled(ids.length, '?').join(',');
+      final found = await db.rawQuery(
+        'SELECT id, (${MoneySql.invoiceOpenRemainingFils}) AS rem '
+        'FROM invoices WHERE tenantId = ? AND type = ? '
+        'AND IFNULL(isReturned, 0) = 0 AND deleted_at IS NULL '
+        'AND id IN ($marks)',
+        [tenantId, InvoiceType.credit.index, ...ids],
+      );
+      for (final f in found) {
+        final rem = (f['rem'] as num?)?.toInt() ?? 0;
+        if (rem > 500) debt[(f['id'] as num).toInt()] = rem;
+      }
+    } catch (e) {
+      AppLogger.warn('service_orders', 'open debt for log rows failed: $e');
+      return rows;
+    }
+    if (debt.isEmpty) return rows;
+    return [
+      for (final r in rows)
+        if (debt[(r['invoiceId'] as num?)?.toInt()] case final rem?)
+          {...r, openDebtFilsKey: rem}
+        else
+          r,
+    ];
   }
 
   /// إنشاء تذكرة صيانة جديدة.
@@ -256,6 +302,8 @@ class ServiceOrdersRepository {
     bool powerHydraulicCustomerProvided = false,
     int? powerHydraulicWarehouseId,
     int? powerHydraulicStockVoucherId,
+    /// أعمدة تسعير البطاقة (أجور اليد وسعر لتر الهيدروليك). null = لا تغيير.
+    Map<String, Object?>? extraColumns,
   }) async {
     final tid = await _tenantId();
     final db = await _db;
@@ -344,6 +392,7 @@ class ServiceOrdersRepository {
       if (powerHydraulicStockVoucherId != null &&
           powerHydraulicStockVoucherId > 0)
         'powerHydraulicStockVoucherId': powerHydraulicStockVoucherId,
+      ...?extraColumns,
       'workStartedAt': null,
       'createdAt': now,
       'updatedAt': now,
@@ -433,6 +482,8 @@ class ServiceOrdersRepository {
     bool? powerHydraulicCustomerProvided,
     int? powerHydraulicWarehouseId,
     int? powerHydraulicStockVoucherId,
+    /// أعمدة تسعير البطاقة (أجور اليد وسعر لتر الهيدروليك). null = لا تغيير.
+    Map<String, Object?>? extraColumns,
   }) async {
     final tid = await _tenantId();
     final db = await _db;
@@ -595,6 +646,8 @@ class ServiceOrdersRepository {
       final w = workStartedAt?.trim();
       payload['workStartedAt'] = w != null && w.isNotEmpty ? w : null;
     }
+
+    if (extraColumns != null) payload.addAll(extraColumns);
 
     final affected = await db.transaction((txn) async {
       final n = await ServiceOrdersSqlOps.updateServiceOrderById(

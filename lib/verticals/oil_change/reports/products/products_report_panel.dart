@@ -49,6 +49,11 @@ class ProductsReportPanel extends StatelessWidget {
     return p.isLiter ? '$n لتر' : n;
   }
 
+  static String _when(DateTime t) {
+    String two(int v) => v.toString().padLeft(2, '0');
+    return '${t.year}/${two(t.month)}/${two(t.day)} ${two(t.hour)}:${two(t.minute)}';
+  }
+
   @override
   Widget build(BuildContext context) {
     final sold = data.products.where((p) => p.soldQty > 0).toList();
@@ -60,6 +65,7 @@ class ProductsReportPanel extends StatelessWidget {
         if (p.daysOfCover(data.rangeDays) case final d?) (p.name, d),
     ]..sort((a, b) => a.$2.compareTo(b.$2));
     final idle = data.idle;
+    final negative = data.negative;
     final noPrice = data.products.where((p) => !p.hasBuyPrice).length;
     final idleNoPrice = idle.where((p) => !p.hasBuyPrice).length;
     final reorder =
@@ -132,7 +138,9 @@ class ProductsReportPanel extends StatelessWidget {
               value: reportNumber(data.shortageCount),
               icon: Icons.warning_amber_rounded,
               accent: data.shortageCount > 0 ? ReportAccents.negative : _accent,
-              caption: idle.isEmpty
+              caption: negative.isNotEmpty
+                  ? '${negative.length} برصيد سالب'
+                  : idle.isEmpty
                   ? 'لا راكد'
                   : idleNoPrice == idle.length
                   ? '${idle.length} راكد بلا سعر شراء'
@@ -189,6 +197,49 @@ class ProductsReportPanel extends StatelessWidget {
             ],
           ),
         ),
+        if (negative.isNotEmpty || data.overrides.isNotEmpty)
+          ReportCard(
+            title: 'أرصدة سالبة',
+            subtitle: negative.isEmpty
+                ? 'لا صنف تحت الصفر الآن'
+                : '${negative.length} صنفاً بيع منه أكثر من المسجّل — '
+                      'سجّل الوارد أو صحّح الجرد',
+            accent: ReportAccents.negative,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (negative.isNotEmpty)
+                  ReportTable(
+                    headers: const ['الصنف', 'الرصيد', 'خرج في الفترة'],
+                    rows: [
+                      for (final p in negative)
+                        [p.name, _qty(p, p.qty), _qty(p, p.soldQty)],
+                    ],
+                  ),
+                if (data.overrides.isNotEmpty) ...[
+                  if (negative.isNotEmpty) const SizedBox(height: 12),
+                  Text(
+                    'تجاوزات المالك في الفترة (${data.overrides.length})',
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                  const SizedBox(height: 6),
+                  ReportTable(
+                    textColumns: const {0, 1, 2, 3},
+                    headers: const ['الوقت', 'البطاقة', 'النقص', 'الموظف'],
+                    rows: [
+                      for (final o in data.overrides)
+                        [
+                          _when(o.at),
+                          '#${o.orderId}',
+                          o.lines.isEmpty ? '—' : o.lines.join('\n'),
+                          o.username.isEmpty ? '—' : o.username,
+                        ],
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          ),
         ReportCard(
           title: 'أيام التغطية',
           subtitle: 'الأحمر يكفي 7 أيام أو أقل، والبرتقالي حتى 14 يوماً',

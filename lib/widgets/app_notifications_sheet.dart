@@ -16,6 +16,7 @@ Future<bool> _confirmDismissImportant(
     NotificationType.debtInvoiceAged,
     NotificationType.debtCustomerCeiling,
     NotificationType.debtInvoiceCeiling,
+    NotificationType.supplierBillDue,
     NotificationType.installmentDue,
     NotificationType.installmentLate,
     NotificationType.negativeStockSale,

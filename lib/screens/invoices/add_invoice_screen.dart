@@ -37,6 +37,8 @@ import '../../owner/owner_command_center_refresh_bridge.dart';
 import '../../owner/services/business_audit_log_service.dart';
 import '../../verticals/_contract/vertical_manifest.dart';
 import '../../verticals/_contract/vertical_registry.dart';
+import '../../verticals/oil_change/widgets/oil_change_owner_pin_confirm_dialog.dart';
+import '../../services/sale_debt_caps_validator.dart';
 import '../../services/product_variants_repository.dart';
 import '../../services/service_orders_repository.dart';
 import '../../services/app_settings_repository.dart';
@@ -5018,6 +5020,24 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
             );
           }
           return;
+        }
+      }
+
+      // دين متأخر عن فترة التسديد: الدين الجديد برمز المالك فقط.
+      if (rem > 0.5) {
+        final overdue = await SaleDebtOverdueCheck.find(
+          customerId: customerId,
+          customerName: customerName,
+        );
+        if (overdue != null) {
+          if (!mounted) return;
+          final ok = await confirmOwnerPinForSensitiveAction(
+            context,
+            title: overdue.title,
+            message: '${overdue.message}\n\nالسماح بدين جديد برمز المالك؟',
+            confirmLabel: 'سماح وبيع',
+          );
+          if (!ok) return;
         }
       }
     }

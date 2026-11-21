@@ -692,7 +692,7 @@ class PharmacyReportsRepository {
         ) b ON b.supplierId = s.id
         LEFT JOIN (
           SELECT supplierId, SUM(amount) AS tp FROM supplier_payouts
-          WHERE tenantId = ? GROUP BY supplierId
+          WHERE tenantId = ? AND voidedAt IS NULL GROUP BY supplierId
         ) p ON p.supplierId = s.id
         WHERE s.tenantId = ? AND s.isActive = 1
         ''',
@@ -1120,7 +1120,7 @@ class PharmacyReportsRepository {
         ) b ON b.supplierId = s.id
         LEFT JOIN (
           SELECT supplierId, SUM(amount) AS tp FROM supplier_payouts
-          WHERE tenantId = ? GROUP BY supplierId
+          WHERE tenantId = ? AND voidedAt IS NULL GROUP BY supplierId
         ) p ON p.supplierId = s.id
         WHERE s.tenantId = ? AND s.isActive = 1
         ORDER BY open DESC

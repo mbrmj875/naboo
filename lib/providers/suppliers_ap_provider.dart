@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import '../models/supplier_ap_models.dart';
 import '../services/database_helper.dart';
+import '../services/supplier_statement.dart';
 
 class SuppliersApProvider extends ChangeNotifier {
   static const int _pageSize = 120;
@@ -26,6 +27,13 @@ class SuppliersApProvider extends ChangeNotifier {
   double _totalOpen = 0;
   double get totalOpen => _totalOpen;
 
+  /// من حان دفع وصل لهم («يُدفع قبل»)، الأقدم تأخراً أولاً.
+  List<SupplierDueEntry> _due = const [];
+  List<SupplierDueEntry> get due => _due;
+  Map<int, SupplierDueStatus> get dueById => {
+    for (final e in _due) e.supplierId: e.status,
+  };
+
   Future<void> setQuery(String query) async {
     final q = query.trim();
     if (q == _query) return;
@@ -42,6 +50,11 @@ class SuppliersApProvider extends ChangeNotifier {
       _offset = 0;
       _hasMore = true;
       _totalOpen = await _db.getSupplierApTotalOpenPayable();
+      try {
+        _due = await _db.getSupplierDueEntries();
+      } catch (_) {
+        _due = const [];
+      }
 
       final page = await _db.querySupplierApSummariesPage(
         query: _query,

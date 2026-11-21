@@ -1,3 +1,4 @@
+import '../verticals/oil_change/services/vehicle_registry.dart';
 import 'dart:convert';
 import 'dart:async';
 import 'dart:math' as math;
@@ -3073,6 +3074,13 @@ class CloudSyncService {
       await db.execute('PRAGMA foreign_keys = ON');
     }
     await _dbHelper.reconcileUserDirectoryAfterCloudImport();
+    // بطاقات وصلت من جهاز قديم بلا ربط بسيارة، وأرقام السيارات بعد الدمج.
+    try {
+      await VehicleRegistry.ensureSchema(db);
+      await VehicleRegistry.reconcile(db, always: true);
+    } catch (e) {
+      AppLogger.warn('CloudSync', 'vehicle reconcile after import failed: $e');
+    }
   }
 
   /// بعد دمج اللقطة: qty = خط أساس السحابة + أثر بنود الفواتير المحلية غير الواردة في اللقطة.
@@ -4008,6 +4016,20 @@ class CloudSyncService {
         if (handled) continue;
       }
 
+      // سجل السيارات: المعرّف المحلي يختلف بين الأجهزة، فالدمج بالمعرّف العام.
+      if (table == VehicleRegistry.table && localCols.contains('global_id')) {
+        final handled = await _mergeSimpleTableByGlobalId(
+          txn: txn,
+          table: table,
+          incomingRaw: incomingRaw,
+          incoming: incoming,
+          localCols: localCols,
+          deletedAt: deletedAt,
+          pkCols: pkCols,
+        );
+        if (handled) continue;
+      }
+
       // إذا لا يوجد مفتاح أساسي عملي، fallback على replace.
 
       if (pkCols.isEmpty || pkCols.any((c) => !incoming.containsKey(c))) {
@@ -4359,8 +4381,39 @@ class CloudSyncService {
         incoming,
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
+    } else {
+      await _applyIncomingVoid(
+        txn,
+        'customer_debt_payments',
+        existing.first,
+        incoming,
+      );
     }
     return true;
+  }
+
+  /// الحركة المالية immutable، والاستثناء الوحيد: إلغاؤها (المرحلة 5 —
+  /// الشريحة 3). حقول الإلغاء تُنقل باتجاه واحد: ملغاة لا تعود سارية.
+  Future<void> _applyIncomingVoid(
+    Transaction txn,
+    String table,
+    Map<String, Object?> current,
+    Map<String, dynamic> incoming,
+  ) async {
+    final inVoid = (incoming['voidedAt'] ?? '').toString().trim();
+    final curVoid = (current['voidedAt'] ?? '').toString().trim();
+    if (inVoid.isEmpty || curVoid.isNotEmpty) return;
+    await txn.update(
+      table,
+      {
+        'voidedAt': inVoid,
+        'voidedByUserName': incoming['voidedByUserName'],
+        'voidReason': incoming['voidReason'],
+        if (incoming['updatedAt'] != null) 'updatedAt': incoming['updatedAt'],
+      },
+      where: 'id = ?',
+      whereArgs: [current['id']],
+    );
   }
 
   Future<bool> _mergeSupplierFinancialsByGlobalId({
@@ -4418,6 +4471,8 @@ class CloudSyncService {
           incoming,
           conflictAlgorithm: ConflictAlgorithm.replace,
         );
+      } else {
+        await _applyIncomingVoid(txn, table, existing.first, incoming);
       }
       return true;
     }

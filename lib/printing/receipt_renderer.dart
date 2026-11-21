@@ -222,6 +222,7 @@ class ReceiptRenderer {
 
     // المجاميع.
     for (final tot in doc.totals) {
+      if (tot.section != null && !t.shows(tot.section!)) continue;
       if (tot.emphasis) {
         y += base * 0.2;
         y += _invertedRow(c, tot.label, _money(tot.fils), y);

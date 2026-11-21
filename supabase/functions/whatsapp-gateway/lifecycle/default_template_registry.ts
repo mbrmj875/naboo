@@ -122,6 +122,23 @@ export const oilChangeCardShortTemplate: DefaultTemplateSpec = {
   ],
 };
 
+/**
+ * تذكير الدين التلقائي (المرحلة 7 — الشريحة 4). لا يدخل في قوالب الربط
+ * الافتراضية: يُرفع فقط حين يختار المحل «تلقائي» في إعدادات الديون، حتى لا
+ * يؤخر جاهزية بطاقة الغيار ولا يُرفع لمحل لا يريده.
+ */
+export const debtReminderTemplate: DefaultTemplateSpec = {
+  key: TemplateKey.debtReminder,
+  name: 'naboo_debt_reminder_ar',
+  language: 'ar',
+  category: 'utility',
+  bodyText: 'مرحباً {{1}}،\n' +
+    'نذكّرك بأن عليك لدى {{2}} مبلغ {{3}} منذ {{4}}.\n' +
+    'نرجو التسديد في أقرب وقت يناسبك، وشكراً لك.',
+  paramKeys: ['customer', 'shop', 'amount', 'since'],
+  exampleBodyParams: ['أحمد', 'مركز النور', '75,000 د.ع', '1/10/2026'],
+};
+
 /** قوالب مطلوبة لعمودي غيار الزيت بعد الربط الرسمي */
 export const oilChangeDefaultTemplates: DefaultTemplateSpec[] = [
   oilChangeCardLongTemplate,
@@ -130,6 +147,7 @@ export const oilChangeDefaultTemplates: DefaultTemplateSpec[] = [
 
 /** الأفضلية أولاً ثم البدائل — القناة تجرّبها بالترتيب. */
 export function resolveTemplateSpecs(key: TemplateKey): DefaultTemplateSpec[] {
+  if (key === TemplateKey.debtReminder) return [debtReminderTemplate];
   const hits = oilChangeDefaultTemplates.filter((t) => t.key === key);
   return hits.length > 0 ? hits : [oilChangeCardShortTemplate];
 }

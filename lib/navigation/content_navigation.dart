@@ -100,9 +100,11 @@ abstract class AppContentRoutes {
   static const oilChangeEditPrefix = 'app_oil_change_edit_';
   static const oilServicesLog = 'app_oil_services_log';
   static const oilChangeServices = 'app_oil_change_services';
+  static const oilVehicles = 'app_oil_vehicles';
   static const oilChangeServiceCreate = 'app_oil_change_service_create';
   static const oilChangeServiceEditPrefix = 'app_oil_change_service_edit_';
   static const oilWhatsappConnect = 'app_oil_whatsapp_connect';
+  static const oilCardSettings = 'app_oil_card_settings';
   static const oilInvoices = 'app_oil_invoices';
   static const oilDirectSale = 'app_oil_direct_sale';
   static const carWashCreate = 'app_car_wash_create';
@@ -226,12 +228,14 @@ const Map<FeatureGateId, List<String>> featureRouteMapping = {
   ],
   FeatureGateId.oilChange: [
     AppContentRoutes.oilServicesLog,
+    AppContentRoutes.oilVehicles,
     AppContentRoutes.oilChangeServices,
     AppContentRoutes.oilChangeHub,
     AppContentRoutes.oilChangeCreate,
     AppContentRoutes.oilInvoices,
     AppContentRoutes.oilDirectSale,
     AppContentRoutes.oilWhatsappConnect,
+    AppContentRoutes.oilCardSettings,
     AppContentRoutes.carWashCreate,
     AppContentRoutes.carWashServices,
     AppContentRoutes.settingsWashOffers,
@@ -765,12 +769,16 @@ String breadcrumbFallbackTitleForRouteId(String id) {
       return 'سجل غيارات الزيت';
     case AppContentRoutes.oilChangeServices:
       return 'خدمات وأسعار غيار الزيت';
+    case AppContentRoutes.oilVehicles:
+      return 'سجل السيارات';
     case AppContentRoutes.oilChangeServiceCreate:
       return 'إضافة خدمة غيار زيت';
     case AppContentRoutes.oilChangeCreate:
       return 'بطاقة غيار زيت جديدة';
     case AppContentRoutes.oilWhatsappConnect:
       return 'ربط واتساب المحل';
+    case AppContentRoutes.oilCardSettings:
+      return 'إعدادات بطاقة الغيار';
     case AppContentRoutes.carWashCreate:
       return 'بطاقة غسيل سيارة';
     case AppContentRoutes.carWashServices:
@@ -921,7 +929,10 @@ IconData breadcrumbIconForRouteId(String id) {
     case AppContentRoutes.oilInvoices:
     case AppContentRoutes.oilDirectSale:
     case AppContentRoutes.oilWhatsappConnect:
+    case AppContentRoutes.oilCardSettings:
       return Icons.opacity_rounded;
+    case AppContentRoutes.oilVehicles:
+      return Icons.directions_car_rounded;
     case AppContentRoutes.carWashCreate:
     case AppContentRoutes.carWashServices:
       return Icons.local_car_wash_rounded;
@@ -1033,6 +1044,7 @@ const Map<String, String> routeParentMapping = {
   AppContentRoutes.oilChangeServiceCreate: AppContentRoutes.oilChangeServices,
   AppContentRoutes.oilChangeCreate: AppContentRoutes.oilServicesLog,
   AppContentRoutes.oilWhatsappConnect: AppContentRoutes.oilServicesLog,
+  AppContentRoutes.oilCardSettings: AppContentRoutes.oilServicesLog,
   AppContentRoutes.oilInvoices: AppContentRoutes.oilServicesLog,
   AppContentRoutes.oilDirectSale: AppContentRoutes.oilServicesLog,
   AppContentRoutes.carWashCreate: AppContentRoutes.home,

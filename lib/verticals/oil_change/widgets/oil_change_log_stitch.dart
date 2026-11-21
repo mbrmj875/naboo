@@ -507,6 +507,51 @@ class OilChangeLogStitchInfoChip extends StatelessWidget {
   }
 }
 
+/// علامة دين البطاقة غير المسدَّد في السجل.
+class OilChangeLogStitchDebtBadge extends StatelessWidget {
+  const OilChangeLogStitchDebtBadge({super.key, required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    if (label.isEmpty) return const SizedBox.shrink();
+    return Container(
+      padding: const EdgeInsetsDirectional.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: OilChangeLogStitchMetrics.error.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(OilChangeLogStitchMetrics.pillRadius),
+        border: Border.all(
+          color: OilChangeLogStitchMetrics.error.withValues(alpha: 0.4),
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(
+            Icons.account_balance_wallet_outlined,
+            size: 14,
+            color: OilChangeLogStitchMetrics.error,
+          ),
+          const SizedBox(width: 4),
+          Flexible(
+            child: Text(
+              label,
+              style: const TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                color: OilChangeLogStitchMetrics.error,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// بطاقة زيارة — Premium Management.
 class OilChangeLogStitchVisitCard extends StatelessWidget {
   const OilChangeLogStitchVisitCard({
@@ -540,6 +585,7 @@ class OilChangeLogStitchVisitCard extends StatelessWidget {
     final price = oilFormatPrice(row);
     final odoCurrent = oilFormatOdo((row['odometerCurrent'] ?? '').toString());
     final oilChip = oilFormatOilChip(row);
+    final debt = oilFormatOpenDebt(row);
 
     return Padding(
       padding: const EdgeInsetsDirectional.only(bottom: OilChangeLogStitchMetrics.gapMd),
@@ -662,6 +708,10 @@ class OilChangeLogStitchVisitCard extends StatelessWidget {
                         ),
                         textDirection: TextDirection.ltr,
                       ),
+                      if (debt.isNotEmpty) ...[
+                        const SizedBox(width: 8),
+                        Flexible(child: OilChangeLogStitchDebtBadge(label: debt)),
+                      ],
                       const Spacer(),
                       TextButton(
                         onPressed: onDetail,
@@ -1165,10 +1215,19 @@ class OilChangeLogStitchDesktopTableCard extends StatelessWidget {
           ),
         ),
         DataCell(
-          Text(
-            oilFormatPrice(r),
-            style: const TextStyle(fontWeight: FontWeight.w800),
-            textDirection: TextDirection.ltr,
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                oilFormatPrice(r),
+                style: const TextStyle(fontWeight: FontWeight.w800),
+                textDirection: TextDirection.ltr,
+              ),
+              if (oilFormatOpenDebt(r).isNotEmpty) ...[
+                const SizedBox(width: 6),
+                OilChangeLogStitchDebtBadge(label: oilFormatOpenDebt(r)),
+              ],
+            ],
           ),
         ),
         DataCell(

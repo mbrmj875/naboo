@@ -12,7 +12,12 @@ class AppSettingsRepository {
 
   Future<Database> get _db async => _dbHelper.database;
 
+  /// آخر قاعدة تأكدنا من وجود الجدول فيها؛ كل قراءة كانت تنفّذ
+  /// CREATE TABLE قبل الاستعلام فتتضاعف رحلات القاعدة عند فتح البطاقة.
+  Database? _tableEnsuredFor;
+
   Future<void> _ensureSettingsTable(Database db) async {
+    if (identical(db, _tableEnsuredFor)) return;
     await db.execute('''
       CREATE TABLE IF NOT EXISTS app_settings (
         key TEXT PRIMARY KEY,
@@ -20,6 +25,7 @@ class AppSettingsRepository {
         updatedAt TEXT NOT NULL
       )
     ''');
+    _tableEnsuredFor = db;
   }
 
   Future<String?> get(String key) async {
@@ -70,13 +76,34 @@ class AppSettingsRepository {
     return 't:$v:$key';
   }
 
+  /// قراءة عدة مفاتيح باستعلام واحد.
   Future<Map<String, String>> getKeys(Iterable<String> keys) async {
+    final list = keys.toSet().toList();
     final out = <String, String>{};
-    for (final k in keys) {
-      final v = await get(k);
-      if (v != null) out[k] = v;
+    if (list.isEmpty) return out;
+    final db = await _db;
+    await _ensureSettingsTable(db);
+    final rows = await db.query(
+      'app_settings',
+      columns: const ['key', 'value'],
+      where: 'key IN (${List.filled(list.length, '?').join(',')})',
+      whereArgs: list,
+    );
+    for (final r in rows) {
+      final v = r['value'] as String?;
+      if (v != null) out[r['key'] as String] = v;
     }
     return out;
+  }
+
+  /// قراءة عدة مفاتيح للمستأجر باستعلام واحد؛ المفاتيح في الناتج بلا بادئة.
+  Future<Map<String, String>> getKeysForTenant(
+    Iterable<String> keys, {
+    required int tenantId,
+  }) async {
+    final byScoped = {for (final k in keys) _tenantScopedKey(k, tenantId): k};
+    final raw = await getKeys(byScoped.keys);
+    return {for (final e in raw.entries) byScoped[e.key]!: e.value};
   }
 
   /// أي مستأجر — مفيد بعد استيراد اللقطة (قد يختلف tenantId عن النشط محلياً).

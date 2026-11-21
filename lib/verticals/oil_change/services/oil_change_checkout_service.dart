@@ -50,7 +50,10 @@ class OilChangeCheckoutService {
       throw OilChangeCheckoutException('معرّف البطاقة غير صالح.');
     }
 
-    final items = await OilChangeInvoiceBuilder.buildItems(order);
+    final items = await OilChangeInvoiceBuilder.buildItems(
+      order,
+      keepLinesWithDiscount: true,
+    );
     if (items.isEmpty) {
       throw OilChangeCheckoutException(
         'لا توجد بنود بيع — أضف خدمة أو زيت أو فلتر بسعر قبل إتمام البيع.',
@@ -100,12 +103,17 @@ class OilChangeCheckoutService {
 
     final totalD = IqdMoney.fromFils(totalFils);
     final advanceD = IqdMoney.fromFils(advanceFils);
+    // المبلغ المتفق عليه أقل من البنود: الفرق خصم على الفاتورة، والبنود تبقى
+    // بأرقام منتجاتها فيُخصم المخزون.
+    final discountD = IqdMoney.fromFils(
+      OilChangeInvoiceBuilder.discountFilsFor(order, items),
+    );
     final invoice = Invoice(
       customerName: custName,
       date: DateTime.now(),
       type: isCredit ? InvoiceType.credit : InvoiceType.cash,
       items: items,
-      discount: 0,
+      discount: discountD,
       tax: 0,
       advancePayment: advanceD,
       total: totalD,

@@ -37,6 +37,13 @@ String oilFormatPrice(Map<String, dynamic> r) {
   return IraqiCurrencyFormat.formatIqd(IqdMoney.fromFils(fils));
 }
 
+/// متبقي فاتورة البطاقة الآجلة غير المسدَّد («دين 20,000 د.ع»)، أو ''.
+String oilFormatOpenDebt(Map<String, dynamic> r) {
+  final fils = (r['openDebtFils'] as num?)?.toInt() ?? 0;
+  if (fils <= 500) return '';
+  return 'دين ${IraqiCurrencyFormat.formatIqd(IqdMoney.fromFils(fils))}';
+}
+
 String oilFormatServicesShort(List<String> services) {
   if (services.isEmpty) return '—';
   return services.join(' · ');

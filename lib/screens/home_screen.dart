@@ -14,6 +14,7 @@ import '../home/home_dashboard_resolver.dart';
 import '../home/specs/home_dashboard_spec.dart';
 import '../providers/auth_provider.dart';
 import '../providers/business_features_provider.dart';
+import '../services/debt_auto_reminder_service.dart';
 import '../services/global_search/global_search_history_store.dart';
 import '../services/global_search/global_search_matcher.dart';
 import '../services/global_search/global_search_tool_hit.dart';
@@ -1516,6 +1517,8 @@ class _HomeScreenState extends State<HomeScreen>
     } catch (e, st) {
       AppLogger.error('Home', 'فشل refresh الإشعارات', e, st);
     }
+    // تذكير الدين التلقائي: مرة في اليوم، ولا يعمل إلا إن اختاره المحل.
+    unawaited(DebtAutoReminderService.instance.runIfDue());
   }
 
   /// استيراد لقطة من جهاز آخر (أو مزامنة يدوية): تحديث المزودات المعروضة على الرئيسية.

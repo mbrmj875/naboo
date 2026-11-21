@@ -16,6 +16,7 @@ import '../services/oil_change_post_sale_service.dart';
 import '../services/oil_change_settings.dart';
 import '../services/oil_change_whatsapp_status_store.dart';
 import 'oil_change_whatsapp_connect_screen.dart';
+import 'oil_change_card_settings_screen.dart';
 import '../../../services/service_orders_repository.dart';
 import '../../../services/tenant_context_service.dart';
 import '../../../utils/app_logger.dart';
@@ -2234,9 +2235,9 @@ class _OilChangeHubSettingsSheetState extends State<_OilChangeHubSettingsSheet> 
                               icon: Icons.water_drop_outlined,
                               title: 'صرف الهيدروليك من المخزون',
                               subtitleOn:
-                                  'اختيار عائلة هيدروليك من المخزون وخصم اللترات عند الحفظ',
+                                  'الكير والباور معاً. لفصلهما: إعدادات البطاقة',
                               subtitleOff:
-                                  'تسجيل الهيدروليك يدوياً فقط — بدون خصم مخزون',
+                                  'تسجيل يدوي بلا خصم مخزون. لفصلهما: إعدادات البطاقة',
                               value: _hydraulicStockFromWarehouse,
                               onChanged: (v) =>
                                   unawaited(_setHydraulicStock(v)),
@@ -2353,6 +2354,37 @@ class _OilChangeHubSettingsSheetState extends State<_OilChangeHubSettingsSheet> 
                                       value: _whatsappAiAutoReply,
                                       onChanged: (v) =>
                                           unawaited(_setWhatsAppAiAutoReply(v)),
+                                    ),
+                                    Divider(
+                                      height: 1,
+                                      color: _royalGold.withValues(alpha: 0.22),
+                                    ),
+                                    ListTile(
+                                      leading: Icon(
+                                        Icons.rule_rounded,
+                                        color: cs.primary,
+                                      ),
+                                      title: const Text('إعدادات البطاقة'),
+                                      subtitle: const Text(
+                                        'مصدر كل قسم، الحقول الإلزامية، أجور اليد',
+                                        textAlign: TextAlign.start,
+                                      ),
+                                      trailing: const Icon(Icons.chevron_left),
+                                      onTap: () {
+                                        Navigator.pop(context);
+                                        unawaited(
+                                          Navigator.of(context).push<void>(
+                                            contentMaterialRoute(
+                                              routeId: AppContentRoutes
+                                                  .oilCardSettings,
+                                              breadcrumbTitle:
+                                                  'إعدادات بطاقة الغيار',
+                                              builder: (_) =>
+                                                  const OilChangeCardSettingsScreen(),
+                                            ),
+                                          ),
+                                        );
+                                      },
                                     ),
                                     Divider(
                                       height: 1,

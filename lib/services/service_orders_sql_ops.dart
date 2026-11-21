@@ -4,6 +4,7 @@ import '../utils/app_logger.dart';
 import '../verticals/oil_change/utils/oil_change_lookup_normalize.dart';
 import '../verticals/oil_change/utils/oil_change_order_status.dart';
 import 'service_order_kinds.dart';
+import '../verticals/oil_change/services/vehicle_registry.dart';
 
 /// Pure SQL operations for service orders + their items.
 ///
@@ -191,6 +192,23 @@ class ServiceOrdersSqlOps {
     if (plate.isEmpty) return null;
     final plateKey = OilChangeLookupNormalize.normalizePlateKey(plate);
     if (plateKey.isEmpty) return null;
+
+    // المسار السريع: السيارة من السجل ثم آخر بطاقة لها (فهرسان).
+    // سيارة معروفة بلا بطاقة من هذا النوع = لا زيارة؛ لا داعي للمسح القديم.
+    try {
+      final v = await VehicleRegistry.findByPlate(db, tenantId, plate);
+      if (v != null) {
+        return VehicleRegistry.latestOrderForVehicle(
+          db,
+          tenantId,
+          vehicleGlobalId: v['global_id'].toString(),
+          orderKind: orderKind,
+          excludeOrderId: excludeOrderId,
+        );
+      }
+    } catch (_) {
+      // قاعدة بلا سجل السيارات بعد — المسار القديم أدناه.
+    }
 
     final variants = <String>{plate, plate.toLowerCase(), plateKey};
     for (final variant in variants) {
@@ -618,25 +636,46 @@ class ServiceOrdersSqlOps {
     DatabaseExecutor txn,
     int tenantId,
     Map<String, dynamic> values,
-  ) {
+  ) async {
     final stamped = Map<String, dynamic>.from(values);
     stamped['tenantId'] = tenantId;
-    return txn.insert('service_orders', stamped);
+    final id = await txn.insert('service_orders', stamped);
+    await VehicleRegistry.linkOrder(txn, tenantId, id);
+    return id;
   }
+
+  /// أعمدة تغيّر سيارة البطاقة أو ما يُشتق منها (الاسم، المالك، العداد، الزيارة).
+  static const _vehicleCols = {
+    'deviceSerial',
+    'deviceName',
+    'carModel',
+    'engineSize',
+    'odometerCurrent',
+    'customerId',
+    'customerNameSnapshot',
+    'customerPhone',
+    'status',
+    'createdAt',
+    'orderKind',
+  };
 
   static Future<int> updateServiceOrderById(
     DatabaseExecutor txn,
     int tenantId, {
     required int id,
     required Map<String, dynamic> values,
-  }) {
+  }) async {
     final patched = Map<String, dynamic>.from(values);
-    return txn.update(
+    final n = await txn.update(
       'service_orders',
       patched,
       where: 'id = ? AND tenantId = ? AND deletedAt IS NULL',
       whereArgs: [id, tenantId],
     );
+    if (n > 0 && patched.keys.any(_vehicleCols.contains)) {
+      await VehicleRegistry.linkOrder(txn, tenantId, id);
+    }
+    return n;
   }
 
   static Future<int> softDeleteServiceOrderById(
@@ -644,13 +683,15 @@ class ServiceOrdersSqlOps {
     int tenantId, {
     required int id,
     required String nowIso,
-  }) {
-    return txn.update(
+  }) async {
+    final n = await txn.update(
       'service_orders',
       {'deletedAt': nowIso, 'updatedAt': nowIso},
       where: 'id = ? AND tenantId = ? AND deletedAt IS NULL',
       whereArgs: [id, tenantId],
     );
+    if (n > 0) await VehicleRegistry.linkOrder(txn, tenantId, id);
+    return n;
   }
 
   // ─────────────────────── service_order_items ───────────────────────

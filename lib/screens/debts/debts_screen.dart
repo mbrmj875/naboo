@@ -8,8 +8,13 @@ import 'package:intl/intl.dart' hide TextDirection;
 import '../../models/credit_debt_invoice.dart';
 import '../../models/customer_debt_models.dart';
 import '../../models/debt_settings_data.dart';
+import 'package:provider/provider.dart';
+
+import '../../providers/auth_provider.dart';
+import '../../services/app_settings_repository.dart';
 import '../../services/cloud_sync_service.dart';
 import '../../services/database_helper.dart';
+import '../../services/tenant_context.dart';
 import '../../theme/app_corner_style.dart';
 import '../../theme/design_tokens.dart';
 import '../../utils/screen_layout.dart';
@@ -22,7 +27,19 @@ import 'supplier_ap_tab.dart';
 final _numFmt = NumberFormat('#,##0', 'en');
 final _dateFmt = DateFormat('dd/MM/yyyy', 'en');
 
-enum _DebtFilter { all, open, aged, settled }
+enum _DebtFilter { open, overdue, settled }
+
+/// يطابق [query] نصاً أو مفاتيح بحث (هواتف ولوحات) مع تجاهل المسافات.
+bool debtSearchMatches(String query, Iterable<String> fields) {
+  final q = query.trim().toLowerCase();
+  if (q.isEmpty) return true;
+  final qs = q.replaceAll(' ', '');
+  for (final f in fields) {
+    final v = f.toLowerCase();
+    if (v.contains(q) || v.replaceAll(' ', '').contains(qs)) return true;
+  }
+  return false;
+}
 
 // Intents لاختصارات لوحة المفاتيح — يتبع نمط Golden في `invoices_screen.dart`.
 class _FocusSearchIntent extends Intent {
@@ -52,12 +69,23 @@ class _DebtsScreenState extends State<DebtsScreen>
   final FocusNode _searchFocus = FocusNode();
   late final TabController _tabs;
 
+  /// الفواتير الآجلة المفتوحة فقط؛ المسدَّدة تُحمَّل عند اختيار «مغلقة».
   List<CreditDebtInvoice> _rows = [];
+  List<CreditDebtInvoice> _settled = [];
+  bool _settledLoading = false;
+  bool _settledHasMore = true;
+  static const _settledPageSize = 50;
+
+  /// لوحة السيارة وهاتف البطاقة لكل فاتورة (للبحث).
+  Map<int, String> _invoiceKeys = const {};
+
+  /// فترة التسديد لكل عميل مسجّل (الخاصة أو العامة).
+  Map<int, int> _periodByCustomer = const {};
   List<CustomerDebtSummary> _summaries = [];
   DebtSettingsData _settings = DebtSettingsData.defaults();
   bool _loading = true;
   bool _showInfoBanner = true;
-  _DebtFilter _filter = _DebtFilter.all;
+  _DebtFilter _filter = _DebtFilter.open;
 
   /// رقم الفاتورة المختارة في Tab 1 (لإبراز البطاقة عند فتح التفاصيل).
   /// ملاحظة: التفاصيل نفسها لا تزال تُعرض كـ BottomSheet للحفاظ على
@@ -71,7 +99,63 @@ class _DebtsScreenState extends State<DebtsScreen>
     _tabs.addListener(_onTabsChanged);
     _search.addListener(_onSearchChanged);
     _searchFocus.addListener(_onSearchFocusChanged);
-    _load();
+    _load().then((_) => _maybeShowPeriodNotice());
+  }
+
+  static String _noticeKey() =>
+      'debts.period_notice_seen.${TenantContext.instance.tenantId ?? ''}';
+
+  /// تنبيه للمالك مرة واحدة: الدين يُعد متأخراً بعد فترة التسديد.
+  Future<void> _maybeShowPeriodNotice() async {
+    if (!mounted) return;
+    bool owner;
+    try {
+      owner = context.read<AuthProvider>().isOwner;
+    } catch (_) {
+      return;
+    }
+    if (!owner) return;
+    final repo = AppSettingsRepository.instance;
+    if (await repo.get(_noticeKey()) == '1') return;
+    await repo.set(_noticeKey(), '1');
+    if (!mounted) return;
+    final days = _settings.paymentPeriodDays;
+    final open = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => Directionality(
+        textDirection: TextDirection.rtl,
+        child: AlertDialog(
+          title: const Text('متى يصير الدين متأخراً؟'),
+          content: Text(
+            days > 0
+                ? 'الدين يُعدّ متأخراً إذا مرّ عليه أكثر من $days يوماً بلا تسديد. '
+                      'المتأخرون يظهرون أول القائمة، وعند البيع لهم بالآجل '
+                      'يُطلب رمز المالك.\n\n'
+                      'تستطيع تغيير المدة من «إعدادات الدين»، أو إعطاء عميل '
+                      'مدة خاصة من صفحة بياناته.'
+                : 'فترة التسديد مطفأة الآن، فلا يُعدّ أي دين متأخراً. '
+                      'تستطيع ضبطها من «إعدادات الدين».',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('فهمت'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('إعدادات الدين'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (open == true && mounted) {
+      await Navigator.push<void>(
+        context,
+        MaterialPageRoute<void>(builder: (_) => const DebtSettingsScreen()),
+      );
+      if (mounted) unawaited(_load());
+    }
   }
 
   void _onTabsChanged() {
@@ -99,16 +183,49 @@ class _DebtsScreenState extends State<DebtsScreen>
 
   Future<void> _load() async {
     setState(() => _loading = true);
-    final rows = await _db.getAllNonReturnedCreditInvoices();
-    final sums = await _db.getCustomerDebtSummaries();
+    final rows = await _db.getOpenCreditDebtInvoices();
+    final sums = await _db.getCustomerDebtSummaries(openInvoices: rows);
     final s = await _db.getDebtSettings();
+    final keys = await _db.creditInvoiceSearchKeys(rows.map((r) => r.invoiceId));
     if (!mounted) return;
     setState(() {
       _rows = rows;
       _summaries = sums;
       _settings = s;
+      _invoiceKeys = keys;
+      _periodByCustomer = {
+        for (final x in sums)
+          if (x.customerId != null) x.customerId!: x.periodDays,
+      };
+      _settled = [];
+      _settledHasMore = true;
       _loading = false;
     });
+    if (_filter == _DebtFilter.settled) unawaited(_loadMoreSettled());
+  }
+
+  Future<void> _loadMoreSettled() async {
+    if (_settledLoading || !_settledHasMore) return;
+    setState(() => _settledLoading = true);
+    final page = await _db.getSettledCreditInvoicesPage(
+      beforeId: _settled.isEmpty ? null : _settled.last.invoiceId,
+      limit: _settledPageSize,
+    );
+    final keys = await _db.creditInvoiceSearchKeys(page.map((r) => r.invoiceId));
+    if (!mounted) return;
+    setState(() {
+      _settled = [..._settled, ...page];
+      _invoiceKeys = {..._invoiceKeys, ...keys};
+      _settledHasMore = page.length == _settledPageSize;
+      _settledLoading = false;
+    });
+  }
+
+  void _selectFilter(_DebtFilter f) {
+    setState(() => _filter = f);
+    if (f == _DebtFilter.settled && _settled.isEmpty) {
+      unawaited(_loadMoreSettled());
+    }
   }
 
   Future<void> _refreshFromServer() async {
@@ -121,48 +238,51 @@ class _DebtsScreenState extends State<DebtsScreen>
     await _load();
   }
 
-  bool _isAged(CreditDebtInvoice r, DateTime now) {
-    if (_settings.warnDebtAgeDays <= 0) return false;
-    if (r.isSettled) return false;
-    return r.daysSinceInvoice(now) >= _settings.warnDebtAgeDays;
-  }
+  int _periodFor(CreditDebtInvoice r) =>
+      (r.customerId == null ? null : _periodByCustomer[r.customerId]) ??
+      _settings.paymentPeriodDays;
+
+  bool _isOverdue(CreditDebtInvoice r, DateTime now) =>
+      !r.isSettled &&
+      creditInvoiceIsOverdue(
+        date: r.date,
+        remainingFils: r.remainingFils,
+        periodDays: _periodFor(r),
+        now: now,
+      );
 
   List<CreditDebtInvoice> _filteredList(DateTime now) {
-    var list = List<CreditDebtInvoice>.from(_rows);
-    final q = _search.text.trim().toLowerCase();
-    if (q.isNotEmpty) {
-      list = list.where((r) {
-        return r.customerName.toLowerCase().contains(q) ||
-            r.invoiceId.toString().contains(q) ||
-            (r.customerId?.toString().contains(q) ?? false);
-      }).toList();
-    }
-    switch (_filter) {
-      case _DebtFilter.all:
-        break;
-      case _DebtFilter.open:
-        list = list.where((r) => !r.isSettled).toList();
-        break;
-      case _DebtFilter.aged:
-        list = list.where((r) => _isAged(r, now)).toList();
-        break;
-      case _DebtFilter.settled:
-        list = list.where((r) => r.isSettled).toList();
-        break;
-    }
-    return list;
+    final base = switch (_filter) {
+      _DebtFilter.open => _rows,
+      _DebtFilter.overdue => _rows.where((r) => _isOverdue(r, now)).toList(),
+      _DebtFilter.settled => _settled,
+    };
+    final q = _search.text;
+    if (q.trim().isEmpty) return base;
+    return base
+        .where(
+          (r) => debtSearchMatches(q, [
+            r.customerName,
+            r.invoiceId.toString(),
+            r.customerId?.toString() ?? '',
+            _invoiceKeys[r.invoiceId] ?? '',
+          ]),
+        )
+        .toList();
   }
 
   List<CustomerDebtSummary> _filteredSummaries() {
-    var list = List<CustomerDebtSummary>.from(_summaries);
-    final q = _search.text.trim().toLowerCase();
-    if (q.isNotEmpty) {
-      list = list.where((s) {
-        return s.displayName.toLowerCase().contains(q) ||
-            (s.customerId?.toString().contains(q) ?? false);
-      }).toList();
-    }
-    return list;
+    final q = _search.text;
+    if (q.trim().isEmpty) return _summaries;
+    return _summaries
+        .where(
+          (s) => debtSearchMatches(q, [
+            s.displayName,
+            s.customerId?.toString() ?? '',
+            s.searchText,
+          ]),
+        )
+        .toList();
   }
 
   Widget _buildUnifiedSearchDock({
@@ -193,7 +313,7 @@ class _DebtsScreenState extends State<DebtsScreen>
             ),
             cursorColor: royalGold,
             decoration: InputDecoration(
-              hintText: 'بحث: عميل، رقم فاتورة، معرّف… (Ctrl+F)',
+              hintText: 'بحث: اسم، هاتف، لوحة سيارة، رقم فاتورة… (Ctrl+F)',
               hintStyle: TextStyle(
                 color: textSecondary.withValues(alpha: 0.75),
                 fontWeight: FontWeight.w500,
@@ -278,7 +398,7 @@ class _DebtsScreenState extends State<DebtsScreen>
                       child: _InfoBanner(
                         colorScheme: cs,
                         isDark: isDark,
-                        warnDays: _settings.warnDebtAgeDays,
+                        periodDays: _settings.paymentPeriodDays,
                         onDismiss: () => setState(() => _showInfoBanner = false),
                       ),
                     )
@@ -294,7 +414,7 @@ class _DebtsScreenState extends State<DebtsScreen>
                 activeFilter: _filter,
                 colorScheme: cs,
                 isDark: isDark,
-                onSelectFilter: (f) => setState(() => _filter = f),
+                onSelectFilter: _selectFilter,
               ),
             ],
           ],
@@ -311,13 +431,16 @@ class _DebtsScreenState extends State<DebtsScreen>
     final bg = isDark ? AppColors.surfaceDark : AppColors.surfaceLight;
     final now = DateTime.now();
     final filtered = _filteredList(now);
-    final totalOpenFils = _rows
-        .where((r) => !r.isSettled)
-        .fold<int>(0, (s, r) => s + r.remainingFils);
+    final totalOpenFils = _rows.fold<int>(0, (s, r) => s + r.remainingFils);
     final totalOpen = totalOpenFils / 1000.0;
-    final openCount = _rows.where((r) => !r.isSettled).length;
-    final agedCount = _rows.where((r) => _isAged(r, now)).length;
-    final listScope = filtered.length != _rows.length;
+    final openCount = _rows.length;
+    final agedCount = _rows.where((r) => _isOverdue(r, now)).length;
+    final listScope = _search.text.trim().isNotEmpty;
+    final listBaseCount = switch (_filter) {
+      _DebtFilter.open => _rows.length,
+      _DebtFilter.overdue => agedCount,
+      _DebtFilter.settled => _settled.length,
+    };
     final sumFiltered = _filteredSummaries();
     final sumScope = sumFiltered.length != _summaries.length;
     final sl = ScreenLayout.of(context);
@@ -388,8 +511,8 @@ class _DebtsScreenState extends State<DebtsScreen>
                   labelColor: cs.onSurface,
                   indicatorColor: AppColors.accentGold,
                   tabs: const [
-                    Tab(text: 'فواتير'),
                     Tab(text: 'عملاء'),
+                    Tab(text: 'فواتير'),
                     Tab(text: 'موردون'),
                   ],
                 ),
@@ -434,130 +557,6 @@ class _DebtsScreenState extends State<DebtsScreen>
                       children: [
                         RefreshIndicator(
                           color: cs.primary,
-                          onRefresh: _refreshFromServer,
-                          child: ListView(
-                            physics: const AlwaysScrollableScrollPhysics(),
-                            padding: const EdgeInsets.only(bottom: 100),
-                            children: [
-                              _buildSharedHeader(
-                                cs: cs,
-                                isDark: isDark,
-                                gap: gap,
-                                showKpis: true,
-                                totalOpen: totalOpen,
-                                openCount: openCount,
-                                agedCount: agedCount,
-                              ),
-                              if (listScope)
-                                Padding(
-                                  padding: EdgeInsetsDirectional.only(
-                                    start: gap,
-                                    end: gap,
-                                    top: 4,
-                                    bottom: 0,
-                                  ),
-                                  child: _DebtsContentWidth(
-                                    child: Text(
-                                      'القائمة: ${filtered.length} من ${_rows.length} فاتورة (بحث أو تصفية)',
-                                      style: theme.textTheme.labelMedium?.copyWith(
-                                        color: isDark
-                                            ? Colors.white.withValues(alpha: 0.72)
-                                            : cs.onSurface.withValues(alpha: 0.72),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              Padding(
-                                padding: EdgeInsetsDirectional.only(
-                                  start: gap,
-                                  end: gap,
-                                  top: 10,
-                                  bottom: 8,
-                                ),
-                                child: _DebtsContentWidth(
-                                  child: SingleChildScrollView(
-                                    scrollDirection: Axis.horizontal,
-                                    child: SegmentedButton<_DebtFilter>(
-                                      style: SegmentedButton.styleFrom(
-                                        selectedBackgroundColor: AppColors.accentGold,
-                                        selectedForegroundColor: Colors.white,
-                                      ),
-                                      segments: const [
-                                        ButtonSegment(
-                                          value: _DebtFilter.all,
-                                          label: Text('الكل'),
-                                        ),
-                                        ButtonSegment(
-                                          value: _DebtFilter.open,
-                                          label: Text('مفتوحة'),
-                                        ),
-                                        ButtonSegment(
-                                          value: _DebtFilter.aged,
-                                          label: Text('تحذير عمر'),
-                                        ),
-                                        ButtonSegment(
-                                          value: _DebtFilter.settled,
-                                          label: Text('مغلقة'),
-                                        ),
-                                      ],
-                                      selected: {_filter},
-                                      emptySelectionAllowed: false,
-                                      multiSelectionEnabled: false,
-                                      onSelectionChanged: (s) {
-                                        if (s.isEmpty) return;
-                                        setState(() => _filter = s.first);
-                                      },
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              if (filtered.isEmpty)
-                                SizedBox(
-                                  height: 260,
-                                  child: _EmptyState(
-                                    hasRows: _rows.isNotEmpty,
-                                    colorScheme: cs,
-                                    filterActive:
-                                        listScope || _filter != _DebtFilter.all,
-                                  ),
-                                )
-                              else
-                                for (final r in filtered)
-                                  Padding(
-                                    padding: EdgeInsetsDirectional.only(
-                                      start: gap,
-                                      end: gap,
-                                      top: 0,
-                                      bottom: 10,
-                                    ),
-                                    child: _DebtCard(
-                                      row: r,
-                                      warnDays: _settings.warnDebtAgeDays,
-                                      colorScheme: cs,
-                                      isDark: isDark,
-                                      isHighlighted:
-                                          _selectedInvoiceId == r.invoiceId,
-                                      onTap: () async {
-                                        setState(() =>
-                                            _selectedInvoiceId = r.invoiceId);
-                                        await showInvoiceDetailSheet(
-                                          context,
-                                          _db,
-                                          r.invoiceId,
-                                        );
-                                        if (mounted) {
-                                          setState(
-                                              () => _selectedInvoiceId = null);
-                                        }
-                                      },
-                                    ),
-                                  ),
-                            ],
-                          ),
-                        ),
-                        RefreshIndicator(
-                          color: cs.primary,
                           onRefresh: _load,
                           child: ListView(
                             physics: const AlwaysScrollableScrollPhysics(),
@@ -581,7 +580,7 @@ class _DebtsScreenState extends State<DebtsScreen>
                                 ),
                                 child: _DebtsContentWidth(
                                   child: Text(
-                                    'تجميع حسب العميل: المنتجات والبائعون وتسديد جزئي من شاشة التفاصيل. QR على الإيصال للعملاء المسجّلين فقط.',
+                                    'المتأخرون عن فترة التسديد أولاً، ثم الأكبر ديناً. اضغط العميل لكشفه والتسديد.',
                                     style: theme.textTheme.bodySmall?.copyWith(
                                       color: isDark
                                           ? Colors.white.withValues(alpha: 0.78)
@@ -641,6 +640,145 @@ class _DebtsScreenState extends State<DebtsScreen>
                                       isDark: isDark,
                                     ),
                                   ),
+                            ],
+                          ),
+                        ),
+                        RefreshIndicator(
+                          color: cs.primary,
+                          onRefresh: _refreshFromServer,
+                          child: ListView(
+                            physics: const AlwaysScrollableScrollPhysics(),
+                            padding: const EdgeInsets.only(bottom: 100),
+                            children: [
+                              _buildSharedHeader(
+                                cs: cs,
+                                isDark: isDark,
+                                gap: gap,
+                                showKpis: true,
+                                totalOpen: totalOpen,
+                                openCount: openCount,
+                                agedCount: agedCount,
+                              ),
+                              if (listScope)
+                                Padding(
+                                  padding: EdgeInsetsDirectional.only(
+                                    start: gap,
+                                    end: gap,
+                                    top: 4,
+                                    bottom: 0,
+                                  ),
+                                  child: _DebtsContentWidth(
+                                    child: Text(
+                                      'نتائج البحث: ${filtered.length} من $listBaseCount فاتورة',
+                                      style: theme.textTheme.labelMedium?.copyWith(
+                                        color: isDark
+                                            ? Colors.white.withValues(alpha: 0.72)
+                                            : cs.onSurface.withValues(alpha: 0.72),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              Padding(
+                                padding: EdgeInsetsDirectional.only(
+                                  start: gap,
+                                  end: gap,
+                                  top: 10,
+                                  bottom: 8,
+                                ),
+                                child: _DebtsContentWidth(
+                                  child: SingleChildScrollView(
+                                    scrollDirection: Axis.horizontal,
+                                    child: SegmentedButton<_DebtFilter>(
+                                      style: SegmentedButton.styleFrom(
+                                        selectedBackgroundColor: AppColors.accentGold,
+                                        selectedForegroundColor: Colors.white,
+                                      ),
+                                      segments: const [
+                                        ButtonSegment(
+                                          value: _DebtFilter.open,
+                                          label: Text('مفتوحة'),
+                                        ),
+                                        ButtonSegment(
+                                          value: _DebtFilter.overdue,
+                                          label: Text('متأخرة'),
+                                        ),
+                                        ButtonSegment(
+                                          value: _DebtFilter.settled,
+                                          label: Text('مغلقة'),
+                                        ),
+                                      ],
+                                      selected: {_filter},
+                                      emptySelectionAllowed: false,
+                                      multiSelectionEnabled: false,
+                                      onSelectionChanged: (s) {
+                                        if (s.isEmpty) return;
+                                        _selectFilter(s.first);
+                                      },
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              if (filtered.isEmpty &&
+                                  !(_filter == _DebtFilter.settled &&
+                                      _settledLoading))
+                                SizedBox(
+                                  height: 260,
+                                  child: _EmptyState(
+                                    hasRows: _rows.isNotEmpty,
+                                    colorScheme: cs,
+                                    filterActive:
+                                        listScope || _filter != _DebtFilter.open,
+                                  ),
+                                )
+                              else
+                                for (final r in filtered)
+                                  Padding(
+                                    padding: EdgeInsetsDirectional.only(
+                                      start: gap,
+                                      end: gap,
+                                      top: 0,
+                                      bottom: 10,
+                                    ),
+                                    child: _DebtCard(
+                                      row: r,
+                                      overdue: _isOverdue(r, now),
+                                      periodDays: _periodFor(r),
+                                      colorScheme: cs,
+                                      isDark: isDark,
+                                      isHighlighted:
+                                          _selectedInvoiceId == r.invoiceId,
+                                      onTap: () async {
+                                        setState(() =>
+                                            _selectedInvoiceId = r.invoiceId);
+                                        await showInvoiceDetailSheet(
+                                          context,
+                                          _db,
+                                          r.invoiceId,
+                                        );
+                                        if (mounted) {
+                                          setState(
+                                              () => _selectedInvoiceId = null);
+                                        }
+                                      },
+                                    ),
+                                  ),
+                              if (_filter == _DebtFilter.settled &&
+                                  (_settledLoading || _settledHasMore))
+                                Padding(
+                                  padding: const EdgeInsets.all(12),
+                                  child: Center(
+                                    child: _settledLoading
+                                        ? const CircularProgressIndicator()
+                                        : OutlinedButton.icon(
+                                            onPressed: _loadMoreSettled,
+                                            icon: const Icon(
+                                              Icons.expand_more_rounded,
+                                            ),
+                                            label: const Text('تحميل المزيد'),
+                                          ),
+                                  ),
+                                ),
                             ],
                           ),
                         ),
@@ -736,6 +874,26 @@ class _CustomerDebtSummaryCard extends StatelessWidget {
                         color: mutedC,
                       ),
                     ),
+                    if (summary.isOverdue || summary.cashOnly)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 6),
+                        child: Wrap(
+                          spacing: 6,
+                          runSpacing: 4,
+                          children: [
+                            if (summary.isOverdue)
+                              _DebtTag(
+                                label: customerDebtLateLabel(summary),
+                                color: AppSemanticColors.danger,
+                              ),
+                            if (summary.cashOnly)
+                              const _DebtTag(
+                                label: 'نقداً فقط',
+                                color: AppSemanticColors.warning,
+                              ),
+                          ],
+                        ),
+                      ),
                   ],
                 ),
               ),
@@ -778,6 +936,41 @@ class _CustomerDebtSummaryCard extends StatelessWidget {
                 ],
               ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// نص تأخر العميل: «متأخر 12 يوماً · 45,000 د.ع».
+String customerDebtLateLabel(CustomerDebtSummary s) {
+  final amount = _numFmt.format(s.overdueFils / 1000.0);
+  return 'متأخر ${s.daysLate} يوماً · $amount د.ع';
+}
+
+class _DebtTag extends StatelessWidget {
+  const _DebtTag({required this.label, required this.color});
+
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontFamily: 'Tajawal',
+            fontSize: 11.5,
+            fontWeight: FontWeight.w700,
+            color: color,
           ),
         ),
       ),
@@ -853,21 +1046,21 @@ class _DebtsContentWidth extends StatelessWidget {
 class _InfoBanner extends StatelessWidget {
   final ColorScheme colorScheme;
   final bool isDark;
-  final int warnDays;
+  final int periodDays;
   final VoidCallback onDismiss;
 
   const _InfoBanner({
     required this.colorScheme,
     required this.isDark,
-    required this.warnDays,
+    required this.periodDays,
     required this.onDismiss,
   });
 
   @override
   Widget build(BuildContext context) {
-    final ageHint = warnDays > 0
-        ? ' التحذير بالعمر يبدأ بعد $warnDays يوماً من تاريخ الفاتورة.'
-        : ' فعّل «أيام تحذير العمر» من إعدادات الدين لتمييز الفواتير القديمة.';
+    final ageHint = periodDays > 0
+        ? ' الدين يصير «متأخراً» بعد $periodDays يوماً من تاريخ الفاتورة (ولبعض العملاء مدة خاصة).'
+        : ' فترة التسديد مطفأة؛ اضبطها من إعدادات الدين لتمييز المتأخرين.';
     final bodyColor = isDark
         ? Colors.white.withValues(alpha: 0.84)
         : colorScheme.onSurface.withValues(alpha: 0.82);
@@ -949,9 +1142,9 @@ class _SummaryStrip extends StatelessWidget {
             icon: Icons.account_balance_wallet_outlined,
             colorScheme: colorScheme,
             isDark: isDark,
-            isActiveFilter: activeFilter == _DebtFilter.all,
-            tooltip: 'عرض كل الفواتير',
-            onTap: () => onSelectFilter(_DebtFilter.all),
+            isActiveFilter: false,
+            tooltip: 'عرض الفواتير المفتوحة',
+            onTap: () => onSelectFilter(_DebtFilter.open),
           ),
         ),
         const SizedBox(width: 8),
@@ -970,15 +1163,15 @@ class _SummaryStrip extends StatelessWidget {
         const SizedBox(width: 8),
         Expanded(
           child: _MetricBox(
-            title: 'تحذير عمر',
+            title: 'متأخرة',
             value: '$agedInvoices',
             icon: Icons.schedule_rounded,
             colorScheme: colorScheme,
             isDark: isDark,
-            isActiveFilter: activeFilter == _DebtFilter.aged,
+            isActiveFilter: activeFilter == _DebtFilter.overdue,
             accent: agedInvoices > 0 ? AppSemanticColors.warning : null,
-            tooltip: 'تصفية: تحذير عمر',
-            onTap: () => onSelectFilter(_DebtFilter.aged),
+            tooltip: 'تصفية: المتأخرة عن فترة التسديد',
+            onTap: () => onSelectFilter(_DebtFilter.overdue),
           ),
         ),
       ],
@@ -1109,7 +1302,8 @@ class _MetricBox extends StatelessWidget {
 
 class _DebtCard extends StatelessWidget {
   final CreditDebtInvoice row;
-  final int warnDays;
+  final bool overdue;
+  final int periodDays;
   final ColorScheme colorScheme;
   final bool isDark;
   final VoidCallback onTap;
@@ -1117,7 +1311,8 @@ class _DebtCard extends StatelessWidget {
 
   const _DebtCard({
     required this.row,
-    required this.warnDays,
+    required this.overdue,
+    required this.periodDays,
     required this.colorScheme,
     required this.isDark,
     required this.onTap,
@@ -1129,12 +1324,15 @@ class _DebtCard extends StatelessWidget {
     final gap = ScreenLayout.of(context).pageHorizontalGap;
     final now = DateTime.now();
     final settled = row.isSettled;
-    final aged =
-        warnDays > 0 && !settled && row.daysSinceInvoice(now) >= warnDays;
+    final aged = overdue && !settled;
     final statusColor = settled
         ? AppSemanticColors.success
         : (aged ? AppSemanticColors.warning : AppSemanticColors.info);
-    final statusLabel = settled ? 'مغلقة' : (aged ? 'تنبيه عمر' : 'مفتوحة');
+    final statusLabel = settled
+        ? 'مغلقة'
+        : (aged
+              ? 'متأخرة ${row.daysSinceInvoice(now) - periodDays} يوماً'
+              : 'مفتوحة');
     final titleC = colorScheme.onSurface;
     final mutedC = colorScheme.onSurfaceVariant;
     final fill = isDark ? AppColors.cardDark : colorScheme.surface;

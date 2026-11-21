@@ -40,9 +40,12 @@ class OilChangeWhatsappNotifyService {
     PrintSettingsData? printSettings,
     /// تصحيح رقم على نفس البطاقة — يجب تجاوز مانع التكرار حسب orderId.
     bool phoneCorrectionResend = false,
+    /// دين العميل السابق بعد ما سُدِّد من البيع؛ يدخل خانة «المتبقي».
+    int priorOpenDebtFils = 0,
   }) async {
     final templateParams = buildOilChangeCardTemplateParams(
       order: order,
+      priorOpenDebtFils: priorOpenDebtFils,
       storeTitle: storeTitle,
       productsSummary: productsSummary,
       storeAddress: printSettings?.storeAddress ?? '',

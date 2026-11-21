@@ -4,6 +4,7 @@ import '../../../utils/iqd_money.dart';
 import '../../../utils/iraqi_currency_format.dart';
 import 'oil_change_auto_whatsapp_message.dart';
 import 'oil_change_filter_format.dart';
+import 'oil_order_has_oil.dart';
 
 /// بناء نص رسالة واتساب بعد إتمام بطاقة غيار الزيت.
 ///
@@ -58,7 +59,7 @@ String buildOilServiceWhatsAppMessage({
 
   final buf = StringBuffer()
     ..writeln('مرحباً $customer،')
-    ..writeln('شكراً لزيارتكم *$shop* لغيار الزيت 🙏')
+    ..writeln('شكراً لزيارتكم *$shop* ل${_visitWork(order)} 🙏')
     ..writeln();
 
   if (car.isNotEmpty || model.isNotEmpty) {
@@ -183,4 +184,10 @@ String buildOilServiceWhatsAppMessage({
   }
 
   return buf.toString().trim();
+}
+
+/// «غيار الزيت» أو ما في البطاقة فعلاً («تبديل فلتر وهيدروليك»).
+String _visitWork(Map<String, dynamic> order) {
+  final label = oilCardWorkLabel(order);
+  return label == 'غيار زيت' ? 'غيار الزيت' : label;
 }

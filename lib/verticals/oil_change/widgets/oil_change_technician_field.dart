@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/oil_change_rating.dart';
 import '../services/oil_change_ratings_repository.dart';
+import '../screens/oil_technicians_screen.dart';
 import '../services/oil_change_technicians_store.dart';
 
 /// حقل اختيار الفني المسؤول من قائمة محفوظة، مع زر إضافة اسم جديد.
@@ -108,6 +109,13 @@ class _OilChangeTechnicianFieldState extends State<OilChangeTechnicianField> {
       case _PickerAction.add:
         await _promptAdd();
         break;
+      case _PickerAction.manage:
+        await OilTechniciansScreen.open(context);
+        if (!mounted) return;
+        final names = await _store.load();
+        if (!mounted) return;
+        setState(() => _names = names);
+        break;
     }
   }
 
@@ -134,8 +142,11 @@ class _OilChangeTechnicianFieldState extends State<OilChangeTechnicianField> {
     final confirmed = await showDialog<bool>(
       context: sheetContext,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('حذف الفني'),
-        content: Text('حذف «$name» من القائمة؟ التقييمات السابقة تبقى محفوظة.'),
+        title: const Text('إيقاف الفني'),
+        content: Text(
+          'إيقاف «$name»؟ لا يظهر في البطاقات الجديدة، وبطاقاته وتقريره '
+          'وتقييماته تبقى. تستطيع إعادته من «إدارة الفنيين».',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dialogContext, false),
@@ -143,14 +154,14 @@ class _OilChangeTechnicianFieldState extends State<OilChangeTechnicianField> {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('حذف'),
+            child: const Text('إيقاف'),
           ),
         ],
       ),
     );
     if (confirmed != true) return false;
 
-    final names = await _store.remove(name);
+    final names = await _store.stop(name);
     if (!mounted) return true;
     setState(() {
       _names = names;
@@ -212,7 +223,7 @@ String _summaryLabel(OilChangeEmployeeRatingSummary s) {
       '· ${s.ratingsCount} تقييم';
 }
 
-enum _PickerAction { select, clear, add }
+enum _PickerAction { select, clear, add, manage }
 
 class _PickerResult {
   const _PickerResult(this.action, [this.name]);
@@ -295,8 +306,9 @@ class _TechnicianPickerSheet extends StatelessWidget {
                             Navigator.pop(context);
                           }
                         },
-                        tooltip: 'حذف',
-                        icon: const Icon(Icons.delete_outline_rounded),
+                        key: Key('techPickerStop_$name'),
+                        tooltip: 'إيقاف',
+                        icon: const Icon(Icons.person_off_outlined),
                       ),
                       onTap: () => Navigator.pop(
                         context,
@@ -313,6 +325,15 @@ class _TechnicianPickerSheet extends StatelessWidget {
               onTap: () => Navigator.pop(
                 context,
                 const _PickerResult(_PickerAction.add),
+              ),
+            ),
+            ListTile(
+              key: const Key('techPickerManage'),
+              leading: const Icon(Icons.manage_accounts_outlined),
+              title: const Text('إدارة الفنيين', textAlign: TextAlign.start),
+              onTap: () => Navigator.pop(
+                context,
+                const _PickerResult(_PickerAction.manage),
               ),
             ),
             if (selected.isNotEmpty)

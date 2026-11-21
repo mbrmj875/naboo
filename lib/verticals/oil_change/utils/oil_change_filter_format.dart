@@ -32,6 +32,11 @@ class OilFilterLineData {
     required this.priceFils,
     this.catalogEntryId,
     this.label,
+    this.customerProvided = false,
+    this.laborFils = 0,
+    this.productId,
+    this.qty = 1,
+    this.stockVoucherId,
   });
 
   final String code;
@@ -40,12 +45,46 @@ class OilFilterLineData {
   final int? catalogEntryId;
   final String? label;
 
+  /// الفلتر أحضره العميل: لا ثمن صنف ولا خصم مخزون، فقط [laborFils].
+  final bool customerProvided;
+  final int laborFils;
+
+  /// صنف المخزون (حين يكون مصدر الفلاتر «مرتبط بالمخزون»).
+  final int? productId;
+
+  /// عدد القطع؛ [priceFils] هو إجمالي السطر (سعر القطعة × العدد).
+  final int qty;
+
+  /// سند صرف المخزون لهذا السطر.
+  final int? stockVoucherId;
+
+  bool get issuesStock =>
+      !customerProvided && (productId ?? 0) > 0 && qty > 0;
+
+  OilFilterLineData withStockVoucher(int? voucherId) => OilFilterLineData(
+        code: code,
+        name: name,
+        priceFils: priceFils,
+        catalogEntryId: catalogEntryId,
+        label: label,
+        customerProvided: customerProvided,
+        laborFils: laborFils,
+        productId: productId,
+        qty: qty,
+        stockVoucherId: voucherId,
+      );
+
   Map<String, dynamic> toJson() => {
         'code': code,
         'name': name,
         'priceFils': priceFils,
         if (catalogEntryId != null) 'catalogEntryId': catalogEntryId,
         if (label != null && label!.trim().isNotEmpty) 'label': label!.trim(),
+        if (customerProvided) 'customerProvided': true,
+        if (customerProvided && laborFils > 0) 'laborFils': laborFils,
+        if (!customerProvided && (productId ?? 0) > 0) 'productId': productId,
+        if (qty != 1) 'qty': qty,
+        if ((stockVoucherId ?? 0) > 0) 'stockVoucherId': stockVoucherId,
       };
 
   factory OilFilterLineData.fromJson(Map<String, dynamic> m) {
@@ -57,6 +96,14 @@ class OilFilterLineData {
       label: (m['label'] ?? '').toString().trim().isEmpty
           ? null
           : (m['label'] ?? '').toString().trim(),
+      customerProvided: m['customerProvided'] == true,
+      laborFils: (m['laborFils'] as num?)?.toInt() ?? 0,
+      productId: (m['productId'] as num?)?.toInt(),
+      qty: () {
+        final q = (m['qty'] as num?)?.toInt() ?? 1;
+        return q < 1 ? 1 : q;
+      }(),
+      stockVoucherId: (m['stockVoucherId'] as num?)?.toInt(),
     );
   }
 }
@@ -74,7 +121,9 @@ List<OilFilterLineData> parseOilFiltersJson(String? raw) {
         Map<String, dynamic>.from(item),
       );
       if (line.code.isEmpty) continue;
-      if (line.name.isEmpty && line.priceFils <= 0) continue;
+      if (line.name.isEmpty && line.priceFils <= 0 && !line.customerProvided) {
+        continue;
+      }
       out.add(line);
     }
     return out;

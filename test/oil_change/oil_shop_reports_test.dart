@@ -80,6 +80,26 @@ Future<int> _product(
   });
 }
 
+/// تجاوز مالك كما يسجّله حفظ البطاقة.
+Future<void> _override(
+  OilChangeTestHarness h, {
+  required String orderId,
+  DateTime? at,
+}) async {
+  final db = await h.database;
+  await db.insert('business_audit_events', {
+    'tenant_id': await h.tenantId(),
+    'username': 'سالم',
+    'event_type': 'oil_change_stock_override',
+    'entity_type': 'service_order',
+    'entity_id': orderId,
+    'new_value_json':
+        '{"approvedBy":"owner_pin","shortages":[{"labels":["الزيت"],'
+        '"product":"زيت سالب","available":2,"needed":4,"unit":"لتر"}]}',
+    'created_at': (at ?? DateTime.now()).toIso8601String(),
+  });
+}
+
 ReportDateRange _today() {
   final now = DateTime.now();
   return ReportDateRange(from: now, to: now);
@@ -374,12 +394,34 @@ void main() {
       expect(r.shortageCount, 1);
       expect(r.idleCostFils, 5000 * 1000 + 2000 * 1000);
     });
+
+    test('الأرصدة السالبة وتجاوزات المالك في الفترة فقط', () async {
+      await _product(h, name: 'زيت سالب', qty: -2);
+      await _product(h, name: 'فلتر سالب', qty: -5);
+      await _product(h, name: 'سليم', qty: 3);
+      await _override(h, orderId: '41');
+      await _override(
+        h,
+        orderId: '7',
+        at: DateTime.now().subtract(const Duration(days: 40)),
+      );
+      final r = await ProductsReportRepository.instance.loadSnapshot(_today());
+      expect(r.negative.map((p) => p.name), ['فلتر سالب', 'زيت سالب']);
+      expect(r.overrides, hasLength(1));
+      final o = r.overrides.single;
+      expect(o.orderId, '41');
+      expect(o.username, 'سالم');
+      expect(o.lines.single, contains('زيت سالب'));
+      expect(o.lines.single, contains('المطلوب 4 لتر'));
+    });
   });
 
   group('اللوحات', () {
     Future<List<Widget>> seededPanels() async {
       final oil = await _product(h, name: 'زيت 5W-30', qty: 12, buy: 4);
+      await _product(h, name: 'زيت سالب', qty: -2);
       final order = await builder.createPending(plate: 'S1');
+      await _override(h, orderId: '$order');
       final inv = await _invoice(
         h,
         totalFils: 40000,

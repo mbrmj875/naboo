@@ -409,6 +409,9 @@ abstract class VerticalManifest {
   /// محرّر عائلات السوائل — `null` للتخصصات التي لا تدعم زيت/هيدروليك.
   VerticalFluidInventoryEditor? get fluidInventoryEditor => null;
 
+  /// اقتراحات إضافية لحقل «التصنيف» في إضافة منتج (مثل فئات الفلاتر).
+  Future<List<String>> productCategorySuggestions() async => const [];
+
   /// محرّر منتج صيدلاني — `null` للتخصصات غير الصيدلانية.
   VerticalPharmacyProductEditor? get pharmacyProductEditor => null;
 

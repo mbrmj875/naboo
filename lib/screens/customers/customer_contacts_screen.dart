@@ -129,9 +129,8 @@ class _CustomerContactsScreenState extends State<CustomerContactsScreen> {
       list.sort((a, b) {
         final fa = financeById[a.id]?.openRemainingFils ?? 0;
         final fb = financeById[b.id]?.openRemainingFils ?? 0;
-        final da = fa > 0 ? fa / 1000.0 : a.balance.abs();
-        final db = fb > 0 ? fb / 1000.0 : b.balance.abs();
-        return db.compareTo(da);
+        // الدين من الفواتير الآجلة فقط؛ عمود balance القديم لا يُكتب.
+        return fb.compareTo(fa);
       });
     } else if (debtMode) {
       list.sort(
@@ -558,9 +557,7 @@ class _CustomerContactsScreenState extends State<CustomerContactsScreen> {
     final initial = c.name.isNotEmpty ? c.name.substring(0, 1) : '?';
     final phone = (c.phone?.trim().isNotEmpty == true) ? c.phone!.trim() : null;
     final av = _avatarColor(c.id);
-    final debtIqd = openRemainingFils > 0
-        ? openRemainingFils / 1000.0
-        : (c.balance > 0.01 ? c.balance : 0.0);
+    final debtIqd = openRemainingFils > 0 ? openRemainingFils / 1000.0 : 0.0;
     final debtLabel = IraqiCurrencyFormat.formatIqd(debtIqd);
 
     return Material(

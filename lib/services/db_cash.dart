@@ -332,11 +332,12 @@ extension DbCash on DatabaseHelper {
             AND cl.invoiceId IS NOT NULL
             AND cl.invoiceId > 0
         )
+        -- الآجل والأقساط مستثناة: مقدَّمها عند البيع يُقيَّد في معاملة الحفظ
+        -- نفسها، وما يُسدَّد بعدها يرفع advancePayment وله سنده وقيده الخاص.
+        -- إعادة إنشائها من advancePayment كانت تحسب كل تسديد مرتين.
         AND (
           i.type = ?
           OR i.type = ?
-          OR (i.type = ? AND ${MoneySql.invoiceAdvancePaymentFilsOf('i')} > 0)
-          OR (i.type = ? AND ${MoneySql.invoiceAdvancePaymentFilsOf('i')} > 0)
           OR i.type = ?
           OR i.type = ?
         )
@@ -346,8 +347,6 @@ extension DbCash on DatabaseHelper {
         tid,
         InvoiceType.cash.index,
         InvoiceType.delivery.index,
-        InvoiceType.credit.index,
-        InvoiceType.installment.index,
         InvoiceType.debtCollection.index,
         InvoiceType.installmentCollection.index,
       ],
@@ -443,6 +442,173 @@ extension DbCash on DatabaseHelper {
     final sessionTenant = TenantContext.instance.requireTenantId();
     final tid = await _activeTenantIdForCash(db, sessionTenant);
     return DbCashSqlOps.getInvoiceShiftIdsByInvoiceIds(db, tid, invoiceIds);
+  }
+
+  /// فحص قراءة فقط لقيود زائدة من خللين قديمين (انظر [CashAuditReport]).
+  /// الحالات التي صُحّحت سابقاً (قيد تصحيح بمفتاحها) لا تظهر.
+  Future<CashAuditReport> auditCashLedgerExcess() async {
+    final db = await database;
+    final sessionTenant = TenantContext.instance.requireTenantId();
+    final tid = await _activeTenantIdForCash(db, sessionTenant);
+
+    final corrected = <String>{};
+    final corr = await db.query(
+      'cash_ledger',
+      columns: ['description'],
+      where: 'tenantId = ? AND transactionType = ? AND deleted_at IS NULL',
+      whereArgs: [tid, kCashAuditCorrectionType],
+    );
+    final keyRe = RegExp(r'\[([^\]]+)\]\s*$');
+    for (final r in corr) {
+      final m = keyRe.firstMatch((r['description'] ?? '').toString());
+      if (m != null) corrected.add(m.group(1)!);
+    }
+
+    int filsOf(Map<String, Object?> r) {
+      final f = (r['amountFils'] as num?)?.toInt() ?? 0;
+      return f != 0 ? f : _toFils((r['amount'] as num?)?.toDouble() ?? 0);
+    }
+
+    String keyOf(String prefix, Map<String, Object?> r) {
+      final g = (r['global_id'] ?? '').toString().trim();
+      return '$prefix:${g.isNotEmpty ? g : 'id${r['id']}'}';
+    }
+
+    DateTime dateOf(Object? v) =>
+        DateTime.tryParse((v ?? '').toString())?.toLocal() ??
+        DateTime.fromMillisecondsSinceEpoch(0);
+
+    final out = <CashAuditFinding>[];
+
+    // 1) قيد دفعة مورد محذوف ناعماً وسنده محذوف، ولا قيد سارٍ آخر للسند:
+    //    هذا أثر العكس القديم (الإيداع العكسي بقي فوق حذف الخصم).
+    final sup = await db.rawQuery(
+      '''
+      SELECT cl.id, cl.global_id, cl.amount, cl.amountFils, cl.createdAt,
+             cl.description
+      FROM cash_ledger cl
+      JOIN invoices i ON i.id = cl.invoiceId AND i.tenantId = cl.tenantId
+      WHERE cl.tenantId = ?
+        AND cl.transactionType = 'supplier_payment'
+        AND cl.deleted_at IS NOT NULL
+        AND i.deleted_at IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM cash_ledger c2
+          WHERE c2.invoiceId = cl.invoiceId AND c2.deleted_at IS NULL
+        )
+        AND EXISTS (
+          SELECT 1 FROM cash_ledger r
+          WHERE r.tenantId = cl.tenantId
+            AND r.transactionType = 'supplier_payment_reversal'
+            AND r.deleted_at IS NULL
+        )
+      ORDER BY cl.createdAt
+      ''',
+      [tid],
+    );
+    for (final r in sup) {
+      final key = keyOf('sp', r);
+      final fils = filsOf(r).abs();
+      if (fils <= 0 || corrected.contains(key)) continue;
+      out.add(
+        CashAuditFinding(
+          kind: CashAuditKind.supplierReversal,
+          key: key,
+          excessFils: fils,
+          date: dateOf(r['createdAt']),
+          label: (r['description'] ?? '').toString(),
+        ),
+      );
+    }
+
+    // 2) قيد «مقدّم» لفاتورة آجلة/أقساط أنشأه الإصلاح القديم: وقته = تاريخ
+    //    الفاتورة حرفياً (قيد البيع الحقيقي يُكتب بوقت الحفظ)، ولا قيد آخر
+    //    للفاتورة نفسها (فلا هو نسخة مزامنة مكررة).
+    final adv = await db.rawQuery(
+      '''
+      SELECT cl.id, cl.global_id, cl.amount, cl.amountFils, cl.createdAt,
+             cl.invoiceId, i.customerName
+      FROM cash_ledger cl
+      JOIN invoices i ON i.id = cl.invoiceId AND i.tenantId = cl.tenantId
+      WHERE cl.tenantId = ?
+        AND cl.deleted_at IS NULL
+        AND i.type IN (?, ?)
+        AND cl.transactionType IN ('sale_advance', 'sale_other')
+        AND cl.createdAt = i.date
+        AND NOT EXISTS (
+          SELECT 1 FROM cash_ledger c2
+          WHERE c2.invoiceId = cl.invoiceId AND c2.id != cl.id
+        )
+      ORDER BY cl.createdAt
+      ''',
+      [tid, InvoiceType.credit.index, InvoiceType.installment.index],
+    );
+    for (final r in adv) {
+      final key = keyOf('ca', r);
+      final fils = filsOf(r);
+      if (fils <= 0 || corrected.contains(key)) continue;
+      final cust = (r['customerName'] ?? '').toString().trim();
+      out.add(
+        CashAuditFinding(
+          kind: CashAuditKind.phantomCreditAdvance,
+          key: key,
+          excessFils: fils,
+          date: dateOf(r['createdAt']),
+          label: 'فاتورة آجلة #${r['invoiceId']}${cust.isEmpty ? '' : ' — $cust'}',
+        ),
+      );
+    }
+    return CashAuditReport(out);
+  }
+
+  /// قيد تصحيح سالب لكل حالة (بعد رمز المالك في الواجهة). يُعيد عدد القيود.
+  Future<int> applyCashAuditCorrections(
+    List<CashAuditFinding> findings, {
+    required String byUserName,
+  }) async {
+    if (findings.isEmpty) return 0;
+    final db = await database;
+    final sessionTenant = TenantContext.instance.requireTenantId();
+    final tid = await _activeTenantIdForCash(db, sessionTenant);
+    var n = 0;
+    await db.transaction((txn) async {
+      for (final f in findings) {
+        final dup = await txn.query(
+          'cash_ledger',
+          columns: ['id'],
+          where:
+              'tenantId = ? AND transactionType = ? AND deleted_at IS NULL '
+              'AND description LIKE ?',
+          whereArgs: [tid, kCashAuditCorrectionType, '%[${f.key}]'],
+          limit: 1,
+        );
+        if (dup.isNotEmpty) continue;
+        final nowIso = DateTime.now().toIso8601String();
+        await DbCashSqlOps.insertCashLedgerEntry(txn, tid, {
+          'global_id': const Uuid().v4(),
+          'transactionType': kCashAuditCorrectionType,
+          'amount': -(f.excessFils / 1000.0),
+          'amountFils': -f.excessFils,
+          'description': f.correctionDescription,
+          'invoiceId': null,
+          'workShiftId': null,
+          'createdAt': nowIso,
+          'updatedAt': DateTime.now().toUtc().toIso8601String(),
+        });
+        n++;
+      }
+      await _insertActivityLogInTxn(
+        txn,
+        type: 'cash_audit_corrected',
+        refTable: 'cash_ledger',
+        title: 'تصحيح فحص الصندوق',
+        details: '$n قيد • المنفذ: ${byUserName.trim().isEmpty ? 'غير معروف' : byUserName.trim()}',
+        amount: -findings.fold<int>(0, (s, f) => s + f.excessFils) / 1000.0,
+        tenantId: tid,
+      );
+    });
+    CloudSyncService.instance.scheduleSyncSoon();
+    return n;
   }
 
   /// dedupe + إصلاح tenant/وردية قبل أي عرض لرصيد الصندوق.

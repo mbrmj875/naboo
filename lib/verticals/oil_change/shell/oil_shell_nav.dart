@@ -31,6 +31,7 @@ import '../../car_wash/screens/car_wash_services_screen.dart';
 import '../screens/oil_change_direct_sale_screen.dart';
 import '../screens/oil_change_hub_screen.dart';
 import '../screens/oil_change_invoices_screen.dart';
+import '../screens/vehicles_registry_screen.dart';
 import '../screens/oil_change_services_screen.dart';
 
 const _oilColor = Color(0xFF0EA5E9);
@@ -60,6 +61,11 @@ List<ShellNavItem> _catalog() => [
         title: 'الفواتير',
         routeId: AppContentRoutes.oilInvoices,
         destination: (_) => const OilChangeInvoicesScreen(),
+      ),
+      ShellNavSubItem(
+        title: 'سجل السيارات',
+        routeId: AppContentRoutes.oilVehicles,
+        destination: (_) => const VehiclesRegistryScreen(),
       ),
       ShellNavSubItem(
         title: 'بيع مباشر',

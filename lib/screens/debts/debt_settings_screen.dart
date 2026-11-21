@@ -8,6 +8,7 @@ import '../../models/debt_settings_data.dart';
 import '../../providers/notification_provider.dart';
 import '../../services/cloud_sync_service.dart';
 import '../../services/database_helper.dart';
+import '../../services/debt_auto_reminder_service.dart';
 import '../../theme/design_tokens.dart';
 import '../../utils/app_logger.dart';
 import '../../utils/screen_layout.dart';
@@ -28,9 +29,17 @@ class _DebtSettingsScreenState extends State<DebtSettingsScreen> {
   bool _loading = true;
   DebtSettingsData _data = DebtSettingsData.defaults();
 
+  /// حالة قالب التذكير التلقائي عند ميتا (المرحلة 7 — الشريحة 4).
+  String? _templateStatus;
+  bool _templateLoading = false;
+
+  bool _isAuto(DebtReminderMode m) =>
+      m == DebtReminderMode.auto || m == DebtReminderMode.both;
+
   final _maxPerCustomer = TextEditingController();
   final _maxPerInvoice = TextEditingController();
   final _warnDays = TextEditingController();
+  final _periodDays = TextEditingController();
 
   Color get _pageBg => Theme.of(context).scaffoldBackgroundColor;
   Color get _surface => Theme.of(context).colorScheme.surface;
@@ -78,6 +87,7 @@ class _DebtSettingsScreenState extends State<DebtSettingsScreen> {
     _maxPerCustomer.dispose();
     _maxPerInvoice.dispose();
     _warnDays.dispose();
+    _periodDays.dispose();
     super.dispose();
   }
 
@@ -94,7 +104,21 @@ class _DebtSettingsScreenState extends State<DebtSettingsScreen> {
           ? ''
           : _numFmt.format(s.maxOpenRemainingPerInvoice);
       _warnDays.text = s.warnDebtAgeDays <= 0 ? '' : '${s.warnDebtAgeDays}';
+      _periodDays.text = '${s.paymentPeriodDays}';
       _loading = false;
+    });
+    if (_isAuto(s.reminderMode)) unawaited(_refreshTemplate(submit: false));
+  }
+
+  Future<void> _refreshTemplate({required bool submit}) async {
+    setState(() => _templateLoading = true);
+    final svc = DebtAutoReminderService.instance;
+    final status =
+        submit ? await svc.submitTemplate() : await svc.templateStatus();
+    if (!mounted) return;
+    setState(() {
+      _templateStatus = status;
+      _templateLoading = false;
     });
   }
 
@@ -114,13 +138,23 @@ class _DebtSettingsScreenState extends State<DebtSettingsScreen> {
       );
       return;
     }
+    final period = int.tryParse(_periodDays.text.trim()) ?? 0;
+    if (period < 0 || period > 3650) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('فترة التسديد: بين 0 و 3650 يوماً')),
+      );
+      return;
+    }
     final next = _data.copyWith(
       maxTotalOpenDebtPerCustomer: capC,
       maxOpenRemainingPerInvoice: capI,
       warnDebtAgeDays: days,
+      paymentPeriodDays: period,
     );
     await _db.saveDebtSettings(next);
+    await DebtAutoReminderService.instance.onModeChanged(next.reminderMode);
     CloudSyncService.instance.scheduleSyncSoon();
+    if (_isAuto(next.reminderMode)) unawaited(_refreshTemplate(submit: true));
     if (!mounted) return;
     try {
       unawaited(context.read<NotificationProvider>().refresh());
@@ -383,6 +417,85 @@ class _DebtSettingsScreenState extends State<DebtSettingsScreen> {
                                 ),
                               ),
                             ),
+                          ],
+                        ),
+                        const SizedBox(height: 16),
+                        _section(
+                          icon: Icons.event_available_outlined,
+                          title: 'فترة التسديد والتذكير',
+                          subtitle:
+                              'الدين الأقدم من الفترة يصير متأخراً: البيع نقداً '
+                              'مسموح دائماً، والدين الجديد يُمنع حتى يسدّد '
+                              'المتأخر إلا برمز المالك.',
+                          children: [
+                            TextField(
+                              key: const ValueKey('debtPaymentPeriodDays'),
+                              controller: _periodDays,
+                              keyboardType: TextInputType.number,
+                              decoration: _fieldDecoration(
+                                label: 'فترة التسديد (أيام)',
+                                helper:
+                                    '0 = بلا فترة ولا منع. الافتراضي '
+                                    '${DebtSettingsData.defaultPaymentPeriodDays} يوماً.',
+                                prefixIcon: const Icon(
+                                  Icons.timer_outlined,
+                                  size: 20,
+                                  color: AppColors.accentGold,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            Text(
+                              'طريقة تذكير العميل',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w600,
+                                fontSize: 14,
+                                color: _textPrimary,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: [
+                                for (final m in DebtReminderMode.values)
+                                  ChoiceChip(
+                                    label: Text(m.label),
+                                    selected: _data.reminderMode == m,
+                                    onSelected: (_) => setState(
+                                      () => _data =
+                                          _data.copyWith(reminderMode: m),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                            if (_isAuto(_data.reminderMode)) ...[
+                              const SizedBox(height: 10),
+                              Text(
+                                'رسالة واتساب واحدة للعميل يوم تأخّر دينه، '
+                                'بمجموع دينه وتاريخ أقدم فاتورة. تُحسب '
+                                'الديون التي تتأخر من يوم التفعيل، وكل '
+                                'رسالة تُخصم من رصيد الرسائل.',
+                                style: TextStyle(
+                                  color: _textSecondary,
+                                  height: 1.4,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                _templateLoading
+                                    ? 'جاري فحص رسالة التذكير…'
+                                    : debtTemplateStatusAr(_templateStatus),
+                                key: const ValueKey('debtTemplateStatus'),
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                  color: _templateStatus == 'approved'
+                                      ? Colors.green.shade700
+                                      : _textPrimary,
+                                  height: 1.4,
+                                ),
+                              ),
+                            ],
                           ],
                         ),
                         const SizedBox(height: 16),

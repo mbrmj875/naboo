@@ -55,6 +55,7 @@ class SupplierBill {
     this.createdByUserName,
     this.linkedStockVoucherId,
     this.linkedVoucherNo,
+    this.dueDate,
   });
 
   final int id;
@@ -73,6 +74,9 @@ class SupplierBill {
   /// إذن مخزوني وارد مرتبط بهذا الوصل (إن وُجد).
   final int? linkedStockVoucherId;
   final String? linkedVoucherNo;
+
+  /// «يُدفع قبل» (اختياري): بعده يصير الباقي من الوصل مستحقاً.
+  final DateTime? dueDate;
 }
 
 class SupplierPayout {
@@ -87,6 +91,9 @@ class SupplierPayout {
     this.createdByUserName,
     required this.affectsCash,
     this.receiptInvoiceId,
+    this.voidedAt,
+    this.voidedByUserName,
+    this.voidReason,
   });
 
   final int id;
@@ -102,6 +109,13 @@ class SupplierPayout {
 
   /// سند الفاتورة المرتبط (قائمة الفواتير) إن وُجد.
   final int? receiptInvoiceId;
+
+  /// الدفعة المعكوسة تبقى ظاهرة «ملغاة» ولا تُحسب في الرصيد.
+  final DateTime? voidedAt;
+  final String? voidedByUserName;
+  final String? voidReason;
+
+  bool get isVoided => voidedAt != null;
 }
 
 class SupplierPayoutResult {

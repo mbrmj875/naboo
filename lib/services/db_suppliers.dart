@@ -26,8 +26,9 @@ Supplier _supplierFromRow(Map<String, dynamic> r) {
 SupplierApSummary _supplierApSummaryFromRow(Map<String, dynamic> r) {
   return SupplierApSummary(
     supplier: _supplierFromRow(r),
-    totalBilled: (r['totalBilled'] as num?)?.toDouble() ?? 0,
-    totalPaid: (r['totalPaid'] as num?)?.toDouble() ?? 0,
+    // المجاميع تُحسب بالفلس في SQL (ROUND(amount * 1000)) ثم تُحوَّل.
+    totalBilled: ((r['totalBilled'] as num?)?.round() ?? 0) / 1000.0,
+    totalPaid: ((r['totalPaid'] as num?)?.round() ?? 0) / 1000.0,
   );
 }
 
@@ -51,13 +52,13 @@ class DbSuppliersSqlOps {
         COALESCE(p.tp, 0) AS totalPaid
       FROM suppliers s
       LEFT JOIN (
-        SELECT supplierId, SUM(amount) AS tb FROM supplier_bills
+        SELECT supplierId, SUM(ROUND(amount * 1000)) AS tb FROM supplier_bills
         WHERE tenantId = ?
         GROUP BY supplierId
       ) b ON b.supplierId = s.id
       LEFT JOIN (
-        SELECT supplierId, SUM(amount) AS tp FROM supplier_payouts
-        WHERE tenantId = ?
+        SELECT supplierId, SUM(ROUND(amount * 1000)) AS tp FROM supplier_payouts
+        WHERE tenantId = ? AND voidedAt IS NULL
         GROUP BY supplierId
       ) p ON p.supplierId = s.id
       WHERE s.tenantId = ?
@@ -79,13 +80,13 @@ class DbSuppliersSqlOps {
         COALESCE(SUM(COALESCE(b.tb, 0) - COALESCE(p.tp, 0)), 0) AS open
       FROM suppliers s
       LEFT JOIN (
-        SELECT supplierId, SUM(amount) AS tb FROM supplier_bills
+        SELECT supplierId, SUM(ROUND(amount * 1000)) AS tb FROM supplier_bills
         WHERE tenantId = ?
         GROUP BY supplierId
       ) b ON b.supplierId = s.id
       LEFT JOIN (
-        SELECT supplierId, SUM(amount) AS tp FROM supplier_payouts
-        WHERE tenantId = ?
+        SELECT supplierId, SUM(ROUND(amount * 1000)) AS tp FROM supplier_payouts
+        WHERE tenantId = ? AND voidedAt IS NULL
         GROUP BY supplierId
       ) p ON p.supplierId = s.id
       WHERE s.tenantId = ?
@@ -94,7 +95,7 @@ class DbSuppliersSqlOps {
       [tenantId, tenantId, tenantId],
     );
     if (rows.isEmpty) return 0;
-    return (rows.first['open'] as num?)?.toDouble() ?? 0;
+    return ((rows.first['open'] as num?)?.round() ?? 0) / 1000.0;
   }
 
   static Future<List<SupplierApSummary>> querySupplierApSummariesPage(
@@ -119,13 +120,13 @@ class DbSuppliersSqlOps {
         COALESCE(p.tp, 0) AS totalPaid
       FROM suppliers s
       LEFT JOIN (
-        SELECT supplierId, SUM(amount) AS tb FROM supplier_bills
+        SELECT supplierId, SUM(ROUND(amount * 1000)) AS tb FROM supplier_bills
         WHERE tenantId = ?
         GROUP BY supplierId
       ) b ON b.supplierId = s.id
       LEFT JOIN (
-        SELECT supplierId, SUM(amount) AS tp FROM supplier_payouts
-        WHERE tenantId = ?
+        SELECT supplierId, SUM(ROUND(amount * 1000)) AS tp FROM supplier_payouts
+        WHERE tenantId = ? AND voidedAt IS NULL
         GROUP BY supplierId
       ) p ON p.supplierId = s.id
       $whereSql
@@ -183,7 +184,7 @@ class DbSuppliersSqlOps {
       '''
       SELECT b.id, b.supplierId, b.theirReference, b.theirBillDate, b.amount,
              b.note, b.imagePath, b.createdAt, b.createdByUserName,
-             b.linkedStockVoucherId,
+             b.linkedStockVoucherId, b.dueDate,
              v.voucherNo AS linkedVoucherNo
       FROM supplier_bills b
       LEFT JOIN stock_vouchers v ON v.id = b.linkedStockVoucherId
@@ -269,15 +270,25 @@ class DbSuppliersSqlOps {
     return txn.insert('supplier_payouts', stamped);
   }
 
-  static Future<int> deleteSupplierPayout(
+  /// يعلّم الدفعة «ملغاة» بدل حذفها (تبقى ظاهرة في السجل وتتزامن).
+  static Future<int> voidSupplierPayout(
     DatabaseExecutor txn,
     int tenantId,
     int payoutId,
-    int supplierId,
-  ) {
-    return txn.delete(
+    int supplierId, {
+    required String reason,
+    String? voidedByUserName,
+  }) {
+    final nowIso = DateTime.now().toUtc().toIso8601String();
+    return txn.update(
       'supplier_payouts',
-      where: 'id = ? AND supplierId = ? AND tenantId = ?',
+      {
+        'voidedAt': nowIso,
+        'voidedByUserName': voidedByUserName,
+        'voidReason': reason,
+        'updatedAt': nowIso,
+      },
+      where: 'id = ? AND supplierId = ? AND tenantId = ? AND voidedAt IS NULL',
       whereArgs: [payoutId, supplierId, tenantId],
     );
   }
@@ -553,6 +564,7 @@ extension DbSuppliers on DatabaseHelper {
     String? imagePath,
     String? createdByUserName,
     int? linkedStockVoucherId,
+    DateTime? dueDate,
   }) async {
     if (amount <= 0) throw ArgumentError('amount');
     final db = await database;
@@ -590,6 +602,7 @@ extension DbSuppliers on DatabaseHelper {
           ? null
           : createdByUserName?.trim(),
       'linkedStockVoucherId': linkedStockVoucherId,
+      if (dueDate != null) 'dueDate': supplierDueDateKey(dueDate),
     });
 
     CloudSyncService.instance.scheduleSyncSoon();
@@ -636,8 +649,77 @@ extension DbSuppliers on DatabaseHelper {
         linkedStockVoucherId:
             linkId == null ? null : (linkId as num).toInt(),
         linkedVoucherNo: (r['linkedVoucherNo'] as String?)?.trim(),
+        dueDate: DateTime.tryParse((r['dueDate'] ?? '').toString()),
       );
     }).toList();
+  }
+
+  /// الموردون الذين حلّ موعد دفع وصل لهم («يُدفع قبل» اليوم أو قبله)،
+  /// الأقدم موعداً أولاً. يُقرأ فقط من له وصل بتاريخ استحقاق.
+  Future<List<SupplierDueEntry>> getSupplierDueEntries({DateTime? today}) async {
+    final db = await database;
+    final sessionTenant = TenantContext.instance.requireTenantId();
+    final tid = await _activeTenantIdForSuppliers(db, sessionTenant);
+    await _ensureSupplierApTables(db);
+    await _ensureSupplierBillStockLinkColumns(db);
+    final ids = await db.rawQuery(
+      '''
+      SELECT DISTINCT b.supplierId AS sid, s.name AS name
+      FROM supplier_bills b
+      JOIN suppliers s ON s.id = b.supplierId AND s.tenantId = b.tenantId
+      WHERE b.tenantId = ? AND s.isActive = 1
+        AND b.dueDate IS NOT NULL AND TRIM(b.dueDate) != ''
+        AND b.dueDate <= ?
+      ''',
+      [tid, supplierDueDateKey(today ?? DateTime.now())],
+    );
+    final out = <SupplierDueEntry>[];
+    for (final r in ids) {
+      final sid = (r['sid'] as num).toInt();
+      final bills = await getSupplierBills(sid);
+      final paid = await db.rawQuery(
+        '''
+        SELECT COALESCE(SUM(ROUND(amount * 1000)), 0) AS f FROM supplier_payouts
+        WHERE tenantId = ? AND supplierId = ? AND voidedAt IS NULL
+        ''',
+        [tid, sid],
+      );
+      final status = computeSupplierDue(
+        bills: bills,
+        paidFils: (paid.first['f'] as num?)?.round() ?? 0,
+        today: today,
+      );
+      if (!status.isDue) continue;
+      out.add(
+        SupplierDueEntry(
+          supplierId: sid,
+          name: (r['name'] as String?)?.trim() ?? 'مورد',
+          status: status,
+        ),
+      );
+    }
+    out.sort((a, b) => b.status.daysLate.compareTo(a.status.daysLate));
+    return out;
+  }
+
+  /// الموردون النشطون (رقم واسم) لاختيارهم من قائمة، ضمن المحل الحالي.
+  Future<List<({int id, String name})>> listActiveSuppliersForPicker() async {
+    final db = await database;
+    final sessionTenant = TenantContext.instance.requireTenantId();
+    final tid = await _activeTenantIdForSuppliers(db, sessionTenant);
+    await _ensureSupplierApTables(db);
+    final rows = await db.query(
+      'suppliers',
+      columns: ['id', 'name'],
+      where: 'tenantId = ? AND isActive = 1',
+      whereArgs: [tid],
+      orderBy: 'name COLLATE NOCASE',
+    );
+    return [
+      for (final r in rows)
+        if (((r['name'] as String?) ?? '').trim().isNotEmpty)
+          (id: (r['id'] as num).toInt(), name: (r['name'] as String).trim()),
+    ];
   }
 
   Future<List<SupplierPayout>> getSupplierPayouts(int supplierId) async {
@@ -658,6 +740,10 @@ extension DbSuppliers on DatabaseHelper {
             createdByUserName: (r['createdByUserName'] as String?)?.trim(),
             affectsCash: ((r['affectsCash'] as int?) ?? 1) == 1,
             receiptInvoiceId: (r['receiptInvoiceId'] as num?)?.toInt(),
+            voidedAt: DateTime.tryParse((r['voidedAt'] ?? '').toString())
+                ?.toLocal(),
+            voidedByUserName: (r['voidedByUserName'] as String?)?.trim(),
+            voidReason: (r['voidReason'] as String?)?.trim(),
           ),
         )
         .toList();
@@ -802,10 +888,27 @@ extension DbSuppliers on DatabaseHelper {
   }
 
   /// حذف دفعة مورد مسجّلة بالخطأ؛ إن وُجد قيد صندوق يُضاف قيد عكسي.
-  Future<bool> deleteSupplierPayoutReversingCash({
+  /// يعكس دفعة مورد.
+  ///
+  /// قيد الصندوق الأصلي يبقى كما هو، ويُضاف قيد عكسي واحد موجب بنفس المبلغ،
+  /// فيعود الصندوق لرقمه قبل الدفعة ويبقى الأثر ظاهراً في السجل.
+  /// (سابقاً كان القيد الأصلي يُحذف ثم يُضاف إيداع فوقه، فيزيد الصندوق بقيمة
+  /// الدفعة مرتين.)
+  ///
+  /// [reversedByUserName]: من نفّذ العكس، يُكتب في سجل التدقيق.
+  ///
+  /// المرحلة 5 — الشريحة 3: الدفعة لا تُحذف؛ تبقى ظاهرة «ملغاة» مع السبب
+  /// [reason] ومن ألغاها (يُطلب رمز المالك في الواجهة قبل الاستدعاء).
+  Future<bool> voidSupplierPayout({
     required int payoutId,
     required int supplierId,
+    required String reason,
+    String? reversedByUserName,
   }) async {
+    final why = reason.trim();
+    if (why.length < 3) {
+      throw StateError('اكتب سبب الإلغاء (3 أحرف على الأقل).');
+    }
     final db = await database;
     final sessionTenant = TenantContext.instance.requireTenantId();
     final tid = await _activeTenantIdForSuppliers(db, sessionTenant);
@@ -819,26 +922,21 @@ extension DbSuppliers on DatabaseHelper {
       );
       if (rows.isEmpty) return false;
       final r = rows.first;
+      if ((r['voidedAt'] ?? '').toString().trim().isNotEmpty) return false;
       final affectsCash = ((r['affectsCash'] as int?) ?? 1) == 1;
       final amount = (r['amount'] as num).toDouble();
       final receiptInvoiceId = (r['receiptInvoiceId'] as num?)?.toInt();
       final tenantInt = (r['tenantId'] as num?)?.toInt() ?? 1;
-      final actor = ((r['createdByUserName'] as String?) ?? '').trim().isEmpty
-          ? 'غير معروف'
-          : ((r['createdByUserName'] as String?) ?? '').trim();
+      final reverser = (reversedByUserName ?? '').trim();
+      final actor = reverser.isNotEmpty ? reverser : 'غير معروف';
 
       if (receiptInvoiceId != null && receiptInvoiceId > 0) {
         // Step 10 (soft delete): financial rows must never be hard-deleted —
         // audit relies on `deleted_at` being present and the original row
         // intact. Each table is in the soft-delete migration scope, so a
         // simple UPDATE stamps the tombstone tenant-scoped.
+        // قيد الصندوق الأصلي لا يُحذف: القيد العكسي أدناه يلغي أثره.
         final nowIso = DateTime.now().toUtc().toIso8601String();
-        await DbCashSqlOps.softDeleteCashLedgerEntry(
-          txn,
-          tenantInt,
-          where: 'invoiceId = ?',
-          whereArgs: [receiptInvoiceId],
-        );
         await txn.update(
           'invoice_items',
           {'deleted_at': nowIso, 'updatedAt': nowIso},
@@ -890,6 +988,7 @@ extension DbSuppliers on DatabaseHelper {
         await DbCashSqlOps.insertCashLedgerEntry(txn, tenantInt, {
           'transactionType': 'supplier_payment_reversal',
           'amount': amount,
+          'amountFils': (amount * 1000).round(),
           'description':
               'عكس دفعة مورد #$supplierId — $name (كانت دفعة #$payoutId)',
           'invoiceId': null,
@@ -907,20 +1006,22 @@ extension DbSuppliers on DatabaseHelper {
           tenantId: tenantInt,
         );
       }
-      final n = await DbSuppliersSqlOps.deleteSupplierPayout(
+      final n = await DbSuppliersSqlOps.voidSupplierPayout(
         txn,
         tid,
         payoutId,
         supplierId,
+        reason: why.length > 300 ? why.substring(0, 300) : why,
+        voidedByUserName: reverser.isEmpty ? null : reverser,
       );
       if (n > 0) {
         await _insertActivityLogInTxn(
           txn,
-          type: 'supplier_payout_deleted',
+          type: 'supplier_payout_voided',
           refTable: 'supplier_payouts',
           refId: payoutId,
-          title: 'حذف دفعة مورد',
-          details: 'المورد #$supplierId • المنفذ: $actor',
+          title: 'إلغاء دفعة مورد',
+          details: 'المورد #$supplierId • السبب: $why • المنفذ: $actor',
           amount: amount,
           tenantId: tenantInt,
         );

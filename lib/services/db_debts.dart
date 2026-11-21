@@ -544,70 +544,227 @@ extension DbDebts on DatabaseHelper {
   }
 
   /// تجميع ديون «آجل» حسب العميل (مسجّل أو باسم فقط).
-  Future<List<CustomerDebtSummary>> getCustomerDebtSummaries() async {
+  /// تجميع الديون المفتوحة حسب العميل (مسجّل أو باسم فقط)، المتأخرون أولاً.
+  ///
+  /// يقرأ الفواتير المفتوحة فقط. لكل عميل: المتأخر عن فترة التسديد (فترته
+  /// الخاصة من صفحته أو العامة)، وأيام التأخر، وهواتفه ولوحات سياراته للبحث.
+  Future<List<CustomerDebtSummary>> getCustomerDebtSummaries({
+    List<CreditDebtInvoice>? openInvoices,
+    DateTime? now,
+  }) async {
     final db = await database;
     final sessionTenant = TenantContext.instance.requireTenantId();
     final tid = await _activeTenantIdForDebts(db, sessionTenant);
     await _backfillLegacyCreditInvoiceCustomerIds(db, tid);
-    final rows = await getAllNonReturnedCreditInvoices();
+    final rows = openInvoices ??
+        await DbDebtsSqlOps.getOpenCreditDebtInvoices(db, tid);
+    final today = now ?? DateTime.now();
+    final globalPeriod = (await getDebtSettings()).paymentPeriodDays;
+
     final byId = <int, List<CreditDebtInvoice>>{};
     final byName = <String, List<CreditDebtInvoice>>{};
     for (final r in rows) {
+      if (r.remainingFils <= 0) continue;
       if (r.customerId != null) {
         byId.putIfAbsent(r.customerId!, () => []).add(r);
       } else {
         final k = r.customerName.trim().toLowerCase();
-        final key = k.isEmpty ? '\u0000unnamed' : k;
-        byName.putIfAbsent(key, () => []).add(r);
+        byName.putIfAbsent(k.isEmpty ? '\u0000unnamed' : k, () => []).add(r);
       }
     }
+
+    // العملاء المسجّلون: الاستثناء والهواتف (باستعلامين لكل الصفحة).
+    final exById = <int, CustomerDebtException>{};
+    final phonesById = <int, List<String>>{};
+    final ids = byId.keys.toList();
+    for (var i = 0; i < ids.length; i += 400) {
+      final chunk = ids.sublist(i, min(i + 400, ids.length));
+      final marks = List.filled(chunk.length, '?').join(',');
+      final cs = await db.rawQuery(
+        'SELECT id, phone, debtPeriodDays, debtCapFils, cashOnly '
+        'FROM customers WHERE id IN ($marks)',
+        chunk,
+      );
+      for (final c in cs) {
+        final id = (c['id'] as num).toInt();
+        exById[id] = CustomerDebtException.fromRow(c);
+        final p = (c['phone'] ?? '').toString().trim();
+        if (p.isNotEmpty) phonesById.putIfAbsent(id, () => []).add(p);
+      }
+      try {
+        final ex = await db.rawQuery(
+          'SELECT customerId, phone FROM customer_extra_phones '
+          'WHERE customerId IN ($marks)',
+          chunk,
+        );
+        for (final e in ex) {
+          final p = (e['phone'] ?? '').toString().trim();
+          if (p.isEmpty) continue;
+          phonesById
+              .putIfAbsent((e['customerId'] as num).toInt(), () => [])
+              .add(p);
+        }
+      } catch (_) {}
+    }
+
+    // لوحات السيارات ورقم الهاتف على البطاقات المرتبطة بالفواتير المفتوحة.
+    final cardKeysByInvoice = await creditInvoiceSearchKeys(
+      rows.map((r) => r.invoiceId),
+    );
+
+    CustomerDebtSummary build({
+      required int? customerId,
+      required String display,
+      required List<CreditDebtInvoice> list,
+    }) {
+      final ex = customerId == null
+          ? CustomerDebtException.none
+          : (exById[customerId] ?? CustomerDebtException.none);
+      final period = ex.periodDays ?? globalPeriod;
+      final openFils = list.fold<int>(0, (s, x) => s + x.remainingFils);
+      DateTime? oldest;
+      DateTime? oldestOverdue;
+      var overdue = 0;
+      for (final x in list) {
+        oldest = oldest == null || x.date.isBefore(oldest) ? x.date : oldest;
+        if (creditInvoiceIsOverdue(
+          date: x.date,
+          remainingFils: x.remainingFils,
+          periodDays: period,
+          now: today,
+        )) {
+          overdue += x.remainingFils;
+          if (oldestOverdue == null || x.date.isBefore(oldestOverdue)) {
+            oldestOverdue = x.date;
+          }
+        }
+      }
+      final keys = <String>{
+        ...?phonesById[customerId],
+        for (final x in list) ...?cardKeysByInvoice[x.invoiceId]?.split(' '),
+      }.where((k) => k.trim().isNotEmpty);
+      return CustomerDebtSummary(
+        customerId: customerId,
+        displayName: display,
+        openRemaining: openFils / 1000.0,
+        invoiceCount: list.length,
+        oldestInvoiceDate: oldest,
+        overdueFils: overdue,
+        daysLate: oldestOverdue == null
+            ? 0
+            : today.difference(oldestOverdue).inDays - period,
+        periodDays: period,
+        cashOnly: ex.cashOnly,
+        searchText: keys.join(' ').toLowerCase(),
+      );
+    }
+
     final out = <CustomerDebtSummary>[];
     for (final e in byId.entries) {
-      final list = e.value;
-      final openFils = list.fold<int>(0, (s, x) => s + x.remainingFils);
-      if (openFils <= 0) continue;
-      DateTime? oldest;
-      for (final x in list) {
-        if (x.remainingFils <= 0) continue;
-        oldest = oldest == null || x.date.isBefore(oldest) ? x.date : oldest;
-      }
-      final names = list
+      final names = e.value
           .map((x) => x.customerName.trim())
           .where((s) => s.isNotEmpty);
-      final display = names.isNotEmpty ? names.first : 'عميل #${e.key}';
       out.add(
-        CustomerDebtSummary(
+        build(
           customerId: e.key,
-          displayName: display,
-          openRemaining: openFils / 1000.0,
-          invoiceCount: list.where((x) => x.remainingFils > 0).length,
-          oldestInvoiceDate: oldest,
+          display: names.isNotEmpty ? names.first : 'عميل #${e.key}',
+          list: e.value,
         ),
       );
     }
     for (final e in byName.entries) {
-      final list = e.value;
-      final openFils = list.fold<int>(0, (s, x) => s + x.remainingFils);
-      if (openFils <= 0) continue;
-      DateTime? oldest;
-      for (final x in list) {
-        if (x.remainingFils <= 0) continue;
-        oldest = oldest == null || x.date.isBefore(oldest) ? x.date : oldest;
-      }
-      final display = list.first.customerName.trim().isEmpty
-          ? 'عميل'
-          : list.first.customerName.trim();
+      final n = e.value.first.customerName.trim();
       out.add(
-        CustomerDebtSummary(
-          customerId: null,
-          displayName: display,
-          openRemaining: openFils / 1000.0,
-          invoiceCount: list.where((x) => x.remainingFils > 0).length,
-          oldestInvoiceDate: oldest,
-        ),
+        build(customerId: null, display: n.isEmpty ? 'عميل' : n, list: e.value),
       );
     }
-    out.sort((a, b) => b.openRemaining.compareTo(a.openRemaining));
+    out.sort(compareCustomerDebtOverdueFirst);
+    return out;
+  }
+
+  /// لكل فاتورة: لوحة السيارة وهاتف البطاقة المرتبطة بها (للبحث)، مفصولة
+  /// بمسافة. الفاتورة بلا بطاقة لا تظهر في الناتج.
+  Future<Map<int, String>> creditInvoiceSearchKeys(Iterable<int> invoiceIds) async {
+    final ids = invoiceIds.where((i) => i > 0).toSet().toList();
+    if (ids.isEmpty) return const {};
+    final db = await database;
+    final out = <int, String>{};
+    try {
+      for (var i = 0; i < ids.length; i += 400) {
+        final chunk = ids.sublist(i, min(i + 400, ids.length));
+        final marks = List.filled(chunk.length, '?').join(',');
+        final rs = await db.rawQuery(
+          'SELECT invoiceId, deviceSerial, customerPhone FROM service_orders '
+          'WHERE invoiceId IN ($marks) AND deletedAt IS NULL',
+          chunk,
+        );
+        for (final r in rs) {
+          final id = (r['invoiceId'] as num?)?.toInt();
+          if (id == null) continue;
+          final plate = (r['deviceSerial'] ?? '').toString().trim();
+          final phone = (r['customerPhone'] ?? '').toString().trim();
+          final k = [
+            if (plate.isNotEmpty) plate.replaceAll(' ', ''),
+            if (phone.isNotEmpty) phone,
+          ].join(' ');
+          if (k.isEmpty) continue;
+          out[id] = out[id] == null ? k : '${out[id]} $k';
+        }
+      }
+    } catch (e) {
+      AppLogger.warn('DbDebts', 'credit invoice search keys failed: $e');
+    }
+    return out;
+  }
+
+  /// فواتير «آجل» المسدَّدة، صفحةً صفحة (الأحدث أولاً)، عند طلبها فقط.
+  Future<List<CreditDebtInvoice>> getSettledCreditInvoicesPage({
+    int? beforeId,
+    int limit = 50,
+  }) async {
+    final db = await database;
+    final sessionTenant = TenantContext.instance.requireTenantId();
+    final tid = await _activeTenantIdForDebts(db, sessionTenant);
+    final rows = await db.rawQuery(
+      '''
+      SELECT id, customerName, customerId, date,
+             total, advancePayment, totalFils, advancePaymentFils
+      FROM invoices
+      WHERE tenantId = ?
+        AND type = ?
+        AND IFNULL(isReturned, 0) = 0
+        AND deleted_at IS NULL
+        AND (${MoneySql.invoiceOpenRemainingFils}) < 500
+        ${beforeId != null ? 'AND id < ?' : ''}
+      ORDER BY id DESC
+      LIMIT ?
+      ''',
+      [tid, InvoiceType.credit.index, ?beforeId, limit],
+    );
+    return rows.map(_creditDebtInvoiceFromRow).toList();
+  }
+
+  /// فواتير الدين المفتوحة للعميل (التاريخ والمتبقي)، الأقدم أولاً.
+  Future<List<({DateTime date, int remainingFils})>> openCreditInvoiceAges(
+    CustomerDebtParty party,
+  ) async {
+    final db = await database;
+    final sessionTenant = TenantContext.instance.requireTenantId();
+    final tid = await _activeTenantIdForDebts(db, sessionTenant);
+    final rows = await DbDebtsSqlOps.queryOpenCreditInvoiceMapsForParty(
+      db,
+      tid,
+      party,
+    );
+    final out = <({DateTime date, int remainingFils})>[];
+    for (final r in rows) {
+      final date = DateTime.tryParse('${r['date']}');
+      if (date == null) continue;
+      out.add((
+        date: date,
+        remainingFils: _toFils(_openRemainingForCreditDebtRow(r)),
+      ));
+    }
     return out;
   }
 
@@ -696,6 +853,8 @@ extension DbDebts on DatabaseHelper {
           ? debtBeforeFils
           : requestedFils;
       var leftFils = toApplyFils;
+      // توزيع الدفعة على الفواتير: يُحفظ مع الدفعة ليُعكس بدقة عند إلغائها.
+      final allocations = <Map<String, Object?>>[];
       for (final r in openMaps) {
         if (leftFils <= 0) break;
         final id = r['id'] as int;
@@ -706,6 +865,7 @@ extension DbDebts on DatabaseHelper {
         final addFils = leftFils > remFils ? remFils : leftFils;
         final newAdvFils = advFils + addFils;
         await DbDebtsSqlOps.applyPaymentToInvoice(txn, tid, id, newAdvFils);
+        allocations.add({'invoiceId': id, 'fils': addFils});
         leftFils -= addFils;
       }
       final unappliedFils = leftFils > 0 ? leftFils : 0;
@@ -740,6 +900,18 @@ extension DbDebts on DatabaseHelper {
       );
       if (r.isNotEmpty) customerGlobalId = r.first['global_id'] as String?;
 
+      for (final a in allocations) {
+        final g = await txn.query(
+          'invoices',
+          columns: ['global_id'],
+          where: 'id = ? AND tenantId = ?',
+          whereArgs: [a['invoiceId'], tid],
+          limit: 1,
+        );
+        final gid = g.isEmpty ? null : g.first['global_id'] as String?;
+        if (gid != null && gid.trim().isNotEmpty) a['invoiceGlobalId'] = gid;
+      }
+
       final pid = await DbDebtsSqlOps.insertCustomerDebtPayment(txn, tid, {
         'global_id': paymentGlobalId,
         'customer_global_id': customerGlobalId,
@@ -752,6 +924,7 @@ extension DbDebts on DatabaseHelper {
         'updatedAt': nowIso,
         'createdByUserName': trimmedUser.isEmpty ? null : trimmedUser,
         'note': note?.trim().isEmpty == true ? null : note?.trim(),
+        'allocationsJson': jsonEncode(allocations),
       });
 
       final loyaltySettings = await _readLoyaltySettings(txn);
@@ -789,6 +962,22 @@ extension DbDebts on DatabaseHelper {
         loyaltySettings,
         enforceStockNonZero: false,
       );
+      final rg = await txn.query(
+        'invoices',
+        columns: ['global_id'],
+        where: 'id = ? AND tenantId = ?',
+        whereArgs: [receiptId, tid],
+        limit: 1,
+      );
+      final receiptGid = rg.isEmpty ? null : rg.first['global_id'] as String?;
+      if (receiptGid != null && receiptGid.trim().isNotEmpty) {
+        await txn.update(
+          'customer_debt_payments',
+          {'receipt_invoice_global_id': receiptGid},
+          where: 'id = ?',
+          whereArgs: [pid],
+        );
+      }
 
       return CustomerDebtPaymentResult(
         amountApplied: applied,
@@ -816,6 +1005,219 @@ extension DbDebts on DatabaseHelper {
       ]);
     }
     return result;
+  }
+
+  /// إلغاء دفعة تسديد سُجّلت خطأً (يُستدعى بعد رمز المالك والسبب).
+  ///
+  /// يُعيد ما خُصم من كل فاتورة حسب التوزيع المحفوظ مع الدفعة، ويحذف سند
+  /// التحصيل حذفاً ناعماً، ويضيف قيد صندوق عكسياً (القيد الأصلي يبقى ظاهراً).
+  /// الدفعة نفسها تبقى في السجل بحالة «ملغاة» مع السبب ومن ألغاها.
+  /// يرمي [StateError] برسالة عربية إن تعذّر الإلغاء.
+  Future<void> voidCustomerDebtPayment({
+    required int paymentId,
+    required String reason,
+    required String voidedByUserName,
+  }) async {
+    final why = reason.trim();
+    if (why.length < 3) {
+      throw StateError('اكتب سبب الإلغاء (3 أحرف على الأقل).');
+    }
+    final db = await database;
+    final sessionTenant = TenantContext.instance.requireTenantId();
+    final tid = await _activeTenantIdForDebts(db, sessionTenant);
+    await _ensureCustomerDebtPaymentsTable(db);
+    final by = voidedByUserName.trim();
+    late int customerId;
+    late double amount;
+    await db.transaction((txn) async {
+      final rows = await txn.query(
+        'customer_debt_payments',
+        where: 'id = ? AND tenantId = ?',
+        whereArgs: [paymentId, tid],
+        limit: 1,
+      );
+      if (rows.isEmpty) throw StateError('لم تُعثر على الدفعة.');
+      final p = rows.first;
+      if ((p['voidedAt'] ?? '').toString().trim().isNotEmpty) {
+        throw StateError('هذه الدفعة ملغاة من قبل.');
+      }
+      customerId = (p['customerId'] as num?)?.toInt() ?? 0;
+      amount = (p['amount'] as num?)?.toDouble() ?? 0;
+      final rawAlloc = (p['allocationsJson'] ?? '').toString().trim();
+      if (rawAlloc.isEmpty) {
+        throw StateError(
+          'هذه الدفعة سُجّلت قبل تحديث الإلغاء، فلا يُعرف على أي فواتير وُزّعت. '
+          'لا يمكن إلغاؤها تلقائياً.',
+        );
+      }
+      final allocs = (jsonDecode(rawAlloc) as List)
+          .cast<Map<String, dynamic>>();
+
+      // 1) إعادة الدين على كل فاتورة بالمقدار الذي دُفع منها.
+      for (final a in allocs) {
+        final fils = (a['fils'] as num?)?.toInt() ?? 0;
+        if (fils <= 0) continue;
+        final gid = (a['invoiceGlobalId'] ?? '').toString().trim();
+        final localId = (a['invoiceId'] as num?)?.toInt();
+        var inv = gid.isEmpty
+            ? const <Map<String, Object?>>[]
+            : await txn.query(
+                'invoices',
+                columns: ['id', 'advancePayment', 'deleted_at'],
+                where: 'global_id = ? AND tenantId = ?',
+                whereArgs: [gid, tid],
+                limit: 1,
+              );
+        if (inv.isEmpty && localId != null) {
+          inv = await txn.query(
+            'invoices',
+            columns: ['id', 'advancePayment', 'deleted_at'],
+            where: 'id = ? AND tenantId = ?',
+            whereArgs: [localId, tid],
+            limit: 1,
+          );
+        }
+        final label = '#${localId ?? '?'}';
+        if (inv.isEmpty || inv.first['deleted_at'] != null) {
+          throw StateError(
+            'الفاتورة $label التي سُدّدت بهذه الدفعة محذوفة، فلا يمكن إعادة دينها.',
+          );
+        }
+        final invId = inv.first['id'] as int;
+        final advFils = _toFils(
+          (inv.first['advancePayment'] as num?)?.toDouble() ?? 0,
+        );
+        if (advFils < fils) {
+          throw StateError(
+            'تغيّر المدفوع على الفاتورة #$invId بعد هذه الدفعة، فلا يمكن عكسها تلقائياً.',
+          );
+        }
+        await DbDebtsSqlOps.applyPaymentToInvoice(
+          txn,
+          tid,
+          invId,
+          advFils - fils,
+        );
+      }
+
+      // 2) سند التحصيل يُحذف حذفاً ناعماً، وقيده في الصندوق يُعكس بقيد سالب.
+      final nowIso = DateTime.now().toUtc().toIso8601String();
+      final rgid = (p['receipt_invoice_global_id'] ?? '').toString().trim();
+      if (rgid.isNotEmpty) {
+        final rec = await txn.query(
+          'invoices',
+          columns: ['id'],
+          where: 'global_id = ? AND tenantId = ? AND deleted_at IS NULL',
+          whereArgs: [rgid, tid],
+          limit: 1,
+        );
+        if (rec.isNotEmpty) {
+          final receiptId = rec.first['id'] as int;
+          final led = await txn.query(
+            'cash_ledger',
+            columns: ['amount', 'amountFils'],
+            where: 'invoiceId = ? AND tenantId = ? AND deleted_at IS NULL',
+            whereArgs: [receiptId, tid],
+            limit: 1,
+          );
+          await txn.update(
+            'invoice_items',
+            {'deleted_at': nowIso, 'updatedAt': nowIso},
+            where: 'invoiceId = ? AND tenantId = ? AND deleted_at IS NULL',
+            whereArgs: [receiptId, tid],
+          );
+          await txn.update(
+            'invoices',
+            {'deleted_at': nowIso, 'updatedAt': nowIso},
+            where: 'id = ? AND tenantId = ? AND deleted_at IS NULL',
+            whereArgs: [receiptId, tid],
+          );
+          if (led.isNotEmpty) {
+            final lf = (led.first['amountFils'] as num?)?.toInt() ?? 0;
+            final cashFils = lf != 0
+                ? lf
+                : _toFils((led.first['amount'] as num?)?.toDouble() ?? 0);
+            if (cashFils > 0) {
+              final ws = await txn.query(
+                'work_shifts',
+                columns: ['id'],
+                where:
+                    'closedAt IS NULL AND tenantId = ? AND deleted_at IS NULL',
+                whereArgs: [tid],
+                limit: 1,
+              );
+              await DbCashSqlOps.insertCashLedgerEntry(txn, tid, {
+                'transactionType': 'debt_collection_reversal',
+                'amount': -_fromFils(cashFils),
+                'amountFils': -cashFils,
+                'description':
+                    'إلغاء تحصيل دين — ${p['customerNameSnapshot']} '
+                    '(سند #$receiptId)',
+                'invoiceId': null,
+                'workShiftId': ws.isEmpty ? null : ws.first['id'],
+                'createdAt': DateTime.now().toIso8601String(),
+              });
+            }
+          }
+        }
+      }
+
+      // 3) الدفعة تبقى في السجل «ملغاة».
+      await txn.update(
+        'customer_debt_payments',
+        {
+          'voidedAt': nowIso,
+          'voidedByUserName': by.isEmpty ? null : by,
+          'voidReason': why.length > 300 ? why.substring(0, 300) : why,
+          'updatedAt': nowIso,
+        },
+        where: 'id = ? AND tenantId = ?',
+        whereArgs: [paymentId, tid],
+      );
+      await _insertActivityLogInTxn(
+        txn,
+        type: 'debt_payment_voided',
+        refTable: 'customer_debt_payments',
+        refId: paymentId,
+        title: 'إلغاء دفعة دين',
+        details:
+            'العميل: ${p['customerNameSnapshot']} • السبب: $why • المنفذ: '
+            '${by.isEmpty ? 'غير معروف' : by}',
+        amount: amount,
+        tenantId: tid,
+      );
+    });
+    await BusinessAuditLogService.instance.record(
+      eventType: 'debt_payment_voided',
+      entityType: 'customer',
+      entityId: customerId.toString(),
+      oldValueJson: jsonEncode({'paymentId': paymentId, 'amount': amount}),
+      newValueJson: jsonEncode({'reason': why, 'by': by}),
+      tenantId: tid,
+    );
+    OwnerCommandCenterRefreshBridge.instance.invalidateSections([
+      OwnerSectionIds.debts,
+      OwnerSectionIds.cash,
+    ]);
+    CloudSyncService.instance.scheduleSyncSoon();
+  }
+
+  /// دفعات تسديد العميل، الأحدث أولاً.
+  Future<List<Map<String, Object?>>> getCustomerDebtPaymentRows(
+    int customerId, {
+    int limit = 50,
+  }) async {
+    final db = await database;
+    final sessionTenant = TenantContext.instance.requireTenantId();
+    final tid = await _activeTenantIdForDebts(db, sessionTenant);
+    await _ensureCustomerDebtPaymentsTable(db);
+    return db.query(
+      'customer_debt_payments',
+      where: 'tenantId = ? AND customerId = ?',
+      whereArgs: [tid, customerId],
+      orderBy: 'createdAt DESC, id DESC',
+      limit: limit,
+    );
   }
 
   /// فواتير دين آجل مفتوحة ما زالت بلا `customerId` بعد محاولة الترحيل التلقائي.

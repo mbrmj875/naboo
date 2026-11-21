@@ -2,6 +2,7 @@ import '../../../services/cloud_sync_service.dart';
 import '../../../services/database_helper.dart';
 import '../../../services/oil_product_grades_repository.dart';
 import '../../../services/tenant_context_service.dart';
+import '../utils/oil_change_filter_format.dart';
 
 /// صرف وإرجاع زيت المخزون لبطاقات غيار الزيت.
 class OilChangeStockService {
@@ -62,17 +63,20 @@ class OilChangeStockService {
     required int warehouseId,
     double creditLiters = 0,
     String notes = 'صرف زيت — بطاقة غيار',
+    String unitLabel = 'لتر',
+    /// تجاوز المالك برمزه: يُسمح بالصرف حتى لو صار الرصيد سالباً.
+    bool allowNegative = false,
   }) async {
     if (liters <= 1e-9) {
-      throw StateError('أدخل كمية اللترات المأخوذة من المخزون');
+      throw StateError('أدخل الكمية المأخوذة من المخزون');
     }
     final tid = await _tenantId();
     final book = await _productBookLiters(tid, productId);
     final credit = creditLiters > 0 ? creditLiters : 0.0;
-    if (book + credit + 1e-9 < liters) {
+    if (!allowNegative && book + credit + 1e-9 < liters) {
       throw StateError(
-        'الرصيد غير كافٍ: متوفر ${book.toStringAsFixed(1)} لتر، '
-        'المطلوب ${liters.toStringAsFixed(1)} لتر',
+        'الرصيد غير كافٍ: متوفر ${book.toStringAsFixed(1)} $unitLabel، '
+        'المطلوب ${liters.toStringAsFixed(1)} $unitLabel',
       );
     }
 
@@ -95,13 +99,13 @@ class OilChangeStockService {
         limit: 1,
       );
       if (beforeRows.isEmpty) {
-        throw StateError('منتج الزيت غير موجود في المخزون');
+        throw StateError('الصنف غير موجود في المخزون');
       }
       final before = (beforeRows.first['qty'] as num?)?.toDouble() ?? 0;
-      if (before + credit + 1e-9 < liters) {
+      if (!allowNegative && before + credit + 1e-9 < liters) {
         throw StateError(
-          'الرصيد غير كافٍ: متوفر ${before.toStringAsFixed(1)} لتر، '
-          'المطلوب ${liters.toStringAsFixed(1)} لتر',
+          'الرصيد غير كافٍ: متوفر ${before.toStringAsFixed(1)} $unitLabel، '
+          'المطلوب ${liters.toStringAsFixed(1)} $unitLabel',
         );
       }
       final after = before - liters;
@@ -110,7 +114,7 @@ class OilChangeStockService {
         [liters, productId, tid],
       );
       if (updated < 1) {
-        throw StateError('تعذّر تحديث رصيد الزيت في المخزون');
+        throw StateError('تعذّر تحديث الرصيد في المخزون');
       }
       if (warehouse > 0) {
         final aligned = await txn.rawUpdate(
@@ -259,6 +263,7 @@ class OilChangeStockService {
     required int? newProductId,
     required int? newWarehouseId,
     required double newLiters,
+    bool allowNegative = false,
   }) async {
     final hadIssue = !previousCustomerProvided &&
         existingVoucherId != null &&
@@ -301,6 +306,64 @@ class OilChangeStockService {
       liters: newLiters,
       warehouseId: newWarehouseId ?? 0,
       creditLiters: creditLiters,
+      allowNegative: allowNegative,
     );
+  }
+
+  /// يصرف/يرجع مخزون الفلاتر بين [previous] (المحفوظ سابقاً) و[next].
+  ///
+  /// سطر لم يتغير صنفه ولا عدده يحتفظ بسنده. يُرجع [next] بسندات الصرف.
+  Future<List<OilFilterLineData>> syncFilterStock({
+    required int orderId,
+    required List<OilFilterLineData> previous,
+    required List<OilFilterLineData> next,
+    int warehouseId = 0,
+    bool allowNegative = false,
+  }) async {
+    final prevByCode = <String, OilFilterLineData>{
+      for (final l in previous)
+        if (l.issuesStock && (l.stockVoucherId ?? 0) > 0) l.code: l,
+    };
+    final out = <OilFilterLineData>[];
+    final handled = <String>{};
+    for (final line in next) {
+      final prev = prevByCode[line.code];
+      handled.add(line.code);
+      if (prev != null &&
+          line.issuesStock &&
+          prev.productId == line.productId &&
+          prev.qty == line.qty) {
+        out.add(line.withStockVoucher(prev.stockVoucherId));
+        continue;
+      }
+      if (prev != null) {
+        await returnStockForOilChangeOrder(
+          orderId: orderId,
+          stockVoucherId: prev.stockVoucherId!,
+        );
+      }
+      if (!line.issuesStock) {
+        out.add(line.withStockVoucher(null));
+        continue;
+      }
+      final vid = await issueForOilChangeOrder(
+        orderId: orderId,
+        productId: line.productId!,
+        liters: line.qty.toDouble(),
+        warehouseId: warehouseId,
+        notes: 'صرف ${line.label ?? 'فلتر'}',
+        unitLabel: 'قطعة',
+        allowNegative: allowNegative,
+      );
+      out.add(line.withStockVoucher(vid));
+    }
+    for (final entry in prevByCode.entries) {
+      if (handled.contains(entry.key)) continue;
+      await returnStockForOilChangeOrder(
+        orderId: orderId,
+        stockVoucherId: entry.value.stockVoucherId!,
+      );
+    }
+    return out;
   }
 }

@@ -2,6 +2,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../app_settings_repository.dart';
 import '../business_setup_settings.dart';
+import '../debts_feature_guard.dart';
 import '../../utils/app_logger.dart';
 
 /// تخصص النشاط على مستوى الحساب (جدول `profiles`) — مصدر حقيقة
@@ -90,6 +91,15 @@ abstract final class OwnerBusinessVerticalCloudService {
   /// يطبّق تخصص الحساب من السحابة محلياً.
   /// السحابة مصدر الحقيقة: إن اختلف المحلي عن السحابة يُستبدل (ويب/جهاز جديد).
   static Future<bool> applyToLocalIfNeeded() async {
+    final applied = await _applyCloudVerticalToLocal();
+    // يعمل بلا إنترنت أيضاً: حساب زيوت عنده ديون مفتوحة لا يفقد صفحة الديون.
+    await DebtsFeatureGuard.ensureOilDebtsEnabledIfOpenDebts(
+      AppSettingsRepository.instance,
+    );
+    return applied;
+  }
+
+  static Future<bool> _applyCloudVerticalToLocal() async {
     final cloud = await fetchForCurrentUser();
     if (cloud == null) return false;
 
@@ -108,12 +118,19 @@ abstract final class OwnerBusinessVerticalCloudService {
       return false;
     }
 
-    final preset = BusinessSetupSettingsData.createForVertical(
-      cloud,
-      onboardingCompleted: true,
-      enableLoyaltyCustom: local.enableLoyalty,
-      enableDebtsCustom: local.enableDebts,
-    );
+    // جهاز جديد (لم يكمل الإعداد محلياً): القيم المحلية غائبة وتُقرأ «مطفأ»،
+    // فتُؤخذ افتراضيات التخصص بدلها (الديون مفعّلة للزيوت).
+    final preset = local.onboardingCompleted
+        ? BusinessSetupSettingsData.createForVertical(
+            cloud,
+            onboardingCompleted: true,
+            enableLoyaltyCustom: local.enableLoyalty,
+            enableDebtsCustom: local.enableDebts,
+          )
+        : BusinessSetupSettingsData.createForVertical(
+            cloud,
+            onboardingCompleted: true,
+          );
 
     await preset.save(repo, forceVerticalCorrection: true);
     await BusinessSetupSettingsData.markVerticalLocked(repo);

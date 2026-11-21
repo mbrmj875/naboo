@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:sqflite/sqflite.dart';
 
 import '../../../../models/product_variant_kind.dart';
@@ -65,8 +67,26 @@ class ProductReportRow {
   }
 }
 
+/// مرة سمح فيها المالك (برمزه) ببيع بطاقة رغم نقص الرصيد.
+class StockOverrideEvent {
+  const StockOverrideEvent({
+    required this.at,
+    required this.username,
+    required this.orderId,
+    required this.lines,
+  });
+
+  final DateTime at;
+  final String username;
+  final String orderId;
+
+  /// نص كل نقص: «الزيت — صنف: متوفر 2 لتر، المطلوب 4 لتر».
+  final List<String> lines;
+}
+
 class ProductsReportSnapshot {
   const ProductsReportSnapshot({
+    this.overrides = const [],
     required this.range,
     required this.rangeDays,
     required this.products,
@@ -87,6 +107,14 @@ class ProductsReportSnapshot {
   /// إيراد المنتجات يومياً من كل القنوات.
   final List<ReportDayPoint> days;
   final ReportCostCoverage costCoverage;
+
+  /// تجاوزات المالك للرصيد في الفترة، الأحدث أولاً.
+  final List<StockOverrideEvent> overrides;
+
+  /// أصناف رصيدها تحت الصفر الآن (بيع رغم النقص، أو جرد لم يُسجَّل).
+  List<ProductReportRow> get negative =>
+      products.where((p) => p.qty < -1e-9).toList()
+        ..sort((a, b) => a.qty.compareTo(b.qty));
 
   int get revenueFils => revenueByChannelFils.values.fold(0, (a, b) => a + b);
   int get profitFils => products.fold(0, (a, p) => a + p.profitFils);
@@ -213,6 +241,7 @@ class ProductsReportRepository {
     final to = DateTime(range.to.year, range.to.month, range.to.day);
 
     return ProductsReportSnapshot(
+      overrides: await _overrides(db, tid, range),
       range: range,
       rangeDays: to.difference(from).inDays + 1,
       products: products,
@@ -233,6 +262,53 @@ class ProductsReportRepository {
   }
 
   /// (المنتج، اللترات) لكل سائل صُرف من المحل على بطاقة غيار في الفترة.
+  Future<List<StockOverrideEvent>> _overrides(
+    Database db,
+    int tid,
+    ReportDateRange range,
+  ) async {
+    final rows = await db.query(
+      'business_audit_events',
+      columns: ['username', 'entity_id', 'new_value_json', 'created_at'],
+      where:
+          "tenant_id = ? AND event_type = 'oil_change_stock_override' "
+          'AND created_at >= ? AND created_at <= ?',
+      whereArgs: [tid, range.fromIso, range.toIso],
+      orderBy: 'created_at DESC, id DESC',
+    );
+    return [
+      for (final r in rows)
+        StockOverrideEvent(
+          at:
+              DateTime.tryParse((r['created_at'] ?? '').toString()) ??
+              range.from,
+          username: (r['username'] ?? '').toString().trim(),
+          orderId: (r['entity_id'] ?? '').toString(),
+          lines: _overrideLines(r['new_value_json']),
+        ),
+    ];
+  }
+
+  static List<String> _overrideLines(Object? raw) {
+    try {
+      final m = jsonDecode((raw ?? '').toString()) as Map<String, dynamic>;
+      String n(Object? v) {
+        final d = (v as num?)?.toDouble() ?? 0;
+        return d % 1 == 0 ? d.toInt().toString() : d.toStringAsFixed(1);
+      }
+
+      return [
+        for (final s in (m['shortages'] as List? ?? const []))
+          if (s is Map)
+            '${(s['labels'] as List? ?? const []).join('، ')} — ${s['product']}: '
+                    'متوفر ${n(s['available'])}، المطلوب ${n(s['needed'])} ${s['unit'] ?? ''}'
+                .trim(),
+      ];
+    } catch (_) {
+      return const [];
+    }
+  }
+
   Future<List<(int, double)>> _cardFluids(
     Database db,
     int tenantId,

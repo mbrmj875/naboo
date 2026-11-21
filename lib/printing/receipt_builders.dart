@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:intl/intl.dart';
 
 import '../models/expense.dart';
@@ -7,10 +9,12 @@ import '../services/returns/return_meta.dart';
 import '../services/service_order_kinds.dart';
 import '../utils/invoice_deep_link.dart';
 import '../utils/iqd_money.dart';
+import '../utils/app_logger.dart';
 import '../verticals/oil_change/models/oil_change_filter_kind.dart';
 import '../verticals/oil_change/services/oil_change_direct_sale_service.dart';
 import '../verticals/oil_change/utils/oil_change_filter_format.dart';
 import 'receipt_model.dart';
+import '../verticals/oil_change/utils/oil_order_has_oil.dart';
 
 /// يبني [ReceiptDocument] من بيانات المنظومة لكل نوع عمل.
 abstract final class ReceiptBuilders {
@@ -19,7 +23,24 @@ abstract final class ReceiptBuilders {
     final helper = DatabaseHelper();
     final invoice = await helper.getInvoiceById(invoiceId);
     if (invoice == null) return null;
-    return fromInvoice(invoice, order: await linkedOrder(invoiceId));
+    return fromInvoice(
+      invoice,
+      order: await linkedOrder(invoiceId),
+      accountBalanceFils: await accountBalanceFilsFor(invoice),
+    );
+  }
+
+  /// دين العميل المسجّل المفتوح الآن (كل فواتيره الآجلة)، أو `null`.
+  static Future<int?> accountBalanceFilsFor(Invoice invoice) async {
+    final cid = invoice.customerId;
+    if (cid == null || cid <= 0 || invoice.isReturned) return null;
+    try {
+      final d = await DatabaseHelper().sumOpenCreditDebtForCustomer(cid);
+      return IqdMoney.toFils(d);
+    } catch (e, st) {
+      AppLogger.error('ReceiptBuilders', 'تعذّر جلب رصيد العميل', e, st);
+      return null;
+    }
   }
 
   /// نوع العمل الذي تمثّله الفاتورة (بطاقتها المرتبطة أولاً، ثم علامة البيع).
@@ -52,10 +73,43 @@ abstract final class ReceiptBuilders {
     return rows.isEmpty ? null : rows.first;
   }
 
+  /// بطاقات الخدمة المرتبطة بعدة فواتير باستعلام واحد (لقوائم الفواتير).
+  /// يُرجع لكل فاتورة أحدث بطاقة: النوع والأعمدة اللازمة لـ [kindOf] فقط.
+  static Future<Map<int, Map<String, dynamic>>> linkedOrderKinds(
+    Set<int> invoiceIds,
+  ) async {
+    if (invoiceIds.isEmpty) return const {};
+    final helper = DatabaseHelper();
+    final db = await helper.database;
+    final tenantId = await helper.resolveLocalBusinessTenantId();
+    final out = <int, Map<String, dynamic>>{};
+    final ids = invoiceIds.toList(growable: false);
+    for (var i = 0; i < ids.length; i += 400) {
+      final chunk = ids.sublist(i, math.min(i + 400, ids.length));
+      final marks = List.filled(chunk.length, '?').join(',');
+      final rows = await db.rawQuery(
+        'SELECT invoiceId, orderKind, oilType, odometerCurrent '
+        'FROM service_orders '
+        'WHERE tenantId = ? AND deletedAt IS NULL AND invoiceId IN ($marks) '
+        'ORDER BY id DESC',
+        [tenantId, ...chunk],
+      );
+      for (final r in rows) {
+        final id = (r['invoiceId'] as num?)?.toInt();
+        if (id != null) out.putIfAbsent(id, () => r);
+      }
+    }
+    return out;
+  }
+
   /// يبني الإيصال من فاتورة محمّلة، ومعها بطاقة الخدمة المرتبطة إن وُجدت.
+  ///
+  /// [accountBalanceFils]: دين العميل المفتوح الآن؛ إن كان عليه دين غير هذه
+  /// الفاتورة يُطبع «دين سابق» و«رصيد الحساب الآن».
   static ReceiptDocument fromInvoice(
     Invoice invoice, {
     Map<String, dynamic>? order,
+    int? accountBalanceFils,
   }) {
     final kind = kindOf(invoice, order: order);
     if (kind == ReceiptKind.saleReturn) return saleReturn(invoice);
@@ -213,6 +267,27 @@ abstract final class ReceiptBuilders {
       if (isCredit) ReceiptTotal('المدفوع', paid),
       if (isCredit && total - paid > 0) ReceiptTotal('المتبقي', total - paid),
     ];
+    if (!isAnonymous && accountBalanceFils != null) {
+      final thisRemaining = isCredit && total - paid > 0 ? total - paid : 0;
+      final prior = accountBalanceFils - thisRemaining;
+      if (prior > 500) {
+        totals
+          ..add(
+            ReceiptTotal(
+              'دين سابق',
+              prior,
+              section: ReceiptSection.accountBalance,
+            ),
+          )
+          ..add(
+            ReceiptTotal(
+              'رصيد الحساب الآن',
+              accountBalanceFils,
+              section: ReceiptSection.accountBalance,
+            ),
+          );
+      }
+    }
 
     final status = invoice.isReturned
         ? 'مرتجع'
@@ -225,8 +300,16 @@ abstract final class ReceiptBuilders {
           };
 
     final cashier = invoice.createdByUserName?.trim() ?? '';
+    // بطاقة غيار بلا زيت (فلتر أو هيدروليك أو خدمة): العنوان بمحتواها.
+    final workLabel = kind == ReceiptKind.oilChange && order != null
+        ? oilCardWorkLabel(order)
+        : null;
+    final workTitle = workLabel == null || workLabel == 'غيار زيت'
+        ? null
+        : 'إيصال $workLabel';
     return ReceiptDocument(
       kind: kind,
+      titleOverride: workTitle,
       date: invoice.date,
       number: invoice.id == null ? null : '${invoice.id}',
       status: status,

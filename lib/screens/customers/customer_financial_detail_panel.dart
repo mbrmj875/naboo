@@ -1,3 +1,4 @@
+import '../../verticals/oil_change/screens/vehicles_registry_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 import 'package:provider/provider.dart';
@@ -55,6 +56,7 @@ class _CustomerFinancialDetailPanelState
   List<CreditDebtInvoice> _creditInvoices = [];
   List<InstallmentPlan> _plans = [];
   List<Map<String, dynamic>> _oilCards = [];
+  List<Map<String, dynamic>> _vehicles = [];
   bool _loading = true;
   String? _error;
 
@@ -75,6 +77,7 @@ class _CustomerFinancialDetailPanelState
           _creditInvoices = [];
           _plans = [];
           _oilCards = [];
+          _vehicles = [];
           _loading = false;
           _error = null;
         });
@@ -105,11 +108,20 @@ class _CustomerFinancialDetailPanelState
               customerName: c.name,
             )
           : <Map<String, dynamic>>[];
+      // سيارات العميل من سجل السيارات (المرحلة 6 — الشريحة 5).
+      var vehicles = <Map<String, dynamic>>[];
+      if (features.enableOilChange) {
+        try {
+          vehicles =
+              await OilChangeOrdersRepository.instance.vehiclesForCustomer(c.id);
+        } catch (_) {}
+      }
       if (!mounted) return;
       setState(() {
         _creditInvoices = credits;
         _plans = plans;
         _oilCards = oilCards;
+        _vehicles = vehicles;
         _loading = false;
       });
     } catch (e) {
@@ -241,6 +253,50 @@ class _CustomerFinancialDetailPanelState
               ),
           ],
           if (features.data.enableOilChange) ...[
+            const SizedBox(height: 22),
+            _SectionTitle(
+              icon: Icons.directions_car_rounded,
+              title: 'سياراته',
+              subtitle: _vehicles.isEmpty
+                  ? 'تظهر هنا كل سيارة يكون هو صاحب آخر بطاقة لها'
+                  : 'اضغط على السيارة لتاريخها: الزيارات والعداد ومالكوها',
+              color: const Color(0xFF0EA5E9),
+            ),
+            const SizedBox(height: 8),
+            if (_vehicles.isEmpty)
+              const _EmptyHint(text: 'لا سيارة مسجّلة باسمه بعد.')
+            else
+              for (final v in _vehicles)
+                Card(
+                  margin: const EdgeInsets.only(bottom: 6),
+                  child: ListTile(
+                    key: Key('customerVehicle_${v['global_id']}'),
+                    leading: const Icon(Icons.directions_car_rounded),
+                    title: Text(
+                      [
+                        (v['plate_display'] ?? '').toString(),
+                        (v['name'] ?? '').toString(),
+                        (v['model'] ?? '').toString(),
+                      ].where((s) => s.trim().isNotEmpty).join(' · '),
+                    ),
+                    subtitle: Text(
+                      [
+                        '${(v['visits_count'] as num?)?.toInt() ?? 0} زيارة',
+                        if ((v['last_odometer'] as num?) != null)
+                          'آخر عداد ${IraqiCurrencyFormat.formatInt((v['last_odometer'] as num).toInt())} كم',
+                      ].join(' · '),
+                    ),
+                    trailing: const Icon(Icons.chevron_left_rounded),
+                    onTap: () => Navigator.push<void>(
+                      context,
+                      MaterialPageRoute<void>(
+                        builder: (_) => VehicleDetailScreen(
+                          vehicleGlobalId: (v['global_id'] ?? '').toString(),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
             const SizedBox(height: 22),
             const _SectionTitle(
               icon: Icons.opacity_rounded,
@@ -440,10 +496,6 @@ class _SummaryCard extends StatelessWidget {
           _kv(
             'البريد',
             customer.email?.trim().isNotEmpty == true ? customer.email! : '—',
-          ),
-          _kv(
-            'رصيد المحفظة',
-            IraqiCurrencyFormat.formatIqd(customer.balance),
           ),
           _kv('نقاط الولاء', '${customer.loyaltyPoints}'),
         ],

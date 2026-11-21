@@ -50,7 +50,11 @@ class CustomerOpenDebtBanner extends StatelessWidget {
         clipBehavior: Clip.antiAlias,
         child: InkWell(
           borderRadius: BorderRadius.circular(12),
-          onTap: () => _openDebtDetail(context),
+          onTap: () => openCustomerOpenDebtDetail(
+            context,
+            customerId: customerId,
+            customerName: customerName,
+          ),
           child: Padding(
             padding: const EdgeInsetsDirectional.fromSTEB(12, 10, 12, 10),
             child: Row(
@@ -102,35 +106,39 @@ class CustomerOpenDebtBanner extends StatelessWidget {
       ),
     );
   }
+}
 
-  void _openDebtDetail(BuildContext context) {
-    final cid = customerId;
-    if (cid != null && cid > 0) {
-      Navigator.of(context).push(
-        contentMaterialRoute(
-          routeId: '${AppContentRoutes.debts}_customer_$cid',
-          breadcrumbTitle: 'دين العميل',
-          builder: (_) => CustomerDebtDetailScreen.fromCustomerId(
-            registeredCustomerId: cid,
-          ),
-        ),
-      );
-      return;
-    }
-    final name = (customerName ?? '').trim();
-    if (name.isEmpty) return;
-    Navigator.of(context).push(
+/// يفتح شاشة دين العميل وينتظر الرجوع منها (ليُحدَّث المبلغ بعدها).
+Future<void> openCustomerOpenDebtDetail(
+  BuildContext context, {
+  required int? customerId,
+  required String? customerName,
+}) async {
+  final cid = customerId;
+  if (cid != null && cid > 0) {
+    await Navigator.of(context).push(
       contentMaterialRoute(
-        routeId: AppContentRoutes.debts,
-        breadcrumbTitle: 'ديون العملاء',
-        builder: (_) => CustomerDebtDetailScreen.fromParty(
-          party: CustomerDebtParty(
-            customerId: null,
-            displayName: name,
-            normalizedName: name.toLowerCase(),
-          ),
-        ),
+        routeId: '${AppContentRoutes.debts}_customer_$cid',
+        breadcrumbTitle: 'دين العميل',
+        builder: (_) =>
+            CustomerDebtDetailScreen.fromCustomerId(registeredCustomerId: cid),
       ),
     );
+    return;
   }
+  final name = (customerName ?? '').trim();
+  if (name.isEmpty) return;
+  await Navigator.of(context).push(
+    contentMaterialRoute(
+      routeId: AppContentRoutes.debts,
+      breadcrumbTitle: 'ديون العملاء',
+      builder: (_) => CustomerDebtDetailScreen.fromParty(
+        party: CustomerDebtParty(
+          customerId: null,
+          displayName: name,
+          normalizedName: name.toLowerCase(),
+        ),
+      ),
+    ),
+  );
 }

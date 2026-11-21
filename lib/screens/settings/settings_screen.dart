@@ -32,6 +32,7 @@ import '../../providers/business_features_provider.dart';
 import '../../services/business_setup_settings.dart';
 import '../../verticals/car_wash/screens/wash_offers_settings_screen.dart';
 import 'sync_queue_health_screen.dart';
+import 'cash_ledger_audit_screen.dart';
 
 const _kTeal = Color(0xFF0D9488);
 const _kAmber = Color(0xFFF59E0B);
@@ -186,6 +187,22 @@ class SettingsScreen extends StatelessWidget {
                                       routeId:
                                           AppContentRoutes.settingsMyBranchInfo,
                                       breadcrumbTitle: 'بيانات فرعي',
+                                    ),
+                                  ),
+                                if (isOwner) const _DebtsFeatureToggleTile(),
+                                if (isOwner)
+                                  _SettingItem(
+                                    icon: Icons.fact_check_outlined,
+                                    iconColor: _kTeal,
+                                    title: 'فحص قيود الصندوق',
+                                    subtitle:
+                                        'يبحث عن مبالغ زادت الصندوق بغير حق من أخطاء قديمة',
+                                    onTap: () => Navigator.push<void>(
+                                      context,
+                                      MaterialPageRoute<void>(
+                                        builder: (_) =>
+                                            const CashLedgerAuditScreen(),
+                                      ),
                                     ),
                                   ),
                                 _SettingItem(
@@ -891,6 +908,60 @@ class _SettingItem extends StatelessWidget {
             size: 20,
           ),
       onTap: onTap,
+    );
+  }
+}
+
+/// مفتاح ميزة الديون للمالك. بدونه لا طريقة لإظهار صفحة الديون بعد الإعداد الأول.
+class _DebtsFeatureToggleTile extends StatefulWidget {
+  const _DebtsFeatureToggleTile();
+
+  @override
+  State<_DebtsFeatureToggleTile> createState() =>
+      _DebtsFeatureToggleTileState();
+}
+
+class _DebtsFeatureToggleTileState extends State<_DebtsFeatureToggleTile> {
+  bool _saving = false;
+
+  Future<void> _set(bool value) async {
+    if (_saving) return;
+    final features = context.read<BusinessFeaturesProvider>();
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _saving = true);
+    try {
+      await features.save(features.data.copyWith(enableDebts: value));
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            value ? 'تم تفعيل الديون وظهرت صفحتها' : 'تم إيقاف الديون',
+          ),
+        ),
+      );
+    } catch (_) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('تعذّر حفظ إعداد الديون')),
+      );
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = context.watch<BusinessFeaturesProvider>().data.enableDebts;
+    return _SettingItem(
+      icon: Icons.balance_outlined,
+      iconColor: Colors.amber.shade800,
+      title: 'تفعيل الديون (البيع الآجل)',
+      subtitle: enabled
+          ? 'صفحة الديون ظاهرة والبيع بالآجل مسموح'
+          : 'مطفأة: صفحة الديون مخفية',
+      trailing: Switch(
+        value: enabled,
+        onChanged: _saving ? null : _set,
+      ),
+      onTap: () => _set(!enabled),
     );
   }
 }

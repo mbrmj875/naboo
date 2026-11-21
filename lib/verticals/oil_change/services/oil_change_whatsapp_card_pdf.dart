@@ -10,6 +10,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../models/print_settings_data.dart';
 import '../../../utils/app_logger.dart';
 import '../utils/oil_change_log_format.dart';
+import '../utils/oil_order_has_oil.dart';
 
 class _OilCardPdfInput {
   const _OilCardPdfInput({
@@ -22,6 +23,7 @@ class _OilCardPdfInput {
     required this.generatedAtIso,
     required this.rows,
     this.logo,
+    this.title = 'بطاقة غيار الزيت',
   });
 
   final Uint8List regularFont;
@@ -33,6 +35,7 @@ class _OilCardPdfInput {
   final String mapsUrl;
   final String generatedAtIso;
   final List<List<String>> rows;
+  final String title;
 }
 
 Map<String, Object?> _pdfJobMap(_OilCardPdfInput input) {
@@ -46,6 +49,7 @@ Map<String, Object?> _pdfJobMap(_OilCardPdfInput input) {
     'mapsUrl': input.mapsUrl,
     'generatedAtIso': input.generatedAtIso,
     'rows': input.rows,
+    'title': input.title,
   };
 }
 
@@ -58,6 +62,7 @@ Future<Uint8List> _renderOilChangeCardPdf(Map<String, Object?> raw) async {
   final phones = (raw['phones'] as List?)?.map((e) => e.toString()).toList() ??
       const <String>[];
   final mapsUrl = (raw['mapsUrl'] as String? ?? '').trim();
+  final title = raw['title'] as String? ?? 'بطاقة غيار الزيت';
   final generatedAtIso = raw['generatedAtIso'] as String? ?? '';
   final rows = ((raw['rows'] as List?) ?? const [])
       .map((e) => (e as List).map((c) => c.toString()).toList())
@@ -122,7 +127,7 @@ Future<Uint8List> _renderOilChangeCardPdf(Map<String, Object?> raw) async {
         children.add(
           pw.Center(
             child: pw.Text(
-              'بطاقة غيار الزيت',
+              title,
               style: pw.TextStyle(font: bold, fontSize: 12, color: navy),
             ),
           ),
@@ -300,6 +305,9 @@ class OilChangeWhatsappCardPdfService {
       mapsUrl: printSettings.storeMapsUrl ?? '',
       generatedAtIso: DateTime.now().toIso8601String(),
       rows: _cardRows(order),
+      title: oilOrderHasOil(order)
+          ? 'بطاقة غيار الزيت'
+          : 'بطاقة ${oilCardWorkLabel(order)}',
     );
     return Isolate.run(() => _renderOilChangeCardPdf(_pdfJobMap(input)));
   }

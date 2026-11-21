@@ -41,7 +41,14 @@ export async function dispatchWhatsappChannel(
   supabase: SupabaseClient,
   request: NotificationRequest,
 ): Promise<NotificationDispatchResult & { retryable?: boolean }> {
-  const ready = await computeReadyState(supabase, request.tenantUserId);
+  // تذكير الدين لا ينتظر قالب بطاقة الغيار (محل غير غيار لا يملكه).
+  const ready = await computeReadyState(
+    supabase,
+    request.tenantUserId,
+    request.templateKey === TemplateKey.debtReminder
+      ? [TemplateKey.debtReminder]
+      : undefined,
+  );
   if (ready.readyState !== 'ready') {
     return {
       ok: false,

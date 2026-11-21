@@ -6,6 +6,11 @@ class CustomerDebtSummary {
     required this.openRemaining,
     required this.invoiceCount,
     this.oldestInvoiceDate,
+    this.overdueFils = 0,
+    this.daysLate = 0,
+    this.periodDays = 0,
+    this.cashOnly = false,
+    this.searchText = '',
   });
 
   /// null = عميل غير مربوط بجدول العملاء؛ التجميع بالاسم فقط.
@@ -14,7 +19,39 @@ class CustomerDebtSummary {
   final double openRemaining;
   final int invoiceCount;
   final DateTime? oldestInvoiceDate;
+
+  /// متبقي الفواتير الأقدم من فترة التسديد (فترته الخاصة أو العامة).
+  final int overdueFils;
+
+  /// أيام التأخر بعد انتهاء الفترة لأقدم دين متأخر؛ 0 = غير متأخر.
+  final int daysLate;
+
+  /// الفترة المطبَّقة عليه؛ 0 = بلا فترة.
+  final int periodDays;
+  final bool cashOnly;
+
+  /// هواتفه ولوحات سياراته (للبحث)، بأحرف صغيرة.
+  final String searchText;
+
+  bool get isOverdue => daysLate > 0 && overdueFils > 0;
 }
+
+/// متأخرون أولاً، ثم الأكبر ديناً (في كل مجموعة).
+int compareCustomerDebtOverdueFirst(CustomerDebtSummary a, CustomerDebtSummary b) {
+  if (a.isOverdue != b.isOverdue) return a.isOverdue ? -1 : 1;
+  return b.openRemaining.compareTo(a.openRemaining);
+}
+
+/// فاتورة متأخرة: مفتوحة وعمرها أكثر من [periodDays] (0 = بلا فترة).
+bool creditInvoiceIsOverdue({
+  required DateTime date,
+  required int remainingFils,
+  required int periodDays,
+  required DateTime now,
+}) =>
+    periodDays > 0 &&
+    remainingFils >= 500 &&
+    now.difference(date).inDays > periodDays;
 
 /// بند منتج ضمن ديون العميل (من فواتير آجل).
 class CustomerDebtLineItem {
@@ -127,4 +164,35 @@ class AmbiguousDebtCustomerName {
   final int matchingCustomerCount;
   final int openInvoiceCount;
   final List<AmbiguousDebtCustomerMatch> matchingCustomers;
+}
+
+/// استثناء العميل من إعدادات الدين العامة (من صفحته).
+class CustomerDebtException {
+  const CustomerDebtException({
+    this.periodDays,
+    this.capFils,
+    this.cashOnly = false,
+  });
+
+  /// فترة تسديد خاصة بالأيام؛ `null` = الفترة العامة، و0 = بلا فترة له.
+  final int? periodDays;
+
+  /// سقف دين خاص بالفلس؛ `null` = السقف العام، و0 = بلا سقف له.
+  final int? capFils;
+
+  /// «نقداً فقط»: لا دين جديد إلا برمز المالك.
+  final bool cashOnly;
+
+  static const none = CustomerDebtException();
+
+  bool get isNone => periodDays == null && capFils == null && !cashOnly;
+
+  factory CustomerDebtException.fromRow(Map<String, dynamic>? r) {
+    if (r == null) return none;
+    return CustomerDebtException(
+      periodDays: (r['debtPeriodDays'] as num?)?.toInt(),
+      capFils: (r['debtCapFils'] as num?)?.toInt(),
+      cashOnly: ((r['cashOnly'] as num?)?.toInt() ?? 0) == 1,
+    );
+  }
 }

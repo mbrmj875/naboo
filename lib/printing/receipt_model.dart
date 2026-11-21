@@ -40,6 +40,7 @@ enum ReceiptKind {
       ReceiptSection.filters,
       ReceiptSection.technician,
       ReceiptSection.customer,
+      ReceiptSection.accountBalance,
     ],
     directSale => const [ReceiptSection.customer, ReceiptSection.payment],
     carWash => const [
@@ -47,11 +48,16 @@ enum ReceiptKind {
       ReceiptSection.car,
       ReceiptSection.technician,
       ReceiptSection.customer,
+      ReceiptSection.accountBalance,
     ],
     debtPayment => const [ReceiptSection.cashier],
     expense => const [ReceiptSection.cashier],
     saleReturn => const [ReceiptSection.customer, ReceiptSection.cashier],
-    sale => const [ReceiptSection.customer, ReceiptSection.payment],
+    sale => const [
+      ReceiptSection.customer,
+      ReceiptSection.payment,
+      ReceiptSection.accountBalance,
+    ],
   };
 
   /// الطباعة التلقائية بعد الحفظ مفعّلة افتراضياً لأعمال البيع والخدمة فقط.
@@ -63,6 +69,24 @@ enum ReceiptKind {
 
   /// نسختان للاسترجاع (للزبون وللمحل)، ونسخة لغيره.
   int get defaultCopies => this == saleReturn ? 2 : 1;
+
+  /// اسم قصير لنوع العمل على بطاقة الفاتورة في القوائم.
+  String get shortLabel => switch (this) {
+    oilChange => 'غيار زيت',
+    directSale => 'بيع مباشر',
+    carWash => 'غسيل سيارة',
+    debtPayment => 'تسديد دين',
+    expense => 'مصروف',
+    saleReturn => 'استرجاع',
+    sale => 'بيع',
+  };
+
+  /// له إيصال خاص بنوع العمل (لا «إيصال بيع» العام).
+  bool get isWorkSpecific =>
+      this == oilChange ||
+      this == directSale ||
+      this == carWash ||
+      this == saleReturn;
 }
 
 /// قسم اختياري في القالب.
@@ -76,6 +100,7 @@ enum ReceiptSection {
   technician('الفني / العامل'),
   customer('اسم العميل'),
   payment('طريقة الدفع والمتبقي'),
+  accountBalance('رصيد حساب العميل (الدين)'),
   cashier('المستلم / المسجِّل');
 
   const ReceiptSection(this.label);
@@ -242,10 +267,16 @@ class ReceiptLine {
 
 /// سطر في قسم المجاميع.
 class ReceiptTotal {
-  const ReceiptTotal(this.label, this.fils, {this.emphasis = false});
+  const ReceiptTotal(
+    this.label,
+    this.fils, {
+    this.emphasis = false,
+    this.section,
+  });
 
   final String label;
   final int fils;
+  final ReceiptSection? section;
 
   /// المبلغ الرئيسي: يُطبع بخط كبير داخل إطار.
   final bool emphasis;

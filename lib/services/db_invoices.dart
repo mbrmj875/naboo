@@ -933,6 +933,17 @@ extension DbInvoices on DatabaseHelper {
           amount: -refund,
         );
       }
+      // مرتجع آجل: يُخصم من دين الفاتورة الأصلية داخل نفس المعاملة، فلا يبقى
+      // مرتجع محفوظ بلا خصم من الدين إن فشلت خطوة لاحقة.
+      final origId = invoice.originalInvoiceId;
+      if (invoice.type == InvoiceType.credit && origId != null && origId > 0) {
+        await _applyReturnToCreditInvoiceDebtInTxn(
+          txn,
+          tenantId: tenantId,
+          originalInvoiceId: origId,
+          amountFils: _toFils(invoice.total),
+        );
+      }
     }
 
     if (loyaltyActive) {
@@ -1219,38 +1230,64 @@ extension DbInvoices on DatabaseHelper {
     if (amount <= 0) return 0;
     final db = await database;
     final tenantId = await _resolveActiveTenantIdForLocalDb(db);
-    return db.transaction<double>((txn) async {
-      final rows = await txn.query(
-        'invoices',
-        columns: ['total', 'totalFils', 'advancePayment', 'advancePaymentFils'],
-        where: 'id = ? AND tenantId = ? AND deleted_at IS NULL',
-        whereArgs: [originalInvoiceId, tenantId],
-        limit: 1,
-      );
-      if (rows.isEmpty) return 0;
-      final r = rows.first;
-      final totalFils =
-          (r['totalFils'] as num?)?.toInt() ??
-          _toFils((r['total'] as num?)?.toDouble() ?? 0);
-      final advFils =
-          (r['advancePaymentFils'] as num?)?.toInt() ??
-          _toFils((r['advancePayment'] as num?)?.toDouble() ?? 0);
-      final remaining = totalFils - advFils;
-      if (remaining <= 0) return 0;
-      final apply = _toFils(amount) > remaining ? remaining : _toFils(amount);
-      final newAdv = advFils + apply;
-      await txn.update(
-        'invoices',
-        {
-          'advancePayment': newAdv / 1000.0,
-          'advancePaymentFils': newAdv,
-          'updatedAt': DateTime.now().toUtc().toIso8601String(),
-        },
-        where: 'id = ? AND tenantId = ?',
-        whereArgs: [originalInvoiceId, tenantId],
-      );
-      return apply / 1000.0;
-    });
+    return db.transaction<double>(
+      (txn) => _applyReturnToCreditInvoiceDebtInTxn(
+        txn,
+        tenantId: tenantId,
+        originalInvoiceId: originalInvoiceId,
+        amountFils: _toFils(amount),
+      ),
+    );
+  }
+
+  /// إجمالي الفاتورة ومقدّمها بالفلس بنفس قاعدة [MoneySql]: الفلس إن كان أحدهما
+  /// غير صفر، وإلا قيمة الدينار القديمة (العمودان افتراضيهما صفر لا فارغ).
+  ({int totalFils, int advFils}) _invoiceTotalAndAdvanceFils(
+    Map<String, Object?> r,
+  ) {
+    final tF = (r['totalFils'] as num?)?.toInt() ?? 0;
+    final aF = (r['advancePaymentFils'] as num?)?.toInt() ?? 0;
+    if (tF != 0 || aF != 0) return (totalFils: tF, advFils: aF);
+    return (
+      totalFils: _toFils((r['total'] as num?)?.toDouble() ?? 0),
+      advFils: _toFils((r['advancePayment'] as num?)?.toDouble() ?? 0),
+    );
+  }
+
+  Future<double> _applyReturnToCreditInvoiceDebtInTxn(
+    DatabaseExecutor txn, {
+    required int tenantId,
+    required int originalInvoiceId,
+    required int amountFils,
+  }) async {
+    if (amountFils <= 0) return 0;
+    final rows = await txn.query(
+      'invoices',
+      columns: ['total', 'totalFils', 'advancePayment', 'advancePaymentFils'],
+      where: 'id = ? AND tenantId = ? AND deleted_at IS NULL',
+      whereArgs: [originalInvoiceId, tenantId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return 0;
+    final m = _invoiceTotalAndAdvanceFils(rows.first);
+    final remaining = m.totalFils - m.advFils;
+    if (remaining <= 0) return 0;
+    final apply = amountFils > remaining ? remaining : amountFils;
+    final newAdv = m.advFils + apply;
+    await txn.update(
+      'invoices',
+      {
+        'advancePayment': newAdv / 1000.0,
+        'advancePaymentFils': newAdv,
+        // فاتورة قديمة بالدينار فقط: يُكتب إجماليها بالفلس أيضاً، وإلا يقرأ
+        // MoneySql المقدّم بالفلس مقابل إجمالي صفر فيظهر الدين صفراً.
+        'totalFils': m.totalFils,
+        'updatedAt': DateTime.now().toUtc().toIso8601String(),
+      },
+      where: 'id = ? AND tenantId = ?',
+      whereArgs: [originalInvoiceId, tenantId],
+    );
+    return apply / 1000.0;
   }
 
   /// المتبقي من دين فاتورة آجلة (لعرضه قبل الاسترجاع).
@@ -1265,14 +1302,8 @@ extension DbInvoices on DatabaseHelper {
       limit: 1,
     );
     if (rows.isEmpty) return 0;
-    final r = rows.first;
-    final totalFils =
-        (r['totalFils'] as num?)?.toInt() ??
-        _toFils((r['total'] as num?)?.toDouble() ?? 0);
-    final advFils =
-        (r['advancePaymentFils'] as num?)?.toInt() ??
-        _toFils((r['advancePayment'] as num?)?.toDouble() ?? 0);
-    final rem = totalFils - advFils;
+    final m = _invoiceTotalAndAdvanceFils(rows.first);
+    final rem = m.totalFils - m.advFils;
     return rem > 0 ? rem / 1000.0 : 0;
   }
 

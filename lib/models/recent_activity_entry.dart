@@ -386,6 +386,12 @@ String ledgerTransactionTypeLabelAr(String transactionType) {
       return 'دفع مورد';
     case 'supplier_payment_reversal':
       return 'عكس دفع مورد';
+    case 'debt_collection':
+      return 'تحصيل دين';
+    case 'debt_collection_reversal':
+      return 'إلغاء تحصيل دين';
+    case 'cash_audit_correction':
+      return 'تصحيح فحص الصندوق';
     case 'sale_return':
       return 'مرتجع';
     default:

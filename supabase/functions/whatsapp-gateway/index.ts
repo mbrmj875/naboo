@@ -111,6 +111,9 @@ type GatewayAction =
   | 'ready_status'
   | 'sync_templates'
   | 'submit_followup_template'
+  | 'submit_debt_reminder_template'
+  | 'debt_reminder_status'
+  | 'send_debt_reminder'
   | 'send_oil_change_card'
   | 'send_connect_test'
   | 'dismiss_failed_message';
@@ -149,6 +152,10 @@ type RequestBody = {
   employee_name?: string;
   /** إعادة إرسال يدوية من سجل الرسائل — لا يمنعها مفتاح التكرار. */
   resend?: boolean;
+  /** تذكير الدين: مفتاح ثابت من التطبيق («عميل|يوم الاستحقاق»). */
+  reminder_key?: string;
+  amount_text?: string;
+  since_text?: string;
 };
 
 const FORCE_RESET_COOLDOWN_MS = 10 * 60 * 1000;
@@ -296,6 +303,40 @@ Deno.serve(async (req) => {
       bodyTemplate,
     );
     return Response.json(result, { status: result.ok ? 200 : 400 });
+  }
+
+  if (
+    action === 'submit_debt_reminder_template' ||
+    action === 'debt_reminder_status' ||
+    action === 'send_debt_reminder'
+  ) {
+    const debt = await import('./lifecycle/debt_reminder.ts');
+    if (action === 'submit_debt_reminder_template') {
+      const r = await debt.submitDebtReminderTemplate(supabase, user.id);
+      return Response.json(r, { status: r.ok ? 200 : 400 });
+    }
+    if (action === 'debt_reminder_status') {
+      const status = await debt.debtReminderTemplateStatus(supabase, user.id);
+      return Response.json({ ok: true, status });
+    }
+    const phone = normalizeIraqWhatsappDigits(
+      (body.customer_phone ?? '').toString().trim(),
+    );
+    const r = await debt.sendDebtReminder(supabase, {
+      tenantUserId: user.id,
+      customerPhone: phone ?? '',
+      reminderKey: (body.reminder_key ?? '').toString(),
+      customerName: (body.customer_name ?? '').toString(),
+      amountText: (body.amount_text ?? '').toString(),
+      sinceText: (body.since_text ?? '').toString(),
+      shopName: (body.shop_name ?? '').toString(),
+    });
+    return Response.json({
+      ok: r.status === 'sent' || r.status === 'already_sent',
+      status: r.status,
+      retry_later: debt.debtReminderRetryLater(r.status),
+      detail: r.detail ?? null,
+    });
   }
 
   if (action === 'send_oil_change_card') {

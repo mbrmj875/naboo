@@ -794,9 +794,8 @@ class _CustomersScreenState extends State<CustomersScreen> {
         ? fin.openRemainingFils / 1000.0
         : 0.0;
     final hasOpenDebt = openDebtIqd > 0.01 || fin.creditInvoices > 0;
-    final st = hasOpenDebt
-        ? 'مديون'
-        : (c.balance < -0.01 ? 'دائن' : 'مميز');
+    // عمود balance القديم لا يُكتب: الحالة من الفواتير الآجلة وحدها.
+    final st = hasOpenDebt ? 'مديون' : 'مميز';
 
     Widget statusBadge({double fontSize = 12}) => Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
@@ -921,7 +920,7 @@ class _CustomersScreenState extends State<CustomersScreen> {
                         color: _textSecondary.withValues(alpha: 0.75),
                       ),
                     ),
-                  if (hasOpenDebt || c.balance.abs() > 0.01) ...[
+                  if (hasOpenDebt) ...[
                     const SizedBox(width: 12),
                     Icon(
                       Icons.account_balance_wallet_outlined,
@@ -930,11 +929,7 @@ class _CustomersScreenState extends State<CustomersScreen> {
                     ),
                     const SizedBox(width: 4),
                     Text(
-                      hasOpenDebt
-                          ? 'دين: ${IraqiCurrencyFormat.formatIqd(openDebtIqd)}'
-                          : (c.balance > 0.01
-                              ? 'دين: ${IraqiCurrencyFormat.formatIqd(c.balance)}'
-                              : 'دائن: ${IraqiCurrencyFormat.formatIqd(c.balance.abs())}'),
+                      'دين: ${IraqiCurrencyFormat.formatIqd(openDebtIqd)}',
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w700,
@@ -1152,18 +1147,14 @@ class _CustomersScreenState extends State<CustomersScreen> {
                               Text(
                                 hasOpenDebt
                                     ? 'دين: ${IraqiCurrencyFormat.formatIqd(openDebtIqd)}'
-                                    : (c.balance < -0.01
-                                          ? 'دائن: ${IraqiCurrencyFormat.formatIqd(-c.balance)}'
-                                          : 'لا ديون'),
+                                    : 'لا ديون',
                                 textAlign: TextAlign.center,
                                 style: TextStyle(
                                   fontSize: 13,
                                   fontWeight: FontWeight.w700,
                                   color: hasOpenDebt
                                       ? AppSemanticColors.danger
-                                      : (c.balance < -0.01
-                                            ? AppSemanticColors.info
-                                            : AppSemanticColors.success),
+                                      : AppSemanticColors.success,
                                 ),
                                 overflow: TextOverflow.ellipsis,
                               ),

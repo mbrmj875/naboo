@@ -13,6 +13,7 @@ import 'screens/oil_change_direct_sale_screen.dart';
 import 'screens/oil_change_form_screen.dart';
 import 'screens/oil_change_hub_screen.dart';
 import 'screens/oil_change_invoices_screen.dart';
+import 'screens/vehicles_registry_screen.dart';
 import '../car_wash/screens/car_wash_form_screen.dart';
 import '../car_wash/screens/car_wash_services_screen.dart';
 import 'screens/oil_change_service_form_screen.dart';
@@ -28,7 +29,10 @@ import 'reports/direct_sale/direct_sale_report_repository.dart';
 import 'reports/oil_change_reports_panel.dart';
 import 'reports/products/products_report_panel.dart';
 import 'reports/products/products_report_repository.dart';
+import 'models/oil_change_filter_kind.dart';
+import 'services/oil_change_filter_kinds_repository.dart';
 import 'services/oil_change_reports_repository.dart';
+import 'services/oil_filter_stock_catalog.dart';
 
 /// سياسة باركود stub — يُستبدَل بـ Scan-to-Card في مرحلة لاحقة.
 final class OilChangeBarcodeScanPolicyStub extends BarcodeScanPolicy {
@@ -77,6 +81,10 @@ final class OilChangeVerticalManifest extends VerticalManifest {
               routeId: AppContentRoutes.oilInvoices,
             ),
             NavSubItemSpec(
+              title: 'سجل السيارات',
+              routeId: AppContentRoutes.oilVehicles,
+            ),
+            NavSubItemSpec(
               title: 'بيع مباشر',
               routeId: AppContentRoutes.oilDirectSale,
             ),
@@ -102,6 +110,7 @@ final class OilChangeVerticalManifest extends VerticalManifest {
         AppContentRoutes.oilChangeServiceCreate: (_) =>
             const OilChangeServiceFormScreen(),
         AppContentRoutes.oilInvoices: (_) => const OilChangeInvoicesScreen(),
+        AppContentRoutes.oilVehicles: (_) => const VehiclesRegistryScreen(),
         AppContentRoutes.oilDirectSale: (_) =>
             const OilChangeDirectSaleScreen(),
         AppContentRoutes.carWashCreate: (_) => const CarWashFormScreen(),
@@ -431,6 +440,21 @@ final class OilChangeVerticalManifest extends VerticalManifest {
   VerticalFluidInventoryEditor? get fluidInventoryEditor =>
       _fluidInventoryEditor;
 
+  /// فئات الفلاتر: الصنف بنفس الاسم يربط المنتج بخانته في بطاقة الغيار.
+  @override
+  Future<List<String>> productCategorySuggestions() async {
+    try {
+      final kinds = await OilChangeFilterKindsRepository.instance.listActive();
+      return OilFilterStockCatalog.categorySuggestions(
+        kinds.isEmpty ? OilChangeFilterKind.builtins : kinds,
+      );
+    } catch (_) {
+      return OilFilterStockCatalog.categorySuggestions(
+        OilChangeFilterKind.builtins,
+      );
+    }
+  }
+
   @override
   InventoryPolicy get inventoryPolicy => const InventoryPolicy(
         businessProfileKey: 'retail',
@@ -458,6 +482,7 @@ final class OilChangeVerticalManifest extends VerticalManifest {
         AppContentRoutes.oilChangeCreate,
         AppContentRoutes.oilChangeServiceCreate,
         AppContentRoutes.oilInvoices,
+        AppContentRoutes.oilVehicles,
         AppContentRoutes.oilDirectSale,
         AppContentRoutes.carWashCreate,
         AppContentRoutes.carWashServices,

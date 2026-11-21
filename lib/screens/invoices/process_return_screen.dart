@@ -531,9 +531,7 @@ class _ProcessReturnScreenState extends State<ProcessReturnScreen> {
           username: auth.displayName,
         ),
       );
-      if (o.type == InvoiceType.credit) {
-        await _db.applyReturnToCreditInvoiceDebt(o.id!, total);
-      }
+      // الآجل: خصم المرتجع من دين الأصل يتم داخل معاملة حفظ المرتجع نفسها.
       if (o.type == InvoiceType.installment) {
         await _db.applyInstallmentAdjustmentAfterReturn(
           originalInvoiceId: o.id!,

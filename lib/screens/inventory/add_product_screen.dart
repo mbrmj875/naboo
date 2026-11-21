@@ -190,6 +190,27 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
     }
   }
 
+  Future<List<String>> _verticalCategorySuggestions() async {
+    try {
+      return await VerticalRegistry.instance.activeManifest
+          .productCategorySuggestions();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  static List<String> _mergeCategoryOptions(
+    List<String> existing,
+    List<String> extra,
+  ) {
+    final seen = {for (final c in existing) c.trim()};
+    return [
+      ...existing,
+      for (final c in extra)
+        if (seen.add(c.trim())) c,
+    ];
+  }
+
   VerticalPharmacyProductEditorSession? _pharmacySession;
   RouteObserver<PageRoute<dynamic>>? _homeInnerRouteObserver;
 
@@ -817,10 +838,14 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
         AppSettingsRepository.instance,
       );
       VerticalRegistry.instance.syncActiveVertical(bizSettings);
+      final extraCategories = await _verticalCategorySuggestions();
       if (!mounted) return;
       setState(() {
         _productCodeHint = data.productCodeHint;
-        _categoryOptions = data.categories;
+        _categoryOptions = _mergeCategoryOptions(
+          data.categories,
+          extraCategories,
+        );
         _brandOptions = data.brands;
         _warehouseRows = data.warehouses;
         _supplierOptions = data.suppliers;

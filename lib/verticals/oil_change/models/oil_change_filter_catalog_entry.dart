@@ -8,9 +8,17 @@ class OilChangeFilterCatalogEntry {
     required this.name,
     required this.priceFils,
     this.sortOrder = 0,
+    this.productId,
+    this.availableQty,
   });
 
   final int id;
+
+  /// صنف المخزون حين يأتي الفلتر من المخزون (حسب حقل «الصنف»).
+  final int? productId;
+
+  /// الرصيد الظاهر في المخزون (للمعلومة فقط).
+  final double? availableQty;
   final OilChangeFilterKind kind;
   final String name;
   final int priceFils;
@@ -42,6 +50,8 @@ class OilChangeFilterCatalogEntry {
           name: name,
           priceFils: priceFils,
           sortOrder: sortOrder,
+          productId: productId,
+          availableQty: availableQty,
         );
       }
     }
@@ -70,7 +80,34 @@ class OilChangeFilterSlot {
   String? name;
   int priceFils = 0;
 
+  /// الفلتر أحضره العميل: لا ثمن ولا مخزون، فقط أجرة التركيب.
+  bool customerProvided = false;
+
+  /// أجرة التركيب التي كتبها الموظف لهذه البطاقة (null = من الإعدادات).
+  int? laborCardFils;
+
+  /// صنف المخزون المختار (مصدر الفلاتر «مرتبط بالمخزون»).
+  int? productId;
+
+  /// عدد القطع. [priceFils] = [unitPriceFils] × [qty].
+  int qty = 1;
+  int unitPriceFils = 0;
+
+  /// سند الصرف المحفوظ على البطاقة (يبقى إن لم يتغير الصنف ولا العدد).
+  int? stockVoucherId;
+
+  void setQty(int value) {
+    final q = value < 1 ? 1 : value;
+    final unit = unitPriceFils > 0
+        ? unitPriceFils
+        : (qty > 0 ? priceFils ~/ qty : priceFils);
+    qty = q;
+    unitPriceFils = unit;
+    priceFils = unit * q;
+  }
+
   bool get hasSelection =>
+      customerProvided ||
       priceFils > 0 ||
       catalogEntryId != null ||
       (name ?? '').trim().isNotEmpty;
@@ -79,12 +116,20 @@ class OilChangeFilterSlot {
     catalogEntryId = null;
     name = null;
     priceFils = 0;
+    customerProvided = false;
+    laborCardFils = null;
+    productId = null;
+    qty = 1;
+    unitPriceFils = 0;
+    stockVoucherId = null;
   }
 
   void applyEntry(OilChangeFilterCatalogEntry e) {
     catalogEntryId = e.id;
     name = e.name;
-    priceFils = e.priceFils;
+    productId = e.productId;
+    unitPriceFils = e.priceFils;
+    priceFils = e.priceFils * (qty < 1 ? 1 : qty);
   }
 
   void loadFromRow(

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
@@ -13,6 +14,8 @@ import '../../../services/tenant_context_service.dart';
 import '../../../utils/app_logger.dart';
 import '../../../utils/invoice_validation.dart';
 import '../../../utils/iqd_money.dart';
+import '../../../utils/iraqi_currency_format.dart';
+import '../utils/oil_change_filter_format.dart';
 import 'oil_change_invoice_builder.dart';
 import 'oil_change_orders_repository.dart';
 import 'oil_change_stock_service.dart';
@@ -54,10 +57,15 @@ class OilChangePostSaleService {
   }
 
   /// تعديل الفاتورة والصندوق لنفس المعرّفات بعد تحديث صف البطاقة.
+  ///
+  /// [originalCardAdvanceFils]: المدفوع على البطاقة عند البيع (قبل التعديل).
+  /// إن مُرِّر يُسمح بالتعديل بعد تسديد العميل من دين هذه الفاتورة: ما سدّده
+  /// بعد البيع يبقى محسوباً له ويُعاد حساب المتبقي. بدونه يبقى المنع القديم.
   Future<OilChangeAmendResult> amendFromOrder({
     required int orderId,
     String? actorUsername,
     int? actorUserId,
+    int? originalCardAdvanceFils,
   }) async {
     if (orderId <= 0) {
       throw OilChangePostSaleException('معرّف البطاقة غير صالح.');
@@ -86,9 +94,22 @@ class OilChangePostSaleService {
     await _assertNoBlockingDebtActivity(
       invoice: existing,
       invoiceId: invoiceId,
+      allowDebtPayments: originalCardAdvanceFils != null,
     );
 
-    final items = await OilChangeInvoiceBuilder.buildItems(order);
+    // ما سُدِّد من دين هذه الفاتورة بعد البيع (التسديد يرفع «المدفوع» في
+    // الفاتورة وحدها، لا في البطاقة).
+    final existingCredit = existing.type == InvoiceType.credit ||
+        existing.type == InvoiceType.installment;
+    final int paidLaterFils = existingCredit && originalCardAdvanceFils != null
+        ? max(0, IqdMoney.toFils(existing.advancePayment) -
+            max(0, originalCardAdvanceFils))
+        : 0;
+
+    final items = await OilChangeInvoiceBuilder.buildItems(
+      order,
+      keepLinesWithDiscount: true,
+    );
     if (items.isEmpty) {
       throw OilChangePostSaleException(
         'لا توجد بنود بيع — أضف خدمة أو زيت أو فلتر بسعر قبل الحفظ.',
@@ -102,12 +123,25 @@ class OilChangePostSaleService {
       throw OilChangePostSaleException('إجمالي البطاقة صفر — لا يمكن حفظ الفاتورة.');
     }
 
-    var advanceFils = (order['advancePaymentFils'] as num?)?.toInt() ?? 0;
-    if (advanceFils < 0) advanceFils = 0;
-    if (advanceFils > totalFils) advanceFils = totalFils;
+    // المدفوع عند البيع (من البطاقة) — هو ما دخل الصندوق مع الفاتورة.
+    var saleAdvanceFils = (order['advancePaymentFils'] as num?)?.toInt() ?? 0;
+    if (saleAdvanceFils < 0) saleAdvanceFils = 0;
+    if (saleAdvanceFils > totalFils) saleAdvanceFils = totalFils;
 
+    final paidAllFils = saleAdvanceFils + paidLaterFils;
+    if (paidAllFils > totalFils + 500) {
+      String f(int v) => IraqiCurrencyFormat.formatIqd(IqdMoney.fromFils(v));
+      throw OilChangePostSaleException(
+        'سدّد العميل ${f(paidLaterFils)} من دين هذه البطاقة بعد البيع، '
+        'فصار ما دفعه كله ${f(paidAllFils)}، وهو أكثر من الإجمالي الجديد '
+        '${f(totalFils)}. خفّض «المستلم» في البطاقة أو ارفع الإجمالي.',
+      );
+    }
+
+    final advanceFils = min(paidAllFils, totalFils);
     final remainderFils = totalFils - advanceFils;
-    final isCredit = remainderFils > 500;
+    // فاتورة آجلة سُدِّد منها تبقى آجلة ولو صار متبقيها صفراً.
+    final isCredit = totalFils - saleAdvanceFils > 500 || paidLaterFils > 0;
 
     final custName = (order['customerNameSnapshot'] ?? '').toString().trim();
     if (custName.isEmpty) {
@@ -125,7 +159,7 @@ class OilChangePostSaleService {
       );
     }
 
-    if (isCredit) {
+    if (remainderFils > 500) {
       final err = await SaleDebtCapsValidator.validate(
         customerId: customerId,
         customerName: custName,
@@ -137,13 +171,18 @@ class OilChangePostSaleService {
 
     final totalD = IqdMoney.fromFils(totalFils);
     final advanceD = IqdMoney.fromFils(advanceFils);
+    // المبلغ المتفق عليه أقل من البنود: الفرق خصم على الفاتورة، والبنود تبقى
+    // بأرقام منتجاتها فيُخصم المخزون.
+    final discountD = IqdMoney.fromFils(
+      OilChangeInvoiceBuilder.discountFilsFor(order, items),
+    );
     final draft = Invoice(
       id: invoiceId,
       customerName: custName,
       date: existing.date,
       type: isCredit ? InvoiceType.credit : InvoiceType.cash,
       items: items,
-      discount: 0,
+      discount: discountD,
       tax: 0,
       advancePayment: advanceD,
       total: totalD,
@@ -160,8 +199,12 @@ class OilChangePostSaleService {
     }
 
     final oldTotalFils = IqdMoney.toFils(existing.total);
-    final oldCashFils = IqdMoney.toFils(_cashAmountForInvoice(existing));
-    final newCashFils = IqdMoney.toFils(_cashAmountForInvoice(draft));
+    // التسديد اللاحق له سند قبض وقيد صندوق خاصان؛ قيد الفاتورة نفسها يبقى
+    // ما دُفع عند البيع فلا يُحسب التسديد مرتين.
+    final int oldCashFils =
+        IqdMoney.toFils(_cashAmountForInvoice(existing)) - paidLaterFils;
+    final newCashFils =
+        IqdMoney.toFils(_cashAmountForInvoice(draft)) - paidLaterFils;
     final plate = (order['deviceSerial'] ?? '').toString().trim();
     final tenantId = await _tenantId();
     final db = await _db.database;
@@ -209,7 +252,7 @@ class OilChangePostSaleService {
           tenantId: tenantId,
           invoiceId: invoiceId,
           invoice: draft,
-          cashAmount: _cashAmountForInvoice(draft),
+          cashAmount: IqdMoney.fromFils(newCashFils),
           workShiftId: existing.workShiftId,
         );
 
@@ -249,6 +292,7 @@ class OilChangePostSaleService {
         'cashFils': newCashFils,
         'customerName': custName,
         'plate': plate,
+        if (paidLaterFils > 0) 'paidAfterSaleFils': paidLaterFils,
       }),
     );
 
@@ -371,6 +415,7 @@ class OilChangePostSaleService {
   Future<void> _assertNoBlockingDebtActivity({
     required Invoice invoice,
     required int invoiceId,
+    bool allowDebtPayments = false,
   }) async {
     final db = await _db.database;
     final tenantId = await _tenantId();
@@ -396,6 +441,7 @@ class OilChangePostSaleService {
         invoice.type == InvoiceType.installment;
     final customerId = invoice.customerId;
     if (!isCredit || customerId == null || customerId <= 0) return;
+    if (allowDebtPayments) return;
 
     final payments = await db.rawQuery(
       '''
@@ -403,8 +449,10 @@ class OilChangePostSaleService {
       WHERE customerId = ?
         AND tenantId = ?
         AND createdAt >= ?
+        AND voidedAt IS NULL
       ''',
-      [customerId, tenantId, invoice.date.toIso8601String()],
+      // التسديد يُحفظ بتوقيت UTC والفاتورة بالمحلي: المقارنة بالتوقيت نفسه.
+      [customerId, tenantId, invoice.date.toUtc().toIso8601String()],
     );
     final payCount = (payments.first['c'] as num?)?.toInt() ?? 0;
     if (payCount > 0) {
@@ -433,6 +481,9 @@ class OilChangePostSaleService {
     await ret((order['stockVoucherId'] as num?)?.toInt());
     await ret((order['hydraulicStockVoucherId'] as num?)?.toInt());
     await ret((order['powerHydraulicStockVoucherId'] as num?)?.toInt());
+    for (final line in oilFilterLinesDataFromRow(order)) {
+      await ret(line.stockVoucherId);
+    }
   }
 
   double _cashAmountForInvoice(Invoice invoice) {
