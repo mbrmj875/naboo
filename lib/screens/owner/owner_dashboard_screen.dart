@@ -35,6 +35,11 @@ import '../../owner/utils/owner_debt_reminder.dart';
 import '../../owner/utils/owner_purchase_request_pdf.dart';
 import '../../owner/widgets/charts/owner_dashboard_analytics_panel.dart';
 import '../../owner/widgets/owner_data_status_line.dart';
+import '../../owner/theme/owner_dashboard_tokens.dart';
+import '../../owner/widgets/owner_dashboard_panel_expand_control.dart';
+import '../../owner/widgets/v4/owner_oil_dashboard_v4.dart';
+import '../../owner/widgets/v4/owner_v4_actions.dart';
+import '../../owner/widgets/v4/owner_v4_top_bar.dart';
 import '../../owner/widgets/owner_partial_status_banner.dart';
 import '../../owner/widgets/owner_staff_activity_panel.dart';
 import '../../owner/widgets/owner_sensitive_actions_panel.dart';
@@ -89,6 +94,7 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen>
   OwnerDashboardProfileSpec? _v3Preset;
   OwnerDashboardStudioEffective? _v3Effective;
   bool _isSyncing = false;
+  String? _shopName;
 
   Future<void> _pullCloudAndRefreshKpis() async {
     if (_isSyncing) return;
@@ -373,11 +379,20 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen>
           _featuresProvider!.data,
         );
     _syncV3Mode();
+    unawaited(_loadShopName());
     OwnerPushActionRegistry.purchasePdf =
         () => _openPurchaseRequestPdf(context);
     OwnerPushActionRegistry.debtReminders =
         () => _openDebtRemindersSheet(context);
     OwnerFcmListenerService.instance.refreshTokenRegistration();
+  }
+
+  Future<void> _loadShopName() async {
+    try {
+      final settings = await PrintSettingsRepository.instance.load();
+      if (!mounted) return;
+      setState(() => _shopName = settings.storeTitleLine);
+    } catch (_) {}
   }
 
   @override
@@ -999,6 +1014,146 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen>
     }
   }
 
+  OwnerV4Actions _oilV4Actions(
+    BuildContext context,
+    OwnerCommandCenterProvider center,
+    List<StaffUserRow> staffRows,
+    Set<String> activeShiftNames,
+    int tenantId,
+  ) {
+    void push(Widget page, {String? name}) {
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          settings: RouteSettings(name: name),
+          builder: (_) => page,
+        ),
+      );
+    }
+
+    return OwnerV4Actions(
+      openSales: () => openOwnerPeriodSalesDetail(context, center),
+      openCash: () => OwnerShortcutNavigation.openRoute(context, 'cash'),
+      openOilLog: () =>
+          OwnerShortcutNavigation.openRoute(context, 'oil_services_log'),
+      openDebts: () => push(const DebtsScreen()),
+      debtReminders: () => _openDebtRemindersSheet(context),
+      purchasePdf: () => _openPurchaseRequestPdf(context),
+      openInventory: () =>
+          OwnerShortcutNavigation.openRoute(context, 'inventory'),
+      openInstallments: () => push(const InstallmentsScreen()),
+      openSensitive: () => openOwnerDashboardFullScreenPanel(
+        context,
+        title: 'الأمان والتعديلات الحساسة',
+        body: OwnerSensitiveActionsPanel(fullScreen: true, tenantId: tenantId),
+      ),
+      openStaffActivity: () => openOwnerDashboardFullScreenPanel(
+        context,
+        title: 'نشاط الموظفين',
+        body: Consumer<OwnerCommandCenterProvider>(
+          builder: (context, c, _) => OwnerStaffActivityPanel(
+            fullScreen: true,
+            staffUsers: staffRows,
+            activeShiftStaffNames: activeShiftNames,
+            selectedStaffName: c.staffFilter,
+            selectedStaffUserId: c.staffUserIdFilter,
+            onStaffSelected: (name, {int? staffUserId}) =>
+                c.setStaffFilter(name, staffUserId: staffUserId),
+          ),
+        ),
+      ),
+      openRoute: (routeId) => OwnerShortcutNavigation.openRoute(
+        context,
+        routeId,
+        onPurchasePdf: () => _openPurchaseRequestPdf(context),
+      ),
+    );
+  }
+
+  Widget _buildOilV4Scaffold(
+    BuildContext context,
+    OwnerCommandCenterProvider center,
+    OwnerCommandCenterSnapshot snapshot,
+    BusinessSetupSettingsData features,
+    List<StaffUserRow> staffRows,
+    Set<String> activeShiftNames,
+    int tenantId,
+  ) {
+    final tokens = OwnerDashboardTokens.of(context);
+    return Scaffold(
+      backgroundColor: tokens.background,
+      body: Directionality(
+        textDirection: TextDirection.rtl,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            OwnerV4TopBar(
+              shopName: _shopName,
+              onDashboardSyncBusy: (busy) {
+                if (mounted) setState(() => _isSyncing = busy);
+              },
+              onAfterCloudSync: _refreshDashboardKpisOnly,
+              onEmployeeGate: () {
+                Navigator.of(context).pushNamedAndRemoveUntil(
+                  '/employee-gate',
+                  (route) => false,
+                );
+              },
+            ),
+            const SizedBox(height: 6),
+            OwnerDataStatusLine(
+              lastSyncAt: CloudSyncService.instance.lastSyncAt,
+              isOffline: center.isOffline,
+              syncing: _isSyncing,
+            ),
+            OwnerPartialStatusBanner(
+              status: center.screenStatus,
+              snapshot: snapshot,
+              onRetry: () => unawaited(center.refreshAll(force: true)),
+            ),
+            Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 1440),
+                child: Padding(
+                  padding: const EdgeInsetsDirectional.fromSTEB(12, 0, 12, 10),
+                  child: OwnerV4PeriodTabs(
+                    selected: center.dateRange,
+                    onChanged: center.setDateRange,
+                  ),
+                ),
+              ),
+            ),
+            Expanded(
+              child: RefreshIndicator(
+                onRefresh: () => _handleRefresh(context, center),
+                child: SingleChildScrollView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: const EdgeInsetsDirectional.fromSTEB(12, 0, 12, 28),
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 1440),
+                      child: OwnerOilDashboardV4(
+                        center: center,
+                        snapshot: snapshot,
+                        features: features,
+                        actions: _oilV4Actions(
+                          context,
+                          center,
+                          staffRows,
+                          activeShiftNames,
+                          tenantId,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return DoubleBackToExitScope(
@@ -1024,6 +1179,22 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen>
         final staffRows = snapshot.staffUsers.data?.users ?? const <StaffUserRow>[];
 
         final useV3 = _v3Preset != null && _v3Effective != null;
+
+        // محل الزيت: لوحة v4 (هوية التطبيق + 6 أقسام بترتيب ثابت).
+        final v4Profile = _v3Preset?.profile;
+        if (useV3 &&
+            (v4Profile == OwnerDashboardProfile.oilChangeService ||
+                v4Profile == OwnerDashboardProfile.oilChangeHybrid)) {
+          return _buildOilV4Scaffold(
+            context,
+            center,
+            snapshot,
+            features.data,
+            staffRows,
+            activeShiftNames,
+            tenantId,
+          );
+        }
 
         final Widget contentLayout;
         if (useV3) {

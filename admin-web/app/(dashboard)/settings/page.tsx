@@ -172,7 +172,7 @@ export default function SettingsPage() {
               />
             </label>
             <label className="acct-label">
-              رابط التحميل (أندرويد)
+              رابط Google Play (أندرويد)
               <input
                 type="url"
                 value={rc.update_download_url}

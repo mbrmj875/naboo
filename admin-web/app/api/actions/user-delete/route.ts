@@ -58,6 +58,19 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: `snapshots: ${sErr.message}` }, { status: 400 });
     }
 
+    const { data: profileBefore } = await supabase
+      .from("profiles")
+      .select("trial_started_at")
+      .eq("id", userId)
+      .maybeSingle();
+    const { error: traceErr } = await supabase.from("account_deletion_traces").insert({
+      email,
+      previous_trial_started_at: profileBefore?.trial_started_at ?? null,
+    });
+    if (traceErr) {
+      console.warn("account deletion trace skipped", traceErr.message);
+    }
+
     const { error: pErr } = await supabase.from("profiles").delete().eq("id", userId);
     if (pErr) {
       return NextResponse.json({ error: `profiles: ${pErr.message}` }, { status: 400 });

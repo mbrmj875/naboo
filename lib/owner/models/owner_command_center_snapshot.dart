@@ -21,6 +21,7 @@ class OwnerCommandCenterSnapshot {
     this.retailTopSellers,
     this.clothingVariantShortages,
     this.clothingSlowMovers,
+    this.ownerAttention,
   });
 
   final OwnerSectionResult<StaffUsersData> staffUsers;
@@ -40,6 +41,7 @@ class OwnerCommandCenterSnapshot {
   final OwnerSectionResult<RetailTopSellersKpi>? retailTopSellers;
   final OwnerSectionResult<ClothingVariantShortagesKpi>? clothingVariantShortages;
   final OwnerSectionResult<ClothingSlowMoversKpi>? clothingSlowMovers;
+  final OwnerSectionResult<OwnerAttentionKpi>? ownerAttention;
 
   static const initial = OwnerCommandCenterSnapshot();
 
@@ -61,6 +63,7 @@ class OwnerCommandCenterSnapshot {
     if (retailTopSellers != null) yield retailTopSellers!;
     if (clothingVariantShortages != null) yield clothingVariantShortages!;
     if (clothingSlowMovers != null) yield clothingSlowMovers!;
+    if (ownerAttention != null) yield ownerAttention!;
   }
 
   CommandCenterScreenStatus get screenStatus {
@@ -107,6 +110,7 @@ class OwnerCommandCenterSnapshot {
     add('الأكثر مبيعاً', retailTopSellers);
     add('نواقص متغيرات الملابس', clothingVariantShortages);
     add('بضائع راكدة (ملابس)', clothingSlowMovers);
+    add('يحتاج انتباهك', ownerAttention);
     return entries;
   }
 
@@ -128,6 +132,7 @@ class OwnerCommandCenterSnapshot {
     OwnerSectionResult<RetailTopSellersKpi>? retailTopSellers,
     OwnerSectionResult<ClothingVariantShortagesKpi>? clothingVariantShortages,
     OwnerSectionResult<ClothingSlowMoversKpi>? clothingSlowMovers,
+    OwnerSectionResult<OwnerAttentionKpi>? ownerAttention,
     bool clearDebts = false,
     bool clearInstallments = false,
     bool clearInventory = false,
@@ -162,6 +167,8 @@ class OwnerCommandCenterSnapshot {
           : (clothingVariantShortages ?? this.clothingVariantShortages),
       clothingSlowMovers:
           clearCatalog ? null : (clothingSlowMovers ?? this.clothingSlowMovers),
+      ownerAttention:
+          clearCatalog ? null : (ownerAttention ?? this.ownerAttention),
     );
   }
 }

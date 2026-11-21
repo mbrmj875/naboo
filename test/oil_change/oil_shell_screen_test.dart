@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:naboo/home/home_kpi_repository.dart';
 import 'package:naboo/providers/dashboard_layout_provider.dart';
+import 'package:naboo/screens/home_screen.dart';
 import 'package:naboo/services/permission_service.dart';
 import 'package:naboo/verticals/oil_change/home/oil_change_home_dashboard.dart';
 import 'package:naboo/verticals/oil_change/shell/oil_change_shell_screen.dart';
@@ -80,6 +81,30 @@ void main() {
       await _finish(tester);
     });
   }
+
+  testWidgets('التحول من الرئيسية العامة إلى الغلاف لا يكسر المحتوى', (
+    tester,
+  ) async {
+    // جهاز جديد: يبدأ بالقطاع العام ثم تصل إعدادات المتجر فيتحول إلى الزيت.
+    final showShell = ValueNotifier<bool>(false);
+    addTearDown(showShell.dispose);
+    await pumpEmployeeHome(
+      tester,
+      ValueListenableBuilder<bool>(
+        valueListenable: showShell,
+        builder: (_, shell, _) => shell
+            ? OilChangeShellScreen(canOverride: (_) => true)
+            : const HomeScreen(),
+      ),
+    );
+
+    showShell.value = true;
+    await _wait(tester, 1200);
+
+    expect(tester.takeException(), isNull);
+    expect(find.byType(OilChangeHomeDashboard), findsOneWidget);
+    await _finish(tester);
+  });
 
   testWidgets('الهاتف: الشريط السفلي يبقى داخل الصفحات', (tester) async {
     await _pumpShell(tester, size: _phone);

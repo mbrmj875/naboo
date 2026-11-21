@@ -1,4 +1,4 @@
-# إعداد بريد رمز التحقق (8 أرقام) — naboo
+# إعداد بريد رمز التحقق (6 أرقام) — naboo
 
 التطبيق يستدعي `signInWithOtp` بدون رابط → Supabase يستخدم قالب **Magic link or OTP**.
 
@@ -54,7 +54,7 @@ https://supabase.com/dashboard/project/rkofqwcuvbzrnmelvxhz/auth/templates/magic
 
 **Authentication** → **Sign In / Providers** → **Email**
 
-- **OTP length:** `8` (إن وُجد)
+- **OTP length:** `6` (الحد الأدنى في اللوحة؛ يجب أن يطابق `OtpConfig.emailOtpLength` في التطبيق)
 - **OTP expiry:** `3600` (60 دقيقة)
 
 ---
@@ -80,7 +80,7 @@ https://supabase.com/dashboard/project/rkofqwcuvbzrnmelvxhz/auth/templates/magic
 | **Your sign-in link** | لم تُحفظ **Magic link or OTP** بعد |
 | **رمز الدخول — نابو** | صحيح |
 | يظهر الاسم **نابو** (وليس نبو) | صحيح |
-| يظهر **8 أرقام** في الصندوق | أدخلها في التطبيق |
+| يظهر **6 أرقام** في الصندوق | أدخلها في التطبيق |
 
 ## متغيرات القالب
 

@@ -91,10 +91,10 @@ export function defaultAppRemoteConfig(): AppRemoteConfigPayload {
     min_supported_version: "1.0.0",
     latest_version: "2.2.35",
     update_message_ar:
-      "يتوفر تحديث جديد. اضغط «تحديث الآن» لتحميل وتثبيت النسخة الأحدث.",
+      "يتوفر تحديث جديد. اضغط «تحديث الآن» لتثبيت النسخة الأحدث.",
     force_update: false,
     update_download_url:
-      "https://github.com/mbrmj875/naboo/releases/download/v2.2.35/naboo.apk",
+      "https://play.google.com/store/apps/details?id=com.basra.storemanager.app",
     update_download_url_windows:
       "https://github.com/mbrmj875/naboo/releases/download/v2.2.35/naboo-windows-setup.exe",
     announcement_title_ar: "",
