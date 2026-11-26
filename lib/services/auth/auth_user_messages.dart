@@ -15,6 +15,8 @@ abstract final class AuthUserMessages {
       'البريد الإلكتروني أو رمز PIN غير صحيح.';
 
   static const wrongPin = 'رمز الدخول غير صحيح.';
+  static const wrongPinAfterEmailVerified =
+      'رمز البريد صحيح، لكن رمز PIN غير صحيح. ارجع وأدخل رمز PIN الصحيح.';
 
   static const googleUnavailable =
       'تعذر فتح Google على هذا الجهاز. استخدم البريد ورمز PIN أو أنشئ حساباً جديداً.';

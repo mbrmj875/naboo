@@ -1,8 +1,15 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
 
-/// أقصى ضلع للشعار بعد التصغير — 512 بكسل تكفي لعرض 80 مم على الطابعة الحرارية.
-const int kStoreLogoMaxSide = 512;
+/// أقصى ضلع للشعار بعد التصغير. الإيصال يطبعه بارتفاع 56 نقطة (حوالي 20 مم،
+/// أي 160 نقطة حرارية)، فـ 256 بكسل تكفي بضعف الدقة. الشعار يُرسل مع ملف الفرع
+/// في كل مزامنة، وشعار 512 الشفاف كان 170 KB.
+const int kStoreLogoMaxSide = 256;
+
+/// شعار محفوظ أكبر من هذا (بطول نص base64) صُغّر قبل هذا الحد، فيُصغَّر مرة.
+const int kStoreLogoShrinkAboveB64 = 64 * 1024;
 
 /// جودة JPEG للشعارات الصُّوَريّة — توازن بين الوضوح وحجم السجلّ.
 const int _jpegQuality = 85;
@@ -60,4 +67,21 @@ Future<Uint8List?> prepareStoreLogo(
   int maxSide = kStoreLogoMaxSide,
 }) {
   return compute(encodeStoreLogo, StoreLogoInput(raw, maxSide: maxSide));
+}
+
+/// شعار محفوظ بحد قديم: يعيده أصغر، أو null إن كان صغيراً أصلاً أو تالفاً أو
+/// لم يصغر بإعادة الترميز.
+Future<String?> shrinkStoredLogo(String base64Logo) async {
+  final raw = base64Logo.trim();
+  if (raw.length <= kStoreLogoShrinkAboveB64) return null;
+  final Uint8List bytes;
+  try {
+    bytes = base64Decode(raw);
+  } catch (_) {
+    return null;
+  }
+  final out = await prepareStoreLogo(bytes);
+  if (out == null) return null;
+  final next = base64Encode(out);
+  return next.length < raw.length ? next : null;
 }

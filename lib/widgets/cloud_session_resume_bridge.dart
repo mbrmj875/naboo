@@ -40,6 +40,7 @@ class _CloudSessionResumeBridgeState extends State<CloudSessionResumeBridge>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    CloudSessionLinkController.instance.watchConnectivity();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(_runSessionCare(reason: 'startup'));
       _scheduleNextHeartbeat();
@@ -164,6 +165,12 @@ class CloudSessionSurface extends StatelessWidget {
           phase: link.phase,
           localContinue: link.localContinue,
           deviceOwnerBound: auth.deviceOwnerBound,
+          offline: link.offline,
+        );
+        final offlineLocked = shouldShowCloudOfflineLockedBanner(
+          phase: link.phase,
+          deviceOwnerBound: auth.deviceOwnerBound,
+          offline: link.offline,
         );
         final banner = shouldShowCloudDegradedBanner(
           phase: link.phase,
@@ -178,6 +185,10 @@ class CloudSessionSurface extends StatelessWidget {
           children: [
             Column(
               children: [
+                if (offlineLocked)
+                  const CloudOfflineLockedBanner()
+                else
+                  const SizedBox.shrink(),
                 if (banner)
                   const CloudDegradedBanner()
                 else
@@ -185,7 +196,7 @@ class CloudSessionSurface extends StatelessWidget {
                 Expanded(
                   child: MediaQuery.removePadding(
                     context: context,
-                    removeTop: banner,
+                    removeTop: banner || offlineLocked,
                     child: child,
                   ),
                 ),

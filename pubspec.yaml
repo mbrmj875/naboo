@@ -1,7 +1,7 @@
 name: naboo
 description: Naboo — multi-vertical store management (pharmacy, retail, oil change, and more)
 publish_to: 'none'
-version: 2.2.42+266
+version: 2.2.43+267
 
 environment:
   sdk: '>=3.11.0 <4.0.0'
@@ -25,6 +25,8 @@ dependencies:
   path_provider: ^2.1.2
   shared_preferences: ^2.2.0
   flutter_secure_storage: ^8.1.0
+  # تشفير جلسة ويندوز بـ DPAPI عبر FFI في عزلة خلفية (البند 5.3).
+  ffi: ^2.2.0
   connectivity_plus: ^7.0.0
   image_picker: ^1.0.7
   image: ^4.5.4

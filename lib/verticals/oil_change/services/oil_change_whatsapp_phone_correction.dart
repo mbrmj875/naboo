@@ -16,6 +16,17 @@ class OilChangeWhatsappPhoneCorrection {
   static final OilChangeWhatsappPhoneCorrection instance =
       OilChangeWhatsappPhoneCorrection._();
 
+  /// رقم البطاقة محلي وقد يدل على بطاقة أخرى على هذا الجهاز، فلا نعدّل إلا بطاقة بالهاتف القديم نفسه.
+  Future<bool> _orderStillHasPhone(int orderId, String oldPhone) async {
+    final order =
+        await ServiceOrdersRepository.instance.getServiceOrderById(orderId);
+    if (order == null) return false;
+    final current = (order['customerPhone'] ?? '').toString().trim();
+    if (current.isEmpty) return true;
+    return CustomerValidation.phoneMatchKey(current) ==
+        CustomerValidation.phoneMatchKey(oldPhone);
+  }
+
   /// يعيد null عند النجاح، أو رسالة عربية عند الفشل.
   Future<String?> correctPhoneAndResend({
     required String newPhoneRaw,
@@ -38,7 +49,7 @@ class OilChangeWhatsappPhoneCorrection {
 
     final orderId = int.tryParse(orderRef.trim()) ?? 0;
     try {
-      if (orderId > 0) {
+      if (orderId > 0 && await _orderStillHasPhone(orderId, oldPhone)) {
         await OilChangeOrdersRepository.instance.updateOilChangeOrder(
           orderId,
           customerPhone: newPhone,

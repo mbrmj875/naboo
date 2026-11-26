@@ -9,7 +9,14 @@ import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import 'package:uuid/uuid.dart';
+import 'catalog_identity.dart';
+import 'change_capture.dart';
+import 'sync_safety.dart';
+import 'sync_tombstones.dart';
+import 'stock_ledger.dart';
+import 'local_device.dart';
 import 'cloud_sync_service.dart';
+import 'db_file_parking.dart';
 import 'marketplace/marketplace_catalog_sync_service.dart';
 import 'customer_delete_guard.dart';
 import 'supplier_statement.dart';
@@ -121,12 +128,14 @@ class DatabaseHelper {
     await ensureSuppliersGlobalIdSchema(db);
     await ensureCategoriesBrandsGlobalIdSchema(db);
     await ensureProductsGlobalIdSchema(db);
+    await StockLedger.ensureSchema(db);
     await ensureInvoicesGlobalIdSchema(db);
     await ensureFinancialGlobalIdSchema(db);
     await ensureUserDirectoryGlobalIdSchema(db);
     await ensureBusinessAuditEventsTable(db);
     await ensureServiceOrdersReadRepair();
     await ensureOwnerDashboardQueryIndexes(db);
+    await _flushMigrationIssues(db);
   }
 
   /// جدول تدقيق محلي لمركز قيادة المالك — retention 90 يوم.
@@ -210,6 +219,45 @@ class DatabaseHelper {
     }
   }
 
+  /// تبديل الحساب السحابي دون حذف شيء (البند 5.1): يُحفظ ملف المالك السابق
+  /// جانباً باسمه، ويُستعاد ملف الحساب الجديد إن كان محفوظاً على هذا الجهاز.
+  /// يعيد true إن استُعيد ملف. على الويب يبقى السلوك القديم (حذف).
+  ///
+  /// إن تعذر نقل الملف يُرمى خطأ ولا يُحذف شيء، فضياع بيع أسوأ من تعثر دخول.
+  Future<bool> closeAndSwapAccountDatabaseFile({
+    required String parkAs,
+    required String restoreFor,
+  }) async {
+    final parking = DbFileParking.instance;
+    if (!parking.supported) {
+      await closeAndDeleteDatabaseFile();
+      return false;
+    }
+    await _closeDatabase();
+    final path = join(await getDatabasesPath(), 'business_app.db');
+    final parked = await parking.park(path, parkAs);
+    final restored = await parking.restore(path, restoreFor);
+    AppLogger.info(
+      'DatabaseHelper',
+      'account file swap: parked=${parked != null} restored=$restored',
+    );
+    return restored;
+  }
+
+  Future<void> _closeDatabase() async {
+    final pending = _opening;
+    _opening = null;
+    if (pending != null) {
+      try {
+        await pending;
+      } catch (_) {}
+    }
+    if (_database != null) {
+      await _database!.close();
+      _database = null;
+    }
+  }
+
   /// إغلاق ملف SQLite وحذفه — عند تبديل حساب سحابي (يُعاد إنشاء الملف عند أول وصول لاحق).
   Future<void> closeAndDeleteDatabaseFile() async {
     final pending = _opening;
@@ -217,7 +265,9 @@ class DatabaseHelper {
     if (pending != null) {
       try {
         await pending;
-      } catch (_) {}
+      } catch (e, st) {
+        DbMigrationSafety.noteIgnored('closeAndDeleteDatabaseFile#1', e, st);
+      }
     }
     if (_database != null) {
       await _database!.close();
@@ -242,12 +292,15 @@ class DatabaseHelper {
         final rows = await txn.rawQuery(
           "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
         );
-        const keep = {'users', 'android_metadata'};
+        // الإفراغ ليس حذفاً يُرسل لبقية الأجهزة: الالتقاط متوقف أثناءه.
+        await ChangeCapture.setPaused(txn, true);
+        const keep = {'users', 'android_metadata', ChangeCapture.ctlTable};
         for (final r in rows) {
           final name = (r['name'] ?? '').toString();
           if (name.isEmpty || keep.contains(name)) continue;
           await txn.delete(name);
         }
+        await ChangeCapture.setPaused(txn, false);
       });
     } catch (e, st) {
       if (kDebugMode) {
@@ -315,16 +368,19 @@ class DatabaseHelper {
   Future<void> ensureCarWashServicesSchema() async {
     final db = await database;
     await _ensureCarWashServicesTable(db);
+    await CatalogIdentity.ensure(db);
   }
 
   Future<void> ensureOilChangeOilCatalogSchema() async {
     final db = await database;
     await _ensureOilChangeOilCatalogTable(db);
+    await CatalogIdentity.ensure(db);
   }
 
   Future<void> ensureOilChangeHydraulicCatalogSchema() async {
     final db = await database;
     await _ensureOilChangeHydraulicCatalogTable(db);
+    await CatalogIdentity.ensure(db);
   }
 
   Future<void> ensureOilChangeFilterCatalogSchema() async {
@@ -332,6 +388,7 @@ class DatabaseHelper {
     await _ensureOilChangeFilterKindsTable(db);
     await _ensureOilChangeFilterCatalogTable(db);
     await _ensureServiceOrdersOilChangeFilterColumns(db);
+    await CatalogIdentity.ensure(db);
   }
 
   Future<void> _ensureOilChangeFilterKindsTable(Database db) async {
@@ -359,8 +416,12 @@ class DatabaseHelper {
           ON oil_change_filter_kinds(tenantId, code)
           WHERE deletedAt IS NULL
         ''');
-      } catch (_) {}
-    } catch (_) {}
+      } catch (e, st) {
+        DbMigrationSafety.noteIgnored('_ensureOilChangeFilterKindsTable#1', e, st);
+      }
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureOilChangeFilterKindsTable#2', e, st);
+    }
   }
 
   /// Migration 49: Pharmacy vertical catalog
@@ -396,7 +457,9 @@ class DatabaseHelper {
         'CREATE INDEX IF NOT EXISTS idx_oil_change_services_tenant '
         'ON oil_change_services(tenantId, deletedAt, sortOrder)',
       );
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureOilChangeServicesTable#1', e, st);
+    }
   }
 
   Future<void> _ensureCarWashServicesTable(Database db) async {
@@ -417,7 +480,9 @@ class DatabaseHelper {
         'CREATE INDEX IF NOT EXISTS idx_car_wash_services_tenant '
         'ON car_wash_services(tenantId, deletedAt, sortOrder)',
       );
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureCarWashServicesTable#1', e, st);
+    }
   }
 
   Future<void> _ensureOilChangeOilCatalogTable(Database db) async {
@@ -449,8 +514,12 @@ class DatabaseHelper {
           )
           WHERE deletedAt IS NULL
         ''');
-      } catch (_) {}
-    } catch (_) {}
+      } catch (e, st) {
+        DbMigrationSafety.noteIgnored('_ensureOilChangeOilCatalogTable#1', e, st);
+      }
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureOilChangeOilCatalogTable#2', e, st);
+    }
   }
 
   Future<void> _ensureOilChangeHydraulicCatalogTable(Database db) async {
@@ -482,8 +551,12 @@ class DatabaseHelper {
           )
           WHERE deletedAt IS NULL
         ''');
-      } catch (_) {}
-    } catch (_) {}
+      } catch (e, st) {
+        DbMigrationSafety.noteIgnored('_ensureOilChangeHydraulicCatalogTable#1', e, st);
+      }
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureOilChangeHydraulicCatalogTable#2', e, st);
+    }
   }
 
   Future<void> _ensureOilChangeFilterCatalogTable(Database db) async {
@@ -519,8 +592,12 @@ class DatabaseHelper {
           )
           WHERE deletedAt IS NULL AND LENGTH(TRIM(name)) > 0
         ''');
-      } catch (_) {}
-    } catch (_) {}
+      } catch (e, st) {
+        DbMigrationSafety.noteIgnored('_ensureOilChangeFilterCatalogTable#1', e, st);
+      }
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureOilChangeFilterCatalogTable#2', e, st);
+    }
   }
 
   /// الإصدار 52 — استثناء العميل من إعدادات الدين العامة (من صفحته):
@@ -579,7 +656,9 @@ class DatabaseHelper {
           await db.execute('ALTER TABLE service_orders ADD COLUMN $col $type');
         }
       }
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureServiceOrdersOilChangeFilterColumns#1', e, st);
+    }
   }
 
   Future<Database> _initDatabase() async {
@@ -607,6 +686,10 @@ class DatabaseHelper {
         } catch (_) {
           // Some platforms/configurations may not support WAL; ignore safely.
         }
+        // ترقية القاعدة وإصلاحات الفتح صيانة محلية يجريها كل جهاز بنفسه:
+        // لا تُلتقط، وإلا وصل حذف إصلاح محلي إلى كل الأجهزة. يعود الالتقاط
+        // في آخر [_onOpen].
+        await ChangeCapture.setPaused(db, true);
       },
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
@@ -644,6 +727,7 @@ class DatabaseHelper {
     await ensureSuppliersGlobalIdSchema(db);
     await ensureCategoriesBrandsGlobalIdSchema(db);
     await ensureProductsGlobalIdSchema(db);
+    await StockLedger.ensureSchema(db);
     await ensureInvoicesGlobalIdSchema(db);
     await _ensureInvoiceItemsUnitCost(db);
     await _ensureProductUnitVariantsSchema(db);
@@ -660,11 +744,18 @@ class DatabaseHelper {
     await _ensureOilChangeOilCatalogTable(db);
     await _ensureOilChangeHydraulicCatalogTable(db);
     await _ensureOilChangeFilterCatalogTable(db);
+    // البند 1.9: الاستيراد من السحابة يتخطى الجداول غير الموجودة محلياً، فكانت
+    // هذه الثلاثة تُنشأ فارغة لاحقاً وتُرفع فارغة فوق بيانات الخادم.
+    await _ensureOilChangeFilterKindsTable(db);
+    await _ensureOilChangeServicesTable(db);
+    await _ensureCarWashServicesTable(db);
     await _ensureServiceOrdersOilChangeFilterColumns(db);
     await _ensureCustomerDebtExceptionColumns(db);
     await _ensureServiceOrdersOdometerUnit(db);
+    await CatalogIdentity.ensure(db);
     await ensureOilProductGradesSchema(db);
     await ensureBusinessAuditEventsTable(db);
+    await LogIdentity.ensure(db);
     await ensureOwnerDashboardQueryIndexes(db);
     await ensurePharmacyCatalogTables(db);
     await ensureRestaurantTables(db);
@@ -674,6 +765,43 @@ class DatabaseHelper {
       await VehicleRegistry.reconcile(db);
     } catch (e, st) {
       AppLogger.error('DatabaseHelper', 'vehicle registry setup failed', e, st);
+    }
+    // آخر خطوة: المشغّلات تُبنى على الجداول والأعمدة بعد اكتمال الترقية.
+    await ChangeCapture.ensure(db);
+    await ChangeCapture.setPaused(db, false);
+    await _flushMigrationIssues(db);
+  }
+
+  /// يحفظ أخطاء الترقية التي أُهملت في جدول محلي (آخر 200 فقط).
+  /// لا يرمي أبداً: فتح القاعدة أهم من حفظ السجل.
+  Future<void> _flushMigrationIssues(Database db) async {
+    final issues = DbMigrationSafety.takePending();
+    if (issues.isEmpty) return;
+    try {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS local_migration_issues (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          label TEXT NOT NULL,
+          error TEXT NOT NULL,
+          at TEXT NOT NULL
+        )
+      ''');
+      final batch = db.batch();
+      for (final i in issues) {
+        batch.insert('local_migration_issues', {
+          'label': i.label,
+          'error': i.error,
+          'at': i.at.toIso8601String(),
+        });
+      }
+      batch.execute(
+        'DELETE FROM local_migration_issues WHERE id NOT IN '
+        '(SELECT id FROM local_migration_issues ORDER BY id DESC LIMIT '
+        '${DbMigrationSafety.maxStoredIssues})',
+      );
+      await batch.commit(noResult: true);
+    } catch (e, st) {
+      AppLogger.error('Migration', 'flush issues failed', e, st);
     }
   }
 
@@ -826,7 +954,9 @@ class DatabaseHelper {
         );
       }
       await _ensureServiceOrdersOilChangeFilterColumns(db);
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureOilChangeStockLinkColumns#1', e, st);
+    }
   }
 
   /// مرحلة 1 زيوت: متوسط تكلفة/مستودع + لقطات وحدة على بنود السند.
@@ -867,7 +997,9 @@ class DatabaseHelper {
           'ALTER TABLE stock_voucher_items ADD COLUMN baseQty REAL',
         );
       }
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureOilVolumeStockPhase1Schema#1', e, st);
+    }
   }
 
   Future<void> _ensureServicesAndJobTicketsSchema(Database db) async {
@@ -960,7 +1092,9 @@ class DatabaseHelper {
         'CREATE INDEX IF NOT EXISTS idx_service_orders_invoice_lookup '
         'ON service_orders(tenantId, invoiceId)',
       );
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_recreateServiceOrdersIndexes#1', e, st);
+    }
   }
 
   /// إصدارات قديمة قد تكون أنشأت الجدول بدون عمود الحذف الناعم (camelCase).
@@ -972,7 +1106,9 @@ class DatabaseHelper {
           'ALTER TABLE service_orders ADD COLUMN deletedAt TEXT',
         );
       }
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureServiceOrdersCamelDeletedAt#1', e, st);
+    }
   }
 
   Future<void> _ensureServiceOrderItemsCamelDeletedAt(Database db) async {
@@ -983,7 +1119,9 @@ class DatabaseHelper {
           'ALTER TABLE service_order_items ADD COLUMN deletedAt TEXT',
         );
       }
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureServiceOrderItemsCamelDeletedAt#1', e, st);
+    }
   }
 
   /// بعد مسح بيانات العمل: يضمن وجود صف مستأجر نشط واحد على الأقل.
@@ -1009,11 +1147,12 @@ class DatabaseHelper {
         'isActive': 1,
         'createdAt': nowIso,
       }, conflictAlgorithm: ConflictAlgorithm.ignore);
-      // تنشيط صريح لـ id=1 إن وُجد معطّلاً سابقاً.
+      // تنشيط صريح لـ id=1 إن وُجد معطّلاً سابقاً. لا كتابة إن كان نشطاً، فلا
+      // يُلتقط تعديل وهمي عند كل فتح (المرحلة 3).
       await db.update(
         'tenants',
         {'isActive': 1},
-        where: 'id = ?',
+        where: 'id = ? AND isActive IS NOT 1',
         whereArgs: <Object?>[1],
       );
 
@@ -1069,7 +1208,9 @@ class DatabaseHelper {
           'ALTER TABLE service_orders ADD COLUMN promisedDeliveryAt TEXT',
         );
       }
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureServiceOrdersEtaColumns#1', e, st);
+    }
   }
 
   /// وقت بدء العمل الفعلي — أساس عدّ موعد التسليم بعد زر «بدء العمل».
@@ -1080,7 +1221,9 @@ class DatabaseHelper {
           'ALTER TABLE service_orders ADD COLUMN workStartedAt TEXT',
         );
       }
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureServiceOrdersWorkStartedAtColumn#1', e, st);
+    }
   }
 
   /// نوع السجل: repair | oil_change — فصل غيار الزيت عن تذاكر الصيانة.
@@ -1100,7 +1243,9 @@ class DatabaseHelper {
             OR (odometerCurrent IS NOT NULL AND TRIM(odometerCurrent) != '')
           )
       ''');
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureServiceOrdersOrderKind#1', e, st);
+    }
   }
 
   /// أعمدة إضافية لبطاقة صيانة وتغيير زيت السيارات
@@ -1123,7 +1268,9 @@ class DatabaseHelper {
           await db.execute('ALTER TABLE service_orders ADD COLUMN $col TEXT');
         }
       }
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureServiceOrdersOilChangeColumns#1', e, st);
+    }
   }
 
   Future<void> _ensureProductsServiceColumns(Database db) async {
@@ -1140,7 +1287,9 @@ class DatabaseHelper {
         'CREATE INDEX IF NOT EXISTS idx_products_isService '
         'ON products(tenantId, isService)',
       );
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureProductsServiceColumns#1', e, st);
+    }
   }
 
   Future<void> _ensureServiceOrdersSchema(Database db) async {
@@ -1173,7 +1322,9 @@ class DatabaseHelper {
           FOREIGN KEY(invoiceId) REFERENCES invoices(id) ON DELETE SET NULL
         )
       ''');
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureServiceOrdersSchema#1', e, st);
+    }
 
     try {
       await db.execute(
@@ -1188,7 +1339,9 @@ class DatabaseHelper {
         'CREATE INDEX IF NOT EXISTS idx_service_orders_invoice_lookup '
         'ON service_orders(tenantId, invoiceId)',
       );
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureServiceOrdersSchema#2', e, st);
+    }
   }
 
   Future<void> _ensureServiceOrderItemsSchema(Database db) async {
@@ -1210,7 +1363,9 @@ class DatabaseHelper {
           FOREIGN KEY(productId) REFERENCES products(id) ON DELETE RESTRICT
         )
       ''');
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureServiceOrderItemsSchema#1', e, st);
+    }
 
     try {
       await db.execute(
@@ -1221,7 +1376,9 @@ class DatabaseHelper {
         'CREATE INDEX IF NOT EXISTS idx_service_order_items_product_stats '
         'ON service_order_items(tenantId, deletedAt, productId)',
       );
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureServiceOrderItemsSchema#2', e, st);
+    }
   }
 
   Future<void> _ensureInvoiceItemsClothingVariantSnapshots(Database db) async {
@@ -1245,14 +1402,18 @@ class DatabaseHelper {
           'ALTER TABLE invoice_items ADD COLUMN variantSizeSnapshot TEXT',
         );
       }
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureInvoiceItemsClothingVariantSnapshots#1', e, st);
+    }
 
     try {
       await db.execute(
         'CREATE INDEX IF NOT EXISTS idx_invoice_items_productVariantId '
         'ON invoice_items(productVariantId)',
       );
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureInvoiceItemsClothingVariantSnapshots#2', e, st);
+    }
   }
 
   // PR-4: global_id حرج للمزامنة — استبدلنا catch (_) {} الصامت بـ runIdempotent.
@@ -1290,7 +1451,9 @@ class DatabaseHelper {
           whereArgs: [id],
         );
       }
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureProductVariantsGlobalIds#1', e, st);
+    }
 
     try {
       final uuid = const Uuid();
@@ -1309,20 +1472,26 @@ class DatabaseHelper {
           whereArgs: [id],
         );
       }
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureProductVariantsGlobalIds#2', e, st);
+    }
 
     try {
       await db.execute(
         'CREATE INDEX IF NOT EXISTS idx_product_colors_global_id '
         'ON product_colors(global_id)',
       );
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureProductVariantsGlobalIds#3', e, st);
+    }
     try {
       await db.execute(
         'CREATE INDEX IF NOT EXISTS idx_product_variants_global_id '
         'ON product_variants(global_id)',
       );
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureProductVariantsGlobalIds#4', e, st);
+    }
   }
 
   // PR-4 (roadmap_phase2_execution_v1 §4): migrations مالية حرجة مع
@@ -1500,7 +1669,9 @@ class DatabaseHelper {
               AND IFNULL(u.passwordSalt, '') != ''
           )
       ''');
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureUserProfilesPinColumns#1', e, st);
+    }
   }
 
   /// منتجات مثبّتة في لوحة التحكم — بطاقة وصول سريع لفاتورة جديدة.
@@ -1517,7 +1688,9 @@ class DatabaseHelper {
       await db.execute(
         'CREATE INDEX IF NOT EXISTS idx_products_pinned ON products(isPinned, pinnedAt)',
       );
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureProductPinning#1', e, st);
+    }
   }
 
   Future<void> _ensureProductsTenantScopedProductCodeUnique(Database db) async {
@@ -1665,12 +1838,16 @@ class DatabaseHelper {
           FOREIGN KEY(productId) REFERENCES products(id) ON DELETE CASCADE
         )
       ''');
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureProductUnitVariantsSchema#1', e, st);
+    }
     try {
       await db.execute(
         'CREATE INDEX IF NOT EXISTS idx_puv_productId ON product_unit_variants(productId)',
       );
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureProductUnitVariantsSchema#2', e, st);
+    }
     // Unique barcode when present (SQLite supports partial indexes).
     try {
       await db.execute('''
@@ -1678,12 +1855,16 @@ class DatabaseHelper {
         ON product_unit_variants(barcode)
         WHERE barcode IS NOT NULL AND TRIM(barcode) != ''
       ''');
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureProductUnitVariantsSchema#3', e, st);
+    }
     try {
       await db.execute(
         'CREATE INDEX IF NOT EXISTS idx_puv_active ON product_unit_variants(productId, isActive)',
       );
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureProductUnitVariantsSchema#4', e, st);
+    }
   }
 
   /// تخزين معلومات الوحدة المُدخلة وقت البيع، مع إبقاء `quantity` = الكمية الأساسية لضمان عدم كسر المخزون والتقارير.
@@ -1710,7 +1891,9 @@ class DatabaseHelper {
       if (!await _tableHasColumn(db, 'invoice_items', 'baseQty')) {
         await db.execute('ALTER TABLE invoice_items ADD COLUMN baseQty REAL');
       }
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureInvoiceItemsUnitSnapshots#1', e, st);
+    }
 
     // Backfill القديمة: عامل 1، المُدخل = الأساسي.
     try {
@@ -1728,14 +1911,18 @@ class DatabaseHelper {
           )
         WHERE unitFactor IS NULL OR enteredQty IS NULL OR baseQty IS NULL OR unitLabel IS NULL
       ''');
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureInvoiceItemsUnitSnapshots#2', e, st);
+    }
 
     // فهارس مساعدة للفواتير/التقارير.
     try {
       await db.execute(
         'CREATE INDEX IF NOT EXISTS idx_invoice_items_unitVariantId ON invoice_items(unitVariantId)',
       );
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureInvoiceItemsUnitSnapshots#3', e, st);
+    }
   }
 
   /// نوع وحدة المخزون الأساسية للمنتج:
@@ -1750,7 +1937,9 @@ class DatabaseHelper {
           'ALTER TABLE products ADD COLUMN stockBaseKind INTEGER NOT NULL DEFAULT 0',
         );
       }
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureProductsBaseStockKind#1', e, st);
+    }
     // إنشاء variant افتراضي (factor=1) لكل منتج نشط بلا وحدة — دفعة واحدة
     // لتفادي معاملة طويلة (N×استعلام) تسبب قفل SQLite وتحذيرات busy_timeout.
     try {
@@ -1790,7 +1979,9 @@ class DatabaseHelper {
             LIMIT 1
           )
       ''');
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureProductsBaseStockKind#2', e, st);
+    }
   }
 
   /// عمود التكلفة المثبّتة وقت البيع على سطر الفاتورة.
@@ -1801,7 +1992,9 @@ class DatabaseHelper {
       if (!await _tableHasColumn(db, 'invoice_items', 'unitCost')) {
         await db.execute('ALTER TABLE invoice_items ADD COLUMN unitCost REAL');
       }
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureInvoiceItemsUnitCost#1', e, st);
+    }
     try {
       await db.rawUpdate('''
         UPDATE invoice_items
@@ -1811,7 +2004,9 @@ class DatabaseHelper {
         )
         WHERE unitCost IS NULL
       ''');
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureInvoiceItemsUnitCost#2', e, st);
+    }
   }
 
   /// [paidAmount] في الخطة = مقدّم الفاتورة + مجموع أقساط الجدول المسدّدة (لا مجموع الأقساط وحده).
@@ -1876,7 +2071,9 @@ class DatabaseHelper {
           invoiceId: row['invoiceId'] as int?,
         );
       }
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_reconcileInstallmentPlanPaidAmounts#1', e, st);
+    }
   }
 
   /// قواعد قديمة قد تفتقد جداول التقسيط (لم تُنشأ في [onUpgrade] السابق).
@@ -1910,7 +2107,9 @@ class DatabaseHelper {
           'ALTER TABLE installment_plans ADD COLUMN customerId INTEGER',
         );
       }
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureInstallmentTables#1', e, st);
+    }
   }
 
   Future<void> _onCreate(Database db, int version) async {
@@ -2075,34 +2274,44 @@ class DatabaseHelper {
           'ALTER TABLE customers ADD COLUMN loyaltyPoints INTEGER NOT NULL DEFAULT 0',
         );
       }
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureLoyaltySchema#1', e, st);
+    }
 
     try {
       if (!await _tableHasColumn(db, 'invoices', 'customerId')) {
         await db.execute('ALTER TABLE invoices ADD COLUMN customerId INTEGER');
       }
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureLoyaltySchema#2', e, st);
+    }
     try {
       if (!await _tableHasColumn(db, 'invoices', 'loyaltyDiscount')) {
         await db.execute(
           'ALTER TABLE invoices ADD COLUMN loyaltyDiscount REAL NOT NULL DEFAULT 0',
         );
       }
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureLoyaltySchema#3', e, st);
+    }
     try {
       if (!await _tableHasColumn(db, 'invoices', 'loyaltyPointsRedeemed')) {
         await db.execute(
           'ALTER TABLE invoices ADD COLUMN loyaltyPointsRedeemed INTEGER NOT NULL DEFAULT 0',
         );
       }
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureLoyaltySchema#4', e, st);
+    }
     try {
       if (!await _tableHasColumn(db, 'invoices', 'loyaltyPointsEarned')) {
         await db.execute(
           'ALTER TABLE invoices ADD COLUMN loyaltyPointsEarned INTEGER NOT NULL DEFAULT 0',
         );
       }
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureLoyaltySchema#5', e, st);
+    }
   }
 
   /// ترحيل لمرة واحدة: منتجات [stockBaseKind]=1 كانت تُخزَّن بالـ **غرام** وتُسعَّر للغرام؛
@@ -2187,7 +2396,9 @@ class DatabaseHelper {
         await db.execute(
           'ALTER TABLE products ADD COLUMN supplierItemCode TEXT',
         );
-      } catch (_) {}
+      } catch (e, st) {
+        DbMigrationSafety.noteIgnored('_onUpgrade#1', e, st);
+      }
     }
     if (oldVersion < 6) {
       await _migrateCategoriesHierarchy(db);
@@ -2200,19 +2411,25 @@ class DatabaseHelper {
         await db.execute(
           'ALTER TABLE invoices ADD COLUMN createdByUserName TEXT',
         );
-      } catch (_) {}
+      } catch (e, st) {
+        DbMigrationSafety.noteIgnored('_onUpgrade#2', e, st);
+      }
       try {
         await db.execute(
           'ALTER TABLE invoices ADD COLUMN discountPercent REAL NOT NULL DEFAULT 0',
         );
-      } catch (_) {}
+      } catch (e, st) {
+        DbMigrationSafety.noteIgnored('_onUpgrade#3', e, st);
+      }
     }
     if (oldVersion < 9) {
       try {
         await db.execute(
           'ALTER TABLE invoice_items ADD COLUMN productId INTEGER',
         );
-      } catch (_) {}
+      } catch (e, st) {
+        DbMigrationSafety.noteIgnored('_onUpgrade#4', e, st);
+      }
       await db.execute('''
         CREATE TABLE IF NOT EXISTS cash_ledger(
           id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2228,33 +2445,47 @@ class DatabaseHelper {
     if (oldVersion < 10) {
       try {
         await db.execute('ALTER TABLE products ADD COLUMN netWeightGrams REAL');
-      } catch (_) {}
+      } catch (e, st) {
+        DbMigrationSafety.noteIgnored('_onUpgrade#5', e, st);
+      }
       try {
         await db.execute(
           'ALTER TABLE products ADD COLUMN manufacturingDate TEXT',
         );
-      } catch (_) {}
+      } catch (e, st) {
+        DbMigrationSafety.noteIgnored('_onUpgrade#6', e, st);
+      }
       try {
         await db.execute('ALTER TABLE products ADD COLUMN expiryDate TEXT');
-      } catch (_) {}
+      } catch (e, st) {
+        DbMigrationSafety.noteIgnored('_onUpgrade#7', e, st);
+      }
     }
     if (oldVersion < 11) {
       try {
         await db.execute(
           'ALTER TABLE installment_plans ADD COLUMN customerId INTEGER',
         );
-      } catch (_) {}
+      } catch (e, st) {
+        DbMigrationSafety.noteIgnored('_onUpgrade#8', e, st);
+      }
     }
     if (oldVersion < 12) {
       try {
         await db.execute('ALTER TABLE users ADD COLUMN displayName TEXT');
-      } catch (_) {}
+      } catch (e, st) {
+        DbMigrationSafety.noteIgnored('_onUpgrade#9', e, st);
+      }
       try {
         await db.execute('ALTER TABLE users ADD COLUMN passwordSalt TEXT');
-      } catch (_) {}
+      } catch (e, st) {
+        DbMigrationSafety.noteIgnored('_onUpgrade#10', e, st);
+      }
       try {
         await db.execute('ALTER TABLE users ADD COLUMN passwordHash TEXT');
-      } catch (_) {}
+      } catch (e, st) {
+        DbMigrationSafety.noteIgnored('_onUpgrade#11', e, st);
+      }
     }
     if (oldVersion < 13) {
       await db.execute('''
@@ -2290,22 +2521,30 @@ class DatabaseHelper {
     if (oldVersion < 17) {
       try {
         await db.execute('ALTER TABLE invoices ADD COLUMN workShiftId INTEGER');
-      } catch (_) {}
+      } catch (e, st) {
+        DbMigrationSafety.noteIgnored('_onUpgrade#12', e, st);
+      }
       try {
         await db.execute(
           'ALTER TABLE work_shifts ADD COLUMN withdrawnAtClose REAL',
         );
-      } catch (_) {}
+      } catch (e, st) {
+        DbMigrationSafety.noteIgnored('_onUpgrade#13', e, st);
+      }
       try {
         await db.execute(
           'ALTER TABLE work_shifts ADD COLUMN declaredCashInBoxAtClose REAL',
         );
-      } catch (_) {}
+      } catch (e, st) {
+        DbMigrationSafety.noteIgnored('_onUpgrade#14', e, st);
+      }
     }
     if (oldVersion < 18) {
       try {
         await db.execute('ALTER TABLE customers ADD COLUMN notes TEXT');
-      } catch (_) {}
+      } catch (e, st) {
+        DbMigrationSafety.noteIgnored('_onUpgrade#15', e, st);
+      }
     }
     if (oldVersion < 19) {
       await _createPrintSettingsTable(db);
@@ -2315,25 +2554,35 @@ class DatabaseHelper {
         await db.execute(
           'ALTER TABLE customers ADD COLUMN loyaltyPoints INTEGER NOT NULL DEFAULT 0',
         );
-      } catch (_) {}
+      } catch (e, st) {
+        DbMigrationSafety.noteIgnored('_onUpgrade#16', e, st);
+      }
       try {
         await db.execute('ALTER TABLE invoices ADD COLUMN customerId INTEGER');
-      } catch (_) {}
+      } catch (e, st) {
+        DbMigrationSafety.noteIgnored('_onUpgrade#17', e, st);
+      }
       try {
         await db.execute(
           'ALTER TABLE invoices ADD COLUMN loyaltyDiscount REAL NOT NULL DEFAULT 0',
         );
-      } catch (_) {}
+      } catch (e, st) {
+        DbMigrationSafety.noteIgnored('_onUpgrade#18', e, st);
+      }
       try {
         await db.execute(
           'ALTER TABLE invoices ADD COLUMN loyaltyPointsRedeemed INTEGER NOT NULL DEFAULT 0',
         );
-      } catch (_) {}
+      } catch (e, st) {
+        DbMigrationSafety.noteIgnored('_onUpgrade#19', e, st);
+      }
       try {
         await db.execute(
           'ALTER TABLE invoices ADD COLUMN loyaltyPointsEarned INTEGER NOT NULL DEFAULT 0',
         );
-      } catch (_) {}
+      } catch (e, st) {
+        DbMigrationSafety.noteIgnored('_onUpgrade#20', e, st);
+      }
       await _createLoyaltyTables(db);
     }
     if (oldVersion < 21) {
@@ -2344,14 +2593,18 @@ class DatabaseHelper {
         if (!await _tableHasColumn(db, 'users', 'jobTitle')) {
           await db.execute('ALTER TABLE users ADD COLUMN jobTitle TEXT');
         }
-      } catch (_) {}
+      } catch (e, st) {
+        DbMigrationSafety.noteIgnored('_onUpgrade#21', e, st);
+      }
       try {
         if (!await _tableHasColumn(db, 'users', 'shiftAccessPin')) {
           await db.execute(
             "ALTER TABLE users ADD COLUMN shiftAccessPin TEXT NOT NULL DEFAULT ''",
           );
         }
-      } catch (_) {}
+      } catch (e, st) {
+        DbMigrationSafety.noteIgnored('_onUpgrade#22', e, st);
+      }
       final users = await db.query('users');
       for (final u in users) {
         final pin = (u['shiftAccessPin'] as String?) ?? '';
@@ -2372,7 +2625,9 @@ class DatabaseHelper {
             'ALTER TABLE cash_ledger ADD COLUMN workShiftId INTEGER',
           );
         }
-      } catch (_) {}
+      } catch (e, st) {
+        DbMigrationSafety.noteIgnored('_onUpgrade#23', e, st);
+      }
       try {
         await db.execute('''
           UPDATE cash_ledger
@@ -2382,7 +2637,9 @@ class DatabaseHelper {
           WHERE invoiceId IS NOT NULL
             AND workShiftId IS NULL
         ''');
-      } catch (_) {}
+      } catch (e, st) {
+        DbMigrationSafety.noteIgnored('_onUpgrade#24', e, st);
+      }
     }
     if (oldVersion < 24) {
       await _createInstallmentSettingsTable(db);
@@ -2444,7 +2701,9 @@ class DatabaseHelper {
           await db.execute(
             'ALTER TABLE products ADD COLUMN expiryAlertDaysBefore INTEGER',
           );
-        } catch (_) {}
+        } catch (e, st) {
+          DbMigrationSafety.noteIgnored('_onUpgrade#25', e, st);
+        }
       }
     }
     if (oldVersion < 39) {
@@ -2470,7 +2729,9 @@ class DatabaseHelper {
       if (!await _tableHasColumn(db, 'products', 'imageUrl')) {
         try {
           await db.execute('ALTER TABLE products ADD COLUMN imageUrl TEXT');
-        } catch (_) {}
+        } catch (e, st) {
+          DbMigrationSafety.noteIgnored('_onUpgrade#26', e, st);
+        }
       }
     }
     if (oldVersion < 42) {
@@ -2617,7 +2878,9 @@ class DatabaseHelper {
           await db.execute(
             'ALTER TABLE products ADD COLUMN ${e.key} ${e.value}',
           );
-        } catch (_) {}
+        } catch (e, st) {
+          DbMigrationSafety.noteIgnored('_ensureInventoryProductExtendedCols#1', e, st);
+        }
       }
     }
   }
@@ -2863,7 +3126,9 @@ class DatabaseHelper {
         WHERE invoiceId IS NOT NULL
           AND invoiceId NOT IN (SELECT id FROM invoices)
       ''');
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_repairInstallmentInvoiceLinkage#1', e, st);
+    }
     try {
       final dupInvoices = await db.rawQuery('''
         SELECT invoiceId FROM installment_plans
@@ -2908,12 +3173,16 @@ class DatabaseHelper {
           }
         }
       }
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_repairInstallmentInvoiceLinkage#2', e, st);
+    }
     try {
       await db.execute(
         'CREATE UNIQUE INDEX IF NOT EXISTS ux_installment_plans_invoiceId ON installment_plans(invoiceId)',
       );
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_repairInstallmentInvoiceLinkage#3', e, st);
+    }
   }
 
   /// أعمدة فائدة التقسيط على الفاتورة وعلى خطة التقسيط (ترقية 26+).
@@ -3056,7 +3325,9 @@ class DatabaseHelper {
         await db.execute(
           'ALTER TABLE customer_debt_payments ADD COLUMN $name $type',
         );
-      } catch (_) {}
+      } catch (e, st) {
+        DbMigrationSafety.noteIgnored('_ensureCustomerDebtPaymentsTable#1', e, st);
+      }
     }
 
     await addCol('global_id', 'TEXT');
@@ -3074,7 +3345,9 @@ class DatabaseHelper {
         'CREATE UNIQUE INDEX IF NOT EXISTS ux_customer_debt_payments_global_id '
         'ON customer_debt_payments(global_id) WHERE global_id IS NOT NULL',
       );
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_ensureCustomerDebtPaymentsTable#2', e, st);
+    }
   }
 
   /// موردون + وصولاتهم (ذمم دائنة AP) + دفعات للمورد.
@@ -3142,7 +3415,9 @@ class DatabaseHelper {
         await db.execute(
           'ALTER TABLE supplier_payouts ADD COLUMN receiptInvoiceId INTEGER',
         );
-      } catch (_) {}
+      } catch (e, st) {
+        DbMigrationSafety.noteIgnored('_ensureSupplierPayoutReceiptInvoiceColumn#1', e, st);
+      }
     }
   }
 
@@ -3158,7 +3433,9 @@ class DatabaseHelper {
         await db.execute(
           'ALTER TABLE supplier_bills ADD COLUMN linkedStockVoucherId INTEGER',
         );
-      } catch (_) {}
+      } catch (e, st) {
+        DbMigrationSafety.noteIgnored('_ensureSupplierBillStockLinkColumns#1', e, st);
+      }
     }
   }
 
@@ -3213,33 +3490,43 @@ class DatabaseHelper {
           'ALTER TABLE loyalty_ledger ADD COLUMN points INTEGER NOT NULL DEFAULT 0',
         );
       }
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_createLoyaltyTables#1', e, st);
+    }
     try {
       if (!await _tableHasColumn(db, 'loyalty_ledger', 'balanceAfter')) {
         await db.execute(
           'ALTER TABLE loyalty_ledger ADD COLUMN balanceAfter INTEGER NOT NULL DEFAULT 0',
         );
       }
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_createLoyaltyTables#2', e, st);
+    }
     try {
       if (!await _tableHasColumn(db, 'loyalty_ledger', 'kind')) {
         await db.execute(
           "ALTER TABLE loyalty_ledger ADD COLUMN kind TEXT NOT NULL DEFAULT 'earn'",
         );
       }
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_createLoyaltyTables#3', e, st);
+    }
     try {
       if (!await _tableHasColumn(db, 'loyalty_ledger', 'createdAt')) {
         await db.execute(
           "ALTER TABLE loyalty_ledger ADD COLUMN createdAt TEXT NOT NULL DEFAULT ''",
         );
       }
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_createLoyaltyTables#4', e, st);
+    }
     try {
       if (!await _tableHasColumn(db, 'loyalty_ledger', 'note')) {
         await db.execute('ALTER TABLE loyalty_ledger ADD COLUMN note TEXT');
       }
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_createLoyaltyTables#5', e, st);
+    }
     await db.execute(
       'CREATE INDEX IF NOT EXISTS idx_loyalty_ledger_customer ON loyalty_ledger(customerId)',
     );
@@ -3313,10 +3600,14 @@ class DatabaseHelper {
   Future<void> _migrateCategoriesHierarchy(Database db) async {
     try {
       await db.execute('ALTER TABLE categories ADD COLUMN parentId INTEGER');
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_migrateCategoriesHierarchy#1', e, st);
+    }
     try {
       await db.execute('ALTER TABLE categories ADD COLUMN description TEXT');
-    } catch (_) {}
+    } catch (e, st) {
+      DbMigrationSafety.noteIgnored('_migrateCategoriesHierarchy#2', e, st);
+    }
   }
 
   /// حقول إضافية للمنتج (وصف، صورة، ضريبة، saleUnit قديم اختياري، ملاحظات، وسوم، إلخ).
@@ -3324,7 +3615,9 @@ class DatabaseHelper {
     Future<void> addCol(String sql) async {
       try {
         await db.execute(sql);
-      } catch (_) {}
+      } catch (e, st) {
+        DbMigrationSafety.noteIgnored('_migrateProductsExtended#1', e, st);
+      }
     }
 
     await addCol('ALTER TABLE products ADD COLUMN description TEXT');

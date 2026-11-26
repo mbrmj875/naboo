@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:naboo/services/auth/cloud_session_link_state.dart';
 
@@ -147,6 +149,71 @@ void main() {
       link.markConnected();
       expect(link.phase, CloudSessionLinkPhase.connected);
       expect(link.localContinue, isFalse);
+    });
+  });
+
+  group('إعادة الربط إجبارية', () {
+    test('الحاجز يظهر مع الإنترنت ولا يمكن تخطيه', () {
+      expect(
+        shouldShowCloudReconnectGate(
+          phase: CloudSessionLinkPhase.locked,
+          localContinue: false,
+          deviceOwnerBound: true,
+          offline: false,
+        ),
+        isTrue,
+      );
+    });
+
+    test('بلا إنترنت: لا حاجز، بل شريط ثابت والبيع مستمر', () {
+      expect(
+        shouldShowCloudReconnectGate(
+          phase: CloudSessionLinkPhase.locked,
+          localContinue: false,
+          deviceOwnerBound: true,
+          offline: true,
+        ),
+        isFalse,
+      );
+      expect(
+        shouldShowCloudOfflineLockedBanner(
+          phase: CloudSessionLinkPhase.locked,
+          deviceOwnerBound: true,
+          offline: true,
+        ),
+        isTrue,
+      );
+    });
+
+    test('عودة الإنترنت تعيد الحاجز', () {
+      final link = CloudSessionLinkController.instance..resetForTest();
+      link.markLocked();
+      link.setOffline(true);
+      link.setOffline(false);
+      expect(
+        shouldShowCloudReconnectGate(
+          phase: link.phase,
+          localContinue: link.localContinue,
+          deviceOwnerBound: true,
+          offline: link.offline,
+        ),
+        isTrue,
+      );
+    });
+
+    test('الرجوع من شاشة الدخول بالبريد دون ربط يعيد الحاجز', () {
+      final link = CloudSessionLinkController.instance..resetForTest();
+      link.markLocked();
+      link.continueLocally();
+      link.endEmailSignInDetour();
+      expect(link.localContinue, isFalse);
+    });
+
+    test('الحاجز لا يعرض زر المتابعة بدون سحابة', () {
+      final src = File('lib/widgets/cloud_reconnect_gate.dart').readAsStringSync();
+      expect(src, isNot(contains('متابعة بدون سحابة')));
+      expect(src, isNot(contains('if (!AuthProvider.hasSilentGoogleRestore)')));
+      expect(src, contains('الدخول بالبريد ورمز PIN'));
     });
   });
 }

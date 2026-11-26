@@ -1172,6 +1172,21 @@ extension _OilFormSave on _OilChangeOrderFormScreenState {
     }
     if (_hydratingEdit || _saving) return;
 
+    // البند 4.3: الوردية قد تُغلق والشاشة مفتوحة. يُفحص قبل حفظ صف البطاقة،
+    // فلا تتغير البطاقة دون فاتورتها.
+    if (widget.amendInvoicedOrder &&
+        await PaidCardLock.isLocked(
+          await DatabaseHelper().database,
+          _editInvoiceId,
+        )) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text(PaidCardLock.message)),
+        );
+      }
+      return;
+    }
+
     if (widget.amendInvoicedOrder && intent == _OilSubmitIntent.suspend) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

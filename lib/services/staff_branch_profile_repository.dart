@@ -6,6 +6,7 @@ import '../utils/app_logger.dart';
 import 'app_settings_repository.dart';
 import 'cloud_sync_service.dart';
 import 'database_helper.dart';
+import 'store_logo_processor.dart';
 
 /// بيانات فرع كل موظف (اسم / عنوان / هاتف / شعار) فقط.
 ///
@@ -125,7 +126,9 @@ class StaffBranchProfileRepository {
           final fromGid = StaffBranchProfile.fromJsonString(
             (byGid.first['branchProfileJson'] ?? '').toString(),
           );
-          if (fromGid.hasIdentity) return fromGid;
+          if (fromGid.hasIdentity) {
+            return _shrinkLogoIfLarge(fromGid, userGlobalId: gid, userId: id);
+          }
         }
       }
 
@@ -162,6 +165,34 @@ class StaffBranchProfileRepository {
         st,
       );
       return StaffBranchProfile.empty();
+    }
+  }
+
+  /// شعار حُفظ بالحد القديم (512) يُرسل كاملاً مع كل تعديل للملف. يُصغَّر مرة
+  /// ويُحفظ؛ بعدها يبقى تحت الحد فلا يُعاد.
+  Future<StaffBranchProfile> _shrinkLogoIfLarge(
+    StaffBranchProfile profile, {
+    required String userGlobalId,
+    required int userId,
+  }) async {
+    if (userId <= 0) return profile;
+    try {
+      final smaller = await shrinkStoredLogo(profile.storeLogoBase64);
+      if (smaller == null) return profile;
+      final next = profile.copyWith(storeLogoBase64: smaller);
+      await saveForUser(
+        profile: next,
+        userGlobalId: userGlobalId,
+        userId: userId,
+      );
+      AppLogger.info(
+        'StaffBranchProfile',
+        'logo shrunk ${profile.storeLogoBase64.length} -> ${smaller.length}',
+      );
+      return next;
+    } catch (e) {
+      AppLogger.warn('StaffBranchProfile', 'logo shrink skipped :: $e');
+      return profile;
     }
   }
 

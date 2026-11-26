@@ -743,6 +743,7 @@ extension DbInvoices on DatabaseHelper {
               ? 'مورد'
               : invoice.customerName;
           await txn.insert('cash_ledger', {
+            ...SyncSafety.newCashGlobalIdField(),
             'tenantId': tenantId,
             'transactionType': 'supplier_payment',
             'amount': -invoice.total,
@@ -788,6 +789,7 @@ extension DbInvoices on DatabaseHelper {
                     : 'سند تسديد قسط #$id — $cust')
               : 'فاتورة بيع #${id.toString()} — $cust';
           await txn.insert('cash_ledger', {
+            ...SyncSafety.newCashGlobalIdField(),
             'tenantId': tenantId,
             'transactionType': typeLabel,
             'amount': cashAmount,
@@ -915,6 +917,7 @@ extension DbInvoices on DatabaseHelper {
       final refund = _cashAmountForInvoice(invoice);
       if (refund > 0) {
         await txn.insert('cash_ledger', {
+            ...SyncSafety.newCashGlobalIdField(),
           'tenantId': tenantId,
           'transactionType': 'sale_return',
           'amount': -refund,

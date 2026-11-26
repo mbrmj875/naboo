@@ -1,12 +1,10 @@
 import 'dart:async' show Timer, unawaited;
 
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../providers/global_barcode_route_bridge.dart';
-import '../../providers/theme_provider.dart';
 import '../../widgets/product_media_image.dart';
 import '../../providers/inventory_products_provider.dart';
 import '../../services/product_repository.dart';

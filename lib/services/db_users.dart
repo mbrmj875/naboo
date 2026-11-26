@@ -231,7 +231,6 @@ Future<void> _syncUserProfileRowForUserId(Transaction txn, int userId) async {
   String? staffUiPrefsJson;
   final existingProfiles = await txn.query(
     'user_profiles',
-    columns: const ['branchProfileJson', 'staffUiPrefsJson'],
     where: 'id = ?',
     whereArgs: [userId],
     limit: 1,
@@ -273,6 +272,10 @@ Future<void> _syncUserProfileRowForUserId(Transaction txn, int userId) async {
   if (staffUiPrefsJson != null) {
     profileMap['staffUiPrefsJson'] = staffUiPrefsJson;
   }
+  if (existingProfiles.isNotEmpty &&
+      _sameProfile(existingProfiles.first, profileMap)) {
+    return;
+  }
 
   await txn.insert(
     'user_profiles',
@@ -280,6 +283,13 @@ Future<void> _syncUserProfileRowForUserId(Transaction txn, int userId) async {
     conflictAlgorithm: ConflictAlgorithm.replace,
   );
 }
+
+/// ملف الموظف كما هو: لا كتابة. يُعاد بناؤه لكل موظف بعد كل استيراد، والكتابة
+/// تُلتقط تعديلاً يصل لكل الأجهزة.
+bool _sameProfile(Map<String, Object?> existing, Map<String, dynamic> next) =>
+    next.entries.every(
+      (e) => (existing[e.key] ?? '').toString() == (e.value ?? '').toString(),
+    );
 
 /// بعد دمج [users] ← يُزيل نسخ [user_profiles] المكررة لنفس [global_id].
 Future<void> _reconcileUserProfileAfterUserApply(
@@ -622,7 +632,6 @@ extension DbUsers on DatabaseHelper {
     String? staffUiPrefsJson;
     final existingProfiles = await db.query(
       'user_profiles',
-      columns: const ['branchProfileJson', 'staffUiPrefsJson'],
       where: 'id = ?',
       whereArgs: [id],
       limit: 1,
@@ -663,6 +672,10 @@ extension DbUsers on DatabaseHelper {
     }
     if (staffUiPrefsJson != null) {
       profileMap['staffUiPrefsJson'] = staffUiPrefsJson;
+    }
+    if (existingProfiles.isNotEmpty &&
+        _sameProfile(existingProfiles.first, profileMap)) {
+      return;
     }
     await db.insert(
       'user_profiles',

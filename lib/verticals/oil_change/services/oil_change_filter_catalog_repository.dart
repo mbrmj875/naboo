@@ -1,3 +1,4 @@
+import '../../../services/catalog_identity.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../models/oil_change_filter_catalog_entry.dart';
@@ -115,6 +116,7 @@ class OilChangeFilterCatalogRepository {
     );
     final nextSort = ((maxRow.first['m'] as num?)?.toInt() ?? 0) + 1;
     final id = await db.insert('oil_change_filter_catalog', {
+      'global_id': CatalogIdentity.newId(),
       'tenantId': tid,
       'filterKind': kind.code,
       'name': label,
