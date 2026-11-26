@@ -1,3 +1,4 @@
+import '../../../utils/stock_qty_format.dart';
 import '../../../printing/receipt_printer.dart';
 import 'dart:async';
 
@@ -252,6 +253,51 @@ class _OilChangeDirectSaleScreenState extends State<OilChangeDirectSaleScreen> {
     _addProductRow(picked);
   }
 
+  /// بيع كسور اللتر (1.5 لتر): سطر واحد معامله اللترات، فيُخصم 1.5 من المخزون
+  /// ويكتب الإيصال «1.5 لتر» (ع-18).
+  Future<void> _setLiters(OilChangeProductLine line) async {
+    final ctrl = TextEditingController(
+      text: line.unitVariantId == null && line.unitFactor != 1
+          ? StockQtyFormat.format(line.unitFactor * line.quantity)
+          : '',
+    );
+    final liters = await showDialog<double>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('الكمية باللتر'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: OilChangeFormTheme.field(
+            context: ctx,
+            labelText: 'لتر (مثلاً 1.5)',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.pop(ctx, StockQtyFormat.parse(ctrl.text)),
+            child: const Text('تم'),
+          ),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    if (!mounted || liters == null || liters <= 0) return;
+    setState(() {
+      line.unitVariantId = null;
+      line.quantity = 1;
+      line.unitFactor = liters;
+      line.unitLabel = '${StockQtyFormat.format(liters)} لتر';
+      line.priceFils = (line.literPriceFils * liters).round();
+    });
+  }
+
   void _setQty(OilChangeProductLine line, int qty) {
     if (qty <= 0) {
       _cart.remove(line);
@@ -485,6 +531,7 @@ class _OilChangeDirectSaleScreenState extends State<OilChangeDirectSaleScreen> {
                                     onQty: _setQty,
                                     saleUnits: _saleUnits,
                                     onSelectUnit: _selectSaleUnit,
+                                    onLiters: _setLiters,
                                     saving: _saving,
                                     onComplete: () =>
                                         unawaited(_completeSale()),
@@ -514,6 +561,7 @@ class _OilChangeDirectSaleScreenState extends State<OilChangeDirectSaleScreen> {
                               onQty: _setQty,
                               saleUnits: _saleUnits,
                               onSelectUnit: _selectSaleUnit,
+                              onLiters: _setLiters,
                               saving: _saving,
                               onComplete: () => unawaited(_openPhoneCheckout()),
                               stickyFooter: false,
@@ -716,6 +764,7 @@ class _CartPanel extends StatelessWidget {
     required this.onQty,
     required this.saleUnits,
     required this.onSelectUnit,
+    required this.onLiters,
     required this.saving,
     required this.onComplete,
     required this.stickyFooter,
@@ -739,6 +788,9 @@ class _CartPanel extends StatelessWidget {
   final void Function(OilChangeProductLine line, int qty) onQty;
   final Map<int, List<_SaleUnit>> saleUnits;
   final void Function(OilChangeProductLine line, _SaleUnit unit) onSelectUnit;
+
+  /// كسور اللتر للأصناف المسجّلة باللتر (ق-16).
+  final void Function(OilChangeProductLine line) onLiters;
   final bool saving;
   final VoidCallback onComplete;
   final bool stickyFooter;
@@ -871,9 +923,7 @@ class _CartPanel extends StatelessWidget {
                 signed: false,
               ),
               inputFormatters: [
-                _CappedIqdFormatter(
-                  IqdMoney.fromFils(totalFils).round(),
-                ),
+                _CappedIqdFormatter(IqdMoney.fromFils(totalFils).round()),
               ],
               textDirection: TextDirection.ltr,
               textAlign: TextAlign.start,
@@ -915,7 +965,8 @@ class _CartPanel extends StatelessWidget {
                   separatorBuilder: (_, __) => const Divider(height: 1),
                   itemBuilder: (context, i) {
                     final line = cart[i];
-                    final units = saleUnits[line.productId] ?? const <_SaleUnit>[];
+                    final units =
+                        saleUnits[line.productId] ?? const <_SaleUnit>[];
                     return Padding(
                       padding: const EdgeInsets.symmetric(vertical: 6),
                       child: Column(
@@ -985,7 +1036,8 @@ class _CartPanel extends StatelessWidget {
                                   for (final unit in units)
                                     ChoiceChip(
                                       label: Text(unit.label),
-                                      selected: line.unitVariantId == unit.variantId,
+                                      selected:
+                                          line.unitVariantId == unit.variantId,
                                       onSelected: saving
                                           ? null
                                           : (_) => onSelectUnit(line, unit),
@@ -998,7 +1050,8 @@ class _CartPanel extends StatelessWidget {
                                       labelStyle: TextStyle(
                                         fontWeight: FontWeight.w700,
                                         fontSize: 12,
-                                        color: line.unitVariantId == unit.variantId
+                                        color:
+                                            line.unitVariantId == unit.variantId
                                             ? OilChangeFormTheme.navy
                                             : OilChangeFormTheme.emphasisText(
                                                 context,
@@ -1008,6 +1061,25 @@ class _CartPanel extends StatelessWidget {
                                       materialTapTargetSize:
                                           MaterialTapTargetSize.shrinkWrap,
                                     ),
+                                  ActionChip(
+                                    label: Text(
+                                      line.unitVariantId == null &&
+                                              line.unitFactor != 1
+                                          ? line.unitLabel
+                                          : 'كسور لتر',
+                                    ),
+                                    onPressed: saving
+                                        ? null
+                                        : () => onLiters(line),
+                                    side: BorderSide(
+                                      color: OilChangeFormTheme.gold.withValues(
+                                        alpha: 0.55,
+                                      ),
+                                    ),
+                                    visualDensity: VisualDensity.compact,
+                                    materialTapTargetSize:
+                                        MaterialTapTargetSize.shrinkWrap,
+                                  ),
                                 ],
                               ),
                             ),
@@ -1347,15 +1419,17 @@ class _PhoneCheckoutSheetState extends State<_PhoneCheckoutSheet> {
                             : () async {
                                 await widget.onAddCustomer();
                                 if (!mounted) return;
-                                if (widget.customerName.text.trim().isNotEmpty) {
+                                if (widget.customerName.text
+                                    .trim()
+                                    .isNotEmpty) {
                                   setState(() => _linked = true);
                                 }
                               },
                         style: IconButton.styleFrom(
                           foregroundColor: OilChangeFormTheme.navy,
-                          backgroundColor:
-                              OilChangeLogStitchMetrics.secondaryContainer
-                                  .withValues(alpha: 0.85),
+                          backgroundColor: OilChangeLogStitchMetrics
+                              .secondaryContainer
+                              .withValues(alpha: 0.85),
                           fixedSize: const Size(48, 48),
                         ),
                         icon: const Icon(Icons.add_rounded),
@@ -1404,8 +1478,9 @@ class _PhoneCheckoutSheetState extends State<_PhoneCheckoutSheet> {
                         onPressed: _busy || widget.totalFils <= 0
                             ? null
                             : () {
-                                widget.advancePaid.text =
-                                    IraqiCurrencyFormat.formatInt(
+                                widget
+                                    .advancePaid
+                                    .text = IraqiCurrencyFormat.formatInt(
                                   IqdMoney.fromFils(widget.totalFils).round(),
                                 );
                               },
@@ -1417,8 +1492,9 @@ class _PhoneCheckoutSheetState extends State<_PhoneCheckoutSheet> {
                   _PhoneDebtNote(
                     totalFils: widget.totalFils,
                     paidFils: IqdMoney.toFils(
-                      IraqiCurrencyFormat.parseIqdInt(widget.advancePaid.text)
-                          .toDouble(),
+                      IraqiCurrencyFormat.parseIqdInt(
+                        widget.advancePaid.text,
+                      ).toDouble(),
                     ),
                     customerName: widget.customerName.text.trim(),
                     linked: _linked,

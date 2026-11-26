@@ -1,3 +1,5 @@
+import 'stock/stock_actions_repository.dart';
+import 'stock/stock_engine.dart';
 import 'package:sqflite/sqflite.dart';
 
 import 'database_helper.dart';
@@ -332,17 +334,23 @@ class InventoryRepository {
         'createdByUserId': null,
       });
 
+      // رصيد المكان نفسه (المحل أو المخزن)، لا رقم مستودع منفصل (ع-1).
+      final place = await StockEngine.placeOfWarehouse(
+        txn,
+        tenantId,
+        warehouseId,
+      );
       final products = await txn.rawQuery(
         '''
-        SELECT p.id AS productId, COALESCE(pws.qty, 0) AS systemQty
+        SELECT p.id AS productId, COALESCE(p.${place.column}, 0) AS systemQty
         FROM products p
-        LEFT JOIN product_warehouse_stock pws
-          ON pws.productId = p.id AND pws.warehouseId = ?
         WHERE p.isActive = 1
           AND p.tenantId = ?
+          AND COALESCE(p.trackInventory, 1) = 1
+          AND COALESCE(p.variantKind, 0) NOT IN (2, 3)
         ORDER BY p.name COLLATE NOCASE
         ''',
-        [warehouseId, tenantId],
+        [tenantId],
       );
 
       final batch = txn.batch();
@@ -395,23 +403,38 @@ class InventoryRepository {
       ''', args);
   }
 
+  /// العدّ يُقارن برصيد المكان لحظة العدّ: البيع أثناء الجلسة لا يدخل الفرق
+  /// مرتين (ع-1).
   Future<void> saveStocktakingCount({
     required int itemId,
     required double countedQty,
   }) async {
     final db = await _db;
-    final rows = await db.query(
-      'stocktaking_items',
-      columns: ['systemQty'],
-      where: 'id = ? AND tenantId = ?',
-      whereArgs: [itemId, _tenantId],
-      limit: 1,
+    final rows = await db.rawQuery(
+      '''
+      SELECT i.productId, s.warehouseId FROM stocktaking_items i
+      JOIN stocktaking_sessions s ON s.id = i.sessionId
+      WHERE i.id = ? AND i.tenantId = ?
+      LIMIT 1
+      ''',
+      [itemId, _tenantId],
     );
     if (rows.isEmpty) return;
-    final systemQty = (rows.first['systemQty'] as num?)?.toDouble() ?? 0.0;
+    final productId = (rows.first['productId'] as num).toInt();
+    final place = await StockEngine.placeOfWarehouse(
+      db,
+      _tenantId,
+      (rows.first['warehouseId'] as num?)?.toInt() ?? 0,
+    );
+    final b = await StockEngine.balances(db, productId);
+    final systemQty = place == StockPlace.shop ? b.shop : b.store;
     await db.update(
       'stocktaking_items',
-      {'countedQty': countedQty, 'difference': countedQty - systemQty},
+      {
+        'systemQty': systemQty,
+        'countedQty': countedQty,
+        'difference': double.parse((countedQty - systemQty).toStringAsFixed(3)),
+      },
       where: 'id = ? AND tenantId = ?',
       whereArgs: [itemId, _tenantId],
     );
@@ -438,89 +461,51 @@ class InventoryRepository {
     );
   }
 
-  Future<void> postStocktakingAdjustments(int sessionId) async {
+  /// ترحيل فروق الجلسة: المالك يطبّقها فوراً، وعدّ الموظف ينتظر موافقة
+  /// المالك (ق-17). الفرق حركة «زيادة جرد» أو «عجز جرد» لا «وارد» (ع-1).
+  /// يعيد عدد الفروق.
+  Future<int> postStocktakingAdjustments(
+    int sessionId, {
+    bool approveNow = true,
+    String? actor,
+  }) async {
     final db = await _db;
     final tid = _tenantId;
-    final nowIso = DateTime.now().toIso8601String();
-    await db.transaction((txn) async {
-      final sessionRows = await txn.query(
-        'stocktaking_sessions',
-        columns: ['warehouseId', 'title'],
-        where: 'id = ? AND tenantId = ?',
-        whereArgs: [sessionId, tid],
-        limit: 1,
+    final sessionRows = await db.query(
+      'stocktaking_sessions',
+      columns: ['warehouseId', 'title'],
+      where: 'id = ? AND tenantId = ?',
+      whereArgs: [sessionId, tid],
+      limit: 1,
+    );
+    if (sessionRows.isEmpty) return 0;
+    final warehouseId = (sessionRows.first['warehouseId'] as num).toInt();
+    final place = await StockEngine.placeOfWarehouse(db, tid, warehouseId);
+    final diffs = await db.query(
+      'stocktaking_items',
+      columns: ['id', 'productId', 'systemQty', 'countedQty', 'difference'],
+      where: 'sessionId = ? AND tenantId = ? AND countedQty IS NOT NULL '
+          'AND ABS(difference) > 1e-9 AND adjustmentVoucherId IS NULL',
+      whereArgs: [sessionId, tid],
+    );
+    for (final d in diffs) {
+      await StockActionsRepository.instance.submitCount(
+        productId: (d['productId'] as num).toInt(),
+        place: place,
+        systemQty: (d['systemQty'] as num?)?.toDouble() ?? 0,
+        counted: (d['countedQty'] as num?)?.toDouble() ?? 0,
+        approveNow: approveNow,
+        actor: actor,
+        sessionId: 'session:$sessionId',
       );
-      if (sessionRows.isEmpty) return;
-      final warehouseId = (sessionRows.first['warehouseId'] as num).toInt();
-      final sessionTitle =
-          sessionRows.first['title']?.toString() ?? 'Stocktaking';
-      final diffs = await txn.query(
+      await db.update(
         'stocktaking_items',
-        columns: ['id', 'productId', 'difference'],
-        where:
-            'sessionId = ? AND tenantId = ? AND countedQty IS NOT NULL AND ABS(difference) > 1e-9',
-        whereArgs: [sessionId, tid],
+        // 0 = رُحّل عبر السجل (لا سند وارد كما في السابق).
+        {'adjustmentVoucherId': 0},
+        where: 'id = ? AND tenantId = ?',
+        whereArgs: [(d['id'] as num).toInt(), tid],
       );
-      if (diffs.isEmpty) return;
-
-      final vId = await txn.insert('stock_vouchers', {
-        'tenantId': tid,
-        'voucherNo': 'STK-$sessionId-${DateTime.now().millisecondsSinceEpoch}',
-        'voucherType': 'in',
-        'voucherDate': nowIso,
-        'warehouseFromId': null,
-        'warehouseToId': warehouseId,
-        'referenceNo': 'stocktaking:$sessionId',
-        'notes': 'تسوية فروقات جرد: $sessionTitle',
-        'supplierName': null,
-        'sourceType': 'manual',
-        'sourceName': 'stocktaking',
-        'sourceRefId': sessionId,
-        'createdByUserId': null,
-        'createdAt': nowIso,
-      });
-      for (final d in diffs) {
-        final diff = (d['difference'] as num?)?.toDouble() ?? 0.0;
-        final productId = (d['productId'] as num).toInt();
-        final stockRows = await txn.query(
-          'product_warehouse_stock',
-          columns: ['qty'],
-          where: 'tenantId = ? AND productId = ? AND warehouseId = ?',
-          whereArgs: [tid, productId, warehouseId],
-          limit: 1,
-        );
-        final before = stockRows.isEmpty
-            ? 0.0
-            : (stockRows.first['qty'] as num).toDouble();
-        final after = before + diff;
-        await txn.insert('stock_voucher_items', {
-          'tenantId': tid,
-          'voucherId': vId,
-          'productId': productId,
-          'qty': diff.abs(),
-          'unitPrice': 0.0,
-          'total': 0.0,
-          'stockBefore': before,
-          'stockAfter': after,
-        });
-        await txn.insert('product_warehouse_stock', {
-          'tenantId': tid,
-          'productId': productId,
-          'warehouseId': warehouseId,
-          'qty': after,
-          'updatedAt': nowIso,
-        }, conflictAlgorithm: ConflictAlgorithm.replace);
-        await txn.rawUpdate(
-          'UPDATE products SET qty = qty + ? WHERE id = ? AND tenantId = ?',
-          [diff, productId, tid],
-        );
-        await txn.update(
-          'stocktaking_items',
-          {'adjustmentVoucherId': vId},
-          where: 'id = ? AND tenantId = ?',
-          whereArgs: [(d['id'] as num).toInt(), tid],
-        );
-      }
-    });
+    }
+    return diffs.length;
   }
 }

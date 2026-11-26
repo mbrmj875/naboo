@@ -1207,12 +1207,35 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
     );
   }
 
+  /// إعدادات تُحفظ ولا يقرؤها التطبيق بعد (ع-10): مخفية حتى تُربط، فلا يظن
+  /// المالك أنها تعمل. تبقى قيمها محفوظة كما هي.
+  static const _unwiredTitles = {
+    'استخدام وحدات متعددة لكل صنف',
+    'الوحدة الافتراضية لعرض المخزون',
+    'التجميعات والوحدات المركبة',
+    'تتبع بواسطة الرقم المسلسل، رقم التوصيلة، أو تاريخ الانتهاء',
+    'المخزون السالب',
+    'عرض الكمية الإجمالية والمتوفرة',
+    'الطلبات المخزنية',
+    'الرقم التسلسلي لإذن التحويل المخزني التالي',
+    'الأذون المخزنية لفواتير المبيعات',
+    'الأذون المخزنية لفواتير الشراء',
+    'الحساب الفرعي الافتراضي',
+    'المستودع الافتراضي',
+    'قائمة الأسعار الافتراضية',
+    'الضريبة الافتراضية 1',
+    'الضريبة الافتراضية 2',
+    'طريقة احتساب تكلفة المرتجعات',
+    'طبيعة مبيعات النشاط',
+  };
+
   Widget _sectionCard(
     ColorScheme cs, {
     required String title,
     required Widget child,
     String footer = '',
   }) {
+    if (_unwiredTitles.contains(title)) return const SizedBox.shrink();
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(

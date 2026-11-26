@@ -260,23 +260,20 @@ void main() {
       expect(await _qtyOf(pid), 10);
     });
 
-    test('رصيد غير كافٍ يمنع الصرف برسالة بالقطع', () async {
+    // ق-6: الصرف بلا رصيد يمر وينبّه، فيصير الرصيد سالباً.
+    test('رصيد غير كافٍ لا يمنع الصرف', () async {
       final pid = await _seedFilterProduct(
         name: 'فلتر نادر',
         category: 'فلتر محرك',
         qty: 1,
       );
-      await expectLater(
-        OilChangeStockService.instance.syncFilterStock(
-          orderId: 503,
-          previous: const [],
-          next: [line(pid, qty: 2)],
-        ),
-        throwsA(
-          isA<StateError>().having((e) => e.message, 'message', contains('قطعة')),
-        ),
+      final out = await OilChangeStockService.instance.syncFilterStock(
+        orderId: 503,
+        previous: const [],
+        next: [line(pid, qty: 2)],
       );
-      expect(await _qtyOf(pid), 1);
+      expect(out.single.stockVoucherId, isNotNull);
+      expect(await _qtyOf(pid), -1);
     });
   });
 

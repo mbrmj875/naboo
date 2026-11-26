@@ -62,24 +62,168 @@ class StockLedger {
     await db.execute(
       'INSERT OR IGNORE INTO $ctlTable (id, paused) VALUES (1, 0)',
     );
+    for (final c in _metaCols.entries) {
+      if (!cols.any((x) => x['name'] == c.key)) {
+        await db.execute('ALTER TABLE $table ADD COLUMN ${c.key} ${c.value}');
+      }
+    }
+    final ctlCols = await db.rawQuery('PRAGMA table_info($ctlTable)');
+    for (final c in _ctxCols) {
+      if (!ctlCols.any((x) => x['name'] == c)) {
+        await db.execute('ALTER TABLE $ctlTable ADD COLUMN $c TEXT');
+      }
+    }
     if (!await _hasProducts(db)) return;
-    await db.execute('''
-      CREATE TRIGGER IF NOT EXISTS $_trigger
-      AFTER UPDATE OF qty ON products
+    final pCols = await db.rawQuery('PRAGMA table_info(products)');
+    if (!pCols.any((c) => c['name'] == storeQtyCol)) {
+      await db.execute(
+        'ALTER TABLE products ADD COLUMN $storeQtyCol REAL NOT NULL DEFAULT 0',
+      );
+    }
+    // النسخة الأولى من المشغّل لا تكتب نوع الحركة ومرجعها.
+    await db.execute('DROP TRIGGER IF EXISTS $_trigger');
+    await db.execute(_ledgerTrigger(_triggerShop, 'qty', 'NEW.global_id', null));
+    await db.execute(_ledgerTrigger(
+      _triggerStore,
+      storeQtyCol,
+      "'$storeKeyPrefix' || NEW.global_id",
+      'store',
+    ));
+    await _ensureWarehouseMirror(db);
+  }
+
+  /// أعمدة وصف الحركة: نوعها ومرجعها وملاحظتها ومن عملها وكلفة الوحدة
+  /// ومكانها. النسخ القديمة تتجاهلها عند الدمج، فلا تفسد شيئاً.
+  static const _metaCols = <String, String>{
+    'kind': 'TEXT',
+    'ref': 'TEXT',
+    'note': 'TEXT',
+    'actor': 'TEXT',
+    'unit_cost_fils': 'INTEGER',
+    'location': 'TEXT',
+  };
+
+  /// وصف الحركة الجارية: يكتبه [StockMoveContext] قبل التعديل ويمسحه بعده،
+  /// ويقرؤه المشغّل. محلي لكل جهاز مثل [ctlTable].
+  static const _ctxCols = <String>[
+    'ctx_kind',
+    'ctx_ref',
+    'ctx_note',
+    'ctx_actor',
+    'ctx_cost',
+  ];
+
+  static const _triggerShop = 'trg_stock_ledger_qty_v2';
+  static const _triggerStore = 'trg_stock_ledger_store_qty';
+
+  /// رصيد «المخزن» (ق-1). `products.qty` يبقى رصيد «المحل» الذي يخصم منه
+  /// كل بيع (ق-2)، فلا يتغير أي مسار بيع.
+  static const storeQtyCol = 'store_qty';
+
+  /// حركات المخزن تُكتب بمفتاح `store:<global_id المنتج>`: النسخ القديمة
+  /// لا تجد منتجاً بهذا المعرّف، فلا تضيف حركات المخزن إلى رصيد المحل.
+  static const storeKeyPrefix = 'store:';
+
+  static String storeKey(String productGid) => '$storeKeyPrefix$productGid';
+
+  static String _ledgerTrigger(
+    String name,
+    String col,
+    String keyExpr,
+    String? location,
+  ) {
+    String ctx(String c) => '(SELECT $c FROM $ctlTable WHERE id = 1)';
+    return '''
+      CREATE TRIGGER IF NOT EXISTS $name
+      AFTER UPDATE OF $col ON products
       WHEN (SELECT paused FROM $ctlTable WHERE id = 1) = 0
         AND NEW.global_id IS NOT NULL AND TRIM(NEW.global_id) <> ''
-        AND COALESCE(NEW.qty, 0) <> COALESCE(OLD.qty, 0)
+        AND COALESCE(NEW.$col, 0) <> COALESCE(OLD.$col, 0)
       BEGIN
-        INSERT INTO $table (global_id, product_global_id, delta, created_at, updatedAt)
+        INSERT INTO $table (global_id, product_global_id, delta, created_at,
+          updatedAt, kind, ref, note, actor, unit_cost_fils, location)
         VALUES (
           lower(hex(randomblob(16))),
-          NEW.global_id,
-          COALESCE(NEW.qty, 0) - COALESCE(OLD.qty, 0),
+          $keyExpr,
+          COALESCE(NEW.$col, 0) - COALESCE(OLD.$col, 0),
           strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-          strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+          COALESCE(${ctx('ctx_kind')}, 'edit'),
+          ${ctx('ctx_ref')},
+          ${ctx('ctx_note')},
+          ${ctx('ctx_actor')},
+          CAST(${ctx('ctx_cost')} AS INTEGER),
+          ${location == null ? "'shop'" : "'$location'"}
         );
       END
+    ''';
+  }
+
+  /// `product_warehouse_stock` يصير مرآة: رصيد المستودع الافتراضي = رصيد
+  /// المحل، وأول مستودع آخر = رصيد المخزن، والكلفة = متوسط الصنف. فلا يبقى
+  /// رصيدان مختلفان للصنف نفسه (ع-2)، وكل شاشة قديمة تقرأ الرقم الصحيح.
+  static Future<void> ensureWarehouseMirror(DatabaseExecutor db) =>
+      _ensureWarehouseMirror(db);
+
+  static Future<void> _ensureWarehouseMirror(DatabaseExecutor db) async {
+    final t = await db.rawQuery(
+      "SELECT name FROM sqlite_master WHERE type = 'table' "
+      "AND name IN ('warehouses', 'product_warehouse_stock')",
+    );
+    if (t.length < 2) return;
+    final pws = await db.rawQuery('PRAGMA table_info(product_warehouse_stock)');
+    final wh = await db.rawQuery('PRAGMA table_info(warehouses)');
+    final prod = await db.rawQuery('PRAGMA table_info(products)');
+    bool has(List<Map<String, Object?>> c, String n) =>
+        c.any((x) => x['name'] == n);
+    if (!has(pws, 'tenantId') ||
+        !has(pws, 'avgCostFils') ||
+        !has(wh, 'tenantId') ||
+        !has(prod, 'tenantId')) {
+      return;
+    }
+    const shopWh = '(SELECT id FROM warehouses WHERE tenantId = NEW.tenantId '
+        'AND isActive = 1 ORDER BY isDefault DESC, id LIMIT 1)';
+    const storeWh = '(SELECT id FROM warehouses WHERE tenantId = NEW.tenantId '
+        'AND isActive = 1 AND id <> $shopWh ORDER BY isDefault DESC, id LIMIT 1)';
+    String upsert(String wExpr, String col) => '''
+        UPDATE product_warehouse_stock
+        SET qty = COALESCE(NEW.$col, 0),
+            avgCostFils = CAST(ROUND(COALESCE(NEW.buyPrice, 0) * 1000) AS INTEGER),
+            updatedAt = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE productId = NEW.id AND warehouseId = $wExpr;
+        INSERT OR IGNORE INTO product_warehouse_stock
+          (tenantId, productId, warehouseId, qty, avgCostFils, updatedAt)
+        SELECT NEW.tenantId, NEW.id, $wExpr, COALESCE(NEW.$col, 0),
+          CAST(ROUND(COALESCE(NEW.buyPrice, 0) * 1000) AS INTEGER),
+          strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE $wExpr IS NOT NULL;
+    ''';
+    final body = '${upsert(shopWh, 'qty')}${upsert(storeWh, storeQtyCol)}';
+    await db.execute('DROP TRIGGER IF EXISTS trg_pws_mirror_u');
+    await db.execute('DROP TRIGGER IF EXISTS trg_pws_mirror_i');
+    await db.execute('''
+      CREATE TRIGGER trg_pws_mirror_u
+      AFTER UPDATE OF qty, $storeQtyCol, buyPrice ON products
+      BEGIN
+$body
+      END
     ''');
+    await db.execute('''
+      CREATE TRIGGER trg_pws_mirror_i
+      AFTER INSERT ON products
+      BEGIN
+$body
+      END
+    ''');
+  }
+
+  /// يعيد بناء المرآة لكل الأصناف (بعد الترقية أو تغيير المستودعات).
+  static Future<void> rebuildWarehouseMirror(DatabaseExecutor db) async {
+    if (!await _hasProducts(db)) return;
+    await db.rawUpdate(
+      'UPDATE products SET $storeQtyCol = COALESCE($storeQtyCol, 0)',
+    );
   }
 
   static Future<void> setPaused(DatabaseExecutor db, bool paused) =>
@@ -107,6 +251,23 @@ class StockLedger {
           SELECT 1 FROM $table o WHERE o.global_id = '$openingPrefix' || p.global_id
         )
     ''', [now, now]);
+    await db.rawInsert('''
+      INSERT INTO $table (global_id, product_global_id, delta, created_at,
+        updatedAt, kind, location)
+      SELECT '$openingPrefix$storeKeyPrefix' || p.global_id,
+             '$storeKeyPrefix' || p.global_id,
+             COALESCE(p.$storeQtyCol, 0) - COALESCE((
+               SELECT SUM(l.delta) FROM $table l
+               WHERE l.product_global_id = '$storeKeyPrefix' || p.global_id
+             ), 0),
+             ?, ?, 'opening', 'store'
+      FROM products p
+      WHERE p.global_id IS NOT NULL AND TRIM(p.global_id) <> ''
+        AND NOT EXISTS (
+          SELECT 1 FROM $table o
+          WHERE o.global_id = '$openingPrefix$storeKeyPrefix' || p.global_id
+        )
+    ''', [now, now]);
   }
 
   /// الكمية = مجموع الحركات، للمنتجات التي لها افتتاحية.
@@ -120,6 +281,16 @@ class StockLedger {
       WHERE global_id IN (
         SELECT product_global_id FROM $table
         WHERE global_id LIKE '$openingPrefix%'
+      )
+    ''');
+    await db.rawUpdate('''
+      UPDATE products SET $storeQtyCol = (
+        SELECT ROUND(SUM(l.delta), 3) FROM $table l
+        WHERE l.product_global_id = '$storeKeyPrefix' || products.global_id
+      )
+      WHERE '$storeKeyPrefix' || global_id IN (
+        SELECT product_global_id FROM $table
+        WHERE global_id LIKE '$openingPrefix$storeKeyPrefix%'
       )
     ''');
   }
@@ -143,6 +314,8 @@ class StockLedger {
       'created_at': (row['created_at'] ?? '').toString(),
       'updatedAt': (row['updatedAt'] ?? row['created_at'] ?? '').toString(),
       'compacted_before': cut.isEmpty ? null : cut,
+      for (final c in _metaCols.keys)
+        if (row.containsKey(c)) c: row[c],
     };
     if (!gid.startsWith(openingPrefix)) {
       await txn.insert(table, clean,

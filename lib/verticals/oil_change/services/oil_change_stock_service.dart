@@ -1,4 +1,11 @@
+import 'dart:async' show unawaited;
+
+import 'package:sqflite/sqflite.dart';
+
 import '../../../services/cloud_sync_service.dart';
+import '../../../services/stock/negative_stock_alerts.dart';
+import '../../../services/stock/stock_engine.dart';
+import '../../../utils/iqd_money.dart';
 import '../../../services/database_helper.dart';
 import '../../../services/oil_product_grades_repository.dart';
 import '../../../services/tenant_context_service.dart';
@@ -71,15 +78,7 @@ class OilChangeStockService {
       throw StateError('أدخل الكمية المأخوذة من المخزون');
     }
     final tid = await _tenantId();
-    final book = await _productBookLiters(tid, productId);
-    final credit = creditLiters > 0 ? creditLiters : 0.0;
-    if (!allowNegative && book + credit + 1e-9 < liters) {
-      throw StateError(
-        'الرصيد غير كافٍ: متوفر ${book.toStringAsFixed(1)} $unitLabel، '
-        'المطلوب ${liters.toStringAsFixed(1)} $unitLabel',
-      );
-    }
-
+    // ق-6: الصرف بلا رصيد يمر دائماً وينبّه؛ [allowNegative] باقٍ للتوافق.
     var warehouse = warehouseId;
     if (warehouse <= 0) {
       final warehouses = await _db.listWarehousesActive(tenantId: tid);
@@ -90,53 +89,39 @@ class OilChangeStockService {
 
     final db = await _db.database;
     final nowIso = DateTime.now().toIso8601String();
+    NegativeStockLine? negative;
     final voucherId = await db.transaction<int>((txn) async {
-      final beforeRows = await txn.query(
-        'products',
-        columns: ['qty', 'buyPrice'],
-        where: 'id = ? AND tenantId = ?',
-        whereArgs: [productId, tid],
-        limit: 1,
-      );
-      if (beforeRows.isEmpty) {
-        throw StateError('الصنف غير موجود في المخزون');
-      }
-      final before = (beforeRows.first['qty'] as num?)?.toDouble() ?? 0;
-      if (!allowNegative && before + credit + 1e-9 < liters) {
-        throw StateError(
-          'الرصيد غير كافٍ: متوفر ${before.toStringAsFixed(1)} $unitLabel، '
-          'المطلوب ${liters.toStringAsFixed(1)} $unitLabel',
-        );
-      }
+      final bal = await StockEngine.balances(txn, productId);
+      final before = bal.shop;
       final after = before - liters;
-      final updated = await txn.rawUpdate(
-        'UPDATE products SET qty = qty - ? WHERE id = ? AND tenantId = ?',
-        [liters, productId, tid],
+      // البطاقة تخصم من «المحل» دائماً (ق-2) بحركة «بطاقة غيار» (ع-2).
+      await StockEngine.move(
+        txn,
+        productId: productId,
+        place: StockPlace.shop,
+        delta: -liters,
+        ctx: StockMoveContext(
+          kind: StockMoveKind.card,
+          ref: 'card:$orderId',
+          note: notes,
+          unitCostFils: IqdMoney.toFils(bal.avgCost),
+        ),
       );
-      if (updated < 1) {
-        throw StateError('تعذّر تحديث الرصيد في المخزون');
-      }
-      if (warehouse > 0) {
-        final aligned = await txn.rawUpdate(
-          '''
-          UPDATE product_warehouse_stock
-          SET qty = ?, updatedAt = ?
-          WHERE tenantId = ? AND productId = ? AND warehouseId = ?
-          ''',
-          [after, nowIso, tid, productId, warehouse],
+      if (after < -1e-9) {
+        final n = await txn.query(
+          'products',
+          columns: ['name'],
+          where: 'id = ?',
+          whereArgs: [productId],
+          limit: 1,
         );
-        if (aligned < 1) {
-          await txn.insert('product_warehouse_stock', {
-            'tenantId': tid,
-            'productId': productId,
-            'warehouseId': warehouse,
-            'qty': after,
-            'updatedAt': nowIso,
-          });
-        }
+        negative = (
+          productId: productId,
+          name: n.isEmpty ? 'صنف' : (n.first['name'] ?? 'صنف').toString(),
+          after: after,
+        );
       }
-      final unitCost =
-          (beforeRows.first['buyPrice'] as num?)?.toDouble() ?? 0;
+      final unitCost = bal.avgCost;
       final vId = await txn.insert('stock_vouchers', {
         'tenantId': tid,
         'voucherNo':
@@ -165,6 +150,14 @@ class OilChangeStockService {
       return vId;
     });
     CloudSyncService.instance.scheduleSyncSoon();
+    final neg = negative;
+    if (neg != null) {
+      unawaited(NegativeStockAlerts.notify(
+        source: 'card',
+        ref: '$orderId',
+        lines: [neg],
+      ));
+    }
     return voucherId;
   }
 
@@ -249,6 +242,71 @@ class OilChangeStockService {
       );
     }
     return res.voucherId!;
+  }
+
+  /// إرجاع سند صرف داخل معاملة قائمة (إلغاء البطاقة كله في معاملة واحدة،
+  /// ع-17): إن فشل الإرجاع لا يُلغى شيء. [line] يُقرأ قبل المعاملة بـ
+  /// [readOutboundVoucherLine].
+  Future<void> returnVoucherLineInTxn(
+    DatabaseExecutor txn, {
+    required int tenantId,
+    required int orderId,
+    required int stockVoucherId,
+    required ({
+      int productId,
+      double liters,
+      int warehouseId,
+      double unitCostIqd,
+    }) line,
+    String? reason,
+    String sourceType = 'oil_change_return',
+  }) async {
+    final why = reason ?? 'إلغاء بطاقة #$orderId';
+    final nowIso = DateTime.now().toIso8601String();
+    final bal = await StockEngine.balances(txn, line.productId);
+    final place = await StockEngine.placeOfWarehouse(
+      txn,
+      tenantId,
+      line.warehouseId,
+    );
+    final before = place == StockPlace.shop ? bal.shop : bal.store;
+    await StockEngine.move(
+      txn,
+      productId: line.productId,
+      place: place,
+      delta: line.liters,
+      ctx: StockMoveContext(
+        kind: StockMoveKind.cardReturn,
+        ref: 'card:$orderId',
+        note: why,
+        unitCostFils: IqdMoney.toFils(line.unitCostIqd),
+      ),
+    );
+    final vId = await txn.insert('stock_vouchers', {
+      'tenantId': tenantId,
+      'voucherNo':
+          'OC-RET-${DateTime.now().microsecondsSinceEpoch}-${orderId % 100000}-$stockVoucherId',
+      'voucherType': 'in',
+      'voucherDate': nowIso,
+      'warehouseFromId': null,
+      'warehouseToId': line.warehouseId,
+      'notes': 'إرجاع — $why (سند صرف #$stockVoucherId)',
+      'sourceType': sourceType,
+      'sourceName': 'بطاقة غيار زيت',
+      'sourceRefId': orderId,
+      'createdAt': nowIso,
+    });
+    await txn.insert('stock_voucher_items', {
+      'tenantId': tenantId,
+      'voucherId': vId,
+      'productId': line.productId,
+      'qty': line.liters,
+      'unitPrice': line.unitCostIqd,
+      'total': line.liters * line.unitCostIqd,
+      'stockBefore': before,
+      'stockAfter': before + line.liters,
+      'baseQty': line.liters,
+    });
   }
 
   /// يحدّث صرف المخزون عند تعديل البطاقة. يُرجع معرّف سند الصرف الجديد أو null.

@@ -4037,7 +4037,7 @@ class CloudSyncService {
     'loyaltyPoints',
   };
 
-  static const Set<String> _productStockProtectedCols = {'qty'};
+  static const Set<String> _productStockProtectedCols = {'qty', 'store_qty'};
 
   /// دمج عملاء/موردين: LWW للبيانات الوصفية فقط — لا يُستبدل الرصيد/النقاط محلياً.
   Future<bool> _mergePartyMasterByGlobalId({
@@ -4906,6 +4906,7 @@ class CloudSyncService {
       'stock_movements',
       'stock_vouchers',
       'stock_voucher_lines',
+      'stock_voucher_items',
     };
     return blocked.contains(table);
   }

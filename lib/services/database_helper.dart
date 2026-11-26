@@ -14,6 +14,11 @@ import 'change_capture.dart';
 import 'sync_safety.dart';
 import 'sync_tombstones.dart';
 import 'stock_ledger.dart';
+import 'stock/stock_engine.dart';
+import 'stock/stock_metrics.dart';
+import 'stock/purchase_list_repository.dart';
+import 'stock/stock_actions_repository.dart';
+import 'stock/negative_stock_alerts.dart';
 import 'local_device.dart';
 import 'cloud_sync_service.dart';
 import 'db_file_parking.dart';
@@ -30,7 +35,6 @@ import '../models/installment_settings_data.dart';
 import '../models/debt_settings_data.dart';
 import '../models/credit_debt_invoice.dart';
 import '../models/customer_debt_models.dart';
-import '../models/product_variant_kind.dart';
 import '../models/supplier_ap_models.dart';
 import '../models/loyalty_settings_data.dart';
 import '../models/recent_activity_entry.dart';
@@ -41,7 +45,6 @@ import '../utils/customer_validation.dart';
 import '../utils/iqd_money.dart';
 import '../utils/money_sql.dart';
 import '../utils/staff_activity_filter.dart';
-import '../utils/warehouse_avg_cost.dart';
 import '../owner/owner_command_center_refresh_bridge.dart';
 import '../owner/models/owner_section_ttl.dart';
 import '../owner/services/business_audit_log_service.dart';
@@ -129,6 +132,8 @@ class DatabaseHelper {
     await ensureCategoriesBrandsGlobalIdSchema(db);
     await ensureProductsGlobalIdSchema(db);
     await StockLedger.ensureSchema(db);
+    await StockActionsRepository.ensureSchema(db);
+    await PurchaseListRepository.ensureSchema(db);
     await ensureInvoicesGlobalIdSchema(db);
     await ensureFinancialGlobalIdSchema(db);
     await ensureUserDirectoryGlobalIdSchema(db);
@@ -728,6 +733,8 @@ class DatabaseHelper {
     await ensureCategoriesBrandsGlobalIdSchema(db);
     await ensureProductsGlobalIdSchema(db);
     await StockLedger.ensureSchema(db);
+    await StockActionsRepository.ensureSchema(db);
+    await PurchaseListRepository.ensureSchema(db);
     await ensureInvoicesGlobalIdSchema(db);
     await _ensureInvoiceItemsUnitCost(db);
     await _ensureProductUnitVariantsSchema(db);
@@ -766,6 +773,9 @@ class DatabaseHelper {
     } catch (e, st) {
       AppLogger.error('DatabaseHelper', 'vehicle registry setup failed', e, st);
     }
+    // مرآة رصيد المستودع تحتاج عمود الكلفة الذي يُضاف أعلاه، فتُبنى بعده
+    // (وإلا لا تعمل في أول جلسة على تثبيت جديد).
+    await StockLedger.ensureWarehouseMirror(db);
     // آخر خطوة: المشغّلات تُبنى على الجداول والأعمدة بعد اكتمال الترقية.
     await ChangeCapture.ensure(db);
     await ChangeCapture.setPaused(db, false);

@@ -952,9 +952,11 @@ extension _OilFormSave on _OilChangeOrderFormScreenState {
     );
   }
 
+  /// ق-6: نقص الرصيد لا يمنع البيع ولا يطلب رمز المالك. الموظف يرى التنبيه
+  /// ويتابع، والرصيد يصير سالباً، ويُسجَّل الحدث باسمه ويصل إشعار للمالك.
   Future<bool> _approveStockShortages(List<OilStockShortage> shortages) async {
     final cs = Theme.of(context).colorScheme;
-    final wantsOverride = await showDialog<bool>(
+    final go = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('الرصيد غير كافٍ'),
@@ -970,8 +972,8 @@ extension _OilFormSave on _OilChangeOrderFormScreenState {
                 ),
               const SizedBox(height: 4),
               Text(
-                'البيع ممنوع. يمكن للمالك التجاوز برمزه فيصير الرصيد سالباً '
-                'ويُسجَّل التجاوز باسمه.',
+                'البيع يتم والرصيد يصير سالباً، ويُسجَّل باسمك ويصل تنبيه '
+                'للمالك. صحّح الرصيد لاحقاً بـ«استلام بضاعة» أو «تحويل» من المخزن.',
                 style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12.5),
                 textAlign: TextAlign.start,
               ),
@@ -985,18 +987,12 @@ extension _OilFormSave on _OilChangeOrderFormScreenState {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('تجاوز برمز المالك'),
+            child: const Text('متابعة البيع'),
           ),
         ],
       ),
     );
-    if (wantsOverride != true || !mounted) return false;
-    return confirmOwnerPinForSensitiveAction(
-      context,
-      title: 'تجاوز نقص الرصيد',
-      message: 'البيع رغم نقص ${shortages.length} صنف. الرصيد سيصير سالباً.',
-      confirmLabel: 'تجاوز وبيع',
-    );
+    return go == true && mounted;
   }
 
   Future<void> _recordStockOverride(int orderId) async {
@@ -1009,7 +1005,7 @@ extension _OilFormSave on _OilChangeOrderFormScreenState {
         entityType: 'service_order',
         entityId: '$orderId',
         newValueJson: jsonEncode({
-          'approvedBy': 'owner_pin',
+          'approvedBy': 'warning',
           'shortages': [for (final s in shortages) s.toJson()],
         }),
         userId: auth.userId,

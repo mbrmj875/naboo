@@ -176,7 +176,8 @@ class DeviceExecPort implements AssistantExecPort {
         buyPrice: (r['buyPrice'] as num?)?.toDouble() ?? 0,
         sellPrice: sell,
         minSellPrice: minSell > sell ? sell : minSell,
-        qty: (r['qty'] as num?)?.toDouble() ?? 0,
+        // الكمية لا تُكتب من تعديل السعر (ع-4).
+        qty: null,
         lowStockThreshold: (r['lowStockThreshold'] as num?)?.toDouble() ?? 0,
         trackInventory: ((r['trackInventory'] as num?)?.toInt() ?? 1) == 1,
         stockBaseKind: (r['stockBaseKind'] as num?)?.toInt(),
@@ -517,7 +518,7 @@ class DeviceExecPort implements AssistantExecPort {
         buyPrice: buyFils == null ? cur('buyPrice') : buyFils / 1000.0,
         sellPrice: sell,
         minSellPrice: minSell,
-        qty: cur('qty'),
+        qty: null,
         lowStockThreshold: lowStock ?? cur('lowStockThreshold'),
         trackInventory: ((r['trackInventory'] as num?)?.toInt() ?? 1) == 1,
         stockBaseKind: (r['stockBaseKind'] as num?)?.toInt(),

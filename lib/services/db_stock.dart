@@ -178,6 +178,7 @@ extension DbStock on DatabaseHelper {
     String? sourceName,
     int? sourceRefId,
     String? notes,
+    String? actorName,
     required List<
         ({
           int productId,
@@ -232,27 +233,14 @@ extension DbStock on DatabaseHelper {
             throw StateError('منتج غير موجود #${L.productId}');
           }
           final track = ((prow.first['trackInventory'] as int?) ?? 1) != 0;
-          // قراءة الرصيد والمتوسط داخل المعاملة قبل أي تحديث (WAC).
-          final beforeRows = await txn.query(
-            'product_warehouse_stock',
-            columns: ['qty', 'avgCostFils'],
-            where: 'productId = ? AND warehouseId = ?',
-            whereArgs: [L.productId, warehouseToId],
-            limit: 1,
+          // المكان من المستودع، والرصيد قبل وبعد من رصيد المكان نفسه.
+          final place = await StockEngine.placeOfWarehouse(
+            txn,
+            tenantId,
+            warehouseToId,
           );
-          final before = beforeRows.isEmpty
-              ? 0.0
-              : (beforeRows.first['qty'] as num).toDouble();
-          final beforeAvgFils = beforeRows.isEmpty
-              ? 0
-              : (beforeRows.first['avgCostFils'] as num?)?.toInt() ?? 0;
-          final inboundCostFils = IqdMoney.toFils(L.unitPrice);
-          final newAvgFils = computeWacFils(
-            beforeQtyBase: before,
-            beforeAvgFils: beforeAvgFils,
-            inboundQtyBase: L.qty,
-            inboundCostPerBaseFils: inboundCostFils,
-          );
+          final bal = await StockEngine.balances(txn, L.productId);
+          final before = place == StockPlace.shop ? bal.shop : bal.store;
           final after = before + L.qty;
           final tot = L.qty * L.unitPrice;
           final entered = L.enteredQty;
@@ -272,22 +260,42 @@ extension DbStock on DatabaseHelper {
               'unitLabel': L.unitLabel!.trim(),
             'baseQty': L.qty,
           });
-          await txn.insert(
-            'product_warehouse_stock',
-            {
-              'tenantId': tenantId,
-              'productId': L.productId,
-              'warehouseId': warehouseToId,
-              'qty': after,
-              'avgCostFils': newAvgFils,
-              'updatedAt': nowIso,
-            },
-            conflictAlgorithm: ConflictAlgorithm.replace,
-          );
-          if (track) {
-            await txn.rawUpdate(
-              'UPDATE products SET qty = qty + ? WHERE id = ?',
-              [L.qty, L.productId],
+          if (track && sourceType.trim().endsWith('_return')) {
+            // إرجاع ما صُرف (تعديل بطاقة أو إلغاؤها): الكمية تعود بكلفتها،
+            // فلا يتغير المتوسط.
+            await StockEngine.move(
+              txn,
+              productId: L.productId,
+              place: place,
+              delta: L.qty,
+              ctx: StockMoveContext(
+                kind: StockMoveKind.cardReturn,
+                ref: sourceRefId == null ? null : 'card:$sourceRefId',
+                note: notes?.trim().isEmpty == true ? null : notes?.trim(),
+                actor: actorName,
+                unitCostFils: IqdMoney.toFils(L.unitPrice),
+              ),
+            );
+          } else if (track) {
+            // المتوسط المرجّح يتحدّث مع الوارد (ق-9)، ولا يمسحه الصادر.
+            await StockEngine.receive(
+              txn,
+              productId: L.productId,
+              place: place,
+              qty: L.qty,
+              unitCost: L.unitPrice,
+              ctx: StockMoveContext(
+                kind: sourceType == 'purchase_list'
+                    ? StockMoveKind.purchaseList
+                    : (sourceType == 'receive'
+                        ? StockMoveKind.receive
+                        : StockMoveKind.voucherIn),
+                ref: 'voucher:${voucherNo.trim()}',
+                note: supplierName?.trim().isEmpty == true
+                    ? null
+                    : supplierName?.trim(),
+                actor: actorName,
+              ),
             );
           }
         }
@@ -303,14 +311,20 @@ extension DbStock on DatabaseHelper {
         return vId;
       });
       CloudSyncService.instance.scheduleSyncSoon();
-      MarketplaceCatalogSyncService.instance.scheduleSyncSoon();
-      await BusinessAuditLogService.instance.record(
-        eventType: 'stock_voucher_posted',
-        entityType: 'stock_voucher',
-        entityId: '$vid',
-        newValueJson: jsonEncode({'voucherType': 'in', 'lineCount': lines.length}),
-        tenantId: tenantId,
-      );
+      try {
+        MarketplaceCatalogSyncService.instance.scheduleSyncSoon();
+      } catch (_) {}
+      try {
+        await BusinessAuditLogService.instance.record(
+          eventType: 'stock_voucher_posted',
+          entityType: 'stock_voucher',
+          entityId: '$vid',
+          newValueJson: jsonEncode({'voucherType': 'in', 'lineCount': lines.length}),
+          tenantId: tenantId,
+        );
+      } catch (_) {
+        // السجل لا يُفشل إذناً حُفظ.
+      }
       OwnerCommandCenterRefreshBridge.instance.invalidateSections([
         OwnerSectionIds.inventoryShortages,
         OwnerSectionIds.inventoryValue,
@@ -333,6 +347,7 @@ extension DbStock on DatabaseHelper {
     String? sourceName,
     int? sourceRefId,
     String? notes,
+    String? actorName,
     required List<({int productId, double qty, double unitPrice})> lines,
   }) async {
     if (lines.isEmpty) {
@@ -379,51 +394,39 @@ extension DbStock on DatabaseHelper {
             throw StateError('منتج غير موجود #${L.productId}');
           }
           final track = ((prow.first['trackInventory'] as int?) ?? 1) != 0;
-          final allowNeg =
-              ((prow.first['allowNegativeStock'] as int?) ?? 0) != 0;
-          final beforeRows = await txn.query(
-            'product_warehouse_stock',
-            columns: ['qty'],
-            where: 'productId = ? AND warehouseId = ?',
-            whereArgs: [L.productId, warehouseFromId],
-            limit: 1,
+          final place = await StockEngine.placeOfWarehouse(
+            txn,
+            tenantId,
+            warehouseFromId,
           );
-          final before = beforeRows.isEmpty
-              ? 0.0
-              : (beforeRows.first['qty'] as num).toDouble();
+          final bal = await StockEngine.balances(txn, L.productId);
+          final before = place == StockPlace.shop ? bal.shop : bal.store;
+          // قاعدة واحدة للبيع والإخراج بلا رصيد: يمر وينبّه (ق-6).
           final after = before - L.qty;
-          if (after < -1e-9 && !allowNeg) {
-            throw StateError(
-              'رصيد غير كافٍ للمنتج #${L.productId} في المخزن (المتاح ${before.toStringAsFixed(0)})',
-            );
-          }
-          final tot = L.qty * L.unitPrice;
           await txn.insert('stock_voucher_items', {
             'tenantId': tenantId,
             'voucherId': vId,
             'productId': L.productId,
             'qty': L.qty,
             'unitPrice': L.unitPrice,
-            'total': tot,
+            'total': L.qty * L.unitPrice,
             'stockBefore': before,
-            'stockAfter': allowNeg ? after : (after < 0 ? 0.0 : after),
+            'stockAfter': after,
+            'baseQty': L.qty,
           });
-          final newQ = allowNeg ? after : (after < 0 ? 0.0 : after);
-          await txn.insert(
-            'product_warehouse_stock',
-            {
-              'tenantId': tenantId,
-              'productId': L.productId,
-              'warehouseId': warehouseFromId,
-              'qty': newQ,
-              'updatedAt': nowIso,
-            },
-            conflictAlgorithm: ConflictAlgorithm.replace,
-          );
           if (track) {
-            await txn.rawUpdate(
-              'UPDATE products SET qty = qty - ? WHERE id = ?',
-              [L.qty, L.productId],
+            await StockEngine.move(
+              txn,
+              productId: L.productId,
+              place: place,
+              delta: -L.qty,
+              ctx: StockMoveContext(
+                kind: StockMoveKind.voucherOut,
+                ref: 'voucher:${voucherNo.trim()}',
+                note: notes?.trim().isEmpty == true ? null : notes?.trim(),
+                actor: actorName,
+                unitCostFils: IqdMoney.toFils(bal.avgCost),
+              ),
             );
           }
         }
@@ -439,14 +442,20 @@ extension DbStock on DatabaseHelper {
         return vId;
       });
       CloudSyncService.instance.scheduleSyncSoon();
-      MarketplaceCatalogSyncService.instance.scheduleSyncSoon();
-      await BusinessAuditLogService.instance.record(
-        eventType: 'stock_voucher_posted',
-        entityType: 'stock_voucher',
-        entityId: '$vid',
-        newValueJson: jsonEncode({'voucherType': 'out', 'lineCount': lines.length}),
-        tenantId: tenantId,
-      );
+      try {
+        MarketplaceCatalogSyncService.instance.scheduleSyncSoon();
+      } catch (_) {}
+      try {
+        await BusinessAuditLogService.instance.record(
+          eventType: 'stock_voucher_posted',
+          entityType: 'stock_voucher',
+          entityId: '$vid',
+          newValueJson: jsonEncode({'voucherType': 'out', 'lineCount': lines.length}),
+          tenantId: tenantId,
+        );
+      } catch (_) {
+        // السجل لا يُفشل إذناً حُفظ.
+      }
       OwnerCommandCenterRefreshBridge.instance.invalidateSections([
         OwnerSectionIds.inventoryShortages,
         OwnerSectionIds.inventoryValue,
@@ -469,6 +478,7 @@ extension DbStock on DatabaseHelper {
     String sourceType = 'transfer',
     String? sourceName,
     int? sourceRefId,
+    String? actorName,
     required List<({int productId, double qty, double unitPrice})> lines,
   }) async {
     if (warehouseFromId == warehouseToId) {
@@ -519,72 +529,42 @@ extension DbStock on DatabaseHelper {
           if (prow.isEmpty) {
             throw StateError('منتج غير موجود #${L.productId}');
           }
-          final allowNeg =
-              ((prow.first['allowNegativeStock'] as int?) ?? 0) != 0;
-          final fromRows = await txn.query(
-            'product_warehouse_stock',
-            columns: ['qty'],
-            where: 'productId = ? AND warehouseId = ?',
-            whereArgs: [L.productId, warehouseFromId],
-            limit: 1,
+          final from = await StockEngine.placeOfWarehouse(
+            txn,
+            tenantId,
+            warehouseFromId,
           );
-          final fromBefore = fromRows.isEmpty
-              ? 0.0
-              : (fromRows.first['qty'] as num).toDouble();
-          final fromAfter = fromBefore - L.qty;
-          if (fromAfter < -1e-9 && !allowNeg) {
-            throw StateError(
-              'رصيد غير كافٍ في المخزن المصدر للمنتج #${L.productId}',
-            );
+          final to = await StockEngine.placeOfWarehouse(
+            txn,
+            tenantId,
+            warehouseToId,
+          );
+          if (from == to) {
+            throw StateError('المكان المصدر والمستهدف متطابقان');
           }
-          final toRows = await txn.query(
-            'product_warehouse_stock',
-            columns: ['qty'],
-            where: 'productId = ? AND warehouseId = ?',
-            whereArgs: [L.productId, warehouseToId],
-            limit: 1,
-          );
-          final toBefore = toRows.isEmpty
-              ? 0.0
-              : (toRows.first['qty'] as num).toDouble();
-          final toAfter = toBefore + L.qty;
-          final tot = L.qty * L.unitPrice;
+          final bal = await StockEngine.balances(txn, L.productId);
+          final fromBefore = from == StockPlace.shop ? bal.shop : bal.store;
           await txn.insert('stock_voucher_items', {
             'tenantId': tenantId,
             'voucherId': vId,
             'productId': L.productId,
             'qty': L.qty,
             'unitPrice': L.unitPrice,
-            'total': tot,
+            'total': L.qty * L.unitPrice,
             'stockBefore': fromBefore,
-            'stockAfter': allowNeg
-                ? fromAfter
-                : (fromAfter < 0 ? 0.0 : fromAfter),
+            'stockAfter': fromBefore - L.qty,
+            'baseQty': L.qty,
           });
-          final fromNew = allowNeg
-              ? fromAfter
-              : (fromAfter < 0 ? 0.0 : fromAfter);
-          await txn.insert(
-            'product_warehouse_stock',
-            {
-              'tenantId': tenantId,
-              'productId': L.productId,
-              'warehouseId': warehouseFromId,
-              'qty': fromNew,
-              'updatedAt': nowIso,
-            },
-            conflictAlgorithm: ConflictAlgorithm.replace,
-          );
-          await txn.insert(
-            'product_warehouse_stock',
-            {
-              'tenantId': tenantId,
-              'productId': L.productId,
-              'warehouseId': warehouseToId,
-              'qty': toAfter,
-              'updatedAt': nowIso,
-            },
-            conflictAlgorithm: ConflictAlgorithm.replace,
+          await StockEngine.transfer(
+            txn,
+            productId: L.productId,
+            from: from,
+            qty: L.qty,
+            ctx: StockMoveContext(
+              kind: StockMoveKind.transfer,
+              ref: 'voucher:${voucherNo.trim()}',
+              actor: actorName,
+            ),
           );
         }
         final ic = Sqflite.firstIntValue(
@@ -599,14 +579,20 @@ extension DbStock on DatabaseHelper {
         return vId;
       });
       CloudSyncService.instance.scheduleSyncSoon();
-      MarketplaceCatalogSyncService.instance.scheduleSyncSoon();
-      await BusinessAuditLogService.instance.record(
-        eventType: 'stock_voucher_posted',
-        entityType: 'stock_voucher',
-        entityId: '$vid',
-        newValueJson: jsonEncode({'voucherType': 'transfer', 'lineCount': lines.length}),
-        tenantId: tenantId,
-      );
+      try {
+        MarketplaceCatalogSyncService.instance.scheduleSyncSoon();
+      } catch (_) {}
+      try {
+        await BusinessAuditLogService.instance.record(
+          eventType: 'stock_voucher_posted',
+          entityType: 'stock_voucher',
+          entityId: '$vid',
+          newValueJson: jsonEncode({'voucherType': 'transfer', 'lineCount': lines.length}),
+          tenantId: tenantId,
+        );
+      } catch (_) {
+        // السجل لا يُفشل إذناً حُفظ.
+      }
       OwnerCommandCenterRefreshBridge.instance.invalidateSections([
         OwnerSectionIds.inventoryShortages,
         OwnerSectionIds.inventoryValue,
@@ -721,7 +707,9 @@ extension DbStock on DatabaseHelper {
     });
     if (linked) {
       CloudSyncService.instance.scheduleSyncSoon();
-      MarketplaceCatalogSyncService.instance.scheduleSyncSoon();
+      try {
+        MarketplaceCatalogSyncService.instance.scheduleSyncSoon();
+      } catch (_) {}
     }
     return linked;
   }
@@ -740,7 +728,9 @@ extension DbStock on DatabaseHelper {
     );
     if (n > 0) {
       CloudSyncService.instance.scheduleSyncSoon();
-      MarketplaceCatalogSyncService.instance.scheduleSyncSoon();
+      try {
+        MarketplaceCatalogSyncService.instance.scheduleSyncSoon();
+      } catch (_) {}
     }
     return n > 0;
   }

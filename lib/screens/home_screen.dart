@@ -58,10 +58,10 @@ import 'inventory/add_product_screen.dart';
 import 'inventory/quick_product_update_screen.dart';
 import 'inventory/inventory_products_screen.dart';
 import 'inventory/barcode_labels_screen.dart';
-import 'inventory/inventory_management_screen.dart';
 import 'inventory/warehouses_screen.dart';
 import 'inventory/stocktaking_screen.dart';
-import 'inventory/purchase_orders_screen.dart';
+import 'inventory/stock/purchase_lists_screen.dart';
+import 'inventory/stock/stock_moves_screen.dart';
 import 'inventory/stock_analytics_screen.dart';
 import 'cash/cash_screen.dart';
 import 'printing/printing_screen.dart';
@@ -855,7 +855,7 @@ class _HomeScreenState extends State<HomeScreen>
         SubMenuItem(
           title: 'حركات المخزون',
           routeId: AppContentRoutes.inventoryManagement,
-          destination: (context) => const InventoryManagementScreen(),
+          destination: (context) => const StockMovesScreen(),
         ),
         SubMenuItem(
           title: 'المستودعات',
@@ -868,9 +868,9 @@ class _HomeScreenState extends State<HomeScreen>
           destination: (context) => const StocktakingScreen(),
         ),
         SubMenuItem(
-          title: 'أوامر الشراء',
+          title: 'قوائم المشتريات',
           routeId: AppContentRoutes.inventoryPurchaseOrders,
-          destination: (context) => const PurchaseOrdersScreen(),
+          destination: (context) => const PurchaseListsScreen(),
         ),
         SubMenuItem(
           title: 'تحليلات المخزون',

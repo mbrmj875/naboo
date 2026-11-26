@@ -30,6 +30,8 @@ import '../../utils/invoice_barcode.dart';
 import '../../utils/iraqi_currency_format.dart';
 import '../../utils/screen_layout.dart';
 import '../../utils/shift_actor_conflict_guard.dart';
+import '../../verticals/oil_change/services/oil_change_post_sale_service.dart';
+import '../../utils/stock_qty_format.dart';
 
 /// واجهة مرتجع مخصّصة: قائمة منتجات فقط + ملخص مالي يظهر عند اختيار الكميات.
 /// الربط الصريح: [Invoice.originalInvoiceId] = رقم الفاتورة الأصلية المفتوحة.
@@ -354,6 +356,56 @@ class _ProcessReturnScreenState extends State<ProcessReturnScreen> {
     }
   }
 
+  /// «يرجع للمخزون؟» لكل بند صُرف على البطاقة.
+  Future<bool?> _askCardStockReturn(List<CardStockReturnLine> lines) {
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: const Text('يرجع للمخزون؟'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text(
+                  'هذه فاتورة بطاقة غيار. اختر ما يرجع سليماً إلى المخزون '
+                  '(الزيت المسكوب لا يرجع).',
+                ),
+                const SizedBox(height: 8),
+                for (final l in lines)
+                  CheckboxListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: l.alreadyReturned ? true : l.returnToStock,
+                    onChanged: l.alreadyReturned
+                        ? null
+                        : (v) => setLocal(() => l.returnToStock = v ?? false),
+                    title: Text(l.name),
+                    subtitle: Text(
+                      l.alreadyReturned
+                          ? 'رجع من قبل'
+                          : '${StockQtyFormat.format(l.qty)}'
+                              '${l.isFilter ? ' قطعة' : ' لتر'}',
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('رجوع'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('متابعة الإرجاع'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<void> _submitReturn() async {
     final o = _original;
     if (o == null || o.id == null) return;
@@ -419,6 +471,19 @@ class _ProcessReturnScreenState extends State<ProcessReturnScreen> {
     if (!mounted) return;
     final protection = await _runReturnProtection(o);
     if (protection == null || !mounted) return;
+
+    // فاتورة بطاقة غيار (ع-16، ق-14): سطورها بلا رقم صنف، فيُسأل الموظف عن كل
+    // بند صُرف من المخزون هل يرجع.
+    var cardLines = const <CardStockReturnLine>[];
+    try {
+      cardLines = await OilChangePostSaleService.instance
+          .cardStockLinesForInvoice(o.id!);
+    } catch (_) {}
+    if (cardLines.any((l) => !l.alreadyReturned)) {
+      if (!mounted) return;
+      final ok = await _askCardStockReturn(cardLines);
+      if (ok != true || !mounted) return;
+    }
 
     final staff = context.read<AuthProvider>().username.trim();
     final items = <InvoiceItem>[];
@@ -510,6 +575,19 @@ class _ProcessReturnScreenState extends State<ProcessReturnScreen> {
     }
 
     // المرتجع محفوظ: لا تُلغى المطالبة بعد هذه النقطة مهما حدث.
+    if (cardLines.isNotEmpty) {
+      try {
+        await OilChangePostSaleService.instance.returnCardStockLines(
+          invoiceId: o.id!,
+          returnInvoiceId: newId,
+          lines: cardLines,
+        );
+      } catch (e) {
+        if (mounted) {
+          _snack('حُفظ المرتجع، لكن إرجاع بنود البطاقة للمخزون فشل: $e');
+        }
+      }
+    }
     try {
       unawaited(
         BusinessAuditLogService.instance.record(

@@ -1,3 +1,5 @@
+import '../../utils/stock_qty_format.dart';
+import 'stock/stock_action_sheets.dart';
 import 'dart:async' show unawaited;
 
 import 'package:flutter/material.dart';
@@ -361,7 +363,8 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
     _buy.text = dnum(p['buyPrice']).toStringAsFixed(0);
     _sell.text = dnum(p['sellPrice']).toStringAsFixed(0);
     _minSell.text = dnum(p['minSellPrice']).toStringAsFixed(0);
-    _qty.text = dnum(p['qty']).toStringAsFixed(0);
+    // الكمية كما هي بكسورها وسالبها (ع-4)، والحقل للعرض فقط (ق-8).
+    _qty.text = StockQtyFormat.format(dnum(p['qty']));
     _low.text = dnum(p['lowStockThreshold']).toStringAsFixed(0);
     _track = ((p['trackInventory'] as num?)?.toInt() ?? 1) == 1;
     _stockBaseKind = (p['stockBaseKind'] as num?)?.toInt() ?? 0;
@@ -634,7 +637,8 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
         buyPrice: buy,
         sellPrice: sell,
         minSellPrice: minSell,
-        qty: qty,
+        // الكمية للعرض (ق-8): «استلام بضاعة» أو «جرد هذا الصنف».
+        qty: null,
         lowStockThreshold: low,
         trackInventory: _track,
         stockBaseKind: _stockBaseKind,
@@ -1759,10 +1763,11 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
                               children: [
                                 Expanded(
                                   child: _field(
-                                    label: 'الكمية',
+                                    label: 'الكمية (للعرض)',
                                     controller: _qty,
                                     hint: '0',
                                     keyboard: TextInputType.number,
+                                    readOnly: true,
                                   ),
                                 ),
                                 const SizedBox(width: 10),
@@ -1776,6 +1781,10 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
                                 ),
                               ],
                             ),
+                          if (!_multiVariantEnabled && _track) ...[
+                            const SizedBox(height: 10),
+                            _stockActionsRow(),
+                          ],
                           const SizedBox(height: 10),
                           FilledButton(
                             onPressed: _saving ? null : _save,
@@ -1791,12 +1800,50 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
     );
   }
 
+  /// «استلام بضاعة» و«جرد هذا الصنف» و«تحويل» بدل تغيير الكمية مباشرة (ق-8).
+  Widget _stockActionsRow() {
+    final product = StockSheetProduct(
+      id: widget.productId,
+      name: _name.text.trim(),
+      unitLabel: _stockBaseKind == 3 ? 'لتر' : '',
+    );
+    Future<void> after(bool? changed) async {
+      if (changed == true && mounted) await _bootstrap();
+    }
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        OutlinedButton.icon(
+          onPressed: () async =>
+              after(await showReceiveGoodsSheet(context, product)),
+          icon: const Icon(Icons.move_to_inbox_rounded),
+          label: const Text('استلام بضاعة'),
+        ),
+        OutlinedButton.icon(
+          onPressed: () async =>
+              after(await showQuickCountSheet(context, product)),
+          icon: const Icon(Icons.fact_check_rounded),
+          label: const Text('جرد هذا الصنف'),
+        ),
+        OutlinedButton.icon(
+          onPressed: () async =>
+              after(await showTransferSheet(context, product)),
+          icon: const Icon(Icons.swap_horiz_rounded),
+          label: const Text('تحويل'),
+        ),
+      ],
+    );
+  }
+
   Widget _field({
     required String label,
     required TextEditingController controller,
     required String hint,
     TextInputType keyboard = TextInputType.text,
     String? Function(String?)? validator,
+    bool readOnly = false,
   }) {
     final cs = Theme.of(context).colorScheme;
     final ac = context.appCorners;
@@ -1809,6 +1856,7 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
           controller: controller,
           validator: validator,
           keyboardType: keyboard,
+          readOnly: readOnly,
           textDirection: TextDirection.rtl,
           decoration: InputDecoration(
             hintText: hint,

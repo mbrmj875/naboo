@@ -90,25 +90,14 @@ void main() {
     );
   });
 
-  test('بلا تجاوز: الصرف يُمنع. بتجاوز المالك: الرصيد يصير سالباً', () async {
+  // ق-6 (خطة المخزون): الصرف بلا رصيد يمر وينبّه، ولا يحتاج رمز المالك.
+  test('الصرف بلا رصيد يمر ويصير الرصيد سالباً', () async {
     final oil = await _product('زيت قليل', 1);
-    await expectLater(
-      OilChangeStockService.instance.issueForOilChangeOrder(
-        orderId: 900,
-        productId: oil,
-        liters: 4,
-        warehouseId: 0,
-      ),
-      throwsA(isA<StateError>()),
-    );
-    expect(await _qty(oil), 1);
-
     final vid = await OilChangeStockService.instance.issueForOilChangeOrder(
       orderId: 900,
       productId: oil,
       liters: 4,
       warehouseId: 0,
-      allowNegative: true,
     );
     expect(vid, greaterThan(0));
     expect(await _qty(oil), -3);

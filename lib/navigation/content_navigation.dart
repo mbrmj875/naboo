@@ -717,7 +717,7 @@ String breadcrumbFallbackTitleForRouteId(String id) {
     case AppContentRoutes.inventoryStocktaking:
       return 'جرد المخزون';
     case AppContentRoutes.inventoryPurchaseOrders:
-      return 'أوامر الشراء';
+      return 'قوائم المشتريات';
     case AppContentRoutes.inventoryAnalytics:
       return 'تحليلات المخزون';
     case AppContentRoutes.inventorySettings:

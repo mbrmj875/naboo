@@ -1,5 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
+import '../../../models/sale_pos_settings_data.dart';
+import '../../../providers/sale_pos_settings_provider.dart';
+import '../../../theme/app_corner_style.dart';
 import '../../../theme/design_tokens.dart';
 import '../../../theme/erp_input_constants.dart';
 import '../../../theme/sale_brand.dart';
@@ -14,6 +18,28 @@ abstract final class OilChangeFormTheme {
   static bool isDark(BuildContext context) =>
       Theme.of(context).brightness == Brightness.dark;
 
+  /// ألوان العلامة من «إعدادات شاشة البيع» (ق-24)؛ الثابتان [gold] و[navy]
+  /// للسياق الذي لا إعدادات فيه (اختبارات، شاشات قبل التهيئة).
+  static SalePalette? _palette(BuildContext context) {
+    try {
+      final data = Provider.of<SalePosSettingsProvider>(context, listen: true)
+          .data;
+      return SalePalette.fromSettings(data, Theme.of(context));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Color goldOf(BuildContext context) => _palette(context)?.gold ?? gold;
+
+  static Color navyOf(BuildContext context) => _palette(context)?.navy ?? navy;
+
+  /// زوايا الحقول والصناديق من إعداد الزوايا (حادة أو مستديرة).
+  static BorderRadius radiusOf(BuildContext context) {
+    final ext = Theme.of(context).extension<AppCornerStyle>();
+    return ext == null ? ErpInputConstants.borderRadius : ext.md;
+  }
+
   /// لون النص البارز (عناوين، أسماء منتجات).
   static Color emphasisText(BuildContext context) =>
       isDark(context) ? Colors.white : const Color(0xFF0F172A);
@@ -24,17 +50,20 @@ abstract final class OilChangeFormTheme {
       : const Color(0xFF64748B);
 
   /// لون التمييز — ذهبي في كل الأوضاع.
-  static Color accentText(BuildContext context) => gold;
+  static Color accentText(BuildContext context) => goldOf(context);
 
   static ThemeData wrap(BuildContext context, ThemeData base) {
     final dark = isDark(context);
+    final gold = goldOf(context);
+    final navy = navyOf(context);
     final fill = dark ? const Color(0xFF0F172A) : Colors.white;
     final borderIdle = gold.withValues(alpha: 0.48);
     final borderFocus = gold;
+    final radius = radiusOf(context);
 
     OutlineInputBorder outline(Color color, [double w = 1.5]) =>
         OutlineInputBorder(
-          borderRadius: ErpInputConstants.borderRadius,
+          borderRadius: radius,
           borderSide: BorderSide(color: color, width: w),
         );
 
@@ -89,6 +118,8 @@ abstract final class OilChangeFormTheme {
     PreferredSizeWidget? bottom,
   }) {
     final dark = isDark(context);
+    final gold = goldOf(context);
+    final navy = navyOf(context);
     final bg = dark ? const Color(0xFF0F172A) : Colors.white;
     final titleColor = dark ? gold : navy;
     final iconColor = dark ? gold : navy;
@@ -102,8 +133,8 @@ abstract final class OilChangeFormTheme {
       actionsIconTheme: IconThemeData(color: gold, size: 22),
       title: Text(
         title,
-        style: TextStyle(
-          fontFamily: 'Tajawal',
+        // الخط من ثيم التطبيق (Tajawal أو Noto حسب الإعداد).
+        style: Theme.of(context).textTheme.titleMedium?.copyWith(
           fontSize: 17,
           fontWeight: FontWeight.w800,
           color: titleColor,
@@ -124,15 +155,18 @@ abstract final class OilChangeFormTheme {
   /// إطار ذهبي موحّد لقوائم منسدلة أو محتوى داخل بطاقة.
   static BoxDecoration fieldContainerDecoration(
     BuildContext context, {
-    double radius = 12,
+    double? radius,
   }) {
+    final corners = Theme.of(context).extension<AppCornerStyle>();
     return BoxDecoration(
       color: isDark(context)
           ? Colors.white.withValues(alpha: 0.04)
           : Colors.white,
-      borderRadius: BorderRadius.circular(radius),
+      borderRadius: corners == null
+          ? BorderRadius.circular(radius ?? 12)
+          : (radius == null ? corners.md : corners.radius(radius)),
       border: Border.all(
-        color: gold.withValues(alpha: 0.48),
+        color: goldOf(context).withValues(alpha: 0.48),
       ),
     );
   }
@@ -147,9 +181,11 @@ abstract final class OilChangeFormTheme {
     bool isDense = false,
     int? helperMaxLines,
   }) {
+    final gold = goldOf(context);
     final borderIdle = gold.withValues(alpha: 0.48);
+    final radius = radiusOf(context);
     OutlineInputBorder border(Color c, [double w = 1.5]) => OutlineInputBorder(
-          borderRadius: ErpInputConstants.borderRadius,
+          borderRadius: radius,
           borderSide: BorderSide(color: c, width: w),
         );
 
