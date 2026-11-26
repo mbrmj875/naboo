@@ -24,6 +24,7 @@ import '../installments/installments_screen.dart';
 import 'customer_financial_detail_panel.dart';
 import 'customer_financial_detail_screen.dart';
 import 'customer_form_screen.dart';
+import '../../guides/guide_anchor.dart';
 
 enum _CustomerSort {
   nameAsc,
@@ -524,15 +525,14 @@ class _CustomersScreenState extends State<CustomersScreen> {
       ),
       actions: [
         if (_selectedIds.isNotEmpty)
-          IconButton(
-            icon: const Icon(Icons.delete_outline),
-            tooltip: 'حذف المحدد',
-            onPressed: _confirmDeleteSelected,
+          IconButton(icon: const Icon(Icons.delete_outline), tooltip: 'حذف المحدد', onPressed: _confirmDeleteSelected),
+        GuideAnchor(
+          id: OilGuideAnchors.customersAdd,
+          child: IconButton(
+            icon: const Icon(Icons.person_add_alt_1_outlined),
+            tooltip: 'إضافة عميل',
+            onPressed: () => unawaited(_openEditor()),
           ),
-        IconButton(
-          icon: const Icon(Icons.person_add_alt_1_outlined),
-          tooltip: 'إضافة عميل',
-          onPressed: () => unawaited(_openEditor()),
         ),
         IconButton(
           icon: const Icon(Icons.refresh_rounded),

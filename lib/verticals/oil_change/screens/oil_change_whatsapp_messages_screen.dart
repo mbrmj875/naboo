@@ -18,6 +18,9 @@ import '../widgets/oil_change_whatsapp_outbox_view.dart';
 import '../widgets/whatsapp_send_block_banner.dart';
 import 'oil_change_whatsapp_connect_screen.dart';
 import 'oil_change_whatsapp_wallet_screen.dart';
+import '../services/whatsapp_responder_repository.dart';
+import 'whatsapp_customer_queue_screen.dart';
+import 'whatsapp_responder_page_screen.dart';
 import '../../../navigation/content_navigation.dart';
 
 /// رسائل واتساب: تم الإرسال / لم يتم الإرسال (قسم جهاز + قسم سحابة).
@@ -606,6 +609,17 @@ class _OilChangeWhatsappMessagesScreenState
                       label: 'الوقت',
                       value: _dateFormat.format(entry.createdAt),
                     ),
+                    if (entry.isAutoReply) ...[
+                      const SizedBox(height: 8),
+                      OutlinedButton.icon(
+                        onPressed: () {
+                          Navigator.of(ctx).pop();
+                          unawaited(_correctAutoReply(entry));
+                        },
+                        icon: const Icon(Icons.rule_rounded),
+                        label: const Text('رد خاطئ'),
+                      ),
+                    ],
                     if (failure != null) ...[
                       const SizedBox(height: 8),
                       _DetailRow(
@@ -746,6 +760,16 @@ class _OilChangeWhatsappMessagesScreenState
         context: context,
         title: 'رسائل واتساب',
         actions: [
+          IconButton(
+            tooltip: 'زبائن ينتظرون وقادمون',
+            onPressed: () => unawaited(WhatsappCustomerQueueScreen.open(context)),
+            icon: const Icon(Icons.support_agent_rounded),
+          ),
+          IconButton(
+            tooltip: 'ما يقوله المجيب للزبائن',
+            onPressed: () => unawaited(WhatsappResponderPageScreen.open(context)),
+            icon: const Icon(Icons.smart_toy_outlined),
+          ),
           IconButton(
             tooltip: 'تحديث',
             onPressed: (_sentLoading || _failedLoading)
@@ -941,6 +965,54 @@ class _OilChangeWhatsappMessagesScreenState
         ],
       ),
     );
+  }
+
+  /// ق90: الصواب يصير ملاحظة في صفحة المجيب، فيستعمله من الرسالة التالية.
+  Future<void> _correctAutoReply(OilChangeMessageLogEntry entry) async {
+    final ctrl = TextEditingController();
+    final text = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('رد خاطئ'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(entry.body, maxLines: 4, overflow: TextOverflow.fade),
+            const SizedBox(height: 12),
+            TextField(
+              controller: ctrl,
+              autofocus: true,
+              maxLength: WhatsappResponderProfile.maxNoteChars,
+              maxLines: 3,
+              minLines: 1,
+              decoration: const InputDecoration(
+                labelText: 'الصحيح',
+                hintText: 'مثال: الدوام يوم الجمعة من 4 العصر',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: const Text('احفظ الصحيح')),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    if (text == null || text.length < 2 || !mounted) return;
+    try {
+      await WhatsappResponderRepository.instance.correctReply(entry.id, text);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('حُفظ. المجيب يستعمله من الرسالة التالية.')),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تعذّر الحفظ. تأكد من الاتصال.')),
+      );
+    }
   }
 
   Widget _buildCloudTile(

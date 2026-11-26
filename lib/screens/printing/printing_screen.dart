@@ -10,8 +10,6 @@ import '../../theme/design_tokens.dart';
 import '../../utils/sale_receipt_pdf.dart';
 import '../../services/thermal_esc_pos_service.dart';
 import '../../services/thermal_network_printer_service.dart';
-import '../inventory/barcode_settings_screen.dart';
-import '../settings/store_info_screen.dart';
 
 /// مركز الطباعة — إعدادات مرتبطة بقاعدة البيانات [print_settings] وإيصال البيع.
 class PrintingScreen extends StatefulWidget {
@@ -506,59 +504,6 @@ class _PrintingScreenState extends State<PrintingScreen> {
                         ),
                       ],
                     ),
-                  ),
-                ),
-                const SizedBox(height: 20),
-                const _SectionTitle(icon: Icons.link_rounded, title: 'ربط مع بقية النظام'),
-                const SizedBox(height: 8),
-                  Card(
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
-                      side: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.5)),
-                    ),
-                  color: cs.surface,
-                  child: Column(
-                    children: [
-                      ListTile(
-                        leading: Icon(Icons.qr_code_2_rounded,
-                            color: cs.secondary),
-                        title: const Text('إعدادات الباركود والملصقات'),
-                        subtitle: const Text(
-                          'تنسيق الباركود للمنتجات — يُستخدم عند الطباعة من المخزون',
-                          style: TextStyle(fontSize: 12),
-                        ),
-                        trailing: const Icon(Icons.chevron_left, size: 20),
-                        onTap: () => Navigator.of(context).push(
-                          MaterialPageRoute<void>(
-                            builder: (_) => const BarcodeSettingsScreen(),
-                          ),
-                        ),
-                      ),
-                      const Divider(height: 1),
-                      ListTile(
-                        leading: Icon(Icons.store_rounded,
-                            color: cs.primary),
-                        title: const Text('بيانات المتجر'),
-                        subtitle: const Text(
-                          'الاسم، العنوان، وأرقام الهاتف — تظهر على إيصال البيع',
-                          style: TextStyle(fontSize: 12),
-                        ),
-                        trailing: const Icon(Icons.chevron_left, size: 20),
-                        onTap: () async {
-                          await Navigator.of(context).push(
-                            MaterialPageRoute<void>(
-                              builder: (_) => const StoreInfoScreen(),
-                            ),
-                          );
-                          if (!context.mounted) return;
-                          final p =
-                              context.read<PrintSettingsProvider>().data;
-                          _storeTitleCtrl.text = p.storeTitleLine;
-                          setState(() => _dirty = true);
-                        },
-                      ),
-                    ],
                   ),
                 ),
                 const SizedBox(height: 20),

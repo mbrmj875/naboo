@@ -1,3 +1,4 @@
+import '../../assistant/exec/assistant_prefill.dart';
 import 'dart:async' show Timer, unawaited;
 import 'dart:math';
 
@@ -126,7 +127,11 @@ class AddProductScreen extends StatefulWidget {
     super.key,
     this.initialBarcode,
     this.autoFillFromScan = false,
+    this.assistantPrefill,
   });
+
+  /// صنف جديد عبّأه المساعد (م4-2). يُراجع ويُحفظ بزر الشاشة نفسه.
+  final AssistantPrefill? assistantPrefill;
 
   final String? initialBarcode;
 
@@ -744,6 +749,18 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
     _minSellPriceCtrl.addListener(_onSellOrMinManualEdit);
     _reconcilePharmacySession();
     _loadRefs();
+    final ap = widget.assistantPrefill;
+    if (ap != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        setState(() {
+          _nameCtrl.text = ap.str('name') ?? _nameCtrl.text;
+          if (ap.str('brand') case final b?) _brandCtrl.text = b;
+          if (ap.number('sell_price') case final p? when p > 0) _sellPriceCtrl.text = '${p.toInt()}';
+          if (ap.number('qty') case final q? when q > 0) _qtyCtrl.text = q == q.roundToDouble() ? '${q.toInt()}' : '$q';
+        });
+      });
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       try {
@@ -2360,7 +2377,11 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
               onPressed: _saving ? null : () => Navigator.maybePop(context),
             ),
           ),
-          body: _loadingRefs
+          body: AssistantPrefillBanner.wrap(
+            widget.assistantPrefill,
+            only: const {'name', 'brand', 'sell_price', 'qty'},
+            what: 'بيانات الصنف',
+            child: _loadingRefs
               ? const Center(child: CircularProgressIndicator())
               : LayoutBuilder(
                   builder: (context, constraints) {
@@ -2418,6 +2439,7 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
                     );
                   },
                 ),
+          ),
         ),
       ),
     );

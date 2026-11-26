@@ -170,17 +170,27 @@ class CloudSessionSurface extends StatelessWidget {
           deviceOwnerBound: auth.deviceOwnerBound,
           gateVisible: gate,
         );
+        // الشريط يدفع التطبيق للأسفل بدل أن يغطي شريطه العلوي (البحث
+        // والوردية والمزامنة). التطبيق يبقى في الموضع نفسه من الشجرة دائماً،
+        // فظهور الشريط واختفاؤه لا يعيدان بناء الشاشات.
         return Stack(
           fit: StackFit.expand,
           children: [
-            child,
-            if (banner)
-              const PositionedDirectional(
-                top: 0,
-                start: 0,
-                end: 0,
-                child: CloudDegradedBanner(),
-              ),
+            Column(
+              children: [
+                if (banner)
+                  const CloudDegradedBanner()
+                else
+                  const SizedBox.shrink(),
+                Expanded(
+                  child: MediaQuery.removePadding(
+                    context: context,
+                    removeTop: banner,
+                    child: child,
+                  ),
+                ),
+              ],
+            ),
             if (gate) const Positioned.fill(child: CloudReconnectGate()),
           ],
         );

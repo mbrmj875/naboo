@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../notifications/push_device_registry.dart';
 import '../services/database_helper.dart';
 import '../services/system_notification_service.dart';
 import '../services/tenant_context_service.dart';
@@ -299,6 +300,23 @@ class NotificationProvider extends ChangeNotifier {
       (defaultTargetPlatform == TargetPlatform.android ||
           defaultTargetPlatform == TargetPlatform.iOS);
 
+  /// أنواع يرسلها الخادم إلى هاتف المالك المعلَّم (خطة الإشعارات): لا تُعرض محليا
+  /// مرة ثانية في شريط النظام على ذلك الهاتف. تبقى في لوحة التنبيهات كما هي.
+  static const _serverPushedTypes = {
+    NotificationType.lowInventory,
+    NotificationType.negativeStockSale,
+    NotificationType.saleReturn,
+    NotificationType.financedSale,
+    NotificationType.installmentDue,
+    NotificationType.installmentLate,
+    NotificationType.customerDebt,
+    NotificationType.cashAlert,
+  };
+
+  bool _trayAllowed(AppNotification n) =>
+      !(PushDeviceRegistry.instance.thisDeviceIsOwnerPhone.value &&
+          _serverPushedTypes.contains(n.type));
+
   void _emitNewToAndroidSystemTray(List<AppNotification> built) {
     if (!_supportsLocalDeviceTray) return;
     if (!_systemTrayPrimed) {
@@ -307,6 +325,7 @@ class NotificationProvider extends ChangeNotifier {
       var primeShown = 0;
       for (final n in built) {
         final showPrime = _primeTrayTypes.contains(n.type) &&
+            _trayAllowed(n) &&
             !n.isRead &&
             primeShown < _maxPrimeTray;
         if (showPrime) {
@@ -330,6 +349,7 @@ class NotificationProvider extends ChangeNotifier {
       if (n.isRead) continue;
       if (_systemTrayShownIds.contains(n.id)) continue;
       _systemTrayShownIds.add(n.id);
+      if (!_trayAllowed(n)) continue;
       unawaited(
         SystemNotificationService.instance.show(
           id: n.id,

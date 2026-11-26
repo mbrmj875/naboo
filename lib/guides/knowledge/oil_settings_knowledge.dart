@@ -22,7 +22,7 @@ class OilSettingsKnowledgeEntry {
 
 abstract final class OilSettingsKnowledge {
   static const howToOpenSheet =
-      'من سجل غيارات الزيت اضغط أيقونة إعدادات غيار الزيت (ضبط) أعلى الشاشة.';
+      'من شاشة الإعدادات، مجموعة «محل الزيت»، اضغط «إعدادات غيار الزيت».';
 
   static const entries = <OilSettingsKnowledgeEntry>[
     OilSettingsKnowledgeEntry(
@@ -73,7 +73,7 @@ abstract final class OilSettingsKnowledge {
 
   static String packSnippet() {
     final buf = StringBuffer(
-      'معرفة إعدادات غيار الزيت (لوحة السجل). الوصول: $howToOpenSheet\n',
+      'معرفة إعدادات غيار الزيت. الوصول: $howToOpenSheet\n',
     );
     for (final e in entries) {
       buf.writeln('- ${e.toPromptSnippet()}');

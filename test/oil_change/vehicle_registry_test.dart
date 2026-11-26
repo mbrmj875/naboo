@@ -24,6 +24,7 @@ Future<int> _rawOrder(
   String phone = '',
   String car = 'كامري',
   String odo = '',
+  String? unit,
 }) async {
   final db = await h.database;
   // إدخال مباشر يحاكي بطاقة قديمة قبل السجل (بلا ربط).
@@ -36,6 +37,7 @@ Future<int> _rawOrder(
     'deviceName': car,
     'deviceSerial': plate,
     'odometerCurrent': odo,
+    'odometerUnit': ?unit,
     'estimatedPriceFils': 0,
     'advancePaymentFils': 0,
     'createdAt': date,
@@ -92,6 +94,26 @@ void main() {
       final updatedAt = car['updatedAt'];
       expect(await VehicleRegistry.reconcile(db), 0, reason: 'آمن للتكرار');
       expect((await _vehicles(h)).first['updatedAt'], updatedAt);
+    });
+
+    test('وحدة آخر عداد من آخر زيارة، وتبقى بعد إعادة الحساب', () async {
+      await _rawOrder(h, plate: '24680', date: '2026-01-01T10:00:00', odo: '90000', unit: 'km');
+      await _rawOrder(h, plate: '24680', date: '2026-02-01T10:00:00', odo: '54815', unit: 'mi');
+      final db = await h.database;
+      await VehicleRegistry.reconcile(db);
+      var car = (await _vehicles(h)).single;
+      expect(car['last_odometer'], 54815);
+      expect(car['last_odometer_unit'], 'mi');
+
+      await VehicleRegistry.rebuildAll(db);
+      car = (await _vehicles(h)).single;
+      expect(car['last_odometer_unit'], 'mi', reason: 'إعادة الحساب لا تعيدها كم');
+
+      // سجل كتبته النسخة السابقة «كم» خطأً يُصحَّح عند الفتح التالي.
+      await db.update('vehicles', {'last_odometer_unit': 'km'});
+      await VehicleRegistry.ensureSchema(db);
+      car = (await _vehicles(h)).single;
+      expect(car['last_odometer_unit'], 'mi');
     });
 
     test('الحفظ يربط البطاقة، وتغيير اللوحة ينقلها ويحدّث السيارتين', () async {

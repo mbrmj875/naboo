@@ -6,6 +6,8 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <!-- Android 13+ لإظهار إشعارات في شريط النظام -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- تذكيرات المساعد (م4-11): تبقى بعد إعادة تشغيل الجهاز. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <!-- اختيار صورة/شعار عبر Photo Picker فقط — بدون صلاحية قراءة كل المعرض (سياسة Play). -->
@@ -87,6 +89,20 @@
                 <data android:scheme="io.supabase.naboo" android:host="whatsapp-es-complete"/>
             </intent-filter>
         </activity>
+        <!-- مدخل الاختبار النهائي (م7-1): naboo-qa://assistant/... يُسجَّل في نسخة
+             الاختبار فقط (-Pnaboo.qa=true). في نسخة المتجر الاسم المستعار معطّل
+             فلا يستقبل النظام هذا الرابط أصلاً. -->
+        <activity-alias
+            android:name=".QaAssistantLinks"
+            android:targetActivity=".MainActivity"
+            android:enabled="${qaLinksEnabled}"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:scheme="naboo-qa" android:host="assistant"/>
+            </intent-filter>
+        </activity-alias>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data
@@ -99,6 +115,20 @@
         <meta-data
             android:name="com.google.android.geo.API_KEY"
             android:value="${googleMapsApiKey}" />
+        <!-- إشعارات مجدولة لتذكيرات المساعد (flutter_local_notifications). -->
+        <receiver
+            android:exported="false"
+            android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver" />
+        <receiver
+            android:exported="false"
+            android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
     </application>
     <!-- tel / https فقط — لا نستعلم PROCESS_TEXT لتجنّب تحذيرات SwiftKey/لوحات خارجية
          المعطوبة عند التركيز على حقول النص (ProcessTextPlugin). -->

@@ -115,18 +115,8 @@ class BusinessFeaturesProvider extends ChangeNotifier {
       }
     }
 
-    if (!guarded.enableTaxOnSale) {
-      pos = pos.copyWith(enableTaxOnSale: false);
-    } else if (guarded.enableTaxOnSale && !previous.enableTaxOnSale) {
-      pos = pos.copyWith(enableTaxOnSale: true);
-    }
-
-    if (!guarded.enableInvoiceDiscount) {
-      pos = pos.copyWith(enableInvoiceDiscount: false);
-    } else if (guarded.enableInvoiceDiscount &&
-        !previous.enableInvoiceDiscount) {
-      pos = pos.copyWith(enableInvoiceDiscount: true);
-    }
+    // الضريبة والخصم: مصدرهما الوحيد إعدادات نقطة البيع (وهي ما تقرؤه شاشة
+    // البيع). مفتاحا الميزات القديمان لا يُكتبان فوقها بعد الآن.
 
     await repo.set(SalePosSettingsKeys.jsonKey, pos.toJsonString());
   }

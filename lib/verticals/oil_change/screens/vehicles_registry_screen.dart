@@ -9,6 +9,8 @@ import '../services/vehicle_registry.dart';
 import '../utils/oil_change_lookup_normalize.dart';
 import '../../../services/service_order_kinds.dart';
 import 'oil_change_detail_screen.dart';
+import '../../../utils/arabic_count.dart';
+import '../utils/oil_odometer_unit.dart';
 
 String _day(DateTime? d) => d == null
     ? ''
@@ -19,14 +21,13 @@ DateTime? _date(Object? v) => DateTime.tryParse((v ?? '').toString());
 
 String _s(Object? v) => (v ?? '').toString().trim();
 
-/// العداد في السجل رقم، وفي البطاقة نص («85,000» أو «٨٥٠٠٠»).
-String _km(Object? v) {
-  final n = v is num
-      ? v.toInt()
-      : int.tryParse(
-          OilChangeLookupNormalize.toWesternDigits(_s(v)),
-        );
-  return n == null || n <= 0 ? '' : '${IraqiCurrencyFormat.formatInt(n)} كم';
+/// العداد في السجل رقم، وفي البطاقة نص («85,000» أو «٨٥٠٠٠»)، مع وحدته
+/// («كم» أو «ميل»).
+String _km(Object? v, [Object? unit]) {
+  final n = v is num ? v.toInt() : int.tryParse(OilChangeLookupNormalize.toWesternDigits(_s(v)));
+  if (n == null || n <= 0) return '';
+  final label = OilOdometerUnit.label(OilOdometerUnit.parse(unit));
+  return '${IraqiCurrencyFormat.formatInt(n)} $label';
 }
 
 /// سجل السيارات (المرحلة 6 — الشريحة 4): كل سيارات المحل مع البحث.
@@ -173,10 +174,9 @@ class _VehicleTile extends StatelessWidget {
         .join(' ');
     final visits = (v['visits_count'] as num?)?.toInt() ?? 0;
     final facts = [
-      if (_date(v['last_visit_at']) != null)
-        'آخر زيارة ${_day(_date(v['last_visit_at']))}',
-      '$visits زيارة',
-      if (_km(v['last_odometer']).isNotEmpty) _km(v['last_odometer']),
+      if (_date(v['last_visit_at']) != null) 'آخر زيارة ${_day(_date(v['last_visit_at']))}',
+      arabicVisitsCount(visits),
+      if (_km(v['last_odometer']).isNotEmpty) _km(v['last_odometer'], v['last_odometer_unit']),
     ].join(' · ');
     return Card(
       margin: EdgeInsets.zero,
@@ -315,9 +315,9 @@ class _VehicleDetailScreenState extends State<VehicleDetailScreen> {
                           const SizedBox(height: 8),
                           Text(
                             [
-                              '${(v['visits_count'] as num?)?.toInt() ?? 0} زيارة',
+                              arabicVisitsCount((v['visits_count'] as num?)?.toInt() ?? 0),
                               if (_km(v['last_odometer']).isNotEmpty)
-                                'آخر عداد ${_km(v['last_odometer'])}',
+                                'آخر عداد ${_km(v['last_odometer'], v['last_odometer_unit'])}',
                             ].join(' · '),
                             style: TextStyle(color: cs.onSurfaceVariant),
                           ),
@@ -353,7 +353,7 @@ class _VehicleDetailScreenState extends State<VehicleDetailScreen> {
                               owners[i].from == owners[i].to
                                   ? _day(owners[i].from)
                                   : 'من ${_day(owners[i].from)} إلى ${_day(owners[i].to)}',
-                              '${owners[i].visits} زيارة',
+                              arabicVisitsCount(owners[i].visits),
                             ].join(' · '),
                           ),
                           trailing: i == 0 ? const Text('الحالي') : null,
@@ -399,7 +399,7 @@ class _VisitTile extends StatelessWidget {
           [
             _day(_date(o['createdAt'])),
             wash ? 'غسيل' : 'غيار زيت',
-            if (_km(o['odometerCurrent']).isNotEmpty) _km(o['odometerCurrent']),
+            if (_km(o['odometerCurrent']).isNotEmpty) _km(o['odometerCurrent'], o['odometerUnit']),
           ].join(' · '),
           style: const TextStyle(fontWeight: FontWeight.w700),
         ),

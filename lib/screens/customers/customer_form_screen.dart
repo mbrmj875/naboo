@@ -1,3 +1,4 @@
+import '../../assistant/exec/assistant_prefill.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart' hide TextDirection;
@@ -15,12 +16,16 @@ import '../../verticals/_contract/vertical_registry.dart';
 import '../../theme/design_tokens.dart';
 import '../../utils/customer_validation.dart';
 import '../../widgets/adaptive/adaptive_form_container.dart';
+import '../../guides/guide_anchor.dart';
 
 /// صفحة إضافة أو تعديل عميل — بدون نافذة منبثقة؛ مرتبطة بجدول [customers] وباقي التطبيق.
 ///
 /// عند نجاح الحفظ تُرجع [Navigator.pop] قيمة [CustomerRecord] للشاشة النافذة (مثل البيع).
 class CustomerFormScreen extends StatefulWidget {
-  const CustomerFormScreen({super.key, this.existing});
+  const CustomerFormScreen({super.key, this.existing, this.assistantPrefill});
+
+  /// زبون جديد عبّأه المساعد (م4-2). يُراجع ويُحفظ بزر الشاشة نفسه.
+  final AssistantPrefill? assistantPrefill;
 
   /// `null` = إضافة جديدة، وإلا تعديل.
   final CustomerRecord? existing;
@@ -59,8 +64,9 @@ class _CustomerFormScreenState extends State<CustomerFormScreen> {
   void initState() {
     super.initState();
     final e = widget.existing;
-    _nameCtrl = TextEditingController(text: e?.name ?? '');
-    _phoneCtrls.add(TextEditingController(text: e?.phone ?? ''));
+    final ap = e == null ? widget.assistantPrefill : null;
+    _nameCtrl = TextEditingController(text: e?.name ?? ap?.str('name') ?? '');
+    _phoneCtrls.add(TextEditingController(text: e?.phone ?? ap?.str('phone') ?? ''));
     _addressCtrl = TextEditingController(text: e?.address ?? '');
     _notesCtrl = TextEditingController(text: e?.notes ?? '');
     _selectedPriceListId = e?.priceListId;
@@ -87,9 +93,7 @@ class _CustomerFormScreenState extends State<CustomerFormScreen> {
       setState(() {
         _loadedDebtException = ex;
         _debtPeriodCtrl.text = ex.periodDays == null ? '' : '${ex.periodDays}';
-        _debtCapCtrl.text = ex.capFils == null
-            ? ''
-            : IqdMoney.fromFils(ex.capFils!).round().toString();
+        _debtCapCtrl.text = ex.capFils == null ? '' : IqdMoney.fromFils(ex.capFils!).round().toString();
         _cashOnly = ex.cashOnly;
       });
     } catch (e, st) {
@@ -108,9 +112,7 @@ class _CustomerFormScreenState extends State<CustomerFormScreen> {
   }
 
   bool _sameException(CustomerDebtException a, CustomerDebtException b) =>
-      a.periodDays == b.periodDays &&
-      a.capFils == b.capFils &&
-      a.cashOnly == b.cashOnly;
+      a.periodDays == b.periodDays && a.capFils == b.capFils && a.cashOnly == b.cashOnly;
 
   /// تغيير الاستثناء برمز المالك: لا يرفع موظف المنع عن زبون بنفسه.
   Future<bool> _saveDebtExceptionIfChanged(int customerId) async {
@@ -144,15 +146,11 @@ class _CustomerFormScreenState extends State<CustomerFormScreen> {
     try {
       final lists = await _priceLists.listPriceLists();
       if (!mounted) return;
-      final activeIds = lists
-          .map((l) => (l['id'] as num?)?.toInt())
-          .whereType<int>()
-          .toSet();
+      final activeIds = lists.map((l) => (l['id'] as num?)?.toInt()).whereType<int>().toSet();
       setState(() {
         _priceListOptions = lists;
         _priceListsLoading = false;
-        if (_selectedPriceListId != null &&
-            !activeIds.contains(_selectedPriceListId)) {
+        if (_selectedPriceListId != null && !activeIds.contains(_selectedPriceListId)) {
           _selectedPriceListId = null;
         }
       });
@@ -185,10 +183,7 @@ class _CustomerFormScreenState extends State<CustomerFormScreen> {
   ];
 
   List<String> _phonesInOrder() {
-    return _phoneCtrls
-        .map((c) => c.text.trim())
-        .where((s) => s.isNotEmpty)
-        .toList();
+    return _phoneCtrls.map((c) => c.text.trim()).where((s) => s.isNotEmpty).toList();
   }
 
   void _addEmptyPhoneField() {
@@ -204,13 +199,8 @@ class _CustomerFormScreenState extends State<CustomerFormScreen> {
       final primary = phones.isEmpty ? null : phones.first;
       final extra = phones.length <= 1 ? <String>[] : phones.sublist(1);
 
-      final normalizedPrimary = primary == null
-          ? null
-          : CustomerValidation.normalizePhoneDigits(primary);
-      final normalizedExtra = extra
-          .map(CustomerValidation.normalizePhoneDigits)
-          .whereType<String>()
-          .toList();
+      final normalizedPrimary = primary == null ? null : CustomerValidation.normalizePhoneDigits(primary);
+      final normalizedExtra = extra.map(CustomerValidation.normalizePhoneDigits).whereType<String>().toList();
 
       final data = <String, dynamic>{
         'name': _nameCtrl.text.trim(),
@@ -224,42 +214,28 @@ class _CustomerFormScreenState extends State<CustomerFormScreen> {
         await _db.updateCustomer(
           id: id,
           name: data['name'] as String,
-          phone: (data['phone'] as String).isEmpty
-              ? null
-              : data['phone'] as String?,
+          phone: (data['phone'] as String).isEmpty ? null : data['phone'] as String?,
           email: widget.existing?.email,
-          address: (data['address'] as String).isEmpty
-              ? null
-              : data['address'] as String?,
-          notes: (data['notes'] as String).isEmpty
-              ? null
-              : data['notes'] as String?,
+          address: (data['address'] as String).isEmpty ? null : data['address'] as String?,
+          notes: (data['notes'] as String).isEmpty ? null : data['notes'] as String?,
           extraPhones: normalizedExtra,
           priceListId: _selectedPriceListId,
         );
         if (!mounted) return;
         if (!await _saveDebtExceptionIfChanged(id)) {
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('حُفظت بيانات العميل، ولم يُحفظ استثناء الدين.'),
-              ),
-            );
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(const SnackBar(content: Text('حُفظت بيانات العميل، ولم يُحفظ استثناء الدين.')));
           }
         }
       } else {
         final newId = await _db.insertCustomer(
           name: data['name'] as String,
-          phone: (data['phone'] as String).isEmpty
-              ? null
-              : data['phone'] as String?,
+          phone: (data['phone'] as String).isEmpty ? null : data['phone'] as String?,
           email: null,
-          address: (data['address'] as String).isEmpty
-              ? null
-              : data['address'] as String?,
-          notes: (data['notes'] as String).isEmpty
-              ? null
-              : data['notes'] as String?,
+          address: (data['address'] as String).isEmpty ? null : data['address'] as String?,
+          notes: (data['notes'] as String).isEmpty ? null : data['notes'] as String?,
           extraPhones: normalizedExtra,
           priceListId: _selectedPriceListId,
         );
@@ -281,12 +257,8 @@ class _CustomerFormScreenState extends State<CustomerFormScreen> {
       Navigator.pop(context, CustomerRecord.fromMap(row));
     } catch (e) {
       if (mounted) {
-        final msg = e is DuplicateCustomerPhoneException
-            ? e.message
-            : 'تعذر الحفظ: $e';
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(msg)));
+        final msg = e is DuplicateCustomerPhoneException ? e.message : 'تعذر الحفظ: $e';
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
       }
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -300,10 +272,7 @@ class _CustomerFormScreenState extends State<CustomerFormScreen> {
       child: ExpansionTile(
         key: const ValueKey('customerDebtException'),
         initiallyExpanded: hasAny,
-        leading: Icon(
-          Icons.rule_rounded,
-          color: hasAny ? cs.error : cs.onSurfaceVariant,
-        ),
+        leading: Icon(Icons.rule_rounded, color: hasAny ? cs.error : cs.onSurfaceVariant),
         title: const Text('استثناء الدين لهذا العميل'),
         subtitle: Text(
           hasAny ? 'مضبوط له استثناء' : 'يتبع إعدادات الدين العامة',
@@ -314,14 +283,9 @@ class _CustomerFormScreenState extends State<CustomerFormScreen> {
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
             title: const Text('نقداً فقط'),
-            subtitle: const Text(
-              'لا دين جديد له إلا برمز المالك.',
-              style: TextStyle(fontSize: 12),
-            ),
+            subtitle: const Text('لا دين جديد له إلا برمز المالك.', style: TextStyle(fontSize: 12)),
             value: _cashOnly,
-            onChanged: _saving
-                ? null
-                : (v) => setState(() => _cashOnly = v),
+            onChanged: _saving ? null : (v) => setState(() => _cashOnly = v),
           ),
           const SizedBox(height: 8),
           TextField(
@@ -379,147 +343,136 @@ class _CustomerFormScreenState extends State<CustomerFormScreen> {
         ),
         body: AdaptiveFormContainer(
           child: Column(
-          children: [
-            Expanded(
-              child: SingleChildScrollView(
-                padding: EdgeInsetsDirectional.only(
-                  start: ScreenLayout.of(context).pageHorizontalGap,
-                  end: ScreenLayout.of(context).pageHorizontalGap,
-                  top: 16,
-                  bottom: 24,
-                ),
-                child: Form(
-                  key: _formKey,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      if (created != null)
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 12),
-                          child: Text(
-                            'مسجّل منذ ${DateFormat('yyyy/MM/dd', 'en').format(created)}',
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: cs.onSurfaceVariant,
+            children: [
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: EdgeInsetsDirectional.only(
+                    start: ScreenLayout.of(context).pageHorizontalGap,
+                    end: ScreenLayout.of(context).pageHorizontalGap,
+                    top: 16,
+                    bottom: 24,
+                  ),
+                  child: Form(
+                    key: _formKey,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        if (widget.existing == null && widget.assistantPrefill != null)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 12),
+                            child: AssistantPrefillBanner(
+                              prefill: widget.assistantPrefill!,
+                              only: const {'name', 'phone'},
+                              what: 'بيانات الزبون',
                             ),
                           ),
+                        if (created != null)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 12),
+                            child: Text(
+                              'مسجّل منذ ${DateFormat('yyyy/MM/dd', 'en').format(created)}',
+                              style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant),
+                            ),
+                          ),
+                        Text(
+                          'املأ البيانات الأساسية. يمكن ترك الحقول الاختيارية فارغة.',
+                          style: TextStyle(fontSize: 13, height: 1.45, color: cs.onSurfaceVariant),
                         ),
-                      Text(
-                        'املأ البيانات الأساسية. يمكن ترك الحقول الاختيارية فارغة.',
-                        style: TextStyle(
-                          fontSize: 13,
-                          height: 1.45,
-                          color: cs.onSurfaceVariant,
+                        const SizedBox(height: 16),
+                        _CustomerFormField(
+                          controller: _nameCtrl,
+                          label: 'اسم العميل',
+                          hint: 'الاسم الكامل كما يظهر في الفواتير',
+                          icon: Icons.person_outline,
+                          autofocus: !_isEdit,
+                          validator: _validateName,
                         ),
-                      ),
-                      const SizedBox(height: 16),
-                      _CustomerFormField(
-                        controller: _nameCtrl,
-                        label: 'اسم العميل',
-                        hint: 'الاسم الكامل كما يظهر في الفواتير',
-                        icon: Icons.person_outline,
-                        autofocus: !_isEdit,
-                        validator: _validateName,
-                      ),
-                      const SizedBox(height: 14),
-                      for (var i = 0; i < _phoneCtrls.length; i++) ...[
-                        Builder(
-                          builder: (context) {
-                            final idx = i;
-                            return Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Expanded(
-                                  child: _CustomerFormField(
-                                    controller: _phoneCtrls[idx],
-                                    label: idx == 0
-                                        ? 'رقم الهاتف (اختياري)'
-                                        : 'رقم هاتف إضافي',
-                                    hint: idx == 0
-                                        ? '07701234567 — 11 رقمًا يبدأ بـ 07'
-                                        : '07801234567 — 11 رقمًا يبدأ بـ 07',
-                                    icon: Icons.phone_outlined,
-                                    keyboardType: TextInputType.phone,
-                                    textDirection: TextDirection.ltr,
-                                    inputFormatters: _iraqiPhoneInputFormatters,
-                                    validator: _validatePhone,
-                                  ),
-                                ),
-                                if (idx > 0) ...[
-                                  const SizedBox(width: 4),
-                                  Padding(
-                                    padding: const EdgeInsets.only(top: 28),
-                                    child: IconButton(
-                                      tooltip: 'حذف الرقم',
-                                      onPressed: _saving
-                                          ? null
-                                          : () {
-                                              setState(() {
-                                                _phoneCtrls[idx].dispose();
-                                                _phoneCtrls.removeAt(idx);
-                                              });
-                                            },
-                                      icon: const Icon(Icons.close_rounded),
+                        const SizedBox(height: 14),
+                        for (var i = 0; i < _phoneCtrls.length; i++) ...[
+                          Builder(
+                            builder: (context) {
+                              final idx = i;
+                              return Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Expanded(
+                                    child: _CustomerFormField(
+                                      controller: _phoneCtrls[idx],
+                                      label: idx == 0 ? 'رقم الهاتف (اختياري)' : 'رقم هاتف إضافي',
+                                      hint: idx == 0
+                                          ? '07701234567 — 11 رقمًا يبدأ بـ 07'
+                                          : '07801234567 — 11 رقمًا يبدأ بـ 07',
+                                      icon: Icons.phone_outlined,
+                                      keyboardType: TextInputType.phone,
+                                      textDirection: TextDirection.ltr,
+                                      inputFormatters: _iraqiPhoneInputFormatters,
+                                      validator: _validatePhone,
                                     ),
                                   ),
+                                  if (idx > 0) ...[
+                                    const SizedBox(width: 4),
+                                    Padding(
+                                      padding: const EdgeInsets.only(top: 28),
+                                      child: IconButton(
+                                        tooltip: 'حذف الرقم',
+                                        onPressed: _saving
+                                            ? null
+                                            : () {
+                                                setState(() {
+                                                  _phoneCtrls[idx].dispose();
+                                                  _phoneCtrls.removeAt(idx);
+                                                });
+                                              },
+                                        icon: const Icon(Icons.close_rounded),
+                                      ),
+                                    ),
+                                  ],
                                 ],
-                              ],
-                            );
-                          },
-                        ),
-                        if (i == 0) ...[
-                          const SizedBox(height: 4),
-                          Align(
-                            alignment: AlignmentDirectional.centerStart,
-                            child: TextButton.icon(
-                              onPressed: _saving ? null : _addEmptyPhoneField,
-                              icon: Icon(
-                                Icons.add_circle_outline_rounded,
-                                size: 20,
-                                color: AppColors.accentGold,
-                              ),
-                              label: Text(
-                                'إضافة رقم آخر',
-                                style: TextStyle(
-                                  color: AppColors.accentGold,
-                                  fontWeight: FontWeight.w700,
+                              );
+                            },
+                          ),
+                          if (i == 0) ...[
+                            const SizedBox(height: 4),
+                            Align(
+                              alignment: AlignmentDirectional.centerStart,
+                              child: TextButton.icon(
+                                onPressed: _saving ? null : _addEmptyPhoneField,
+                                icon: Icon(Icons.add_circle_outline_rounded, size: 20, color: AppColors.accentGold),
+                                label: Text(
+                                  'إضافة رقم آخر',
+                                  style: TextStyle(color: AppColors.accentGold, fontWeight: FontWeight.w700),
                                 ),
                               ),
                             ),
-                          ),
-                        ],
-                        const SizedBox(height: 14),
-                      ],
-                      _CustomerFormField(
-                        controller: _addressCtrl,
-                        label: 'العنوان (اختياري)',
-                        hint: 'المدينة، المنطقة',
-                        icon: Icons.location_on_outlined,
-                      ),
-                      const SizedBox(height: 14),
-                      _CustomerFormField(
-                        controller: _notesCtrl,
-                        label: 'ملاحظات (اختياري)',
-                        hint: 'تفضيلات العميل، ملاحظات داخلية…',
-                        icon: Icons.notes_outlined,
-                        maxLines: 3,
-                      ),
-                      const SizedBox(height: 14),
-                      _PriceListPicker(
-                        loading: _priceListsLoading,
-                        options: _priceListOptions,
-                        selectedId: _selectedPriceListId,
-                        onChanged: _saving
-                            ? null
-                            : (id) => setState(() => _selectedPriceListId = id),
-                      ),
-                      const SizedBox(height: 14),
-                      _buildDebtExceptionSection(cs),
-                      if (_isEdit && widget.existing!.id > 0 && _tenantId != null)
-                        ...[
+                          ],
                           const SizedBox(height: 14),
-                          VerticalRegistry.instance.activeManifest
-                                  .buildCustomerExtensionSection(
+                        ],
+                        _CustomerFormField(
+                          controller: _addressCtrl,
+                          label: 'العنوان (اختياري)',
+                          hint: 'المدينة، المنطقة',
+                          icon: Icons.location_on_outlined,
+                        ),
+                        const SizedBox(height: 14),
+                        _CustomerFormField(
+                          controller: _notesCtrl,
+                          label: 'ملاحظات (اختياري)',
+                          hint: 'تفضيلات العميل، ملاحظات داخلية…',
+                          icon: Icons.notes_outlined,
+                          maxLines: 3,
+                        ),
+                        const SizedBox(height: 14),
+                        _PriceListPicker(
+                          loading: _priceListsLoading,
+                          options: _priceListOptions,
+                          selectedId: _selectedPriceListId,
+                          onChanged: _saving ? null : (id) => setState(() => _selectedPriceListId = id),
+                        ),
+                        const SizedBox(height: 14),
+                        _buildDebtExceptionSection(cs),
+                        if (_isEdit && widget.existing!.id > 0 && _tenantId != null) ...[
+                          const SizedBox(height: 14),
+                          VerticalRegistry.instance.activeManifest.buildCustomerExtensionSection(
                                 context: context,
                                 tenantId: _tenantId!,
                                 customerId: widget.existing!.id,
@@ -535,67 +488,60 @@ class _CustomerFormScreenState extends State<CustomerFormScreen> {
                               ) ??
                               const SizedBox.shrink(),
                         ],
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            Material(
-              elevation: 8,
-              color: cs.surface,
-              child: SafeArea(
-                top: false,
-                child: Padding(
-                  padding: EdgeInsetsDirectional.only(
-                    start: ScreenLayout.of(context).pageHorizontalGap,
-                    end: ScreenLayout.of(context).pageHorizontalGap,
-                    top: 10,
-                    bottom: 12,
-                  ),
-                  child: Align(
-                    alignment: AlignmentDirectional.centerStart,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        TextButton(
-                          onPressed: _saving
-                              ? null
-                              : () => Navigator.pop(context),
-                          style: TextButton.styleFrom(foregroundColor: cs.onSurface),
-                          child: const Text('إلغاء'),
-                        ),
-                        const SizedBox(width: 8),
-                        FilledButton(
-                          onPressed: _saving ? null : _submit,
-                          style: FilledButton.styleFrom(
-                            backgroundColor: AppColors.accentGold.withValues(alpha: 0.2),
-                            foregroundColor: AppColors.accentGold,
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 28,
-                              vertical: 14,
-                            ),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                          ),
-                          child: _saving
-                              ? SizedBox(
-                                  width: 22,
-                                  height: 22,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    color: cs.onPrimary,
-                                  ),
-                                )
-                              : const Text('حفظ'),
-                        ),
                       ],
                     ),
                   ),
                 ),
               ),
-            ),
-          ],
+              Material(
+                elevation: 8,
+                color: cs.surface,
+                child: SafeArea(
+                  top: false,
+                  child: Padding(
+                    padding: EdgeInsetsDirectional.only(
+                      start: ScreenLayout.of(context).pageHorizontalGap,
+                      end: ScreenLayout.of(context).pageHorizontalGap,
+                      top: 10,
+                      bottom: 12,
+                    ),
+                    child: Align(
+                      alignment: AlignmentDirectional.centerStart,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          TextButton(
+                            onPressed: _saving ? null : () => Navigator.pop(context),
+                            style: TextButton.styleFrom(foregroundColor: cs.onSurface),
+                            child: const Text('إلغاء'),
+                          ),
+                          const SizedBox(width: 8),
+                          GuideAnchor(
+                            id: OilGuideAnchors.customerFormSave,
+                            child: FilledButton(
+                              onPressed: _saving ? null : _submit,
+                              style: FilledButton.styleFrom(
+                                backgroundColor: AppColors.accentGold.withValues(alpha: 0.2),
+                                foregroundColor: AppColors.accentGold,
+                                padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                              ),
+                              child: _saving
+                                  ? SizedBox(
+                                      width: 22,
+                                      height: 22,
+                                      child: CircularProgressIndicator(strokeWidth: 2, color: cs.onPrimary),
+                                    )
+                                  : const Text('حفظ'),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),
@@ -637,11 +583,7 @@ class _CustomerFormField extends StatelessWidget {
       children: [
         Text(
           label,
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w600,
-            color: AppColors.accentGold,
-          ),
+          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.accentGold),
         ),
         const SizedBox(height: 6),
         TextFormField(
@@ -655,19 +597,11 @@ class _CustomerFormField extends StatelessWidget {
           style: TextStyle(fontSize: 14, color: cs.onSurface),
           decoration: InputDecoration(
             hintText: hint,
-            hintStyle: TextStyle(
-              color: cs.onSurfaceVariant.withValues(alpha: 0.75),
-              fontSize: 13,
-            ),
-            prefixIcon: icon != null
-                ? Icon(icon, size: 20, color: AppColors.accentGold)
-                : null,
+            hintStyle: TextStyle(color: cs.onSurfaceVariant.withValues(alpha: 0.75), fontSize: 13),
+            prefixIcon: icon != null ? Icon(icon, size: 20, color: AppColors.accentGold) : null,
             filled: true,
             fillColor: cs.surface,
-            contentPadding: const EdgeInsets.symmetric(
-              horizontal: 12,
-              vertical: 12,
-            ),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(12),
               borderSide: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.5)),
@@ -714,11 +648,7 @@ class _PriceListPicker extends StatelessWidget {
       children: [
         Text(
           'قائمة الأسعار للعميل (اختياري)',
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w600,
-            color: AppColors.accentGold,
-          ),
+          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.accentGold),
         ),
         const SizedBox(height: 6),
         if (loading)
@@ -731,19 +661,9 @@ class _PriceListPicker extends StatelessWidget {
             ),
             child: Row(
               children: [
-                const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
+                const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
                 const SizedBox(width: 10),
-                Text(
-                  'جاري تحميل القوائم…',
-                  style: TextStyle(
-                    color: cs.onSurfaceVariant,
-                    fontSize: 13,
-                  ),
-                ),
+                Text('جاري تحميل القوائم…', style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13)),
               ],
             ),
           )
@@ -754,17 +674,10 @@ class _PriceListPicker extends StatelessWidget {
             onChanged: onChanged,
             dropdownColor: cs.surfaceContainerHighest,
             decoration: InputDecoration(
-              prefixIcon: Icon(
-                Icons.price_change_outlined,
-                size: 20,
-                color: AppColors.accentGold,
-              ),
+              prefixIcon: Icon(Icons.price_change_outlined, size: 20, color: AppColors.accentGold),
               filled: true,
               fillColor: cs.surface,
-              contentPadding: const EdgeInsets.symmetric(
-                horizontal: 12,
-                vertical: 8,
-              ),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
                 borderSide: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.5)),
@@ -779,10 +692,7 @@ class _PriceListPicker extends StatelessWidget {
               ),
             ),
             items: [
-              const DropdownMenuItem<int?>(
-                value: null,
-                child: Text('استخدام الأسعار الافتراضية'),
-              ),
+              const DropdownMenuItem<int?>(value: null, child: Text('استخدام الأسعار الافتراضية')),
               for (final l in options)
                 DropdownMenuItem<int?>(
                   value: (l['id'] as num?)?.toInt(),
@@ -791,18 +701,9 @@ class _PriceListPicker extends StatelessWidget {
                       if (((l['isDefault'] as int?) ?? 0) == 1)
                         const Padding(
                           padding: EdgeInsetsDirectional.only(end: 6),
-                          child: Icon(
-                            Icons.star_rounded,
-                            size: 16,
-                            color: AppColors.accentGold,
-                          ),
+                          child: Icon(Icons.star_rounded, size: 16, color: AppColors.accentGold),
                         ),
-                      Expanded(
-                        child: Text(
-                          (l['name'] as String?) ?? '—',
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
+                      Expanded(child: Text((l['name'] as String?) ?? '—', overflow: TextOverflow.ellipsis)),
                     ],
                   ),
                 ),
@@ -811,10 +712,7 @@ class _PriceListPicker extends StatelessWidget {
         const SizedBox(height: 4),
         Text(
           'عند ترك الخيار افتراضيًا، يطبَّق هرم الأسعار العام تلقائيًا في الفواتير.',
-          style: TextStyle(
-            fontSize: 11.5,
-            color: cs.onSurfaceVariant.withValues(alpha: 0.85),
-          ),
+          style: TextStyle(fontSize: 11.5, color: cs.onSurfaceVariant.withValues(alpha: 0.85)),
         ),
       ],
     );

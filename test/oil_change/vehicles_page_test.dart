@@ -93,7 +93,7 @@ void main() {
         await t.pump();
       }
       expect(find.text('2468'), findsOneWidget);
-      expect(find.textContaining('2 زيارة'), findsOneWidget);
+      expect(find.textContaining('زيارتان'), findsOneWidget);
 
       await t.tap(find.text('2468'));
       for (var i = 0; i < 10; i++) {

@@ -1,3 +1,4 @@
+import 'package:naboo/utils/arabic_count.dart';
 import 'package:flutter/material.dart';
 
 import '../../../utils/iqd_money.dart';
@@ -411,7 +412,7 @@ class _OilTechniciansReportCardState extends State<OilTechniciansReportCard> {
                   ? '${e.name} · موقوف'
                   : e.name;
               final parts = [
-                '${e.count} سيارة',
+                arabicCarsCount(e.count),
                 reportMoneyCompact(IqdMoney.toFils(e.amountIqd)),
                 if (r != null) 'تقييم ${r.avg.toStringAsFixed(1)} (${r.count})',
               ];

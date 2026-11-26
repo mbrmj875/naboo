@@ -93,11 +93,12 @@ class AppAssistantScope {
     if (tourId == GuideTourIds.none) return false;
     switch (tourId) {
       case GuideTourIds.oilWhatsapp:
+      // لوحة «إعدادات غيار الزيت» تتبع صلاحية إعدادات التطبيق مثل بندها.
+      case GuideTourIds.oilHubSettings:
         return canUseOilAssistant && canManageWhatsappConnect;
       case GuideTourIds.oilFirstRun:
       case GuideTourIds.oilPendingTab:
       case GuideTourIds.oilPlateAutofill:
-      case GuideTourIds.oilHubSettings:
       case GuideTourIds.oilCatalogOil:
       case GuideTourIds.oilCatalogFilter:
       case GuideTourIds.oilCatalogHydraulic:

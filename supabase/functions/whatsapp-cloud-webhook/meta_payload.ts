@@ -35,9 +35,13 @@ export type MetaTemplateStatusUpdate = {
   reason: string;
 };
 
+/** رد كتبه المحل بنفسه من تطبيق واتساب للأعمال (التعايش): ينهي صمت المجيب (م6-9). */
+export type MetaShopEcho = { phoneNumberId: string; toPhone: string };
+
 export type MetaWebhookParse = {
   isMeta: boolean;
   messages: MetaInboundMessage[];
+  echoes: MetaShopEcho[];
   statuses: MetaStatusUpdate[];
   templateUpdates: MetaTemplateStatusUpdate[];
 };
@@ -77,6 +81,7 @@ export function parseMetaWebhook(event: unknown): MetaWebhookParse {
   const messages: MetaInboundMessage[] = [];
   const statuses: MetaStatusUpdate[] = [];
   const templateUpdates: MetaTemplateStatusUpdate[] = [];
+  const echoes: MetaShopEcho[] = [];
 
   for (const entryRaw of entries) {
     const entry = asDict(entryRaw);
@@ -111,6 +116,13 @@ export function parseMetaWebhook(event: unknown): MetaWebhookParse {
         });
       }
 
+      if (str(change.field) === 'smb_message_echoes') {
+        for (const eRaw of asArray(value.message_echoes)) {
+          const toPhone = str(asDict(eRaw).to);
+          if (toPhone) echoes.push({ phoneNumberId, toPhone });
+        }
+      }
+
       for (const stRaw of asArray(value.statuses)) {
         const st = asDict(stRaw);
         statuses.push({
@@ -125,8 +137,9 @@ export function parseMetaWebhook(event: unknown): MetaWebhookParse {
 
   return {
     isMeta: isMeta &&
-      (messages.length > 0 || statuses.length > 0 || templateUpdates.length > 0),
+      (messages.length > 0 || statuses.length > 0 || templateUpdates.length > 0 || echoes.length > 0),
     messages,
+    echoes,
     statuses,
     templateUpdates,
   };

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../assistant/assistant_access.dart';
 import '../../guides/guide_anchor.dart';
 import '../../providers/auth_provider.dart';
 import '../../models/user_permission_catalog.dart';
@@ -43,6 +44,9 @@ class _UserFormScreenState extends State<UserFormScreen> {
   /// التخصيص المتقدم — يُفتح فقط عند اختيار "تخصيص يدوي"
   bool _showAdvancedPerms = false;
 
+  /// مستوى مساعد نابو (ق48): اختيار مستقل عن مستوى الصلاحية.
+  AssistantLevel _assistantLevel = AssistantLevel.full;
+
   final _groups = buildPermissionGroupsUi();
 
   bool get _isEdit => widget.existing != null;
@@ -51,8 +55,7 @@ class _UserFormScreenState extends State<UserFormScreen> {
   Color get _surface => Theme.of(context).colorScheme.surface;
   Color get _primary => Theme.of(context).colorScheme.primary;
   Color get _onPrimary => Theme.of(context).colorScheme.onPrimary;
-  Color get _filterBg =>
-      Theme.of(context).colorScheme.surfaceContainerHighest;
+  Color get _filterBg => Theme.of(context).colorScheme.surfaceContainerHighest;
   Color get _textPrimary => Theme.of(context).colorScheme.onSurface;
   Color get _textSecondary => Theme.of(context).colorScheme.onSurfaceVariant;
   Color get _outline => Theme.of(context).colorScheme.outline;
@@ -71,6 +74,7 @@ class _UserFormScreenState extends State<UserFormScreen> {
       _loadPermsForEdit();
     } else {
       _permMap = _perm.defaultStaffPermissionMap();
+      _assistantLevel = AssistantAccess.levelFromMap(_permMap);
       _booting = false;
     }
   }
@@ -84,9 +88,10 @@ class _UserFormScreenState extends State<UserFormScreen> {
     );
     if (!mounted) return;
     // تحديد ما إذا كانت الصلاحيات كاملة
-    final allTrue = m.values.every((v) => v);
+    final allTrue = PermissionKeys.coreKeys.every((k) => m[k] == true);
     setState(() {
       _permMap = m;
+      _assistantLevel = AssistantAccess.levelFromMap(m);
       _fullAccess = allTrue;
       _booting = false;
     });
@@ -147,9 +152,9 @@ class _UserFormScreenState extends State<UserFormScreen> {
 
     final name = _nameCtrl.text.trim();
     if (name.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('الاسم مطلوب')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('الاسم مطلوب')));
       return;
     }
 
@@ -171,9 +176,7 @@ class _UserFormScreenState extends State<UserFormScreen> {
       if (_pinCtrl.text.isNotEmpty) {
         if (!PinInputConstraints.matches(_pinCtrl.text, _pin2Ctrl.text)) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(PinInputConstraints.mismatchMessage),
-            ),
+            SnackBar(content: Text(PinInputConstraints.mismatchMessage)),
           );
           return;
         }
@@ -182,13 +185,12 @@ class _UserFormScreenState extends State<UserFormScreen> {
 
     // تطبيق مستوى الصلاحية
     if (_fullAccess && !_showAdvancedPerms) {
-      _permMap = {
-        for (final k in PermissionKeys.allKeys) k: true,
-      };
+      _permMap = {for (final k in PermissionKeys.allKeys) k: true};
     } else if (!_fullAccess && !_showAdvancedPerms) {
       _permMap = _perm.defaultStaffPermissionMap();
     }
     // إذا _showAdvancedPerms فإن _permMap يحتوي على التخصيص اليدوي
+    AssistantAccess.applyLevel(_permMap, _assistantLevel);
 
     setState(() => _saving = true);
     try {
@@ -367,7 +369,8 @@ class _UserFormScreenState extends State<UserFormScreen> {
                                       return PinInputConstraints.invalidMessage;
                                     }
                                     if (v != _pinCtrl.text) {
-                                      return PinInputConstraints.mismatchMessage;
+                                      return PinInputConstraints
+                                          .mismatchMessage;
                                     }
                                     return null;
                                   },
@@ -394,7 +397,8 @@ class _UserFormScreenState extends State<UserFormScreen> {
                                   onTap: () => setState(() {
                                     _fullAccess = false;
                                     _showAdvancedPerms = false;
-                                    _permMap = _perm.defaultStaffPermissionMap();
+                                    _permMap = _perm
+                                        .defaultStaffPermissionMap();
                                   }),
                                 ),
                                 const SizedBox(height: 8),
@@ -428,14 +432,58 @@ class _UserFormScreenState extends State<UserFormScreen> {
                             ),
                           ),
 
+                          // ── مساعد نابو (ق48) ──
+                          const SizedBox(height: 16),
+                          _sectionCard(
+                            icon: Icons.support_agent_rounded,
+                            title: 'مساعد نابو',
+                            children: [
+                              _accessLevelTile(
+                                title: 'بلا مساعد',
+                                subtitle:
+                                    'لا تظهر أيقونة المساعد. الجولات الجاهزة من زر المساعدة تبقى',
+                                icon: Icons.block_outlined,
+                                selected:
+                                    _assistantLevel == AssistantLevel.none,
+                                onTap: () => setState(
+                                  () => _assistantLevel = AssistantLevel.none,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              _accessLevelTile(
+                                title: 'إرشاد فقط',
+                                subtitle:
+                                    'يسأل «وين» و«شلون» ويأخذه المساعد للشاشة. لا يقرأ أرقام المحل',
+                                icon: Icons.near_me_outlined,
+                                selected:
+                                    _assistantLevel == AssistantLevel.guideOnly,
+                                onTap: () => setState(
+                                  () => _assistantLevel =
+                                      AssistantLevel.guideOnly,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              _accessLevelTile(
+                                title: 'كامل',
+                                subtitle:
+                                    'يرشد ويجيب من بيانات المحل، ضمن صلاحيات الموظف الأخرى',
+                                icon: Icons.auto_awesome_outlined,
+                                selected:
+                                    _assistantLevel == AssistantLevel.full,
+                                onTap: () => setState(
+                                  () => _assistantLevel = AssistantLevel.full,
+                                ),
+                              ),
+                            ],
+                          ),
+
                           // ── تفاصيل الصلاحيات (تظهر فقط عند تخصيص يدوي) ──
                           if (_showAdvancedPerms) ...[
                             const SizedBox(height: 16),
                             _sectionCard(
                               icon: Icons.rule_folder_outlined,
                               title: 'الصلاحيات التفصيلية',
-                              subtitle:
-                                  'فعّل ما يحق لهذا الموظف الوصول إليه.',
+                              subtitle: 'فعّل ما يحق لهذا الموظف الوصول إليه.',
                               children: [
                                 for (final g in _groups) ...[
                                   _permExpansion(g),
@@ -518,19 +566,13 @@ class _UserFormScreenState extends State<UserFormScreen> {
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(8),
             border: Border.all(
-              color: selected
-                  ? _primary
-                  : _outline.withValues(alpha: 0.35),
+              color: selected ? _primary : _outline.withValues(alpha: 0.35),
               width: selected ? 1.5 : 1,
             ),
           ),
           child: Row(
             children: [
-              Icon(
-                icon,
-                color: selected ? _primary : _textSecondary,
-                size: 26,
-              ),
+              Icon(icon, color: selected ? _primary : _textSecondary, size: 26),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
@@ -547,16 +589,12 @@ class _UserFormScreenState extends State<UserFormScreen> {
                     const SizedBox(height: 2),
                     Text(
                       subtitle,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: _textSecondary,
-                      ),
+                      style: TextStyle(fontSize: 12, color: _textSecondary),
                     ),
                   ],
                 ),
               ),
-              if (selected)
-                Icon(Icons.check_circle, color: _primary, size: 22),
+              if (selected) Icon(Icons.check_circle, color: _primary, size: 22),
             ],
           ),
         ),

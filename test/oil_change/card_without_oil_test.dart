@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:naboo/models/invoice.dart';
 import 'package:naboo/printing/receipt_builders.dart';
+import 'package:naboo/printing/receipt_model.dart';
 import 'package:naboo/services/reports_repository.dart';
 import 'package:naboo/services/service_order_kinds.dart';
 import 'package:naboo/verticals/oil_change/services/oil_change_orders_repository.dart';
@@ -85,6 +86,17 @@ void main() {
       order: {..._filterOnly(), 'oilType': 'توتال'},
     );
     expect(withOil.title, 'إيصال غيار زيت');
+  });
+
+  test('قائمة الفواتير: العلامة «تبديل فلتر» مثل عنوان الإيصال', () {
+    final order = _filterOnly();
+    final kind = ReceiptBuilders.kindOf(_invoice(), order: order);
+    expect(ReceiptBuilders.workLabelOf(kind, order), 'تبديل فلتر');
+    expect(
+      ReceiptBuilders.workLabelOf(kind, {...order, 'oilType': 'توتال'}),
+      'غيار زيت',
+    );
+    expect(ReceiptBuilders.workLabelOf(kind, null), kind.shortLabel);
   });
 
   test('رسالتا واتساب تشكران على ما في البطاقة', () {

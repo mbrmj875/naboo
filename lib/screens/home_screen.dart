@@ -19,6 +19,7 @@ import '../services/global_search/global_search_history_store.dart';
 import '../services/global_search/global_search_matcher.dart';
 import '../services/global_search/global_search_tool_hit.dart';
 import '../services/global_search/global_search_tools_index.dart';
+import '../verticals/oil_change/shell/oil_shell_guide_routes.dart';
 import '../verticals/oil_change/screens/oil_change_hub_screen.dart';
 import '../verticals/oil_change/screens/oil_change_form_screen.dart';
 import '../verticals/oil_change/screens/oil_change_whatsapp_connect_screen.dart';
@@ -50,10 +51,8 @@ import '../navigation/app_system_back.dart';
 import '../widgets/double_back_to_exit_scope.dart';
 import '../utils/app_logger.dart';
 import 'invoices/invoices_screen.dart';
-import 'installments/installment_settings_screen.dart';
 import 'installments/installments_screen.dart';
 import 'debts/debts_screen.dart';
-import 'debts/debt_settings_screen.dart';
 import 'inventory/inventory_hub_screen.dart';
 import 'inventory/add_product_screen.dart';
 import 'inventory/quick_product_update_screen.dart';
@@ -64,7 +63,6 @@ import 'inventory/warehouses_screen.dart';
 import 'inventory/stocktaking_screen.dart';
 import 'inventory/purchase_orders_screen.dart';
 import 'inventory/stock_analytics_screen.dart';
-import 'inventory/inventory_settings_screen.dart';
 import 'cash/cash_screen.dart';
 import 'printing/printing_screen.dart';
 import '../printing/printing_center_screen.dart';
@@ -82,11 +80,9 @@ import 'services/services_hub_screen.dart';
 import 'services/service_orders_hub_screen.dart';
 import '../utils/iraqi_currency_format.dart';
 import 'invoices/parked_sales_screen.dart';
-import 'invoices/sale_pos_settings_screen.dart';
 import 'customers/customers_screen.dart';
 import 'customers/customer_form_screen.dart';
 import 'customers/customer_contacts_screen.dart';
-import 'loyalty/loyalty_settings_screen.dart';
 import 'loyalty/loyalty_ledger_screen.dart';
 import 'settings/settings_screen.dart';
 import 'settings/dashboard_layout_settings_screen.dart';
@@ -209,6 +205,7 @@ class _HomeScreenState extends State<HomeScreen>
     ModuleItem m, {
     required bool enableCustomers,
     required bool enableLoyalty,
+    required bool canLoyalty,
     required bool enablePos,
   }) {
     final subs = m.subItems;
@@ -216,7 +213,8 @@ class _HomeScreenState extends State<HomeScreen>
 
     final kept = <SubMenuItem>[];
     for (final s in subs) {
-      if (!enableLoyalty && s.routeId == AppContentRoutes.loyaltySettings) {
+      if ((!enableLoyalty || !canLoyalty) &&
+          s.routeId == AppContentRoutes.loyaltyLedger) {
         continue;
       }
       if (!enablePos &&
@@ -512,6 +510,7 @@ class _HomeScreenState extends State<HomeScreen>
         m,
         enableCustomers: enableCustomers,
         enableLoyalty: enableLoyalty,
+        canLoyalty: allow(PermissionKeys.loyaltyAccess),
         enablePos: enablePos,
       );
       if (gated == null) continue;
@@ -772,11 +771,6 @@ class _HomeScreenState extends State<HomeScreen>
           routeId: AppContentRoutes.parkedSales,
           destination: (context) => const ParkedSalesScreen(),
         ),
-        SubMenuItem(
-          title: 'إعدادات نقطة البيع',
-          routeId: AppContentRoutes.salePosSettings,
-          destination: (context) => const SalePosSettingsScreen(),
-        ),
       ],
     ),
     ModuleItem(
@@ -809,25 +803,7 @@ class _HomeScreenState extends State<HomeScreen>
           routeId: AppContentRoutes.customerContacts,
           destination: (context) => const CustomerContactsScreen(),
         ),
-        SubMenuItem(
-          title: 'إعدادات العميل (الولاء)',
-          routeId: AppContentRoutes.loyaltySettings,
-          destination: (context) => const LoyaltySettingsScreen(),
-        ),
-      ],
-    ),
-    ModuleItem(
-      icon: Icons.card_giftcard_rounded,
-      title: 'ولاء العملاء',
-      iconColor: Colors.deepPurple,
-      routeId: AppContentRoutes.loyaltySettings,
-      destination: (context) => const LoyaltySettingsScreen(),
-      subItems: [
-        SubMenuItem(
-          title: 'إعدادات النقاط والاستبدال',
-          routeId: AppContentRoutes.loyaltySettings,
-          destination: (context) => const LoyaltySettingsScreen(),
-        ),
+        // إعدادات الولاء في «الإعدادات»؛ السجل هنا مع العملاء.
         SubMenuItem(
           title: 'سجل حركات النقاط',
           routeId: AppContentRoutes.loyaltyLedger,
@@ -841,20 +817,6 @@ class _HomeScreenState extends State<HomeScreen>
       iconColor: Colors.blue,
       routeId: AppContentRoutes.installments,
       destination: (context) => const InstallmentsScreen(),
-      subItems: [
-        SubMenuItem(
-          title: 'خطط التقسيط',
-          icon: Icons.receipt_long_rounded,
-          routeId: AppContentRoutes.installments,
-          destination: (context) => const InstallmentsScreen(),
-        ),
-        SubMenuItem(
-          title: 'إعدادات تقسيط',
-          icon: Icons.tune_rounded,
-          routeId: AppContentRoutes.installmentSettings,
-          destination: (context) => const InstallmentSettingsScreen(),
-        ),
-      ],
     ),
     ModuleItem(
       icon: Icons.balance_outlined,
@@ -862,20 +824,6 @@ class _HomeScreenState extends State<HomeScreen>
       iconColor: Colors.amber,
       routeId: AppContentRoutes.debts,
       destination: (context) => const DebtsScreen(),
-      subItems: [
-        SubMenuItem(
-          title: 'لوحة الديون (آجل)',
-          icon: Icons.dashboard_customize_outlined,
-          routeId: AppContentRoutes.debts,
-          destination: (context) => const DebtsScreen(),
-        ),
-        SubMenuItem(
-          title: 'إعدادات الدين',
-          icon: Icons.tune_rounded,
-          routeId: AppContentRoutes.debtSettings,
-          destination: (context) => const DebtSettingsScreen(),
-        ),
-      ],
     ),
     ModuleItem(
       icon: Icons.inventory_2,
@@ -928,11 +876,6 @@ class _HomeScreenState extends State<HomeScreen>
           title: 'تحليلات المخزون',
           routeId: AppContentRoutes.inventoryAnalytics,
           destination: (context) => const StockAnalyticsScreen(),
-        ),
-        SubMenuItem(
-          title: 'إعدادات المخزون',
-          routeId: AppContentRoutes.inventorySettings,
-          destination: (context) => const InventorySettingsScreen(),
         ),
       ],
     ),
@@ -1098,6 +1041,14 @@ class _HomeScreenState extends State<HomeScreen>
         currentRouteId: () => _guideEffectiveRouteId(),
         ensureRoute: _guideEnsureRoute,
         runAction: _guideRunAction,
+        pushRoute: (route) async {
+          final nav = _contentNavigator;
+          if (nav != null) {
+            await nav.push<void>(route);
+          } else if (mounted) {
+            await Navigator.of(context).push<void>(route);
+          }
+        },
       ),
     );
   }
@@ -1232,6 +1183,20 @@ class _HomeScreenState extends State<HomeScreen>
         setState(() => _currentRouteId = AppContentRoutes.home);
       }
       await waitUntilTopIs((id) => id == AppContentRoutes.home || id.isEmpty);
+      return;
+    }
+
+    if (routeId == AppContentRoutes.settings) {
+      final top = nav != null
+          ? (peekTopContentRouteId(nav) ?? _currentRouteId)
+          : _currentRouteId;
+      if (top == AppContentRoutes.settings) return;
+      await _pushInContentTaggedAwait(
+        AppContentRoutes.settings,
+        'الإعدادات',
+        (_) => const SettingsScreen(),
+      );
+      await waitUntilTopIs((id) => id == AppContentRoutes.settings);
       return;
     }
 
@@ -1405,6 +1370,17 @@ class _HomeScreenState extends State<HomeScreen>
       await waitUntilTopIs((id) => id == AppContentRoutes.addProduct);
       return;
     }
+
+    // باقي شاشات خريطة المساعد (ب3): المسار المولَّد، والأب أولاً إن وُجد.
+    final target = oilGuideRoutes[routeId];
+    if (target == null) return;
+    final top = nav != null ? (peekTopContentRouteId(nav) ?? _currentRouteId) : _currentRouteId;
+    if (top == routeId) return;
+    final parent = target.parentRouteId;
+    if (parent != null && top != parent) await _guideEnsureRoute(parent);
+    if (!mounted) return;
+    await _pushInContentTaggedAwait(routeId, breadcrumbFallbackTitleForRouteId(routeId), target.builder);
+    await waitUntilTopIs((id) => id == routeId);
   }
 
   /// نسخة قابلة للانتظار من دفع مسار المحتوى (للجولة الإرشادية).

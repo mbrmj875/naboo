@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../notifications/push_device_registry.dart';
 import '../services/database_helper.dart';
 import '../services/app_settings_repository.dart';
 import '../services/business_setup_settings.dart';
@@ -222,6 +223,10 @@ class AuthProvider extends ChangeNotifier {
     if (_roleKey == 'owner') {
       _scheduleOwnerPushBridge();
     }
+    // كل الأدوار: تسجيل الجهاز للإشعارات وصلاحيات التوجيه (خطة الإشعارات، المرحلة 5).
+    PushDeviceRegistry.instance.updateSession(
+      PushSession(roleKey: r, userId: _userId, globalId: _userGlobalId),
+    );
   }
 
   void _scheduleOwnerPushBridge() {
@@ -4055,6 +4060,8 @@ class AuthProvider extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     // مثل الموبايل: امسح جلسة التشغيل المحلية — جلسة Supabase تبقى في التخزين.
     await prefs.remove(_prefUserId);
+    // الموظف الخارج لا تبقى صلاحياته على الجهاز (المرحلة 5).
+    PushDeviceRegistry.instance.clearSession();
 
     _isLoggedIn = false;
     _userId = null;
@@ -4364,6 +4371,8 @@ class AuthProvider extends ChangeNotifier {
     await prefs.remove(_prefUserId);
     // لا نمسح OwnerSupabaseCredentialStore عند الخروج العادي — يُستخدم لاستعادة
     // جلسة السحابة على نفس الجهاز. يُمسح عند إلغاء ربط الجهاز بالمالك.
+    // لا يبقى رمز إشعارات هذا الجهاز على الحساب بعد الخروج.
+    await PushDeviceRegistry.instance.unregister();
     try {
       await Supabase.instance.client.auth.signOut();
     } catch (e) {

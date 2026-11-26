@@ -26,6 +26,9 @@ import 'services/database_helper.dart';
 import 'services/system_notification_service.dart';
 import 'services/license_service.dart';
 import 'screens/license/license_expired_screen.dart';
+import 'notifications/notification_event_outbox.dart';
+import 'notifications/push_router.dart';
+import 'notifications/ui/owner_phone_prompt.dart';
 import 'providers/invoice_provider.dart';
 import 'providers/auth_provider.dart';
 import 'providers/theme_provider.dart';
@@ -50,6 +53,8 @@ import 'providers/ui_feedback_settings_provider.dart';
 import 'providers/dashboard_layout_provider.dart';
 import 'providers/global_barcode_route_bridge.dart';
 import 'providers/open_ops_registry.dart';
+import 'assistant/qa/assistant_qa_entry.dart';
+import 'assistant/ui/assistant_session.dart';
 import 'guides/guide_controller.dart';
 import 'guides/guide_overlay.dart';
 import 'guides/guide_root_nav_observer.dart';
@@ -322,6 +327,8 @@ void main() async {
   NetworkStatusService.instance.ensureStarted();
   // أظهر الواجهة فوراً — لا تُجمَّد نافذة ويندوز ريثما تكتمل القاعدة/الترخيص.
   runApp(const MyApp());
+  // مدخل الاختبار (م7-1): لا يفعل شيئاً إلا في حزمة com.basra.storemanager.qa.
+  unawaited(AssistantQaEntry.install(appRootNavigatorKey));
   unawaited(_startDeferredStorageInit());
   unawaited(_startPostUiServices());
   // إعادة تلقائية آمنة لطابور واتساب عند عودة الشبكة (بعد ظهور الواجهة).
@@ -357,12 +364,18 @@ Future<void> _startDeferredStorageInit() async {
 }
 
 Future<void> _startPostUiServices() async {
+  // قبل التهيئة: الضغط على إشعار محلي يذهب إلى موجّه الإشعارات.
+  PushRouter.instance.attach();
   try {
     await SystemNotificationService.instance.initialize();
+    final launch = await SystemNotificationService.instance.launchPayload();
+    if (launch != null) PushRouter.instance.handleLocalPayload(launch);
   } catch (e, st) {
     AppLogger.error('main', 'SystemNotificationService init', e, st);
   }
   unawaited(OwnerFcmListenerService.instance.initialize());
+  // أحداث الإشعارات التي وقعت بلا إنترنت تُرفع الآن.
+  unawaited(NotificationEventOutbox.instance.flush());
   try {
     MarketplaceSessionService.instance.start();
   } catch (e, st) {
@@ -459,7 +472,13 @@ class MyApp extends StatelessWidget {
         ),
         ChangeNotifierProvider(create: (_) => OpenOpsRegistry()),
         Provider(create: (_) => GlobalBarcodeRouteBridge()),
-        ChangeNotifierProvider(create: (_) => GuideController()),
+        ChangeNotifierProvider(
+          create: (_) {
+            // صوت الجولات وبطاقتها يتبعان المساعد الجديد حين يُفعَّل (ق46، ب3).
+            AssistantSession.installNarrationRule();
+            return GuideController();
+          },
+        ),
       ],
       child: Consumer<ThemeProvider>(
         builder: (context, themeProvider, child) {
@@ -525,6 +544,8 @@ class MyApp extends StatelessWidget {
                       if (loggedIn) {
                         WidgetsBinding.instance.addPostFrameCallback((_) {
                           OwnerFcmListenerService.instance.flushPendingIfReady();
+                          PushRouter.instance.flushPending();
+                          OwnerPhonePrompt.scheduleAfterLogin();
                         });
                       }
                       if (!loggedIn) return child ?? const SizedBox.shrink();

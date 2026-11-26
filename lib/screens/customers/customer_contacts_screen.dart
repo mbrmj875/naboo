@@ -19,6 +19,7 @@ import '../debts/customer_debt_detail_screen.dart';
 import 'customer_financial_detail_screen.dart';
 import 'customer_form_screen.dart';
 import 'customers_screen.dart';
+import '../../guides/guide_anchor.dart';
 
 enum _ContactSort {
   nameAsc,
@@ -278,11 +279,14 @@ class _CustomerContactsScreenState extends State<CustomerContactsScreen> {
       ),
       // مجموعة واحدة: إضافة عميل | إدارة العملاء | تحديث
       actions: [
-        IconButton(
-          tooltip: 'عميل جديد',
-          visualDensity: VisualDensity.compact,
-          icon: const Icon(Icons.person_add_alt_1_outlined),
-          onPressed: () => unawaited(_openEditor()),
+        GuideAnchor(
+          id: OilGuideAnchors.contactsAdd,
+          child: IconButton(
+            tooltip: 'عميل جديد',
+            visualDensity: VisualDensity.compact,
+            icon: const Icon(Icons.person_add_alt_1_outlined),
+            onPressed: () => unawaited(_openEditor()),
+          ),
         ),
         IconButton(
           tooltip: 'إدارة العملاء الكاملة',

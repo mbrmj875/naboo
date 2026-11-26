@@ -5,6 +5,7 @@ import '../../../utils/iraqi_currency_format.dart';
 import 'oil_change_auto_whatsapp_message.dart';
 import 'oil_change_filter_format.dart';
 import 'oil_order_has_oil.dart';
+import 'oil_odometer_unit.dart';
 
 /// بناء نص رسالة واتساب بعد إتمام بطاقة غيار الزيت.
 ///
@@ -73,10 +74,12 @@ String buildOilServiceWhatsAppMessage({
     buf.writeln('🔖 *اللوحة:* $plate');
   }
   if (odomCur.isNotEmpty) {
-    buf.writeln('🔢 *قراءة العداد:* $odomCur كم');
+    buf.writeln('🔢 *قراءة العداد:* $odomCur ${OilOdometerUnit.labelOf(order)}');
   }
   if (odomNext.isNotEmpty) {
-    buf.writeln('📅 *موعد الصيانة القادمة:* عند $odomNext كم');
+    buf.writeln(
+      '📅 *موعد الصيانة القادمة:* عند $odomNext ${OilOdometerUnit.labelOf(order)}',
+    );
   }
   buf.writeln();
 

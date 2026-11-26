@@ -9,6 +9,7 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../notifications/notification_event_outbox.dart';
 import '../../navigation/app_root_navigator_key.dart';
 import '../../models/customer_record.dart';
 import '../../models/installment_settings_data.dart';
@@ -4567,6 +4568,22 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
   }) async {
     if (!mounted || !context.mounted) return;
     final c = installmentCalc;
+    // إشعار المالك على هاتفه (خطة الإشعارات، المرحلة 2).
+    final authEv = context.read<AuthProvider>();
+    unawaited(NotificationEventOutbox.instance.record(
+      type: isInstallment ? 'installment_sale' : 'debt_sale',
+      ref: '$invoiceId',
+      staffName: staffName,
+      actorRole: authEv.roleKey,
+      staffGlobalId: authEv.userGlobalId,
+      at: at,
+      payload: {
+        'invoice_id': invoiceId,
+        'total_fils': NotificationEventOutbox.fils(total),
+        'advance_fils': NotificationEventOutbox.fils(advance),
+        'customer_name': customerName,
+      },
+    ));
     await context.read<NotificationProvider>().recordFinancedSale(
       invoiceId: invoiceId,
       isInstallment: isInstallment,
@@ -5225,6 +5242,21 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
       });
     }
     if (negLines.isNotEmpty && mounted) {
+      final authEv = context.read<AuthProvider>();
+      unawaited(NotificationEventOutbox.instance.record(
+        type: 'negative_stock_sale',
+        ref: '$invoiceId',
+        staffName: staffName,
+        actorRole: authEv.roleKey,
+        staffGlobalId: authEv.userGlobalId,
+        at: now,
+        payload: {
+          'invoice_id': invoiceId,
+          'product_name': negLines.first['name'],
+          'product_id': negLines.first['productId'],
+          'lines_count': negLines.length,
+        },
+      ));
       await context.read<NotificationProvider>().recordNegativeStockSale(
         invoiceId: invoiceId,
         staffName: staffName,

@@ -31,6 +31,11 @@ import 'theme.dart';
 import 'customer_debt_deep_link.dart';
 import 'invoice_deep_link.dart';
 
+final NumberFormat _iqdFmt = NumberFormat('#,##0', 'en');
+
+/// مبلغ بالدينار بفواصل الآلاف (25,000 لا 25000) لكل الإيصالات هنا.
+String _iqd(num v) => _iqdFmt.format(v.round());
+
 /// Tajawal: عربي + لاتيني (أسماء منتجات، بريد، أرقام) — يقلّل مربعات الاستبدال.
 const _kTajawalRegular = 'assets/fonts/Tajawal-Regular.ttf';
 const _kTajawalBold = 'assets/fonts/Tajawal-Bold.ttf';
@@ -205,17 +210,17 @@ String buildReceiptQrPlainText({
     buf
       ..writeln('----------------')
       ..writeln(
-        'قبل الخصم: ${subtotalBeforeDiscount.toStringAsFixed(0)} دينار عراقي',
+        'قبل الخصم: ${_iqd(subtotalBeforeDiscount)} دينار عراقي',
       )
-      ..writeln('الخصم: ${invoice.discount.toStringAsFixed(0)} د.ع')
-      ..writeln('الضريبة: ${invoice.tax.toStringAsFixed(0)} د.ع');
+      ..writeln('الخصم: ${_iqd(invoice.discount)} د.ع')
+      ..writeln('الضريبة: ${_iqd(invoice.tax)} د.ع');
     if (invoice.loyaltyDiscount > 0) {
       buf.writeln(
-        'خصم ولاء: ${invoice.loyaltyDiscount.toStringAsFixed(0)} د.ع',
+        'خصم ولاء: ${_iqd(invoice.loyaltyDiscount)} د.ع',
       );
     }
     buf
-      ..writeln('الإجمالي: ${invoice.total.toStringAsFixed(0)} د.ع')
+      ..writeln('الإجمالي: ${_iqd(invoice.total)} د.ع')
       ..writeln('رمز الشريط: INV-${invoice.id ?? 0}');
     return buf.toString().trimRight();
   }
@@ -223,7 +228,7 @@ String buildReceiptQrPlainText({
   final fullItemLines = invoice.items
       .map(
         (e) =>
-            '• ${_itemNameForReceipt(e)}  |  العدد: ${e.quantity}  |  ${e.total.toStringAsFixed(0)} د.ع',
+            '• ${_itemNameForReceipt(e)}  |  العدد: ${e.quantity}  |  ${_iqd(e.total)} د.ع',
       )
       .toList();
 
@@ -250,7 +255,7 @@ String buildReceiptQrPlainText({
 رقم العملية: ${_opIdText(invoice)}
 التاريخ: ${df.format(invoice.date)}
 $custQr
-الإجمالي: ${invoice.total.toStringAsFixed(0)} د.ع
+الإجمالي: ${_iqd(invoice.total)} د.ع
 $payLine
 رمز الشريط: INV-${invoice.id ?? 0}'''
       .trim();
@@ -302,19 +307,19 @@ List<pw.Widget> _receiptCreditSummaryWidgets(
     ),
     pw.SizedBox(height: 4),
     pw.Text(
-      'الإجمالي على الفاتورة: ${inv.total.toStringAsFixed(0)} د.ع',
+      'الإجمالي على الفاتورة: ${_iqd(inv.total)} د.ع',
       style: pw.TextStyle(font: font, fontSize: 11),
       textAlign: pw.TextAlign.right,
       textDirection: pw.TextDirection.rtl,
     ),
     pw.Text(
-      'الواصل (المدفوع الآن): ${paid.toStringAsFixed(0)} د.ع',
+      'الواصل (المدفوع الآن): ${_iqd(paid)} د.ع',
       style: pw.TextStyle(font: font, fontSize: 11),
       textAlign: pw.TextAlign.right,
       textDirection: pw.TextDirection.rtl,
     ),
     pw.Text(
-      'المتبقي على الحساب: ${rem.toStringAsFixed(0)} د.ع',
+      'المتبقي على الحساب: ${_iqd(rem)} د.ع',
       style: pw.TextStyle(font: fontBold, fontSize: 12),
       textAlign: pw.TextAlign.right,
       textDirection: pw.TextDirection.rtl,
@@ -349,19 +354,19 @@ List<pw.Widget> _receiptInstallmentFinanceWidgets(
     ),
     pw.SizedBox(height: 4),
     pw.Text(
-      'إجمالي الفاتورة (سعر البيع): ${inv.total.toStringAsFixed(0)} د.ع',
+      'إجمالي الفاتورة (سعر البيع): ${_iqd(inv.total)} د.ع',
       style: pw.TextStyle(font: font, fontSize: 11),
       textAlign: pw.TextAlign.right,
       textDirection: pw.TextDirection.rtl,
     ),
     pw.Text(
-      'المقدّم / الدفعة الأولى: ${inv.advancePayment.toStringAsFixed(0)} د.ع',
+      'المقدّم / الدفعة الأولى: ${_iqd(inv.advancePayment)} د.ع',
       style: pw.TextStyle(font: font, fontSize: 11),
       textAlign: pw.TextAlign.right,
       textDirection: pw.TextDirection.rtl,
     ),
     pw.Text(
-      'المبلغ بعد المقدّم (متبقٍ للتقسيط): ${financed.toStringAsFixed(0)} د.ع',
+      'المبلغ بعد المقدّم (متبقٍ للتقسيط): ${_iqd(financed)} د.ع',
       style: pw.TextStyle(font: font, fontSize: 11),
       textAlign: pw.TextAlign.right,
       textDirection: pw.TextDirection.rtl,
@@ -373,13 +378,13 @@ List<pw.Widget> _receiptInstallmentFinanceWidgets(
       textDirection: pw.TextDirection.rtl,
     ),
     pw.Text(
-      'قيمة الفائدة: ${interestAmt.toStringAsFixed(0)} د.ع',
+      'قيمة الفائدة: ${_iqd(interestAmt)} د.ع',
       style: pw.TextStyle(font: font, fontSize: 11),
       textAlign: pw.TextAlign.right,
       textDirection: pw.TextDirection.rtl,
     ),
     pw.Text(
-      'الإجمالي مع الفائدة: ${totalWith > 1e-6 ? totalWith.toStringAsFixed(0) : (financed + interestAmt).toStringAsFixed(0)} د.ع',
+      'الإجمالي مع الفائدة: ${_iqd(totalWith > 1e-6 ? totalWith : financed + interestAmt)} د.ع',
       style: pw.TextStyle(font: fontBold, fontSize: 11),
       textAlign: pw.TextAlign.right,
       textDirection: pw.TextDirection.rtl,
@@ -391,7 +396,7 @@ List<pw.Widget> _receiptInstallmentFinanceWidgets(
       textDirection: pw.TextDirection.rtl,
     ),
     pw.Text(
-      'القسط الشهري المقترح: ${monthly > 1e-6 ? '${monthly.toStringAsFixed(0)} د.ع' : '—'}',
+      'القسط الشهري المقترح: ${monthly > 1e-6 ? '${_iqd(monthly)} د.ع' : '—'}',
       style: pw.TextStyle(font: fontBold, fontSize: 12),
       textAlign: pw.TextAlign.right,
       textDirection: pw.TextDirection.rtl,
@@ -889,9 +894,9 @@ class SaleReceiptPdf {
                             true,
                           ),
                           _cell('${e.quantity}', font, 9.5, false),
-                          _cell(e.price.toStringAsFixed(0), font, 9.5, false),
+                          _cell(_iqd(e.price), font, 9.5, false),
                           _cell(
-                            '${e.total.toStringAsFixed(0)} د.ع',
+                            '${_iqd(e.total)} د.ع',
                             font,
                             9.5,
                             false,
@@ -905,19 +910,19 @@ class SaleReceiptPdf {
                 pw.Divider(thickness: 0.7, color: PdfColors.grey600),
                 pw.SizedBox(height: 6),
                 pw.Text(
-                  'المجموع قبل الخصم: ${subtotalBeforeDiscount.toStringAsFixed(0)} د.ع',
+                  'المجموع قبل الخصم: ${_iqd(subtotalBeforeDiscount)} د.ع',
                   style: pw.TextStyle(font: font, fontSize: 11),
                   textAlign: pw.TextAlign.right,
                   textDirection: pw.TextDirection.rtl,
                 ),
                 pw.Text(
-                  'خصم ${invoice.discountPercent.toStringAsFixed(2)}٪: ${invoice.discount.toStringAsFixed(0)} د.ع',
+                  'خصم ${invoice.discountPercent.toStringAsFixed(2)}٪: ${_iqd(invoice.discount)} د.ع',
                   style: pw.TextStyle(font: font, fontSize: 11),
                   textAlign: pw.TextAlign.right,
                   textDirection: pw.TextDirection.rtl,
                 ),
                 pw.Text(
-                  'الضريبة: ${invoice.tax.toStringAsFixed(0)} د.ع',
+                  'الضريبة: ${_iqd(invoice.tax)} د.ع',
                   style: pw.TextStyle(font: font, fontSize: 11),
                   textAlign: pw.TextAlign.right,
                   textDirection: pw.TextDirection.rtl,
@@ -925,7 +930,7 @@ class SaleReceiptPdf {
                 if (invoice.loyaltyDiscount > 0) ...[
                   pw.SizedBox(height: 2),
                   pw.Text(
-                    'خصم ولاء: ${invoice.loyaltyDiscount.toStringAsFixed(0)} د.ع',
+                    'خصم ولاء: ${_iqd(invoice.loyaltyDiscount)} د.ع',
                     style: pw.TextStyle(font: font, fontSize: 11),
                     textAlign: pw.TextAlign.right,
                     textDirection: pw.TextDirection.rtl,
@@ -933,7 +938,7 @@ class SaleReceiptPdf {
                 ],
                 pw.SizedBox(height: 4),
                 pw.Text(
-                  'الإجمالي النهائي: ${invoice.total.toStringAsFixed(0)} د.ع',
+                  'الإجمالي النهائي: ${_iqd(invoice.total)} د.ع',
                   style: pw.TextStyle(font: fontBold, fontSize: 13),
                   textAlign: pw.TextAlign.right,
                   textDirection: pw.TextDirection.rtl,
@@ -1055,7 +1060,7 @@ class SaleReceiptPdf {
               children: [
                 _cell('$n', font, 9, false),
                 _cell(_installmentDayFmt(i.dueDate), font, 9, false),
-                _cell('${i.amount.toStringAsFixed(0)} د.ع', font, 9, false),
+                _cell('${_iqd(i.amount)} د.ع', font, 9, false),
                 _cell(st, font, 9, true),
                 _cell(pd, font, 9, false),
               ],
@@ -1072,7 +1077,7 @@ class SaleReceiptPdf {
           pw.Padding(
             padding: const pw.EdgeInsets.only(top: 3),
             child: pw.Text(
-              'القسط رقم ${k + 1} (${i.amount.toStringAsFixed(0)} د.ع) مستحق في ${_installmentDayFmt(i.dueDate)}',
+              'القسط رقم ${k + 1} (${_iqd(i.amount)} د.ع) مستحق في ${_installmentDayFmt(i.dueDate)}',
               style: pw.TextStyle(font: font, fontSize: 10),
               textAlign: pw.TextAlign.right,
               textDirection: pw.TextDirection.rtl,
@@ -1141,7 +1146,7 @@ class SaleReceiptPdf {
               pw.Padding(
                 padding: const pw.EdgeInsets.only(top: 4),
                 child: pw.Text(
-                  'القسط $idx — ${p.amount.toStringAsFixed(0)} د.ع — استحق ${_installmentDayFmt(p.dueDate)} — سُدد $paidWhen${isToday ? '  (عملية اليوم)' : ''}',
+                  'القسط $idx — ${_iqd(p.amount)} د.ع — استحق ${_installmentDayFmt(p.dueDate)} — سُدد $paidWhen${isToday ? '  (عملية اليوم)' : ''}',
                   style: pw.TextStyle(
                     font: isToday ? fontBold : font,
                     fontSize: isToday ? 10.5 : 10,
@@ -1161,7 +1166,7 @@ class SaleReceiptPdf {
                 pw.Padding(
                   padding: const pw.EdgeInsets.only(top: 3),
                   child: pw.Text(
-                    'القسط رقم ${k + 1} (${ins.amount.toStringAsFixed(0)} د.ع) مستحق في ${_installmentDayFmt(ins.dueDate)}',
+                    'القسط رقم ${k + 1} (${_iqd(ins.amount)} د.ع) مستحق في ${_installmentDayFmt(ins.dueDate)}',
                     style: pw.TextStyle(font: font, fontSize: 10),
                     textAlign: pw.TextAlign.right,
                     textDirection: pw.TextDirection.rtl,
@@ -1452,20 +1457,20 @@ class SaleReceiptPdf {
                 pw.Divider(color: PdfColors.grey600),
                 pw.SizedBox(height: 6),
                 pw.Text(
-                  'المبلغ المُسدَّد في هذه العملية: ${amountApplied.toStringAsFixed(0)} د.ع',
+                  'المبلغ المُسدَّد في هذه العملية: ${_iqd(amountApplied)} د.ع',
                   style: pw.TextStyle(font: fontBold, fontSize: 12),
                   textAlign: pw.TextAlign.right,
                   textDirection: pw.TextDirection.rtl,
                 ),
                 pw.SizedBox(height: 6),
                 pw.Text(
-                  'إجمالي الدين قبل التسديد: ${debtBefore.toStringAsFixed(0)} د.ع',
+                  'إجمالي الدين قبل التسديد: ${_iqd(debtBefore)} د.ع',
                   style: pw.TextStyle(font: font, fontSize: 11),
                   textAlign: pw.TextAlign.right,
                   textDirection: pw.TextDirection.rtl,
                 ),
                 pw.Text(
-                  'المتبقي بعد التسديد: ${debtAfter.toStringAsFixed(0)} د.ع',
+                  'المتبقي بعد التسديد: ${_iqd(debtAfter)} د.ع',
                   style: pw.TextStyle(font: font, fontSize: 11),
                   textAlign: pw.TextAlign.right,
                   textDirection: pw.TextDirection.rtl,
@@ -2013,20 +2018,20 @@ class SaleReceiptPdf {
                 pw.Divider(color: PdfColors.grey600),
                 pw.SizedBox(height: 6),
                 pw.Text(
-                  'المبلغ المدفوع: ${amountPaid.toStringAsFixed(0)} د.ع',
+                  'المبلغ المدفوع: ${_iqd(amountPaid)} د.ع',
                   style: pw.TextStyle(font: fontBold, fontSize: 12),
                   textAlign: pw.TextAlign.right,
                   textDirection: pw.TextDirection.rtl,
                 ),
                 pw.SizedBox(height: 6),
                 pw.Text(
-                  'الذمة قبل الدفعة: ${payableBefore.toStringAsFixed(0)} د.ع',
+                  'الذمة قبل الدفعة: ${_iqd(payableBefore)} د.ع',
                   style: pw.TextStyle(font: font, fontSize: 11),
                   textAlign: pw.TextAlign.right,
                   textDirection: pw.TextDirection.rtl,
                 ),
                 pw.Text(
-                  'الذمة بعد الدفعة: ${payableAfter.toStringAsFixed(0)} د.ع',
+                  'الذمة بعد الدفعة: ${_iqd(payableAfter)} د.ع',
                   style: pw.TextStyle(font: font, fontSize: 11),
                   textAlign: pw.TextAlign.right,
                   textDirection: pw.TextDirection.rtl,

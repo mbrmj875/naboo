@@ -5,6 +5,29 @@ part of '../oil_change_order_form_screen.dart';
 // امتداد على حالة الشاشة: يصل إلى حقولها الخاصة لأنه جزء من نفس المكتبة.
 // لا حقول هنا؛ الحالة كلها تبقى في الشاشة.
 extension _OilFormSections on _OilChangeOrderFormScreenState {
+  /// «كم / ميل»: وحدة عداد هذه السيارة، تُحفظ في البطاقة وتُنسخ لزيارتها
+  /// التالية. الأرقام لا تُحوَّل؛ تُقرأ بالوحدة المختارة.
+  Widget _buildOdometerUnitPicker() {
+    return Row(
+      children: [
+        const Expanded(child: Text('وحدة العداد', textAlign: TextAlign.start)),
+        SegmentedButton<String>(
+          key: const Key('odometerUnitPicker'),
+          showSelectedIcon: false,
+          segments: const [
+            ButtonSegment(value: OilOdometerUnit.km, label: Text('كم')),
+            ButtonSegment(value: OilOdometerUnit.mi, label: Text('ميل')),
+          ],
+          selected: {_odometerUnit},
+          onSelectionChanged: (v) => _rebuild(() {
+            _odometerUnit = v.first;
+            _odometerLowerThanPrevious = _computeOdometerLower();
+          }),
+        ),
+      ],
+    );
+  }
+
   Widget _buildOilPriceBreakdownSummary(ColorScheme cs) {
     // كل مجموع كان يُحسب مرتين (مرة في الشرط ومرة داخل النص)؛ يُحسب هنا مرة.
     final oilFils = _oilMaterialSellFilsEst();
@@ -43,19 +66,13 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
               ),
             if (_selectedOilServiceIds.isNotEmpty) ...[
               const SizedBox(height: 4),
-              Text(
-                'خدمات إضافية: ${_formatFilsLabel(_oilExtrasFils())}',
-                textAlign: TextAlign.start,
-              ),
+              Text('خدمات إضافية: ${_formatFilsLabel(_oilExtrasFils())}', textAlign: TextAlign.start),
             ],
             if (laborFils > 0 || _selectedOilServiceIds.isNotEmpty) ...[
               const SizedBox(height: 6),
               Text(
                 'مجموع الخدمات: ${_formatFilsLabel(servicesFils)}',
-                style: TextStyle(
-                  fontWeight: FontWeight.w800,
-                  color: cs.primary,
-                ),
+                style: TextStyle(fontWeight: FontWeight.w800, color: cs.primary),
                 textAlign: TextAlign.start,
               ),
             ],
@@ -85,34 +102,21 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
             ],
             if (filtersFils > 0) ...[
               const SizedBox(height: 4),
-              Text(
-                'الفلاتر: ${_formatFilsLabel(filtersFils)}',
-                textAlign: TextAlign.start,
-              ),
+              Text('الفلاتر: ${_formatFilsLabel(filtersFils)}', textAlign: TextAlign.start),
             ],
             if (productsFils > 0) ...[
               const SizedBox(height: 4),
-              Text(
-                'منتجات إضافية: ${_formatFilsLabel(productsFils)}',
-                textAlign: TextAlign.start,
-              ),
+              Text('منتجات إضافية: ${_formatFilsLabel(productsFils)}', textAlign: TextAlign.start),
             ],
             if (notesFils > 0) ...[
               const SizedBox(height: 4),
-              Text(
-                'إضافات من الملاحظات: ${_formatFilsLabel(notesFils)}',
-                textAlign: TextAlign.start,
-              ),
+              Text('إضافات من الملاحظات: ${_formatFilsLabel(notesFils)}', textAlign: TextAlign.start),
             ],
             const SizedBox(height: 4),
             Text(
               'إجمالي البيع: '
               '${_formatFilsLabel(servicesFils + oilFils + gearFils + powerFils + filtersFils + productsFils + notesFils)}',
-              style: TextStyle(
-                fontWeight: FontWeight.w900,
-                color: cs.tertiary,
-                fontSize: 14,
-              ),
+              style: TextStyle(fontWeight: FontWeight.w900, color: cs.tertiary, fontSize: 14),
               textAlign: TextAlign.start,
             ),
           ],
@@ -128,26 +132,14 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
         context: context,
         title: 'الفني والملاحظات',
         icon: Icons.edit_note_rounded,
-        children: _buildOilTechnicianAndNotesFields(
-          context,
-          busy,
-          compact: true,
-        ),
+        children: _buildOilTechnicianAndNotesFields(context, busy, compact: true),
       ),
     );
   }
 
-  List<Widget> _buildOilTechnicianAndNotesFields(
-    BuildContext context,
-    bool busy, {
-    required bool compact,
-  }) {
+  List<Widget> _buildOilTechnicianAndNotesFields(BuildContext context, bool busy, {required bool compact}) {
     return [
-      OilChangeTechnicianField(
-        controller: _technicianName,
-        enabled: !busy,
-        isDense: compact,
-      ),
+      OilChangeTechnicianField(controller: _technicianName, enabled: !busy, isDense: compact),
       SizedBox(height: compact ? 8 : 10),
       TextFormField(
         controller: _issue,
@@ -187,11 +179,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
           padding: const EdgeInsetsDirectional.only(top: 8),
           child: Text(
             'مضاف من الملاحظات: ${IraqiCurrencyFormat.formatIqd(IqdMoney.fromFils(_notesExtrasFils))}',
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
-              color: Theme.of(context).colorScheme.primary,
-            ),
+            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Theme.of(context).colorScheme.primary),
             textAlign: TextAlign.start,
           ),
         ),
@@ -200,21 +188,21 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
 
   /// شريط الحساب: الزيارة، الدين السابق، المطلوب كله، المستلم، والرصيد بعد
   /// البيع، مع توزيع المستلم قبل الحفظ.
-  Widget _buildOilAccountBar(
-    BuildContext context,
-    bool busy, {
-    required int totalF,
-    required int paidF,
-  }) {
+  Widget _buildOilAccountBar(BuildContext context, bool busy, {required int totalF, required int paidF}) {
     final cs = Theme.of(context).colorScheme;
     final linked = _customerId != null && _customerId! > 0;
-    final acc = OilCardAccount(
-      visitFils: totalF,
-      priorDebtFils: _collectibleOldDebtFils(),
-      receivedFils: paidF,
-    );
+    final acc = OilCardAccount(visitFils: totalF, priorDebtFils: _collectibleOldDebtFils(), receivedFils: paidF);
     String m(int f) => _formatFilsLabel(f);
     final owes = acc.balanceAfterFils > 500;
+    // لون الأزرار والنص فوق خلفية الصندوق: الذهبي ثم الأبيض (onErrorContainer
+    // في ثيم التطبيق فاتح) فوق الوردي كانا باهتين؛ نص السطور الداكن نفسه
+    // وخلفية فاتحة تميّز الزر.
+    final onBox = cs.onSurface;
+    final boxButton = TextButton.styleFrom(
+      foregroundColor: onBox,
+      backgroundColor: cs.surface.withValues(alpha: 0.7),
+      textStyle: const TextStyle(fontWeight: FontWeight.w800),
+    );
 
     Widget row(String label, String value, {bool strong = false, Color? color}) {
       final style = TextStyle(
@@ -235,45 +223,32 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
       );
     }
 
-    final priorLabel = _customerOpenDebtLoading
-        ? '…'
-        : m(_customerOpenDebtFils);
+    final priorLabel = _customerOpenDebtLoading ? '…' : m(_customerOpenDebtFils);
     return Container(
       width: double.infinity,
       padding: const EdgeInsetsDirectional.fromSTEB(12, 8, 12, 8),
       decoration: BoxDecoration(
-        color: owes
-            ? cs.errorContainer.withValues(alpha: 0.45)
-            : cs.tertiaryContainer.withValues(alpha: 0.45),
+        color: owes ? cs.errorContainer.withValues(alpha: 0.45) : cs.tertiaryContainer.withValues(alpha: 0.45),
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: (owes ? cs.error : cs.tertiary).withValues(alpha: 0.35),
-        ),
+        border: Border.all(color: (owes ? cs.error : cs.tertiary).withValues(alpha: 0.35)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
             children: [
-              Icon(
-                Icons.account_balance_wallet_outlined,
-                size: 18,
-                color: owes ? cs.error : cs.tertiary,
-              ),
+              Icon(Icons.account_balance_wallet_outlined, size: 18, color: owes ? cs.error : cs.tertiary),
               const SizedBox(width: 6),
               Expanded(
                 child: Text(
                   'حساب العميل',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w900,
-                    fontSize: 13,
-                    color: cs.onSurface,
-                  ),
+                  style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: cs.onSurface),
                   textAlign: TextAlign.start,
                 ),
               ),
               TextButton(
                 onPressed: busy ? null : _openCustomerDebtAndRefresh,
+                style: boxButton,
                 child: const Text('عرض الدين'),
               ),
             ],
@@ -287,16 +262,14 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
               Align(
                 alignment: AlignmentDirectional.centerEnd,
                 child: TextButton.icon(
+                  style: boxButton,
                   onPressed: busy
                       ? null
                       : () => _rebuild(() {
                           _advanceManuallyEdited = true;
                           _syncingAdvance = true;
                           try {
-                            _assignControllerText(
-                              _advance,
-                              _formatAdvanceIqd(acc.dueAllFils),
-                            );
+                            _assignControllerText(_advance, _formatAdvanceIqd(acc.dueAllFils));
                           } finally {
                             _syncingAdvance = false;
                           }
@@ -305,20 +278,14 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
                   label: Text('استلام المطلوب كله (${m(acc.dueAllFils)})'),
                 ),
               ),
-            if (acc.oldDebtPaidFils > 0)
-              row(
-                'منه تسديد للدين السابق',
-                m(acc.oldDebtPaidFils),
-                color: cs.tertiary,
-              ),
-            if (acc.newDebtFils > 500)
-              row('دين جديد من الزيارة', m(acc.newDebtFils), color: cs.error),
+            if (acc.oldDebtPaidFils > 0) row('منه تسديد للدين السابق', m(acc.oldDebtPaidFils), color: onBox),
+            if (acc.newDebtFils > 500) row('دين جديد من الزيارة', m(acc.newDebtFils), color: cs.error),
             const Divider(height: 10),
             row(
               'الرصيد بعد البيع',
               acc.balanceAfterFils > 500 ? m(acc.balanceAfterFils) : 'لا دين',
               strong: true,
-              color: owes ? cs.error : cs.tertiary,
+              color: owes ? cs.error : onBox,
             ),
           ] else
             Padding(
@@ -336,11 +303,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
   }
 
   Future<void> _openCustomerDebtAndRefresh() async {
-    await openCustomerOpenDebtDetail(
-      context,
-      customerId: _customerId,
-      customerName: _customerName.text.trim(),
-    );
+    await openCustomerOpenDebtDetail(context, customerId: _customerId, customerName: _customerName.text.trim());
     // ربما سدّد من شاشة الدين: حدّث المبلغ والحد الأعلى للمستلم.
     if (!mounted) return;
     await _refreshCustomerOpenDebt();
@@ -348,11 +311,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
     _rebuild(_clampAdvanceToCheckoutTotal);
   }
 
-  List<Widget> _oilPaymentFields(
-    BuildContext context,
-    bool busy, {
-    required bool compact,
-  }) {
+  List<Widget> _oilPaymentFields(BuildContext context, bool busy, {required bool compact}) {
     final cs = Theme.of(context).colorScheme;
     // المجاميع تُحسب مرة واحدة: كانت تُستدعى ~25 مرة في كل إعادة بناء، وكل
     // استدعاء يمرّ على كتالوج الخدمات والمنتجات والفلاتر.
@@ -364,37 +323,32 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
     final hasDebt = remainderF > 500;
     final customerName = _customerName.text.trim();
     final linkedCustomer = _customerId != null && _customerId! > 0;
-    final showBreakdown = _oilLaborFils() > 0 ||
-                _selectedOilServiceIds.isNotEmpty ||
-        _cardGrandTotalFils() > 0;
+    final showBreakdown = _oilLaborFils() > 0 || _selectedOilServiceIds.isNotEmpty || _cardGrandTotalFils() > 0;
 
     final agreedField = TextFormField(
-              controller: _agreed,
-              onTap: oilFieldSelectAllOnTap(_agreed),
-              enabled: !busy,
-              decoration: InputDecoration(
-                labelText: 'الإجمالي المتفق عليه (د.ع)',
+      controller: _agreed,
+      onTap: oilFieldSelectAllOnTap(_agreed),
+      enabled: !busy,
+      decoration: InputDecoration(
+        labelText: 'الإجمالي المتفق عليه (د.ع)',
         border: const OutlineInputBorder(),
         isDense: true,
-                helperText: _agreedTotalManual
-                    ? 'معدّل يدوياً — «إعادة الحساب» يجمع الكل'
-                    : 'زيت + فلاتر + هيدروليك + خدمات + منتجات',
-                helperMaxLines: 2,
-              ),
-              keyboardType: const TextInputType.numberWithOptions(
-                decimal: false,
-                signed: false,
-              ),
-              inputFormatters: [IraqiCurrencyFormat.moneyInputFormatter()],
-              validator: (v) {
-                final s = (v ?? '').trim().replaceAll(',', '');
-                if (s.isEmpty) return null;
-                final n = double.tryParse(s);
-                if (n == null || n < 0) return 'مبلغ غير صحيح';
-                return null;
-              },
-              textDirection: TextDirection.ltr,
-              textAlign: TextAlign.start,
+        helperText: _agreedTotalManual
+            ? 'معدّل يدوياً — «إعادة الحساب» يجمع الكل'
+            : 'زيت + فلاتر + هيدروليك + خدمات + منتجات',
+        helperMaxLines: 2,
+      ),
+      keyboardType: const TextInputType.numberWithOptions(decimal: false, signed: false),
+      inputFormatters: [IraqiCurrencyFormat.moneyInputFormatter()],
+      validator: (v) {
+        final s = (v ?? '').trim().replaceAll(',', '');
+        if (s.isEmpty) return null;
+        final n = double.tryParse(s);
+        if (n == null || n < 0) return 'مبلغ غير صحيح';
+        return null;
+      },
+      textDirection: TextDirection.ltr,
+      textAlign: TextAlign.start,
     );
 
     final advanceField = TextFormField(
@@ -413,10 +367,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
                   : 'يُملأ تلقائياً من الإجمالي — عدّله إن دفع أقل (لا أكثر)'),
         helperMaxLines: 2,
       ),
-      keyboardType: const TextInputType.numberWithOptions(
-        decimal: false,
-        signed: false,
-      ),
+      keyboardType: const TextInputType.numberWithOptions(decimal: false, signed: false),
       inputFormatters: [IraqiCurrencyFormat.moneyInputFormatter()],
       textDirection: TextDirection.ltr,
       textAlign: TextAlign.start,
@@ -428,9 +379,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
         final paidF = IqdMoney.toFils(n);
         final totalF = _oilCheckoutTotalFils();
         if (totalF > 0 && paidF > _maxReceivableFils()) {
-          return _collectibleOldDebtFils() > 0
-              ? 'لا يتجاوز الزيارة + الدين السابق'
-              : 'لا يمكن أن يتجاوز الإجمالي';
+          return _collectibleOldDebtFils() > 0 ? 'لا يتجاوز الزيارة + الدين السابق' : 'لا يمكن أن يتجاوز الإجمالي';
         }
         return null;
       },
@@ -445,57 +394,49 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
           compact ? 12 : 14,
           compact ? 10 : 12,
         ),
-              decoration: BoxDecoration(
-                color: AppColors.accentGold.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-            color: AppColors.accentGold.withValues(alpha: 0.55),
-                ),
-              ),
-              child: Row(
-                children: [
-            Icon(
-                    Icons.receipt_long_rounded,
-                    color: AppColors.accentGold,
-              size: compact ? 20 : 22,
-                  ),
+        decoration: BoxDecoration(
+          color: AppColors.accentGold.withValues(alpha: 0.15),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppColors.accentGold.withValues(alpha: 0.55)),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.receipt_long_rounded, color: AppColors.accentGold, size: compact ? 20 : 22),
             const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'الإجمالي',
-                          style: TextStyle(
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'الإجمالي',
+                    style: TextStyle(
                       fontSize: compact ? 12 : 13,
-                            color: cs.onSurfaceVariant,
+                      color: cs.onSurfaceVariant,
                       fontWeight: FontWeight.w700,
-                          ),
-                          textAlign: TextAlign.start,
-                        ),
-                        Text(
-                          totalLabel,
-                          style: TextStyle(
-                            fontWeight: FontWeight.w900,
-                      fontSize: compact ? 18 : 22,
-                            color: AppColors.accentGold,
-                          ),
-                          textDirection: TextDirection.ltr,
-                          textAlign: TextAlign.start,
-                        ),
-                      ],
                     ),
+                    textAlign: TextAlign.start,
+                  ),
+                  Text(
+                    totalLabel,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w900,
+                      fontSize: compact ? 18 : 22,
+                      color: AppColors.accentGold,
+                    ),
+                    textDirection: TextDirection.ltr,
+                    textAlign: TextAlign.start,
+                  ),
+                ],
+              ),
             ),
             if (totalF > 0 && _advanceManuallyEdited)
               IconButton(
                 tooltip: 'إرجاع المبلغ المستلم إلى الإجمالي',
-                onPressed: busy
-                    ? null
-                    : () => _rebuild(_resetOilCheckoutAutoAdvance),
+                onPressed: busy ? null : () => _rebuild(_resetOilCheckoutAutoAdvance),
                 icon: Icon(Icons.undo_rounded, color: cs.primary, size: 20),
-                  ),
-                ],
               ),
+          ],
+        ),
       );
     }
 
@@ -508,10 +449,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
       if (!hasDebt) {
         return Container(
           width: double.infinity,
-          padding: const EdgeInsetsDirectional.symmetric(
-            horizontal: 12,
-            vertical: 8,
-          ),
+          padding: const EdgeInsetsDirectional.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
             color: cs.tertiaryContainer.withValues(alpha: 0.45),
             borderRadius: BorderRadius.circular(10),
@@ -523,11 +461,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
               Expanded(
                 child: Text(
                   'مسدّد بالكامل — لا دين',
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                    color: cs.onTertiaryContainer,
-                  ),
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: cs.onTertiaryContainer),
                   textAlign: TextAlign.start,
                 ),
               ),
@@ -542,10 +476,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
 
       return Container(
         width: double.infinity,
-        padding: const EdgeInsetsDirectional.symmetric(
-          horizontal: 12,
-          vertical: 8,
-        ),
+        padding: const EdgeInsetsDirectional.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
           color: cs.errorContainer.withValues(alpha: 0.55),
           borderRadius: BorderRadius.circular(10),
@@ -560,28 +491,21 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                Text(
+                  Text(
                     debtText,
-                  style: TextStyle(
-                    fontSize: 12,
-                      fontWeight: FontWeight.w800,
-                      color: cs.onErrorContainer,
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: cs.onErrorContainer),
+                    textDirection: TextDirection.ltr,
+                    textAlign: TextAlign.start,
                   ),
-                  textDirection: TextDirection.ltr,
-                  textAlign: TextAlign.start,
-                ),
                   if (!linkedCustomer) ...[
                     const SizedBox(height: 4),
-                Text(
+                    Text(
                       'اختر عميلاً مسجّلاً لربط الدين بحسابه',
-                  style: TextStyle(
-                        fontSize: 11,
-                        color: cs.onErrorContainer.withValues(alpha: 0.85),
-                  ),
-                  textAlign: TextAlign.start,
-                ),
-              ],
-            ],
+                      style: TextStyle(fontSize: 11, color: cs.onErrorContainer.withValues(alpha: 0.85)),
+                      textAlign: TextAlign.start,
+                    ),
+                  ],
+                ],
               ),
             ),
           ],
@@ -604,15 +528,13 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
             childrenPadding: const EdgeInsets.only(bottom: 4),
             title: Text(
               'تفاصيل الأسعار',
-              style: TextStyle(
-                fontWeight: FontWeight.w800,
-                fontSize: 13,
-                color: cs.primary,
-              ),
+              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13, color: cs.primary),
               textAlign: TextAlign.start,
             ),
             children: [
-              if (compact) _buildOilPriceBreakdownSummary(cs) else ...[
+              if (compact)
+                _buildOilPriceBreakdownSummary(cs)
+              else ...[
                 _buildOilPriceBreakdownSummary(cs),
                 const SizedBox(height: 8),
               ],
@@ -632,9 +554,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
                   icon: const Icon(Icons.calculate_outlined, size: 18),
                   label: const Text('إعادة حساب الإجمالي'),
                   style: TextButton.styleFrom(
-                    visualDensity: compact
-                        ? VisualDensity.compact
-                        : VisualDensity.standard,
+                    visualDensity: compact ? VisualDensity.compact : VisualDensity.standard,
                     padding: compact ? EdgeInsets.zero : null,
                   ),
                 ),
@@ -671,131 +591,93 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
   List<Widget> _buildOilCheckoutActionButtons(BuildContext context, bool busy) {
     return [
       const SizedBox(height: 12),
-            if (widget.isOilNewCard) ...[
-              GuideAnchor(
-                id: OilGuideAnchors.formSuspend,
-                child: SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: AppColors.accentGold,
-                    side: BorderSide(
-                      color: AppColors.accentGold.withValues(alpha: 0.65),
-                    ),
-                    padding: const EdgeInsetsDirectional.symmetric(
-                      horizontal: 20,
-                      vertical: 14,
-                    ),
+      if (widget.isOilNewCard) ...[
+        GuideAnchor(
+          id: OilGuideAnchors.formSuspend,
+          child: SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppColors.accentGold,
+                side: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.65)),
+                padding: const EdgeInsetsDirectional.symmetric(horizontal: 20, vertical: 14),
+              ),
+              onPressed: busy ? null : () => _submit(intent: _OilSubmitIntent.suspend),
+              icon: const Icon(Icons.pause_circle_outline_rounded),
+              label: Text(
+                _saving ? 'جارٍ التعليق…' : 'تعليق الفاتورة',
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 10),
+      ] else if (_oilEditCompletingSuspended && !widget.amendInvoicedOrder) ...[
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppColors.accentGold,
+              side: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.65)),
+              padding: const EdgeInsetsDirectional.symmetric(horizontal: 20, vertical: 14),
+            ),
+            onPressed: busy ? null : () => _submit(intent: _OilSubmitIntent.suspend),
+            icon: const Icon(Icons.pause_circle_outline_rounded),
+            label: Text(
+              _saving ? 'جارٍ التعليق…' : 'إعادة التعليق',
+              style: const TextStyle(fontWeight: FontWeight.w800),
+            ),
+          ),
+        ),
+        const SizedBox(height: 10),
+      ],
+      GuideAnchor(
+        id: OilGuideAnchors.formSave,
+        child: SizedBox(
+          width: double.infinity,
+          child: widget.isEdit
+              ? FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppColors.accentGold,
+                    foregroundColor: Colors.black,
+                    padding: const EdgeInsetsDirectional.symmetric(horizontal: 20, vertical: 14),
                   ),
-                  onPressed: busy
-                      ? null
-                      : () => _submit(intent: _OilSubmitIntent.suspend),
-                  icon: const Icon(Icons.pause_circle_outline_rounded),
+                  onPressed: busy ? null : () => _submit(openInvoice: _oilEditOffersSale && !widget.amendInvoicedOrder),
+                  icon: Icon(
+                    widget.amendInvoicedOrder
+                        ? Icons.edit_rounded
+                        : (_oilEditOffersSale ? Icons.point_of_sale_rounded : Icons.save_rounded),
+                  ),
                   label: Text(
-                    _saving ? 'جارٍ التعليق…' : 'تعليق الفاتورة',
+                    _saving
+                        ? 'جارٍ الحفظ…'
+                        : (widget.amendInvoicedOrder
+                              ? 'حفظ التعديل على الفاتورة'
+                              : (_oilEditOffersSale ? 'حفظ وبيع' : 'حفظ')),
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                )
+              : FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppColors.accentGold,
+                    foregroundColor: Colors.black,
+                    padding: const EdgeInsetsDirectional.symmetric(horizontal: 20, vertical: 14),
+                  ),
+                  onPressed: busy ? null : () => _submit(openInvoice: true),
+                  icon: const Icon(Icons.point_of_sale_rounded),
+                  label: Text(
+                    _saving ? 'جارٍ الحفظ…' : 'حفظ وبيع',
                     style: const TextStyle(fontWeight: FontWeight.w800),
                   ),
                 ),
-              ),
-              ),
-              const SizedBox(height: 10),
-            ] else if (_oilEditCompletingSuspended &&
-                !widget.amendInvoicedOrder) ...[
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: AppColors.accentGold,
-                    side: BorderSide(
-                      color: AppColors.accentGold.withValues(alpha: 0.65),
-                    ),
-                    padding: const EdgeInsetsDirectional.symmetric(
-                      horizontal: 20,
-                      vertical: 14,
-                    ),
-                  ),
-                  onPressed: busy
-                      ? null
-                      : () => _submit(intent: _OilSubmitIntent.suspend),
-                  icon: const Icon(Icons.pause_circle_outline_rounded),
-                  label: Text(
-                    _saving ? 'جارٍ التعليق…' : 'إعادة التعليق',
-                    style: const TextStyle(fontWeight: FontWeight.w800),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 10),
-            ],
-            GuideAnchor(
-              id: OilGuideAnchors.formSave,
-              child: SizedBox(
-              width: double.infinity,
-              child: widget.isEdit
-                  ? FilledButton.icon(
-                      style: FilledButton.styleFrom(
-                        backgroundColor: AppColors.accentGold,
-                        foregroundColor: Colors.black,
-                        padding: const EdgeInsetsDirectional.symmetric(
-                          horizontal: 20,
-                          vertical: 14,
-                        ),
-                      ),
-                      onPressed: busy
-                          ? null
-                          : () => _submit(
-                                openInvoice: _oilEditOffersSale &&
-                                    !widget.amendInvoicedOrder,
-                              ),
-                      icon: Icon(
-                        widget.amendInvoicedOrder
-                            ? Icons.edit_rounded
-                            : (_oilEditOffersSale
-                                ? Icons.point_of_sale_rounded
-                                : Icons.save_rounded),
-                      ),
-                      label: Text(
-                        _saving
-                            ? 'جارٍ الحفظ…'
-                            : (widget.amendInvoicedOrder
-                                ? 'حفظ التعديل على الفاتورة'
-                                : (_oilEditOffersSale
-                                    ? 'حفظ وبيع'
-                                    : 'حفظ')),
-                        style: const TextStyle(fontWeight: FontWeight.w800),
-                      ),
-                    )
-                  : FilledButton.icon(
-                      style: FilledButton.styleFrom(
-                        backgroundColor: AppColors.accentGold,
-                        foregroundColor: Colors.black,
-                        padding: const EdgeInsetsDirectional.symmetric(
-                          horizontal: 20,
-                          vertical: 14,
-                        ),
-                      ),
-                      onPressed: busy ? null : () => _submit(openInvoice: true),
-                      icon: const Icon(Icons.point_of_sale_rounded),
-                      label: Text(
-                        _saving ? 'جارٍ الحفظ…' : 'حفظ وبيع',
-                        style: const TextStyle(fontWeight: FontWeight.w800),
-                      ),
-                    ),
-            ),
-            ),
+        ),
+      ),
     ];
   }
 
-  List<Widget> _oilCheckoutFields(
-    BuildContext context,
-    bool busy, {
-    required bool compact,
-  }) {
-    return [
-      ..._oilPaymentFields(context, busy, compact: compact),
-      ..._buildOilCheckoutActionButtons(context, busy),
-    ];
+  List<Widget> _oilCheckoutFields(BuildContext context, bool busy, {required bool compact}) {
+    return [..._oilPaymentFields(context, busy, compact: compact), ..._buildOilCheckoutActionButtons(context, busy)];
   }
-
 
   String _formatFilsLabel(int fils) {
     if (fils <= 0) return '—';
@@ -836,25 +718,16 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
       final sell = _selectedOilSellPerLiterIqd();
       if (sell == null || sell <= 0) return 0;
       if ((_oilStockProductId ?? 0) <= 0) return 0;
-      return sellFilsForVolumeMl(
-        sellPerLiterFils: IqdMoney.toFils(sell),
-        milliliters: ml,
-      );
+      return sellFilsForVolumeMl(sellPerLiterFils: IqdMoney.toFils(sell), milliliters: ml);
     }
     if (_usesCatalogOilPricing) {
-      return sellFilsForVolumeMl(
-        sellPerLiterFils: _catalogSellPerLiterFils!,
-        milliliters: ml,
-      );
+      return sellFilsForVolumeMl(sellPerLiterFils: _catalogSellPerLiterFils!, milliliters: ml);
     }
     return 0;
   }
 
   bool get _usesShopOilFromStock =>
-      _stockFromWarehouseEnabled &&
-      !_oilCustomerProvided &&
-      _oilStockProductId != null &&
-      _oilStockProductId! > 0;
+      _stockFromWarehouseEnabled && !_oilCustomerProvided && _oilStockProductId != null && _oilStockProductId! > 0;
 
   void _onOilFamilyDropdownChanged(int? familyKey) {
     _markOilFluidUserEdited();
@@ -941,12 +814,8 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
   List<OilPickLine> _hydraulicStockLinesForFamily(OilChangeHydraulicCardSlot slot) {
     final key = slot.selectedFamilyKey;
     if (key == null) return const [];
-    return _hydraulicStockPickLines
-        .where((l) => _OilChangeOrderFormScreenState._oilFamilyKey(l) == key)
-        .toList()
-      ..sort(
-        (a, b) => a.viscosity.toLowerCase().compareTo(b.viscosity.toLowerCase()),
-      );
+    return _hydraulicStockPickLines.where((l) => _OilChangeOrderFormScreenState._oilFamilyKey(l) == key).toList()
+      ..sort((a, b) => a.viscosity.toLowerCase().compareTo(b.viscosity.toLowerCase()));
   }
 
   int? _hydraulicStockGradeProductIdFor(OilChangeHydraulicCardSlot slot) {
@@ -970,10 +839,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
     _agreedTotalManual = false;
   }
 
-  void _onHydraulicFamilyDropdownChangedFor(
-    OilChangeHydraulicCardSlot slot,
-    int? familyKey,
-  ) {
+  void _onHydraulicFamilyDropdownChangedFor(OilChangeHydraulicCardSlot slot, int? familyKey) {
     _markHydraulicFluidUserEdited(slot);
     _rebuild(() {
       slot.selectedFamilyKey = familyKey;
@@ -994,10 +860,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
     }
   }
 
-  void _onHydraulicStockGradeDropdownChangedFor(
-    OilChangeHydraulicCardSlot slot,
-    int? linkedProductId,
-  ) {
+  void _onHydraulicStockGradeDropdownChangedFor(OilChangeHydraulicCardSlot slot, int? linkedProductId) {
     _markHydraulicFluidUserEdited(slot);
     if (linkedProductId == null) {
       _rebuild(() {
@@ -1044,8 +907,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
         toAdd.add(_OilFormOptionalSection.filters);
         toAdd.add(_OilFormOptionalSection.hydraulicGear);
       }
-      final needsExpand =
-          toAdd.any((section) => !_expandedOptional.contains(section));
+      final needsExpand = toAdd.any((section) => !_expandedOptional.contains(section));
       if (needsExpand) {
         _rebuild(() => _expandedOptional.addAll(toAdd));
         _ensureDeferredCatalogsForExpanded();
@@ -1059,8 +921,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
       });
       _ensureDeferredCatalogsForExpanded();
       unawaited(_openFilterCatalogManage(OilChangeFilterKind.engine));
-    } else if (action == 'oil.open_hydraulic_catalog' &&
-        !_hydraulicCatalogGuideOpen) {
+    } else if (action == 'oil.open_hydraulic_catalog' && !_hydraulicCatalogGuideOpen) {
       _rebuild(() {
         _expandedOptional.add(_OilFormOptionalSection.hydraulicGear);
       });
@@ -1071,9 +932,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
 
   void _closeGuideCatalogSheetsIfNeeded() {
     if (!mounted) return;
-    if (_oilCatalogGuideOpen ||
-        _filterCatalogGuideOpen ||
-        _hydraulicCatalogGuideOpen) {
+    if (_oilCatalogGuideOpen || _filterCatalogGuideOpen || _hydraulicCatalogGuideOpen) {
       Navigator.of(context).maybePop();
     }
   }
@@ -1082,10 +941,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
     if (_oilCatalogGuideOpen) return;
     _oilCatalogGuideOpen = true;
     try {
-      await showOilChangeOilCatalogSheet(
-        context,
-        manageOnly: true,
-      );
+      await showOilChangeOilCatalogSheet(context, manageOnly: true);
     } finally {
       _oilCatalogGuideOpen = false;
     }
@@ -1115,10 +971,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
       return;
     }
     final entry = OilChangeFilterCatalogRepository.entryById(
-      OilChangeFilterCatalogRepository.entriesForKind(
-        _filterProductCatalog,
-        kind,
-      ),
+      OilChangeFilterCatalogRepository.entriesForKind(_filterProductCatalog, kind),
       entryId,
     );
     if (entry == null) return;
@@ -1137,11 +990,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
     if (_filterCatalogGuideOpen) return;
     _filterCatalogGuideOpen = true;
     try {
-      await showOilChangeFilterCatalogSheet(
-        context,
-        manageOnly: true,
-        initialKind: kind,
-      );
+      await showOilChangeFilterCatalogSheet(context, manageOnly: true, initialKind: kind);
     } finally {
       _filterCatalogGuideOpen = false;
     }
@@ -1160,13 +1009,8 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
     required OilChangeFilterKind kind,
   }) {
     final slot = _filterSlotFor(kind);
-    final entries = OilChangeFilterCatalogRepository.entriesForKind(
-      _filterProductCatalog,
-      kind,
-    );
-    final priceLabel = !slot.customerProvided && slot.priceFils > 0
-        ? _formatFilsLabel(slot.priceFils)
-        : null;
+    final entries = OilChangeFilterCatalogRepository.entriesForKind(_filterProductCatalog, kind);
+    final priceLabel = !slot.customerProvided && slot.priceFils > 0 ? _formatFilsLabel(slot.priceFils) : null;
 
     final customerToggle = Align(
       alignment: AlignmentDirectional.centerStart,
@@ -1247,8 +1091,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
           children: [
             Expanded(
               child: DropdownButtonFormField<int>(
-                value: slot.catalogEntryId != null &&
-                        entries.any((e) => e.id == slot.catalogEntryId)
+                value: slot.catalogEntryId != null && entries.any((e) => e.id == slot.catalogEntryId)
                     ? slot.catalogEntryId
                     : null,
                 decoration: InputDecoration(
@@ -1259,36 +1102,22 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
                 ),
                 isExpanded: true,
                 items: [
-                  const DropdownMenuItem<int>(
-                    value: null,
-                    child: Text('بدون'),
-                  ),
+                  const DropdownMenuItem<int>(value: null, child: Text('بدون')),
                   ...entries.map(
                     (e) => DropdownMenuItem(
                       value: e.id,
-                      child: Text(
-                        () {
-                          final label = e.name.trim().isEmpty
-                              ? 'بدون اسم'
-                              : e.name.trim();
-                          final priced = e.priceFils > 0
-                              ? '$label — ${_formatFilsLabel(e.priceFils)}'
-                              : label;
-                          final avail = e.availableQty;
-                          if (avail == null) return priced;
-                          final n = avail % 1 == 0
-                              ? avail.toInt().toString()
-                              : avail.toStringAsFixed(1);
-                          return '$priced (متوفر $n)';
-                        }(),
-                        textAlign: TextAlign.start,
-                      ),
+                      child: Text(() {
+                        final label = e.name.trim().isEmpty ? 'بدون اسم' : e.name.trim();
+                        final priced = e.priceFils > 0 ? '$label — ${_formatFilsLabel(e.priceFils)}' : label;
+                        final avail = e.availableQty;
+                        if (avail == null) return priced;
+                        final n = avail % 1 == 0 ? avail.toInt().toString() : avail.toStringAsFixed(1);
+                        return '$priced (متوفر $n)';
+                      }(), textAlign: TextAlign.start),
                     ),
                   ),
                 ],
-                onChanged: busy
-                    ? null
-                    : (id) => _onFilterEntryChanged(kind, id),
+                onChanged: busy ? null : (id) => _onFilterEntryChanged(kind, id),
               ),
             ),
             if (!_filtersStockEnabled) ...[
@@ -1296,9 +1125,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
               GuideAnchor(
                 id: OilGuideAnchors.formFilterCatalogBtn,
                 child: IconButton.filledTonal(
-                  onPressed: busy
-                      ? null
-                      : () => unawaited(_openFilterCatalogManage(kind)),
+                  onPressed: busy ? null : () => unawaited(_openFilterCatalogManage(kind)),
                   tooltip: 'إدارة أسعار ${kind.label}',
                   icon: const Icon(Icons.add_rounded),
                 ),
@@ -1322,19 +1149,14 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
             textAlign: TextAlign.start,
           ),
         ],
-        if (_filterQtyEditable && slot.catalogEntryId != null)
-          _buildFilterQtyRow(cs, slot: slot, busy: busy),
+        if (_filterQtyEditable && slot.catalogEntryId != null) _buildFilterQtyRow(cs, slot: slot, busy: busy),
         const SizedBox(height: 4),
         customerToggle,
         if (priceLabel != null) ...[
           const SizedBox(height: 4),
           Text(
             'السعر: $priceLabel',
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
-              color: cs.primary,
-            ),
+            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: cs.primary),
             textAlign: TextAlign.start,
           ),
         ],
@@ -1344,16 +1166,9 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
 
   /// فلتر محفوظ بالاسم بلا صنف مخزون والمصدر صار «مرتبط بالمخزون».
   bool _filterNeedsStockPick(OilChangeFilterSlot slot) =>
-      _filtersStockEnabled &&
-      !slot.customerProvided &&
-      slot.hasSelection &&
-      (slot.productId ?? 0) <= 0;
+      _filtersStockEnabled && !slot.customerProvided && slot.hasSelection && (slot.productId ?? 0) <= 0;
 
-  Widget _buildFilterQtyRow(
-    ColorScheme cs, {
-    required OilChangeFilterSlot slot,
-    required bool busy,
-  }) {
+  Widget _buildFilterQtyRow(ColorScheme cs, {required OilChangeFilterSlot slot, required bool busy}) {
     void change(int q) {
       _rebuild(() {
         slot.setQty(q);
@@ -1373,10 +1188,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
             onPressed: busy || slot.qty <= 1 ? null : () => change(slot.qty - 1),
             icon: const Icon(Icons.remove_circle_outline),
           ),
-          Text(
-            '${slot.qty}',
-            style: const TextStyle(fontWeight: FontWeight.w800),
-          ),
+          Text('${slot.qty}', style: const TextStyle(fontWeight: FontWeight.w800)),
           IconButton(
             tooltip: 'زيادة',
             onPressed: busy ? null : () => change(slot.qty + 1),
@@ -1387,21 +1199,14 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
     );
   }
 
-  List<OilChangeHydraulicCatalogEntry> _hydraulicGradeDropdownEntriesFor(
-    OilChangeHydraulicCardSlot slot,
-  ) {
+  List<OilChangeHydraulicCatalogEntry> _hydraulicGradeDropdownEntriesFor(OilChangeHydraulicCardSlot slot) {
     final brand = slot.selectedBrand;
     if (brand == null || brand.isEmpty) return const [];
     final cached = _hydraulicGradeEntriesCache[slot];
-    if (cached != null &&
-        identical(cached.source, _hydraulicProductCatalog) &&
-        cached.brand == brand) {
+    if (cached != null && identical(cached.source, _hydraulicProductCatalog) && cached.brand == brand) {
       return cached.entries;
     }
-    final entries = OilChangeHydraulicCatalogRepository.entriesForBrand(
-      _hydraulicProductCatalog,
-      brand,
-    );
+    final entries = OilChangeHydraulicCatalogRepository.entriesForBrand(_hydraulicProductCatalog, brand);
     _hydraulicGradeEntriesCache[slot] = _HydraulicGradeCache(
       source: _hydraulicProductCatalog,
       brand: brand,
@@ -1428,10 +1233,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
     return null;
   }
 
-  void _applyHydraulicCatalogEntryFor(
-    OilChangeHydraulicCardSlot slot,
-    OilChangeHydraulicCatalogEntry entry,
-  ) {
+  void _applyHydraulicCatalogEntryFor(OilChangeHydraulicCardSlot slot, OilChangeHydraulicCatalogEntry entry) {
     _markHydraulicFluidUserEdited(slot);
     slot.selectedBrand = entry.brandName;
     slot.type.text = entry.brandName;
@@ -1444,10 +1246,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
     _agreedTotalManual = false;
   }
 
-  void _onHydraulicBrandDropdownChangedFor(
-    OilChangeHydraulicCardSlot slot,
-    String? brand,
-  ) {
+  void _onHydraulicBrandDropdownChangedFor(OilChangeHydraulicCardSlot slot, String? brand) {
     _markHydraulicFluidUserEdited(slot);
     _rebuild(() {
       slot.selectedBrand = brand;
@@ -1457,10 +1256,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
         slot.catalogSellPerLiterFils = null;
         return;
       }
-      final entries = OilChangeHydraulicCatalogRepository.entriesForBrand(
-        _hydraulicProductCatalog,
-        brand,
-      );
+      final entries = OilChangeHydraulicCatalogRepository.entriesForBrand(_hydraulicProductCatalog, brand);
       final currentGrade = slot.selectedGrade;
       OilChangeHydraulicCatalogEntry? keep;
       if (currentGrade != null && currentGrade.isNotEmpty) {
@@ -1485,10 +1281,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
     _recalculateOilTotal();
   }
 
-  void _onHydraulicGradeDropdownChangedFor(
-    OilChangeHydraulicCardSlot slot,
-    String? grade,
-  ) {
+  void _onHydraulicGradeDropdownChangedFor(OilChangeHydraulicCardSlot slot, String? grade) {
     _markHydraulicFluidUserEdited(slot);
     if (grade == null || slot.selectedBrand == null) return;
     final entry = OilChangeHydraulicCatalogRepository.entryForBrandGrade(
@@ -1503,15 +1296,11 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
 
   Future<void> _openHydraulicCatalogManageFor(OilChangeHydraulicCardSlot slot) async {
     if (_hydraulicCatalogGuideOpen) return;
-    final seedBrand = _hydraulicBrandDropdownValueFor(slot) ??
-        (slot.type.text.trim().isEmpty ? null : slot.type.text.trim());
+    final seedBrand =
+        _hydraulicBrandDropdownValueFor(slot) ?? (slot.type.text.trim().isEmpty ? null : slot.type.text.trim());
     _hydraulicCatalogGuideOpen = true;
     try {
-      await showOilChangeHydraulicCatalogSheet(
-        context,
-        manageOnly: true,
-        initialBrandName: seedBrand,
-      );
+      await showOilChangeHydraulicCatalogSheet(context, manageOnly: true, initialBrandName: seedBrand);
     } finally {
       _hydraulicCatalogGuideOpen = false;
     }
@@ -1544,8 +1333,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
     bool sideBySideOnPhone = false,
   }) {
     // sideBySideOnPhone: فوق 400dp يبقى صفاً حتى على الهاتف؛ تحت 400 يُطوى دائماً.
-    if (oilChangePreferStackedFieldsOf(context) ||
-        (context.screenLayout.isPhoneVariant && !sideBySideOnPhone)) {
+    if (oilChangePreferStackedFieldsOf(context) || (context.screenLayout.isPhoneVariant && !sideBySideOnPhone)) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -1601,10 +1389,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
     try {
       final picked = await ProductPickerDialog.show(context);
       if (!mounted || picked == null) return;
-      final msg = OilChangeProductScan.addFromProductMap(
-        lines: _oilProductLines,
-        product: picked,
-      );
+      final msg = OilChangeProductScan.addFromProductMap(lines: _oilProductLines, product: picked);
       _rebuild(() {
         _agreedTotalManual = false;
         _expandedOptional.add(_OilFormOptionalSection.products);
@@ -1619,8 +1404,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
   }
 
   void _toggleOptionalSection(_OilFormOptionalSection section) {
-    if (!_isOptionalSectionEnabled(section) &&
-        !_optionalSectionHasData(section)) {
+    if (!_isOptionalSectionEnabled(section) && !_optionalSectionHasData(section)) {
       return;
     }
     final expanding = !_expandedOptional.contains(section);
@@ -1639,10 +1423,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
   String? _oilCollapsedHint() {
     if (!_oilSectionHasData()) return null;
     if (_oilCustomerProvided) return 'زيت العميل';
-    final bits = [
-      _oilType.text.trim(),
-      _selectedViscosity ?? '',
-    ].where((b) => b.isNotEmpty);
+    final bits = [_oilType.text.trim(), _selectedViscosity ?? ''].where((b) => b.isNotEmpty);
     return bits.isEmpty ? 'مُحدَّد' : bits.join(' · ');
   }
 
@@ -1684,33 +1465,22 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
   String? _optionalSectionCollapsedHint(_OilFormOptionalSection section) {
     return switch (section) {
       _OilFormOptionalSection.oil => _oilCollapsedHint(),
-      _OilFormOptionalSection.products => _oilProductLines.isEmpty
-          ? null
-          : '${_oilProductLines.length} صنف',
+      _OilFormOptionalSection.products => _oilProductLines.isEmpty ? null : '${_oilProductLines.length} صنف',
       _OilFormOptionalSection.filters => () {
-          final n =
-              _filterKinds.where((k) => _filterSlotFor(k).hasSelection).length;
-          if (n == 0) return null;
-          return '$n فلتر محدد';
-        }(),
-      _OilFormOptionalSection.hydraulicGear =>
-          _hydraulicCollapsedHint(_gearHydraulic),
-      _OilFormOptionalSection.hydraulicPower =>
-          _hydraulicCollapsedHint(_powerHydraulic),
-      _OilFormOptionalSection.services => _selectedOilServiceIds.isEmpty
-          ? null
-          : '${_selectedOilServiceIds.length} خدمة',
+        final n = _filterKinds.where((k) => _filterSlotFor(k).hasSelection).length;
+        if (n == 0) return null;
+        return '$n فلتر محدد';
+      }(),
+      _OilFormOptionalSection.hydraulicGear => _hydraulicCollapsedHint(_gearHydraulic),
+      _OilFormOptionalSection.hydraulicPower => _hydraulicCollapsedHint(_powerHydraulic),
+      _OilFormOptionalSection.services =>
+        _selectedOilServiceIds.isEmpty ? null : '${_selectedOilServiceIds.length} خدمة',
     };
   }
 
-  Widget _buildOptionalSectionChip(
-    ColorScheme cs,
-    bool busy,
-    _OilFormOptionalSection section,
-  ) {
+  Widget _buildOptionalSectionChip(ColorScheme cs, bool busy, _OilFormOptionalSection section) {
     return Tooltip(
-      message: _optionalSectionCollapsedHint(section) ??
-          _optionalSectionTitle(section),
+      message: _optionalSectionCollapsedHint(section) ?? _optionalSectionTitle(section),
       child: FilterChip(
         label: Text(
           _optionalSectionTitle(section),
@@ -1721,97 +1491,74 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
         avatar: Icon(
           _optionalSectionIcon(section),
           size: 16,
-          color: _expandedOptional.contains(section)
-              ? cs.onPrimaryContainer
-              : cs.onSurfaceVariant,
+          color: _expandedOptional.contains(section) ? cs.onPrimaryContainer : cs.onSurfaceVariant,
         ),
         selected: _expandedOptional.contains(section),
         showCheckmark: false,
         visualDensity: VisualDensity.compact,
         materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
         padding: const EdgeInsetsDirectional.symmetric(horizontal: 6),
-        onSelected:
-            busy ? null : (_) => _toggleOptionalSection(section),
+        onSelected: busy ? null : (_) => _toggleOptionalSection(section),
       ),
     );
   }
 
   Widget _buildOilOptionalQuickBar(ColorScheme cs, bool busy) {
     final sections = _OilFormOptionalSection.values
-        .where(
-          (s) =>
-              _isOptionalSectionEnabled(s) || _optionalSectionHasData(s),
-        )
+        .where((s) => _isOptionalSectionEnabled(s) || _optionalSectionHasData(s))
         .toList(growable: false);
     if (sections.isEmpty) return const SizedBox.shrink();
 
-    final firstRow = sections.length <= 3
-        ? sections
-        : sections.sublist(0, 3);
-    final secondRow =
-        sections.length > 3 ? sections.sublist(3) : const <_OilFormOptionalSection>[];
+    final firstRow = sections.length <= 3 ? sections : sections.sublist(0, 3);
+    final secondRow = sections.length > 3 ? sections.sublist(3) : const <_OilFormOptionalSection>[];
 
     return GuideAnchor(
       id: OilGuideAnchors.formExtras,
       child: Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsetsDirectional.fromSTEB(10, 8, 10, 8),
-      decoration: BoxDecoration(
-        color: cs.surfaceContainerHighest.withValues(alpha: 0.35),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: OilChangeRoyalCard.gold.withValues(alpha: 0.35),
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsetsDirectional.fromSTEB(10, 8, 10, 8),
+        decoration: BoxDecoration(
+          color: cs.surfaceContainerHighest.withValues(alpha: 0.35),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: OilChangeRoyalCard.gold.withValues(alpha: 0.35)),
         ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            'إضافات عند الحاجة',
-            style: TextStyle(
-              fontWeight: FontWeight.w800,
-              fontSize: 12.5,
-              color: cs.onSurface,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'إضافات عند الحاجة',
+              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12.5, color: cs.onSurface),
+              textAlign: TextAlign.start,
             ),
-            textAlign: TextAlign.start,
-          ),
-          const SizedBox(height: 2),
-          Text(
-            'اضغط الزر لفتح القسم — اضغط مرة أخرى لإخفائه',
-            style: TextStyle(
-              fontSize: 10.5,
-              color: cs.onSurfaceVariant,
-              height: 1.25,
+            const SizedBox(height: 2),
+            Text(
+              'اضغط الزر لفتح القسم — اضغط مرة أخرى لإخفائه',
+              style: TextStyle(fontSize: 10.5, color: cs.onSurfaceVariant, height: 1.25),
+              textAlign: TextAlign.start,
             ),
-            textAlign: TextAlign.start,
-          ),
-          const SizedBox(height: 6),
-          Row(
-            children: [
-              for (var i = 0; i < firstRow.length; i++) ...[
-                if (i > 0) const SizedBox(width: 6),
-                Expanded(
-                  child: _buildOptionalSectionChip(cs, busy, firstRow[i]),
-                ),
-              ],
-            ],
-          ),
-          if (secondRow.isNotEmpty) ...[
             const SizedBox(height: 6),
             Row(
               children: [
-                for (var i = 0; i < secondRow.length; i++) ...[
+                for (var i = 0; i < firstRow.length; i++) ...[
                   if (i > 0) const SizedBox(width: 6),
-                  Expanded(
-                    child: _buildOptionalSectionChip(cs, busy, secondRow[i]),
-                  ),
+                  Expanded(child: _buildOptionalSectionChip(cs, busy, firstRow[i])),
                 ],
               ],
             ),
+            if (secondRow.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  for (var i = 0; i < secondRow.length; i++) ...[
+                    if (i > 0) const SizedBox(width: 6),
+                    Expanded(child: _buildOptionalSectionChip(cs, busy, secondRow[i])),
+                  ],
+                ],
+              ),
+            ],
           ],
-        ],
+        ),
       ),
-    ),
     );
   }
 
@@ -1856,12 +1603,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
     required IconData icon,
     required List<Widget> children,
   }) {
-    return OilChangeRoyalCard.section(
-      context: context,
-      title: title,
-      icon: icon,
-      children: children,
-    );
+    return OilChangeRoyalCard.section(context: context, title: title, icon: icon, children: children);
   }
 
   /// سطر أجرة يد ظاهر في القسم، يعدّله الموظف لهذه البطاقة فقط.
@@ -1912,10 +1654,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
                       else if (edited)
                         Text(
                           'معدّلة لهذه البطاقة',
-                          style: TextStyle(
-                            fontSize: 11.5,
-                            color: cs.onSurfaceVariant,
-                          ),
+                          style: TextStyle(fontSize: 11.5, color: cs.onSurfaceVariant),
                           textAlign: TextAlign.start,
                         ),
                     ],
@@ -1923,10 +1662,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
                 ),
                 Text(
                   fils <= 0 ? '0' : _formatFilsLabel(fils),
-                  style: TextStyle(
-                    fontWeight: FontWeight.w800,
-                    color: cs.primary,
-                  ),
+                  style: TextStyle(fontWeight: FontWeight.w800, color: cs.primary),
                   textDirection: TextDirection.ltr,
                 ),
                 const SizedBox(width: 4),
@@ -1940,13 +1676,8 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
   }
 
   /// يُرجع الأجرة بالفلس، أو -1 للعودة إلى أجرة الإعدادات، أو null للإلغاء.
-  Future<int?> _askLaborFils({
-    required String label,
-    required int current,
-  }) async {
-    final ctrl = TextEditingController(
-      text: current > 0 ? _formatIqdWhole(current) : '',
-    );
+  Future<int?> _askLaborFils({required String label, required int current}) async {
+    final ctrl = TextEditingController(text: current > 0 ? _formatIqdWhole(current) : '');
     try {
       return await showDialog<int>(
         context: context,
@@ -1958,26 +1689,14 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
             keyboardType: TextInputType.number,
             inputFormatters: [IraqiCurrencyFormat.moneyInputFormatter()],
             textDirection: TextDirection.ltr,
-            decoration: const InputDecoration(
-              labelText: 'المبلغ (د.ع)',
-              border: OutlineInputBorder(),
-            ),
+            decoration: const InputDecoration(labelText: 'المبلغ (د.ع)', border: OutlineInputBorder()),
           ),
           actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, -1),
-              child: const Text('من الإعدادات'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('إلغاء'),
-            ),
+            TextButton(onPressed: () => Navigator.pop(ctx, -1), child: const Text('من الإعدادات')),
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
             FilledButton(
               onPressed: () {
-                final d = double.tryParse(
-                      ctrl.text.trim().replaceAll(',', ''),
-                    ) ??
-                    0;
+                final d = double.tryParse(ctrl.text.trim().replaceAll(',', '')) ?? 0;
                 Navigator.pop(ctx, d <= 0 ? 0 : IqdMoney.toFils(d));
               },
               child: const Text('حفظ'),
@@ -1997,26 +1716,14 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
         const SizedBox(height: 12),
         Text(
           'مصدر الزيت',
-          style: TextStyle(
-            fontWeight: FontWeight.w800,
-            color: cs.onSurface,
-            fontSize: 13,
-          ),
+          style: TextStyle(fontWeight: FontWeight.w800, color: cs.onSurface, fontSize: 13),
           textAlign: TextAlign.start,
         ),
         const SizedBox(height: 8),
         SegmentedButton<bool>(
           segments: const [
-            ButtonSegment(
-              value: false,
-              label: Text('زيت المحل'),
-              icon: Icon(Icons.inventory_2_outlined, size: 18),
-            ),
-            ButtonSegment(
-              value: true,
-              label: Text('زيت العميل'),
-              icon: Icon(Icons.person_outline, size: 18),
-            ),
+            ButtonSegment(value: false, label: Text('زيت المحل'), icon: Icon(Icons.inventory_2_outlined, size: 18)),
+            ButtonSegment(value: true, label: Text('زيت العميل'), icon: Icon(Icons.person_outline, size: 18)),
           ],
           selected: {_oilCustomerProvided},
           onSelectionChanged: busy
@@ -2047,10 +1754,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
             child: Text(
               'لن يُخصم مخزون ولا يُحسب ثمن زيت — العميل أحضره. '
               'اسم الزيت وحجمه اختياريان.',
-              style: TextStyle(
-                fontSize: 12,
-                color: cs.onSurfaceVariant,
-              ),
+              style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
               textAlign: TextAlign.start,
             ),
           ),
@@ -2088,17 +1792,12 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
     );
   }
 
-  Widget _buildWarehouseOilPickRow(
-    BuildContext context,
-    ColorScheme cs,
-    bool busy,
-  ) {
+  Widget _buildWarehouseOilPickRow(BuildContext context, ColorScheme cs, bool busy) {
     if (!_usesWarehouseOilPicker) return const SizedBox.shrink();
     final families = _oilFamilyDropdownOptions;
     final visLines = _oilStockLinesForSelectedFamily;
     final showViscosityDropdown = visLines.any((l) => l.viscosity.isNotEmpty);
-    final familyKeyValid = _selectedOilFamilyKey != null &&
-        families.any((f) => f.key == _selectedOilFamilyKey);
+    final familyKeyValid = _selectedOilFamilyKey != null && families.any((f) => f.key == _selectedOilFamilyKey);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2145,10 +1844,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
                   .map(
                     (f) => DropdownMenuItem(
                       value: f.key,
-                      child: Text(
-                        f.label,
-                        textAlign: TextAlign.start,
-                      ),
+                      child: Text(f.label, textAlign: TextAlign.start),
                     ),
                   )
                   .toList(),
@@ -2161,9 +1857,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
                       labelText: 'اللزوجة',
                       border: const OutlineInputBorder(),
                       isDense: true,
-                      hintText: familyKeyValid
-                          ? 'اختر اللزوجة'
-                          : 'اختر العائلة أولاً',
+                      hintText: familyKeyValid ? 'اختر اللزوجة' : 'اختر العائلة أولاً',
                     ),
                     isExpanded: true,
                     items: visLines
@@ -2171,16 +1865,11 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
                         .map(
                           (l) => DropdownMenuItem(
                             value: l.linkedProductId,
-                            child: Text(
-                              l.viscosity,
-                              textAlign: TextAlign.start,
-                            ),
+                            child: Text(l.viscosity, textAlign: TextAlign.start),
                           ),
                         )
                         .toList(),
-                    onChanged: busy || !familyKeyValid
-                        ? null
-                        : _onOilStockViscosityChanged,
+                    onChanged: busy || !familyKeyValid ? null : _onOilStockViscosityChanged,
                   )
                 : InputDecorator(
                     decoration: const InputDecoration(
@@ -2189,10 +1878,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
                       isDense: true,
                     ),
                     child: Text(
-                      _selectedViscosity ??
-                          (familyKeyValid && visLines.isNotEmpty
-                              ? '—'
-                              : '—'),
+                      _selectedViscosity ?? (familyKeyValid && visLines.isNotEmpty ? '—' : '—'),
                       textAlign: TextAlign.start,
                       style: const TextStyle(fontWeight: FontWeight.w700),
                     ),
@@ -2202,11 +1888,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
           const SizedBox(height: 6),
           Text(
             'متوفر في المخزون: ${_oilAvailableLiters.toStringAsFixed(1)} لتر',
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: cs.primary,
-            ),
+            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: cs.primary),
             textAlign: TextAlign.start,
           ),
         ],
@@ -2214,18 +1896,12 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
           const SizedBox(height: 10),
           DropdownButtonFormField<int>(
             value: _oilWarehouseId,
-            decoration: const InputDecoration(
-              labelText: 'المستودع',
-              border: OutlineInputBorder(),
-              isDense: true,
-            ),
+            decoration: const InputDecoration(labelText: 'المستودع', border: OutlineInputBorder(), isDense: true),
             isExpanded: true,
             items: _warehouses
                 .map(
-                  (w) => DropdownMenuItem<int>(
-                    value: (w['id'] as num).toInt(),
-                    child: Text(w['name']?.toString() ?? ''),
-                  ),
+                  (w) =>
+                      DropdownMenuItem<int>(value: (w['id'] as num).toInt(), child: Text(w['name']?.toString() ?? '')),
                 )
                 .toList(),
             onChanged: busy
@@ -2255,26 +1931,14 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
         const SizedBox(height: 12),
         Text(
           sourceTitle,
-          style: TextStyle(
-            fontWeight: FontWeight.w800,
-            color: cs.onSurface,
-            fontSize: 13,
-          ),
+          style: TextStyle(fontWeight: FontWeight.w800, color: cs.onSurface, fontSize: 13),
           textAlign: TextAlign.start,
         ),
         const SizedBox(height: 8),
         SegmentedButton<bool>(
           segments: [
-            ButtonSegment(
-              value: false,
-              label: Text(shopLabel),
-              icon: const Icon(Icons.inventory_2_outlined, size: 18),
-            ),
-            ButtonSegment(
-              value: true,
-              label: Text(customerLabel),
-              icon: const Icon(Icons.person_outline, size: 18),
-            ),
+            ButtonSegment(value: false, label: Text(shopLabel), icon: const Icon(Icons.inventory_2_outlined, size: 18)),
+            ButtonSegment(value: true, label: Text(customerLabel), icon: const Icon(Icons.person_outline, size: 18)),
           ],
           selected: {slot.customerProvided},
           onSelectionChanged: busy
@@ -2299,10 +1963,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
             padding: const EdgeInsets.only(top: 8),
             child: Text(
               customerHint,
-              style: TextStyle(
-                fontSize: 12,
-                color: cs.onSurfaceVariant,
-              ),
+              style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
               textAlign: TextAlign.start,
             ),
           ),
@@ -2312,8 +1973,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
             controller: slot.type,
             enabled: !busy,
             decoration: InputDecoration(
-              labelText:
-                  'اسم ${sourceTitle.replaceFirst('مصدر ', '')} (اختياري)',
+              labelText: 'اسم ${sourceTitle.replaceFirst('مصدر ', '')} (اختياري)',
               border: const OutlineInputBorder(),
               isDense: true,
             ),
@@ -2352,8 +2012,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
     final families = _hydraulicFamilyDropdownOptions;
     final gradeLines = _hydraulicStockLinesForFamily(slot);
     final showGradeDropdown = gradeLines.any((l) => l.viscosity.isNotEmpty);
-    final familyKeyValid = slot.selectedFamilyKey != null &&
-        families.any((f) => f.key == slot.selectedFamilyKey);
+    final familyKeyValid = slot.selectedFamilyKey != null && families.any((f) => f.key == slot.selectedFamilyKey);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2374,8 +2033,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
               Align(
                 alignment: AlignmentDirectional.centerStart,
                 child: TextButton.icon(
-                  onPressed:
-                      busy ? null : () => unawaited(_loadHydraulicStockMeta()),
+                  onPressed: busy ? null : () => unawaited(_loadHydraulicStockMeta()),
                   icon: const Icon(Icons.refresh_rounded, size: 18),
                   label: const Text('تحديث قائمة المخزون'),
                 ),
@@ -2401,16 +2059,11 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
                   .map(
                     (f) => DropdownMenuItem(
                       value: f.key,
-                      child: Text(
-                        f.label,
-                        textAlign: TextAlign.start,
-                      ),
+                      child: Text(f.label, textAlign: TextAlign.start),
                     ),
                   )
                   .toList(),
-              onChanged: busy
-                  ? null
-                  : (v) => _onHydraulicFamilyDropdownChangedFor(slot, v),
+              onChanged: busy ? null : (v) => _onHydraulicFamilyDropdownChangedFor(slot, v),
             ),
             end: showGradeDropdown
                 ? DropdownButtonFormField<int>(
@@ -2419,9 +2072,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
                       labelText: 'الدرجة',
                       border: const OutlineInputBorder(),
                       isDense: true,
-                      hintText: familyKeyValid
-                          ? 'اختر الدرجة'
-                          : 'اختر العائلة أولاً',
+                      hintText: familyKeyValid ? 'اختر الدرجة' : 'اختر العائلة أولاً',
                     ),
                     isExpanded: true,
                     items: gradeLines
@@ -2429,29 +2080,18 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
                         .map(
                           (l) => DropdownMenuItem(
                             value: l.linkedProductId,
-                            child: Text(
-                              l.viscosity,
-                              textAlign: TextAlign.start,
-                            ),
+                            child: Text(l.viscosity, textAlign: TextAlign.start),
                           ),
                         )
                         .toList(),
                     onChanged: busy || !familyKeyValid
                         ? null
-                        : (v) =>
-                            _onHydraulicStockGradeDropdownChangedFor(slot, v),
+                        : (v) => _onHydraulicStockGradeDropdownChangedFor(slot, v),
                   )
                 : InputDecorator(
-                    decoration: const InputDecoration(
-                      labelText: 'الدرجة',
-                      border: OutlineInputBorder(),
-                      isDense: true,
-                    ),
+                    decoration: const InputDecoration(labelText: 'الدرجة', border: OutlineInputBorder(), isDense: true),
                     child: Text(
-                      slot.selectedGrade ??
-                          (familyKeyValid && gradeLines.isNotEmpty
-                              ? '—'
-                              : '—'),
+                      slot.selectedGrade ?? (familyKeyValid && gradeLines.isNotEmpty ? '—' : '—'),
                       textAlign: TextAlign.start,
                       style: const TextStyle(fontWeight: FontWeight.w700),
                     ),
@@ -2461,11 +2101,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
           const SizedBox(height: 6),
           Text(
             'متوفر في المخزون: ${slot.availableLiters.toStringAsFixed(1)} لتر',
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: cs.primary,
-            ),
+            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: cs.primary),
             textAlign: TextAlign.start,
           ),
         ],
@@ -2473,18 +2109,12 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
           const SizedBox(height: 10),
           DropdownButtonFormField<int>(
             value: slot.warehouseId,
-            decoration: InputDecoration(
-              labelText: warehouseLabel,
-              border: const OutlineInputBorder(),
-              isDense: true,
-            ),
+            decoration: InputDecoration(labelText: warehouseLabel, border: const OutlineInputBorder(), isDense: true),
             isExpanded: true,
             items: _warehouses
                 .map(
-                  (w) => DropdownMenuItem<int>(
-                    value: (w['id'] as num).toInt(),
-                    child: Text(w['name']?.toString() ?? ''),
-                  ),
+                  (w) =>
+                      DropdownMenuItem<int>(value: (w['id'] as num).toInt(), child: Text(w['name']?.toString() ?? '')),
                 )
                 .toList(),
             onChanged: busy
@@ -2522,140 +2152,113 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
           padding: const EdgeInsets.only(bottom: 8),
           child: Text(
             title,
-            style: TextStyle(
-              fontWeight: FontWeight.w900,
-              fontSize: 13.5,
-              color: cs.onSurface,
-            ),
+            style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13.5, color: cs.onSurface),
             textAlign: TextAlign.start,
           ),
         ),
-        if (_showCatalogHydraulicFieldsFor(slot))
-          oilChangeFieldPairWithAction(
-            context: context,
-            start: DropdownButtonFormField<String>(
-              value: _hydraulicBrandDropdownValueFor(slot),
-              decoration: InputDecoration(
-                labelText: catalogNameLabel,
-                border: const OutlineInputBorder(),
-                isDense: true,
-                hintText: _hydraulicProductCatalogLoading
-                    ? 'جاري التحميل…'
-                    : (_hydraulicBrandDropdownItems.isEmpty
-                        ? 'أضف من +'
-                        : 'اختر الاسم'),
-              ),
-              isExpanded: true,
-              items: _hydraulicBrandDropdownItems
-                  .map(
-                    (b) => DropdownMenuItem(
-                      value: b,
-                      child: Text(b, textAlign: TextAlign.start),
-                    ),
-                  )
-                  .toList(),
-              onChanged: busy ||
-                      (_hydraulicProductCatalogLoading &&
-                          _hydraulicBrandDropdownItems.isEmpty)
-                  ? null
-                  : (b) => _onHydraulicBrandDropdownChangedFor(slot, b),
+      if (_showCatalogHydraulicFieldsFor(slot))
+        oilChangeFieldPairWithAction(
+          context: context,
+          start: DropdownButtonFormField<String>(
+            value: _hydraulicBrandDropdownValueFor(slot),
+            decoration: InputDecoration(
+              labelText: catalogNameLabel,
+              border: const OutlineInputBorder(),
+              isDense: true,
+              hintText: _hydraulicProductCatalogLoading
+                  ? 'جاري التحميل…'
+                  : (_hydraulicBrandDropdownItems.isEmpty ? 'أضف من +' : 'اختر الاسم'),
             ),
-            end: DropdownButtonFormField<String>(
-              value: _hydraulicGradeDropdownValueFor(slot),
-              decoration: InputDecoration(
-                labelText: 'الدرجة',
-                border: const OutlineInputBorder(),
-                isDense: true,
-                hintText: _hydraulicBrandDropdownValueFor(slot) == null
-                    ? 'اختر الاسم أولاً'
-                    : (_hydraulicGradeDropdownEntriesFor(slot).isEmpty
-                        ? 'لا درجات'
-                        : 'اختر الدرجة'),
-              ),
-              isExpanded: true,
-              items: _hydraulicGradeDropdownEntriesFor(slot)
-                  .map(
-                    (e) => DropdownMenuItem(
-                      value: e.grade,
-                      child: Text(e.grade, textAlign: TextAlign.start),
-                    ),
-                  )
-                  .toList(),
-              onChanged: busy ||
-                      _hydraulicBrandDropdownValueFor(slot) == null ||
-                      _hydraulicGradeDropdownEntriesFor(slot).isEmpty
-                  ? null
-                  : (g) => _onHydraulicGradeDropdownChangedFor(slot, g),
+            isExpanded: true,
+            items: _hydraulicBrandDropdownItems
+                .map(
+                  (b) => DropdownMenuItem(
+                    value: b,
+                    child: Text(b, textAlign: TextAlign.start),
+                  ),
+                )
+                .toList(),
+            onChanged: busy || (_hydraulicProductCatalogLoading && _hydraulicBrandDropdownItems.isEmpty)
+                ? null
+                : (b) => _onHydraulicBrandDropdownChangedFor(slot, b),
+          ),
+          end: DropdownButtonFormField<String>(
+            value: _hydraulicGradeDropdownValueFor(slot),
+            decoration: InputDecoration(
+              labelText: 'الدرجة',
+              border: const OutlineInputBorder(),
+              isDense: true,
+              hintText: _hydraulicBrandDropdownValueFor(slot) == null
+                  ? 'اختر الاسم أولاً'
+                  : (_hydraulicGradeDropdownEntriesFor(slot).isEmpty ? 'لا درجات' : 'اختر الدرجة'),
             ),
-            action: GuideAnchor(
-              id: OilGuideAnchors.formHydraulicCatalogBtn,
-              child: IconButton.filledTonal(
-                onPressed: busy
-                    ? null
-                    : () => unawaited(_openHydraulicCatalogManageFor(slot)),
-                tooltip: 'إضافة هيدروليك / درجة للكتالوج',
-                icon: const Icon(Icons.add_rounded),
-              ),
+            isExpanded: true,
+            items: _hydraulicGradeDropdownEntriesFor(slot)
+                .map(
+                  (e) => DropdownMenuItem(
+                    value: e.grade,
+                    child: Text(e.grade, textAlign: TextAlign.start),
+                  ),
+                )
+                .toList(),
+            onChanged:
+                busy || _hydraulicBrandDropdownValueFor(slot) == null || _hydraulicGradeDropdownEntriesFor(slot).isEmpty
+                ? null
+                : (g) => _onHydraulicGradeDropdownChangedFor(slot, g),
+          ),
+          action: GuideAnchor(
+            id: OilGuideAnchors.formHydraulicCatalogBtn,
+            child: IconButton.filledTonal(
+              onPressed: busy ? null : () => unawaited(_openHydraulicCatalogManageFor(slot)),
+              tooltip: 'إضافة هيدروليك / درجة للكتالوج',
+              icon: const Icon(Icons.add_rounded),
             ),
           ),
-        _buildHydraulicSourceSegmentFor(
-          cs,
-          busy,
-          slot,
-          sourceTitle: sourceTitle,
-          shopLabel: shopLabel,
-          customerLabel: customerLabel,
-          customerHint: customerHint,
         ),
-        _buildWarehouseHydraulicPickRowFor(
-          context,
-          cs,
-          busy,
-          slot,
-          stockLabel: stockLabel,
-          warehouseLabel: warehouseLabel,
+      _buildHydraulicSourceSegmentFor(
+        cs,
+        busy,
+        slot,
+        sourceTitle: sourceTitle,
+        shopLabel: shopLabel,
+        customerLabel: customerLabel,
+        customerHint: customerHint,
+      ),
+      _buildWarehouseHydraulicPickRowFor(
+        context,
+        cs,
+        busy,
+        slot,
+        stockLabel: stockLabel,
+        warehouseLabel: warehouseLabel,
+      ),
+      if (_showHydraulicVolumeStepperFor(slot)) ...[
+        const SizedBox(height: 12),
+        MilliliterQuantityStepper(
+          controller: slot.sizeAmount,
+          enabled: !busy,
+          labelText: volumeLabel,
+          onChanged: () {
+            _onOilOrHydraulicVolumeChanged(
+              syncStockLiters: () {
+                if (_usesWarehouseHydraulicPickerFor(slot)) {
+                  _syncHydraulicLitersFromStepperFor(slot);
+                }
+              },
+            );
+          },
         ),
-        if (_showHydraulicVolumeStepperFor(slot)) ...[
-          const SizedBox(height: 12),
-          MilliliterQuantityStepper(
-            controller: slot.sizeAmount,
-            enabled: !busy,
-            labelText: volumeLabel,
-            onChanged: () {
-              _onOilOrHydraulicVolumeChanged(
-                syncStockLiters: () {
-                  if (_usesWarehouseHydraulicPickerFor(slot)) {
-                    _syncHydraulicLitersFromStepperFor(slot);
-                  }
-                },
-              );
-            },
-          ),
-        ],
+      ],
     ];
     if (wrapInSectionCard) {
-      return _buildSectionCard(
-        context,
-        title: title,
-        icon: Icons.water_drop_outlined,
-        children: fields,
-      );
+      return _buildSectionCard(context, title: title, icon: Icons.water_drop_outlined, children: fields);
     }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: fields,
-    );
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: fields);
   }
 
-  Widget _buildOilServiceCheckbox(
-    OilChangeServiceItem s,
-    ColorScheme cs,
-    bool busy,
-  ) {
+  Widget _buildOilServiceCheckbox(OilChangeServiceItem s, ColorScheme cs, bool busy) {
     final checked = _selectedOilServiceIds.contains(s.id);
-    final priceLbl = s.priceFils > 0
-        ? IraqiCurrencyFormat.formatIqd(IqdMoney.fromFils(s.priceFils))
-        : '—';
+    final priceLbl = s.priceFils > 0 ? IraqiCurrencyFormat.formatIqd(IqdMoney.fromFils(s.priceFils)) : '—';
     return InkWell(
       onTap: busy
           ? null
@@ -2675,22 +2278,15 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
         duration: const Duration(milliseconds: 200),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
-          color: checked
-              ? cs.primary.withValues(alpha: 0.12)
-              : cs.surfaceContainerHighest.withValues(alpha: 0.4),
-          border: Border.all(
-            color: checked ? cs.primary : cs.outlineVariant.withValues(alpha: 0.5),
-            width: 1.5,
-          ),
+          color: checked ? cs.primary.withValues(alpha: 0.12) : cs.surfaceContainerHighest.withValues(alpha: 0.4),
+          border: Border.all(color: checked ? cs.primary : cs.outlineVariant.withValues(alpha: 0.5), width: 1.5),
           borderRadius: BorderRadius.circular(12),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(
-              checked
-                  ? Icons.check_circle_rounded
-                  : Icons.radio_button_unchecked_rounded,
+              checked ? Icons.check_circle_rounded : Icons.radio_button_unchecked_rounded,
               color: checked ? cs.primary : cs.onSurfaceVariant,
               size: 18,
             ),
@@ -2723,11 +2319,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
           liters > 1e-9
               ? 'سعر اللتر: ${_formatFilsLabel(perLiter)} × ${formatOilLitersDisplay(liters)} لتر = ${_formatFilsLabel(material)}'
               : 'سعر اللتر: ${_formatFilsLabel(perLiter)}',
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-            color: cs.primary,
-          ),
+          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: cs.primary),
           textAlign: TextAlign.start,
         ),
       );
@@ -2736,11 +2328,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
       padding: const EdgeInsetsDirectional.only(start: 4),
       child: Text(
         'أضف سعر اللتر من زر + بجانب اسم الزيت (ماركة ولزوجة).',
-        style: TextStyle(
-          fontSize: 12,
-          color: cs.error,
-          fontWeight: FontWeight.w600,
-        ),
+        style: TextStyle(fontSize: 12, color: cs.error, fontWeight: FontWeight.w600),
         textAlign: TextAlign.start,
       ),
     );
@@ -2764,582 +2352,509 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
               builder: (context, keyboardBottom) {
                 final safeBottom = MediaQuery.viewPaddingOf(context).bottom;
                 // حجز شريط النظام + جزء من IME دون مبالغة مع adjustPan.
-                final bottomPad = 24 +
-                    80 +
-                    safeBottom +
-                    (keyboardBottom > 8
-                        ? (keyboardBottom * 0.45).clamp(0.0, 220.0)
-                        : 0.0);
+                final bottomPad =
+                    24 + 80 + safeBottom + (keyboardBottom > 8 ? (keyboardBottom * 0.45).clamp(0.0, 220.0) : 0.0);
                 return ListView(
-              padding: EdgeInsetsDirectional.fromSTEB(
-                pagePad,
-                14,
-                pagePad,
-                bottomPad,
-              ),
-              children: [
-              if (_error != null) ...[
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: cs.errorContainer.withValues(alpha: 0.35),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: cs.error.withValues(alpha: 0.25)),
-                  ),
-                  child: Text(
-                    (_errorText ?? 'حدث خطأ أثناء الحفظ. حاول مرة أخرى.'),
-                    style: TextStyle(color: cs.error),
-                  ),
-                ),
-                const SizedBox(height: 12),
-              ],
+                  padding: EdgeInsetsDirectional.fromSTEB(pagePad, 14, pagePad, bottomPad),
+                  children: [
+                    if (_error != null) ...[
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: cs.errorContainer.withValues(alpha: 0.35),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: cs.error.withValues(alpha: 0.25)),
+                        ),
+                        child: Text(
+                          (_errorText ?? 'حدث خطأ أثناء الحفظ. حاول مرة أخرى.'),
+                          style: TextStyle(color: cs.error),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
 
-              // 1. بيانات العميل
-              GuideAnchor(
-                id: OilGuideAnchors.formCustomer,
-                child: _buildSectionCard(
-                context,
-                title: 'بيانات العميل',
-                icon: Icons.person_outline_rounded,
-                children: [
+                    // 1. بيانات العميل
                     GuideAnchor(
-                      id: OilGuideAnchors.formCustomerName,
-                      child: OilChangeCustomerNameField(
-                        controller: _customerName,
-                        focusNode: _customerFocus,
-                        enabled: !busy,
-                        customerLinked: _customerId != null,
-                        onSelected: (c) =>
-                            unawaited(_applyCustomerSelection(c)),
-                        validator: _oilCustomerNameRequiredError,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(
-                          child: GuideAnchor(
-                            id: OilGuideAnchors.formCustomerPhone,
-                            child: TextFormField(
-                              controller: _customerPhone,
-                              onTap: oilPhoneKeepPrefixOnTap(_customerPhone),
-                              decoration: InputDecoration(
-                                labelText: 'رقم الهاتف',
-                                border: const OutlineInputBorder(),
-                                isDense: true,
-                                prefixIcon:
-                                    const Icon(Icons.phone_rounded, size: 20),
-                                hintText: '07xxxxxxxxx',
-                                helperText: widget.amendInvoicedOrder
-                                    ? 'عند تصحيح الرقم تُعاد إرسال بطاقة واتساب '
-                                        'لنفس البطاقة (قالب ميتا) دون إنشاء بطاقة جديدة'
-                                    : '11 رقماً تبدأ بـ 07',
-                                helperMaxLines: widget.amendInvoicedOrder ? 3 : 1,
-                              ),
-                              keyboardType: TextInputType.phone,
-                              textDirection: TextDirection.ltr,
-                              textAlign: TextAlign.start,
-                              inputFormatters: _OilChangeOrderFormScreenState._iraqiMobilePhoneFormatters,
-                              validator: _oilCustomerPhoneRequiredError,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        IconButton.filledTonal(
-                          tooltip: 'عميل جديد',
-                          onPressed: busy ? null : _openNewCustomer,
-                          icon: const Icon(Icons.person_add_alt_rounded),
-                        ),
-                      ],
-                    ),
-                    if (!widget.amendInvoicedOrder &&
-                        _waAutoAfterSave != false)
-                      WaReminderConsentTile(
-                        value: _waReminderConsent,
-                        prior: _waReminderPrior,
-                        onChanged: busy
-                            ? null
-                            : (v) => _rebuild(() => _waReminderConsent = v),
-                      ),
-                ],
-              ),
-              ),
-
-              // 2. بيانات السيارة
-              GuideAnchor(
-                id: OilGuideAnchors.formCar,
-                child: _buildSectionCard(
-                context,
-                title: 'بيانات السيارة',
-                icon: Icons.directions_car_outlined,
-                children: [
-                    if (!widget.isEdit &&
-                        _customerVehicles.length >= 2 &&
-                        _customerVehiclesFor == _customerId) ...[
-                      Text(
-                        'سيارات العميل — اختر السيارة التي أحضرها:',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w700,
-                          color: cs.onSurfaceVariant,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      Wrap(
-                        spacing: 6,
-                        runSpacing: 6,
+                      id: OilGuideAnchors.formCustomer,
+                      child: _buildSectionCard(
+                        context,
+                        title: 'بيانات العميل',
+                        icon: Icons.person_outline_rounded,
                         children: [
-                          for (final v in _customerVehicles)
-                            ChoiceChip(
-                              key: Key('customerCar_${v['global_id']}'),
-                              label: Text(
-                                [
-                                  (v['plate_display'] ?? '').toString(),
-                                  (v['name'] ?? '').toString(),
-                                ].where((s) => s.trim().isNotEmpty).join(' · '),
-                              ),
-                              selected:
-                                  OilChangeLookupNormalize.normalizePlateKey(
-                                    _deviceSerial.text,
-                                  ) ==
-                                  (v['plate_key'] ?? '').toString(),
-                              onSelected: busy
-                                  ? null
-                                  : (_) => _pickCustomerVehicle(v),
+                          GuideAnchor(
+                            id: OilGuideAnchors.formCustomerName,
+                            child: OilChangeCustomerNameField(
+                              controller: _customerName,
+                              focusNode: _customerFocus,
+                              enabled: !busy,
+                              customerLinked: _customerId != null,
+                              onSelected: (c) => unawaited(_applyCustomerSelection(c)),
+                              validator: _oilCustomerNameRequiredError,
                             ),
-                          ActionChip(
-                            key: const Key('customerCarNew'),
-                            avatar: const Icon(Icons.add_rounded, size: 18),
-                            label: const Text('سيارة جديدة'),
-                            onPressed: busy ? null : _pickNewCustomerVehicle,
                           ),
+                          const SizedBox(height: 8),
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(
+                                child: GuideAnchor(
+                                  id: OilGuideAnchors.formCustomerPhone,
+                                  child: TextFormField(
+                                    controller: _customerPhone,
+                                    onTap: oilPhoneKeepPrefixOnTap(_customerPhone),
+                                    decoration: InputDecoration(
+                                      labelText: 'رقم الهاتف',
+                                      border: const OutlineInputBorder(),
+                                      isDense: true,
+                                      prefixIcon: const Icon(Icons.phone_rounded, size: 20),
+                                      hintText: '07xxxxxxxxx',
+                                      helperText: widget.amendInvoicedOrder
+                                          ? 'عند تصحيح الرقم تُعاد إرسال بطاقة واتساب '
+                                                'لنفس البطاقة (قالب ميتا) دون إنشاء بطاقة جديدة'
+                                          : '11 رقماً تبدأ بـ 07',
+                                      helperMaxLines: widget.amendInvoicedOrder ? 3 : 1,
+                                    ),
+                                    keyboardType: TextInputType.phone,
+                                    textDirection: TextDirection.ltr,
+                                    textAlign: TextAlign.start,
+                                    inputFormatters: _OilChangeOrderFormScreenState._iraqiMobilePhoneFormatters,
+                                    validator: _oilCustomerPhoneRequiredError,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              IconButton.filledTonal(
+                                tooltip: 'عميل جديد',
+                                onPressed: busy ? null : _openNewCustomer,
+                                icon: const Icon(Icons.person_add_alt_rounded),
+                              ),
+                            ],
+                          ),
+                          if (!widget.amendInvoicedOrder && _waAutoAfterSave != false)
+                            WaReminderConsentTile(
+                              value: _waReminderConsent,
+                              prior: _waReminderPrior,
+                              onChanged: busy ? null : (v) => _rebuild(() => _waReminderConsent = v),
+                            ),
                         ],
                       ),
-                      const SizedBox(height: 10),
-                    ],
-                    _compactSideBySide(
-                      context: context,
-                      start: TextFormField(
-                        controller: _deviceName,
-                        onTap: oilFieldSelectAllOnTap(_deviceName),
-                        decoration: const InputDecoration(
-                          labelText: 'اسم السيارة',
-                          border: OutlineInputBorder(),
-                          isDense: true,
-                          hintText: 'تويوتا كورولا',
-                        ),
-                        validator: (v) => _isFieldRequired(OilCardField.carName) &&
-                                (v == null || v.trim().isEmpty)
-                            ? 'اسم السيارة مطلوب'
-                            : null,
-                        textAlign: TextAlign.start,
-                      ),
-                      end: GuideAnchor(
-                        id: OilGuideAnchors.formPlate,
-                        child: IraqPlateField(
-                        controller: _deviceSerial,
-                        defaultProvince:
-                            widget.isEdit ? null : _defaultPlateProvince,
-                        required: _isFieldRequired(OilCardField.plate),
-                        onNumberDone: widget.isEdit
-                            ? null
-                            : () => unawaited(
-                                  _syncVehicleFromPlate(askLegacy: true),
-                                ),
-                        suffixIcon: !widget.isEdit
-                            ? IconButton(
-                                tooltip: 'جلب بيانات آخر زيارة',
-                                onPressed: busy
-                                    ? null
-                                    : () => unawaited(
-                                          _syncVehicleFromPlate(
-                                            showFeedback: true,
-                                            overwriteExisting: true,
-                                            force: true,
-                                            askLegacy: true,
-                                          ),
-                                        ),
-                                icon: const Icon(Icons.sync_rounded),
-                              )
-                            : null,
-                      ),
-                      ),
                     ),
-                    const SizedBox(height: 8),
-                    _compactSideBySide(
-                      context: context,
-                      start: TextFormField(
-                        controller: _carModel,
-                        onTap: oilFieldSelectAllOnTap(_carModel),
-                        decoration: const InputDecoration(
-                          labelText: 'موديل السيارة',
-                          border: OutlineInputBorder(),
-                          isDense: true,
-                          hintText: '2022',
-                        ),
-                        keyboardType: TextInputType.number,
-                        inputFormatters: _OilChangeOrderFormScreenState._carModelDigitFormatters,
-                        textDirection: TextDirection.ltr,
-                        textAlign: TextAlign.start,
-                        onEditingComplete: _normalizeCarModelDisplay,
-                      ),
-                      end: TextFormField(
-                        controller: _engineSize,
-                        onTap: oilFieldSelectAllOnTap(_engineSize),
-                        decoration: const InputDecoration(
-                          labelText: 'حجم المحرك',
-                          border: OutlineInputBorder(),
-                          isDense: true,
-                          hintText: '1.8',
-                        ),
-                        keyboardType: const TextInputType.numberWithOptions(
-                          decimal: true,
-                        ),
-                        inputFormatters: _OilChangeOrderFormScreenState._engineSizeInputFormatters,
-                        textDirection: TextDirection.ltr,
-                        textAlign: TextAlign.start,
-                      ),
-                    ),
-                    if (!widget.isEdit)
-                      Padding(
-                        padding:
-                            const EdgeInsetsDirectional.only(start: 4, top: 6),
-                        child: Text(
-                          'رقم اللوحة مطلوب. عند إدخاله تُحمَّل بيانات آخر زيارة تلقائياً إن وُجدت.',
-                          style: TextStyle(
-                            fontSize: 11,
-                            height: 1.3,
-                            color: cs.onSurfaceVariant,
-                          ),
-                          textAlign: TextAlign.start,
-                        ),
-                      ),
-                ],
-              ),
-              ),
 
-              // 3. العداد — ظاهر دائماً؛ الزيت صار زراً ضمن الأقسام.
-              _buildSectionCard(
-                context,
-                title: 'العداد',
-                icon: Icons.speed_rounded,
-                children: [
-                  _responsivePair(
-                    context,
-                    sideBySideOnPhone: true,
-                    gap: 8,
-                    first: GuideAnchor(
-                      id: OilGuideAnchors.formOdoCurrent,
-                      child: TextFormField(
-                      controller: _odometerCurrent,
-                      onTap: oilFieldSelectAllOnTap(_odometerCurrent),
-                      decoration: InputDecoration(
-                        labelText: 'القراءة الحالية (كم)',
-                        border: const OutlineInputBorder(),
-                        isDense: true,
-                        helperText: _previousOdometerHelper,
-                        helperMaxLines: 2,
-                        helperStyle: _odometerLowerThanPrevious
-                            ? TextStyle(
-                                color: cs.error,
-                                fontWeight: FontWeight.w700,
-                              )
-                            : null,
-                      ),
-                      keyboardType: TextInputType.number,
-                      inputFormatters: _OilChangeOrderFormScreenState._odometerInputFormatters,
-                      validator: (v) =>
-                          _isFieldRequired(OilCardField.odometerCurrent) &&
-                                  _odometerDigits(v ?? '').isEmpty
-                          ? 'القراءة الحالية مطلوبة'
-                          : null,
-                      textDirection: TextDirection.ltr,
-                      textAlign: TextAlign.start,
-                    ),
-                    ),
-                    second: TextFormField(
-                      controller: _odometerNext,
-                      onTap: oilFieldSelectAllOnTap(_odometerNext),
-                      decoration: const InputDecoration(
-                        labelText: 'القراءة اللاحقة (كم)',
-                        border: OutlineInputBorder(),
-                        isDense: true,
-                      ),
-                      keyboardType: TextInputType.number,
-                      inputFormatters: _OilChangeOrderFormScreenState._odometerInputFormatters,
-                      textDirection: TextDirection.ltr,
-                      textAlign: TextAlign.start,
-                    ),
-                  ),
-                ],
-              ),
-
-                if (_anyOptionalExtrasEnabled) ...[
-                _buildOilOptionalQuickBar(cs, busy),
-                if (_shouldRenderOptionalSection(_OilFormOptionalSection.oil))
-                GuideAnchor(
-                  id: OilGuideAnchors.formOil,
-                  child: _buildOilOptionalSection(
-                    context,
-                    section: _OilFormOptionalSection.oil,
-                    childrenBuilder: () => [
-                  if (_showCatalogOilFields)
+                    // 2. بيانات السيارة
                     GuideAnchor(
-                      id: OilGuideAnchors.formOilBrand,
-                      child: oilChangeFieldPairWithAction(
-                        context: context,
-                        start: DropdownButtonFormField<String>(
-                          value: _oilBrandDropdownValue,
-                          decoration: InputDecoration(
-                            labelText: 'اسم الزيت',
-                            border: const OutlineInputBorder(),
-                            isDense: true,
-                            hintText: _oilProductCatalogLoading
-                                ? 'جاري التحميل…'
-                                : (_oilBrandDropdownItems.isEmpty
-                                    ? 'أضف زيتاً من +'
-                                    : 'اختر الزيت'),
-                          ),
-                          isExpanded: true,
-                          items: _oilBrandDropdownItems
-                              .map(
-                                (b) => DropdownMenuItem(
-                                  value: b,
-                                  child: Text(
-                                    b,
-                                    textAlign: TextAlign.start,
+                      id: OilGuideAnchors.formCar,
+                      child: _buildSectionCard(
+                        context,
+                        title: 'بيانات السيارة',
+                        icon: Icons.directions_car_outlined,
+                        children: [
+                          if (!widget.isEdit &&
+                              _customerVehicles.length >= 2 &&
+                              _customerVehiclesFor == _customerId) ...[
+                            Text(
+                              'سيارات العميل — اختر السيارة التي أحضرها:',
+                              style: TextStyle(fontWeight: FontWeight.w700, color: cs.onSurfaceVariant),
+                            ),
+                            const SizedBox(height: 6),
+                            Wrap(
+                              spacing: 6,
+                              runSpacing: 6,
+                              children: [
+                                for (final v in _customerVehicles)
+                                  ChoiceChip(
+                                    key: Key('customerCar_${v['global_id']}'),
+                                    label: Text(
+                                      [
+                                        (v['plate_display'] ?? '').toString(),
+                                        (v['name'] ?? '').toString(),
+                                      ].where((s) => s.trim().isNotEmpty).join(' · '),
+                                    ),
+                                    selected:
+                                        OilChangeLookupNormalize.normalizePlateKey(_deviceSerial.text) ==
+                                        (v['plate_key'] ?? '').toString(),
+                                    onSelected: busy ? null : (_) => _pickCustomerVehicle(v),
                                   ),
+                                ActionChip(
+                                  key: const Key('customerCarNew'),
+                                  avatar: const Icon(Icons.add_rounded, size: 18),
+                                  label: const Text('سيارة جديدة'),
+                                  onPressed: busy ? null : _pickNewCustomerVehicle,
                                 ),
-                              )
-                              .toList(),
-                          onChanged: busy ||
-                                  (_oilProductCatalogLoading &&
-                                      _oilBrandDropdownItems.isEmpty)
-                              ? null
-                              : _onOilBrandDropdownChanged,
-                        ),
-                        end: DropdownButtonFormField<String>(
-                          value: _oilViscosityDropdownValue,
-                          decoration: InputDecoration(
-                            labelText: 'اللزوجة',
-                            border: const OutlineInputBorder(),
-                            isDense: true,
-                            hintText: _oilBrandDropdownValue == null
-                                ? 'اختر الاسم أولاً'
-                                : (_oilViscosityDropdownEntries.isEmpty
-                                    ? 'لا قياسات'
-                                    : 'اختر اللزوجة'),
+                              ],
+                            ),
+                            const SizedBox(height: 10),
+                          ],
+                          _compactSideBySide(
+                            context: context,
+                            start: TextFormField(
+                              controller: _deviceName,
+                              onTap: oilFieldSelectAllOnTap(_deviceName),
+                              decoration: const InputDecoration(
+                                labelText: 'اسم السيارة',
+                                border: OutlineInputBorder(),
+                                isDense: true,
+                                hintText: 'تويوتا كورولا',
+                              ),
+                              validator: (v) =>
+                                  _isFieldRequired(OilCardField.carName) && (v == null || v.trim().isEmpty)
+                                  ? 'اسم السيارة مطلوب'
+                                  : null,
+                              textAlign: TextAlign.start,
+                            ),
+                            end: GuideAnchor(
+                              id: OilGuideAnchors.formPlate,
+                              child: IraqPlateField(
+                                controller: _deviceSerial,
+                                defaultProvince: widget.isEdit ? null : _defaultPlateProvince,
+                                required: _isFieldRequired(OilCardField.plate),
+                                onNumberDone: widget.isEdit
+                                    ? null
+                                    : () => unawaited(_syncVehicleFromPlate(askLegacy: true)),
+                                suffixIcon: !widget.isEdit
+                                    ? IconButton(
+                                        tooltip: 'جلب بيانات آخر زيارة',
+                                        onPressed: busy
+                                            ? null
+                                            : () => unawaited(
+                                                _syncVehicleFromPlate(
+                                                  showFeedback: true,
+                                                  overwriteExisting: true,
+                                                  force: true,
+                                                  askLegacy: true,
+                                                ),
+                                              ),
+                                        icon: const Icon(Icons.sync_rounded),
+                                      )
+                                    : null,
+                              ),
+                            ),
                           ),
-                          isExpanded: true,
-                          items: _oilViscosityDropdownEntries
-                              .map(
-                                (e) => DropdownMenuItem(
-                                  value: e.viscosity,
-                                  child: Text(
-                                    e.viscosity,
-                                    textAlign: TextAlign.start,
-                                  ),
-                                ),
-                              )
-                              .toList(),
-                          onChanged: busy ||
-                                  _oilBrandDropdownValue == null ||
-                                  _oilViscosityDropdownEntries.isEmpty
-                              ? null
-                              : _onOilViscosityDropdownChanged,
-                        ),
-                        action: GuideAnchor(
-                          id: OilGuideAnchors.formOilCatalogBtn,
-                          child: IconButton.filledTonal(
-                            onPressed: busy
-                                ? null
-                                : () => unawaited(_openOilCatalogManage()),
-                            tooltip: 'إضافة زيت / لزوجة للكتالوج',
-                            icon: const Icon(Icons.add_rounded),
+                          const SizedBox(height: 8),
+                          _compactSideBySide(
+                            context: context,
+                            start: TextFormField(
+                              controller: _carModel,
+                              onTap: oilFieldSelectAllOnTap(_carModel),
+                              decoration: const InputDecoration(
+                                labelText: 'موديل السيارة',
+                                border: OutlineInputBorder(),
+                                isDense: true,
+                                hintText: '2022',
+                              ),
+                              keyboardType: TextInputType.number,
+                              inputFormatters: _OilChangeOrderFormScreenState._carModelDigitFormatters,
+                              textDirection: TextDirection.ltr,
+                              textAlign: TextAlign.start,
+                              onEditingComplete: _normalizeCarModelDisplay,
+                            ),
+                            end: TextFormField(
+                              controller: _engineSize,
+                              onTap: oilFieldSelectAllOnTap(_engineSize),
+                              decoration: const InputDecoration(
+                                labelText: 'حجم المحرك',
+                                border: OutlineInputBorder(),
+                                isDense: true,
+                                hintText: '1.8',
+                              ),
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                              inputFormatters: _OilChangeOrderFormScreenState._engineSizeInputFormatters,
+                              textDirection: TextDirection.ltr,
+                              textAlign: TextAlign.start,
+                            ),
                           ),
-                        ),
+                          if (!widget.isEdit)
+                            Padding(
+                              padding: const EdgeInsetsDirectional.only(start: 4, top: 6),
+                              child: Text(
+                                'رقم اللوحة مطلوب. عند إدخاله تُحمَّل بيانات آخر زيارة تلقائياً إن وُجدت.',
+                                style: TextStyle(fontSize: 11, height: 1.3, color: cs.onSurfaceVariant),
+                                textAlign: TextAlign.start,
+                              ),
+                            ),
+                        ],
                       ),
                     ),
-                  _buildOilSourceSegment(cs, busy),
-                  _buildWarehouseOilPickRow(context, cs, busy),
-                  if (_showOilVolumeStepper) ...[
-                    const SizedBox(height: 12),
-                    MilliliterQuantityStepper(
-                      controller: _oilSizeAmount,
-                      enabled: !busy,
-                      labelText: 'حجم الزيت المستعمل',
-                      unitSuffix: 'لتر',
-                      onChanged: () {
-                        _onOilOrHydraulicVolumeChanged(
-                          syncStockLiters: () {
-                            if (_usesWarehouseOilPicker ||
-                                _usesShopOilFromStock) {
-                              _syncStockLitersFromStepper();
-                            }
-                          },
-                        );
-                      },
-                    ),
-                    if (_showCatalogOilFields &&
-                        !_oilCustomerProvided &&
-                        _oilBrandDropdownValue != null &&
-                        _oilViscosityDropdownValue != null) ...[
-                      const SizedBox(height: 8),
-                      _buildOilLiterPriceHint(cs),
-                    ],
-                  ],
-                    ],
-                  ),
-                ),
-                if (_shouldRenderOptionalSection(
-                    _OilFormOptionalSection.products))
-                _buildOilOptionalSection(
-                  context,
-                  section: _OilFormOptionalSection.products,
-                  childrenBuilder: () => [
-                OilChangeProductsCard(
-                      bare: true,
-                  lines: _oilProductLines,
-                  busy: busy || _oilBarcodeBusy,
-                      onScanBarcode: () =>
-                          unawaited(_openOilProductBarcodeCapture()),
-                  onAddProduct: () => unawaited(_openOilProductPicker()),
-                  onQuantityChanged: _onOilProductQuantityChanged,
-                  onRemoveLine: _onOilProductLineRemoved,
-                ),
-                  ],
-                ),
-                if (_shouldRenderOptionalSection(
-                    _OilFormOptionalSection.filters))
-                _buildOilOptionalSection(
-                  context,
-                  section: _OilFormOptionalSection.filters,
-                  childrenBuilder: () => [
-                    if (_filterProductCatalogLoading)
-                      const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 8),
-                        child: LinearProgressIndicator(minHeight: 2),
-                      ),
-                    for (var i = 0; i < _filterKinds.length; i++) ...[
-                      if (i > 0) const SizedBox(height: 12),
-                      _buildFilterKindRow(
-                        context: context,
-                        cs: cs,
-                        busy: busy,
-                        kind: _filterKinds[i],
-                      ),
-                    ],
-                    if (_filterProductCatalog.isEmpty &&
-                        !_filterProductCatalogLoading)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 8),
-                        child: Text(
-                          'لا توجد فلاتر في الكتالوج. اضغط + بجانب كل فئة لإضافة اسم وسعر.',
-                          style: TextStyle(
-                            color: cs.onSurfaceVariant,
-                            fontSize: 13,
-                          ),
-                          textAlign: TextAlign.start,
-                        ),
-                      ),
-                  ],
-                ),
-                if (_shouldRenderOptionalSection(
-                    _OilFormOptionalSection.hydraulicGear))
-                _buildOilOptionalSection(
-                  context,
-                  section: _OilFormOptionalSection.hydraulicGear,
-                  childrenBuilder: () => [
-                    _buildHydraulicFluidCard(
-                      context,
-                      title: 'هيدروليك الكير',
-                      slot: _gearHydraulic,
-                      busy: busy,
-                      cs: cs,
-                      catalogNameLabel: 'اسم هيدروليك الكير',
-                      volumeLabel: 'حجم هيدروليك الكير',
-                      sourceTitle: 'مصدر هيدروليك الكير',
-                      shopLabel: 'هيدروليك الكير (المحل)',
-                      customerLabel: 'هيدروليك الكير (العميل)',
-                      customerHint:
-                          'لن يُخصم مخزون — العميل أحضر هيدروليك الكير.',
-                      stockLabel: 'هيدروليك الكير من المخزون',
-                      warehouseLabel: 'مستودع هيدروليك الكير',
-                      wrapInSectionCard: false,
-                    ),
-                  ],
-                ),
-                if (_shouldRenderOptionalSection(
-                    _OilFormOptionalSection.hydraulicPower))
-                _buildOilOptionalSection(
-                  context,
-                  section: _OilFormOptionalSection.hydraulicPower,
-                  childrenBuilder: () => [
-                    _buildHydraulicFluidCard(
-                      context,
-                      title: 'هيدروليك الباور',
-                      slot: _powerHydraulic,
-                      busy: busy,
-                      cs: cs,
-                      catalogNameLabel: 'اسم هيدروليك الباور',
-                      volumeLabel: 'حجم هيدروليك الباور',
-                      sourceTitle: 'مصدر هيدروليك الباور',
-                      shopLabel: 'هيدروليك الباور (المحل)',
-                      customerLabel: 'هيدروليك الباور (العميل)',
-                      customerHint:
-                          'لن يُخصم مخزون — العميل أحضر هيدروليك الباور.',
-                      stockLabel: 'هيدروليك الباور من المخزون',
-                      warehouseLabel: 'مستودع هيدروليك الباور',
-                      wrapInSectionCard: false,
-                    ),
-                  ],
-                ),
-                if (_shouldRenderOptionalSection(
-                    _OilFormOptionalSection.services))
-                _buildOilOptionalSection(
-                  context,
-                  section: _OilFormOptionalSection.services,
-                  childrenBuilder: () => [
-                    if (_oilCatalog.isEmpty)
-                      Text(
-                        'لا توجد خدمات إضافية. أضفها من «الخدمات وأسعارها».',
-                        style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13),
-                        textAlign: TextAlign.start,
-                      )
-                    else
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: _oilCatalog
-                            .map((s) => _buildOilServiceCheckbox(s, cs, busy))
-                            .toList(),
-                      ),
-                  ],
-                ),
-                ],
-                if (!layout.isWideVariant) ...[
-                  _buildOilTechnicianNotesSection(context, busy),
-                  _buildOilCheckoutSectionCard(context, busy),
-                ],
 
-            ],
+                    // 3. العداد — ظاهر دائماً؛ الزيت صار زراً ضمن الأقسام.
+                    _buildSectionCard(
+                      context,
+                      title: 'العداد',
+                      icon: Icons.speed_rounded,
+                      children: [
+                        _responsivePair(
+                          context,
+                          sideBySideOnPhone: true,
+                          gap: 8,
+                          first: GuideAnchor(
+                            id: OilGuideAnchors.formOdoCurrent,
+                            child: TextFormField(
+                              controller: _odometerCurrent,
+                              onTap: oilFieldSelectAllOnTap(_odometerCurrent),
+                              decoration: InputDecoration(
+                                labelText: 'القراءة الحالية (${OilOdometerUnit.label(_odometerUnit)})',
+                                border: const OutlineInputBorder(),
+                                isDense: true,
+                                helperText: _previousOdometerHelper,
+                                helperMaxLines: 2,
+                                helperStyle: _odometerLowerThanPrevious
+                                    ? TextStyle(color: cs.error, fontWeight: FontWeight.w700)
+                                    : null,
+                              ),
+                              keyboardType: TextInputType.number,
+                              inputFormatters: _OilChangeOrderFormScreenState._odometerInputFormatters,
+                              validator: (v) =>
+                                  _isFieldRequired(OilCardField.odometerCurrent) && _odometerDigits(v ?? '').isEmpty
+                                  ? 'القراءة الحالية مطلوبة'
+                                  : null,
+                              textDirection: TextDirection.ltr,
+                              textAlign: TextAlign.start,
+                            ),
+                          ),
+                          second: TextFormField(
+                            controller: _odometerNext,
+                            onTap: oilFieldSelectAllOnTap(_odometerNext),
+                            decoration: InputDecoration(
+                              labelText: 'القراءة اللاحقة (${OilOdometerUnit.label(_odometerUnit)})',
+                              border: const OutlineInputBorder(),
+                              isDense: true,
+                            ),
+                            keyboardType: TextInputType.number,
+                            inputFormatters: _OilChangeOrderFormScreenState._odometerInputFormatters,
+                            textDirection: TextDirection.ltr,
+                            textAlign: TextAlign.start,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        _buildOdometerUnitPicker(),
+                      ],
+                    ),
+
+                    if (_anyOptionalExtrasEnabled) ...[
+                      _buildOilOptionalQuickBar(cs, busy),
+                      if (_shouldRenderOptionalSection(_OilFormOptionalSection.oil))
+                        GuideAnchor(
+                          id: OilGuideAnchors.formOil,
+                          child: _buildOilOptionalSection(
+                            context,
+                            section: _OilFormOptionalSection.oil,
+                            childrenBuilder: () => [
+                              if (_showCatalogOilFields)
+                                GuideAnchor(
+                                  id: OilGuideAnchors.formOilBrand,
+                                  child: oilChangeFieldPairWithAction(
+                                    context: context,
+                                    start: DropdownButtonFormField<String>(
+                                      value: _oilBrandDropdownValue,
+                                      decoration: InputDecoration(
+                                        labelText: 'اسم الزيت',
+                                        border: const OutlineInputBorder(),
+                                        isDense: true,
+                                        hintText: _oilProductCatalogLoading
+                                            ? 'جاري التحميل…'
+                                            : (_oilBrandDropdownItems.isEmpty ? 'أضف زيتاً من +' : 'اختر الزيت'),
+                                      ),
+                                      isExpanded: true,
+                                      items: _oilBrandDropdownItems
+                                          .map(
+                                            (b) => DropdownMenuItem(
+                                              value: b,
+                                              child: Text(b, textAlign: TextAlign.start),
+                                            ),
+                                          )
+                                          .toList(),
+                                      onChanged: busy || (_oilProductCatalogLoading && _oilBrandDropdownItems.isEmpty)
+                                          ? null
+                                          : _onOilBrandDropdownChanged,
+                                    ),
+                                    end: DropdownButtonFormField<String>(
+                                      value: _oilViscosityDropdownValue,
+                                      decoration: InputDecoration(
+                                        labelText: 'اللزوجة',
+                                        border: const OutlineInputBorder(),
+                                        isDense: true,
+                                        hintText: _oilBrandDropdownValue == null
+                                            ? 'اختر الاسم أولاً'
+                                            : (_oilViscosityDropdownEntries.isEmpty ? 'لا قياسات' : 'اختر اللزوجة'),
+                                      ),
+                                      isExpanded: true,
+                                      items: _oilViscosityDropdownEntries
+                                          .map(
+                                            (e) => DropdownMenuItem(
+                                              value: e.viscosity,
+                                              child: Text(e.viscosity, textAlign: TextAlign.start),
+                                            ),
+                                          )
+                                          .toList(),
+                                      onChanged:
+                                          busy || _oilBrandDropdownValue == null || _oilViscosityDropdownEntries.isEmpty
+                                          ? null
+                                          : _onOilViscosityDropdownChanged,
+                                    ),
+                                    action: GuideAnchor(
+                                      id: OilGuideAnchors.formOilCatalogBtn,
+                                      child: IconButton.filledTonal(
+                                        onPressed: busy ? null : () => unawaited(_openOilCatalogManage()),
+                                        tooltip: 'إضافة زيت / لزوجة للكتالوج',
+                                        icon: const Icon(Icons.add_rounded),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              _buildOilSourceSegment(cs, busy),
+                              _buildWarehouseOilPickRow(context, cs, busy),
+                              if (_showOilVolumeStepper) ...[
+                                const SizedBox(height: 12),
+                                MilliliterQuantityStepper(
+                                  controller: _oilSizeAmount,
+                                  enabled: !busy,
+                                  labelText: 'حجم الزيت المستعمل',
+                                  unitSuffix: 'لتر',
+                                  onChanged: () {
+                                    _onOilOrHydraulicVolumeChanged(
+                                      syncStockLiters: () {
+                                        if (_usesWarehouseOilPicker || _usesShopOilFromStock) {
+                                          _syncStockLitersFromStepper();
+                                        }
+                                      },
+                                    );
+                                  },
+                                ),
+                                if (_showCatalogOilFields &&
+                                    !_oilCustomerProvided &&
+                                    _oilBrandDropdownValue != null &&
+                                    _oilViscosityDropdownValue != null) ...[
+                                  const SizedBox(height: 8),
+                                  _buildOilLiterPriceHint(cs),
+                                ],
+                              ],
+                            ],
+                          ),
+                        ),
+                      if (_shouldRenderOptionalSection(_OilFormOptionalSection.products))
+                        _buildOilOptionalSection(
+                          context,
+                          section: _OilFormOptionalSection.products,
+                          childrenBuilder: () => [
+                            OilChangeProductsCard(
+                              bare: true,
+                              lines: _oilProductLines,
+                              busy: busy || _oilBarcodeBusy,
+                              onScanBarcode: () => unawaited(_openOilProductBarcodeCapture()),
+                              onAddProduct: () => unawaited(_openOilProductPicker()),
+                              onQuantityChanged: _onOilProductQuantityChanged,
+                              onRemoveLine: _onOilProductLineRemoved,
+                            ),
+                          ],
+                        ),
+                      if (_shouldRenderOptionalSection(_OilFormOptionalSection.filters))
+                        _buildOilOptionalSection(
+                          context,
+                          section: _OilFormOptionalSection.filters,
+                          childrenBuilder: () => [
+                            if (_filterProductCatalogLoading)
+                              const Padding(
+                                padding: EdgeInsets.symmetric(vertical: 8),
+                                child: LinearProgressIndicator(minHeight: 2),
+                              ),
+                            for (var i = 0; i < _filterKinds.length; i++) ...[
+                              if (i > 0) const SizedBox(height: 12),
+                              _buildFilterKindRow(context: context, cs: cs, busy: busy, kind: _filterKinds[i]),
+                            ],
+                            if (_filterProductCatalog.isEmpty && !_filterProductCatalogLoading)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 8),
+                                child: Text(
+                                  'لا توجد فلاتر في الكتالوج. اضغط + بجانب كل فئة لإضافة اسم وسعر.',
+                                  style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13),
+                                  textAlign: TextAlign.start,
+                                ),
+                              ),
+                          ],
+                        ),
+                      if (_shouldRenderOptionalSection(_OilFormOptionalSection.hydraulicGear))
+                        _buildOilOptionalSection(
+                          context,
+                          section: _OilFormOptionalSection.hydraulicGear,
+                          childrenBuilder: () => [
+                            _buildHydraulicFluidCard(
+                              context,
+                              title: 'هيدروليك الكير',
+                              slot: _gearHydraulic,
+                              busy: busy,
+                              cs: cs,
+                              catalogNameLabel: 'اسم هيدروليك الكير',
+                              volumeLabel: 'حجم هيدروليك الكير',
+                              sourceTitle: 'مصدر هيدروليك الكير',
+                              shopLabel: 'هيدروليك الكير (المحل)',
+                              customerLabel: 'هيدروليك الكير (العميل)',
+                              customerHint: 'لن يُخصم مخزون — العميل أحضر هيدروليك الكير.',
+                              stockLabel: 'هيدروليك الكير من المخزون',
+                              warehouseLabel: 'مستودع هيدروليك الكير',
+                              wrapInSectionCard: false,
+                            ),
+                          ],
+                        ),
+                      if (_shouldRenderOptionalSection(_OilFormOptionalSection.hydraulicPower))
+                        _buildOilOptionalSection(
+                          context,
+                          section: _OilFormOptionalSection.hydraulicPower,
+                          childrenBuilder: () => [
+                            _buildHydraulicFluidCard(
+                              context,
+                              title: 'هيدروليك الباور',
+                              slot: _powerHydraulic,
+                              busy: busy,
+                              cs: cs,
+                              catalogNameLabel: 'اسم هيدروليك الباور',
+                              volumeLabel: 'حجم هيدروليك الباور',
+                              sourceTitle: 'مصدر هيدروليك الباور',
+                              shopLabel: 'هيدروليك الباور (المحل)',
+                              customerLabel: 'هيدروليك الباور (العميل)',
+                              customerHint: 'لن يُخصم مخزون — العميل أحضر هيدروليك الباور.',
+                              stockLabel: 'هيدروليك الباور من المخزون',
+                              warehouseLabel: 'مستودع هيدروليك الباور',
+                              wrapInSectionCard: false,
+                            ),
+                          ],
+                        ),
+                      if (_shouldRenderOptionalSection(_OilFormOptionalSection.services))
+                        _buildOilOptionalSection(
+                          context,
+                          section: _OilFormOptionalSection.services,
+                          childrenBuilder: () => [
+                            if (_oilCatalog.isEmpty)
+                              Text(
+                                'لا توجد خدمات إضافية. أضفها من «الخدمات وأسعارها».',
+                                style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13),
+                                textAlign: TextAlign.start,
+                              )
+                            else
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: _oilCatalog.map((s) => _buildOilServiceCheckbox(s, cs, busy)).toList(),
+                              ),
+                          ],
+                        ),
+                    ],
+                    if (!layout.isWideVariant) ...[
+                      _buildOilTechnicianNotesSection(context, busy),
+                      _buildOilCheckoutSectionCard(context, busy),
+                    ],
+                  ],
                 );
               },
             ),
           ),
         ),
-      // البطاقة من السجل تظهر ببياناتها فوراً؛ شريط رفيع فقط حتى تكتمل
-      // مطابقة الأسعار والمخزون (الحفظ معطّل خلالها عبر busy).
-      if (_prefillBootstrapInProgress)
-        const PositionedDirectional(
-          top: 0,
-          start: 0,
-          end: 0,
-          child: LinearProgressIndicator(minHeight: 2),
-        ),
-    ],
+        // البطاقة من السجل تظهر ببياناتها فوراً؛ شريط رفيع فقط حتى تكتمل
+        // مطابقة الأسعار والمخزون (الحفظ معطّل خلالها عبر busy).
+        if (_prefillBootstrapInProgress)
+          const PositionedDirectional(top: 0, start: 0, end: 0, child: LinearProgressIndicator(minHeight: 2)),
+      ],
     );
   }
+
   String _oilAppBarTitle() {
     if (widget.isEdit) {
       if (_status == OilChangeOrderStatus.suspended) {
@@ -3357,12 +2872,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
     return DecoratedBox(
       decoration: BoxDecoration(
         color: cs.surface,
-        border: BorderDirectional(
-          end: BorderSide(
-            color: OilChangeRoyalCard.gold.withValues(alpha: 0.35),
-            width: 1.5,
-          ),
-        ),
+        border: BorderDirectional(end: BorderSide(color: OilChangeRoyalCard.gold.withValues(alpha: 0.35), width: 1.5)),
       ),
       child: SingleChildScrollView(
         padding: const EdgeInsetsDirectional.fromSTEB(14, 14, 14, 14),
@@ -3374,31 +2884,19 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-            Row(
-              children: [
-                const Icon(
-                  Icons.edit_note_rounded,
-                  color: OilChangeRoyalCard.gold,
-                  size: 22,
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  'الفني والملاحظات',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w900,
-                    fontSize: 15,
-                    color: cs.onSurface,
+                  Row(
+                    children: [
+                      const Icon(Icons.edit_note_rounded, color: OilChangeRoyalCard.gold, size: 22),
+                      const SizedBox(width: 8),
+                      Text(
+                        'الفني والملاحظات',
+                        style: TextStyle(fontWeight: FontWeight.w900, fontSize: 15, color: cs.onSurface),
+                        textAlign: TextAlign.start,
+                      ),
+                    ],
                   ),
-                  textAlign: TextAlign.start,
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            ..._buildOilTechnicianAndNotesFields(
-              context,
-              busy,
-              compact: false,
-            ),
+                  const SizedBox(height: 10),
+                  ..._buildOilTechnicianAndNotesFields(context, busy, compact: false),
                 ],
               ),
             ),
@@ -3408,27 +2906,19 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-            Row(
-              children: [
-                const Icon(
-                  Icons.payments_outlined,
-                  color: OilChangeRoyalCard.gold,
-                  size: 22,
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  'السعر والدفع',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w900,
-                    fontSize: 15,
-                    color: cs.onSurface,
+                  Row(
+                    children: [
+                      const Icon(Icons.payments_outlined, color: OilChangeRoyalCard.gold, size: 22),
+                      const SizedBox(width: 8),
+                      Text(
+                        'السعر والدفع',
+                        style: TextStyle(fontWeight: FontWeight.w900, fontSize: 15, color: cs.onSurface),
+                        textAlign: TextAlign.start,
+                      ),
+                    ],
                   ),
-                  textAlign: TextAlign.start,
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            ..._oilCheckoutFields(context, busy, compact: false),
+                  const SizedBox(height: 12),
+                  ..._oilCheckoutFields(context, busy, compact: false),
                 ],
               ),
             ),

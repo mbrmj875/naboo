@@ -2,13 +2,33 @@ import type { PushAlertCandidate } from './types.ts';
 
 const FCM_SCOPE = 'https://www.googleapis.com/auth/firebase.messaging';
 
+/**
+ * مفتاح تشغيل الإرسال على الخادم (خطة الإشعارات، المرحلة 0).
+ * PUSH_ALLOWED_USER_IDS: قائمة معرّفات حسابات مفصولة بفاصلة، أو `*` للكل.
+ * فارغ أو غير موجود = لا يُرسل شيء لأحد (يفشل مغلقا).
+ */
+export function pushAllowedForUser(userId: string): boolean {
+  const raw = (Deno.env.get('PUSH_ALLOWED_USER_IDS') ?? '').trim();
+  if (!raw) return false;
+  if (raw === '*') return true;
+  return raw.split(',').map((s) => s.trim()).includes(userId);
+}
+
 export async function sendFcmDataMessage(
   deviceToken: string,
   alert: PushAlertCandidate,
+  userId: string,
+  onInvalidToken?: () => Promise<void>,
 ): Promise<boolean> {
-  const saJson = Deno.env.get('FCM_SERVICE_ACCOUNT_JSON');
+  if (!pushAllowedForUser(userId)) {
+    console.info('push gated (PUSH_ALLOWED_USER_IDS)', alert.alertId);
+    return false;
+  }
+  // اسم جديد عمدا: النسخ المنشورة القديمة من دوال واتساب تقرأ
+  // FCM_SERVICE_ACCOUNT_JSON بلا مفتاح تشغيل، فتبقى صامتة.
+  const saJson = Deno.env.get('PUSH_FCM_SERVICE_ACCOUNT_JSON');
   if (!saJson) {
-    console.warn('FCM_SERVICE_ACCOUNT_JSON missing — skip send');
+    console.warn('PUSH_FCM_SERVICE_ACCOUNT_JSON missing — skip send');
     return false;
   }
 
@@ -55,13 +75,22 @@ export async function sendFcmDataMessage(
   });
 
   if (!res.ok) {
-    console.error('FCM send failed', alert.alertId, await res.text());
+    const text = await res.text();
+    console.error('FCM send failed', alert.alertId, res.status, text);
+    // رمز لم يعد مسجلا عند Google (التطبيق حُذف أو أعيد تثبيته): لا فائدة من تكراره.
+    if (onInvalidToken && (res.status === 404 || text.includes('UNREGISTERED'))) {
+      try {
+        await onInvalidToken();
+      } catch (e) {
+        console.error('onInvalidToken failed', e);
+      }
+    }
     return false;
   }
   return true;
 }
 
-async function getGoogleAccessToken(serviceAccount: {
+export async function getGoogleAccessToken(serviceAccount: {
   client_email: string;
   private_key: string;
 }): Promise<string> {

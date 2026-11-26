@@ -82,6 +82,9 @@ abstract class AppContentRoutes {
   static const settingsSubscriptionAccount =
       'app_settings_subscription_account';
   static const settingsBusinessFeatures = 'app_settings_business_features';
+  static const settingsMarketPickup = 'app_settings_market_pickup';
+  static const settingsHelp = 'app_settings_help';
+  static const settingsOilHub = 'app_settings_oil_hub';
   static const subscriptionPlans = 'app_subscription_plans';
   static const reportsPrefix = 'app_reports_';
   static String reports(int section) => '$reportsPrefix$section';
@@ -107,6 +110,16 @@ abstract class AppContentRoutes {
   static const oilCardSettings = 'app_oil_card_settings';
   static const oilInvoices = 'app_oil_invoices';
   static const oilDirectSale = 'app_oil_direct_sale';
+  // شاشات بلا مسار سابق أُعطيت معرّفاً ليصلها الإرشاد (ب3).
+  static const oilRatings = 'app_oil_ratings';
+  static const oilEmployeeRatings = 'app_oil_employee_ratings';
+  static const oilChangeDetail = 'app_oil_change_detail';
+  static const oilTechnicians = 'app_oil_technicians';
+  static const oilWhatsappMessages = 'app_oil_whatsapp_messages';
+  static const oilWhatsappFollowup = 'app_oil_whatsapp_followup';
+  static const oilWhatsappWallet = 'app_oil_whatsapp_wallet';
+  static const oilWhatsappResponder = 'app_oil_whatsapp_responder';
+  static const oilWhatsappQueue = 'app_oil_whatsapp_queue';
   static const carWashCreate = 'app_car_wash_create';
   static const carWashServices = 'app_car_wash_services';
   static const pharmacyInvoices = 'app_pharmacy_invoices';
@@ -206,6 +219,7 @@ const Set<String> _featureGateExemptRouteIds = {
   AppContentRoutes.settingsRestore,
   AppContentRoutes.settingsSyncQueueHealth,
   AppContentRoutes.settingsSubscriptionAccount,
+  AppContentRoutes.settingsHelp,
   AppContentRoutes.subscriptionPlans,
 };
 
@@ -787,6 +801,24 @@ String breadcrumbFallbackTitleForRouteId(String id) {
       return 'فواتير غيار الزيت';
     case AppContentRoutes.oilDirectSale:
       return 'بيع مباشر';
+    case AppContentRoutes.oilRatings:
+      return 'تقييمات الزبائن';
+    case AppContentRoutes.oilEmployeeRatings:
+      return 'تقييمات الموظف';
+    case AppContentRoutes.oilChangeDetail:
+      return 'تفاصيل بطاقة الغيار';
+    case AppContentRoutes.oilTechnicians:
+      return 'الفنيون';
+    case AppContentRoutes.oilWhatsappMessages:
+      return 'رسائل واتساب';
+    case AppContentRoutes.oilWhatsappFollowup:
+      return 'متابعة الزبائن بواتساب';
+    case AppContentRoutes.oilWhatsappWallet:
+      return 'محفظة رسائل واتساب';
+    case AppContentRoutes.oilWhatsappResponder:
+      return 'ما يقوله المجيب للزبائن';
+    case AppContentRoutes.oilWhatsappQueue:
+      return 'زبائن واتساب';
     case AppContentRoutes.pharmacyInvoices:
       return 'فواتير الصيدلية';
     case AppContentRoutes.restaurantFloor:

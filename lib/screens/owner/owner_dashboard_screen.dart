@@ -3,6 +3,7 @@ import 'dart:async' show unawaited;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../notifications/ui/owner_phone_banner.dart';
 import '../../owner/models/owner_command_center_snapshot.dart';
 import '../../owner/models/owner_kpi_models.dart';
 import '../../owner/models/owner_section_result.dart';
@@ -66,11 +67,13 @@ import '../debts/debts_screen.dart';
 import '../installments/installments_screen.dart';
 import '../inventory/inventory_products_screen.dart';
 import '../settings/dashboard_layout_settings_screen.dart';
+import '../settings/settings_screen.dart';
 import '../inventory/add_product_screen.dart';
 import '../users/employee_identity_screen.dart';
 import '../users/staff_shifts_week_screen.dart';
 import '../users/user_form_screen.dart';
 import '../users/users_screen.dart';
+import '../../verticals/oil_change/shell/oil_shell_guide_routes.dart';
 import '../../verticals/car_wash/screens/car_wash_form_screen.dart';
 import '../../verticals/oil_change/screens/oil_change_form_screen.dart';
 import '../../verticals/oil_change/screens/oil_change_hub_screen.dart';
@@ -151,6 +154,9 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen>
         currentRouteId: _guideCurrentRouteId,
         ensureRoute: _guideEnsureRoute,
         runAction: _guideRunAction,
+        pushRoute: (route) async {
+          if (mounted) await Navigator.of(context).push<void>(route);
+        },
       ),
     );
   }
@@ -271,6 +277,11 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen>
       return;
     }
 
+    if (routeId == AppContentRoutes.settings) {
+      await _guidePushNamed(AppContentRoutes.settings, const SettingsScreen());
+      return;
+    }
+
     if (routeId == AppContentRoutes.settingsDashboardLayout) {
       await _guidePushNamed(
         AppContentRoutes.settingsDashboardLayout,
@@ -334,6 +345,14 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen>
       );
       return;
     }
+
+    // باقي شاشات خريطة المساعد (ب3): المسار المولَّد، والأب أولاً إن وُجد.
+    final target = oilGuideRoutes[routeId];
+    if (target == null) return;
+    final parent = target.parentRouteId;
+    if (parent != null && top != parent) await _guideEnsureRoute(parent);
+    if (!mounted) return;
+    await _guidePushNamed(routeId, Builder(builder: target.builder));
   }
 
   @override
@@ -1278,6 +1297,7 @@ class _OwnerDashboardScreenState extends State<OwnerDashboardScreen>
                 },
               ),
               if (_isSyncing) const _SyncTrustBanner(),
+              const OwnerPhoneBanner(),
               OwnerDataStatusLine(
                 lastSyncAt: CloudSyncService.instance.lastSyncAt,
                 isOffline: center.isOffline,

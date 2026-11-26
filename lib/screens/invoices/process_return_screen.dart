@@ -6,6 +6,7 @@ import 'package:intl/intl.dart' hide TextDirection;
 import 'package:provider/provider.dart';
 import 'package:uuid/uuid.dart';
 
+import '../../notifications/notification_event_outbox.dart';
 import '../../models/invoice.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/invoice_provider.dart';
@@ -531,6 +532,20 @@ class _ProcessReturnScreenState extends State<ProcessReturnScreen> {
           username: auth.displayName,
         ),
       );
+      // إشعار المالك على هاتفه (خطة الإشعارات، المرحلة 2).
+      unawaited(NotificationEventOutbox.instance.record(
+        type: 'sale_return',
+        ref: '$newId',
+        staffName: auth.displayName,
+        actorRole: auth.roleKey,
+        staffGlobalId: auth.userGlobalId,
+        payload: {
+          'invoice_id': newId,
+          'original_invoice_id': o.id,
+          'amount_fils': NotificationEventOutbox.fils(total),
+          'customer_name': o.customerName,
+        },
+      ));
       // الآجل: خصم المرتجع من دين الأصل يتم داخل معاملة حفظ المرتجع نفسها.
       if (o.type == InvoiceType.installment) {
         await _db.applyInstallmentAdjustmentAfterReturn(

@@ -16,6 +16,7 @@ import '../../widgets/barcode_input_launcher.dart';
 import '../../widgets/inputs/app_input.dart';
 import '../../widgets/inputs/app_number_input.dart';
 import '../../widgets/inputs/app_price_input.dart';
+import '../../guides/guide_anchor.dart';
 
 /// Intent for Ctrl+S
 final class _SaveIntent extends Intent {
@@ -1271,7 +1272,9 @@ class _QuickProductCardState extends State<_QuickProductCard> {
                   alignment: AlignmentDirectional.centerStart,
                   child: Focus(
                     focusNode: d.saveFn,
-                    child: FilledButton.icon(
+                    child: GuideAnchor(
+  id: OilGuideAnchors.quickUpdateSave,
+  child: FilledButton.icon(
                       onPressed: widget.saving ? null : widget.onSave,
                       icon: widget.saving
                           ? const SizedBox(
@@ -1288,6 +1291,7 @@ class _QuickProductCardState extends State<_QuickProductCard> {
                             borderRadius: AppShape.none),
                       ),
                     ),
+),
                   ),
                 ),
               ],

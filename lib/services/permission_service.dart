@@ -60,6 +60,18 @@ abstract class PermissionKeys {
   static const ownerKpiDebts = 'owner.kpi.debts';
   static const ownerKpiInventory = 'owner.kpi.inventory';
 
+  // ── مساعد نابو (ق48) ──
+  // ثلاثة مستويات تُعرض كاختيار واحد: بلا مساعد / إرشاد فقط / كامل.
+  static const assistantGuide = 'assistant.guide';
+  static const assistantFull = 'assistant.full';
+
+  /// مفاتيح المساعد لا تدخل حساب «كامل التخصيص»: مستوى المساعد اختيار مستقل.
+  static const Set<String> assistantKeys = {assistantGuide, assistantFull};
+
+  /// كل المفاتيح عدا مفاتيح المساعد.
+  static List<String> get coreKeys =>
+      allKeys.where((k) => !assistantKeys.contains(k)).toList(growable: false);
+
   static const List<String> allKeys = [
     appDashboard,
     customersView,
@@ -94,6 +106,8 @@ abstract class PermissionKeys {
     ownerKpiOperations,
     ownerKpiDebts,
     ownerKpiInventory,
+    assistantGuide,
+    assistantFull,
   ];
 }
 
@@ -118,6 +132,9 @@ class PermissionService {
     PermissionKeys.debtsPanel,
     PermissionKeys.installmentsPlans,
     PermissionKeys.shiftsAccess,
+    // الافتراضي «كامل»: صلاحيات البيانات تحكم ما يراه الموظف أصلاً.
+    PermissionKeys.assistantGuide,
+    PermissionKeys.assistantFull,
   };
 
   int get _tenantId => _tenant.activeTenantId;
@@ -260,7 +277,7 @@ class PermissionService {
       roleKey: roleKey,
     );
     if (map.isEmpty) return false;
-    return PermissionKeys.allKeys.every((k) => map[k] == true);
+    return PermissionKeys.coreKeys.every((k) => map[k] == true);
   }
 
   Future<bool> hasElevatedAccessForSession({

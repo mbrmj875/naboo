@@ -10,7 +10,6 @@ import '../../services/marketplace/marketplace_catalog_sync_service.dart';
 import '../../services/marketplace/marketplace_merchant_fcm_service.dart';
 import '../../services/marketplace/marketplace_orders_realtime_service.dart';
 import '../../services/marketplace/marketplace_orders_service.dart';
-import 'market_pickup_settings_screen.dart';
 import 'market_store_profile_screen.dart';
 import '../../utils/iraqi_currency_format.dart';
 
@@ -369,22 +368,6 @@ class _OnlineOrdersScreenState extends State<OnlineOrdersScreen>
                 );
               },
               icon: const Icon(Icons.storefront_outlined),
-            ),
-          if (_linkedStores.isNotEmpty)
-            IconButton(
-              tooltip: 'إعداد نقطة الاستلام على الخريطة',
-              onPressed: () {
-                final store = _linkedStores.first;
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => MarketPickupSettingsScreen(
-                      storeId: store.id,
-                      storeName: store.name,
-                    ),
-                  ),
-                );
-              },
-              icon: const Icon(Icons.map_outlined),
             ),
           if (_linkedStores.isNotEmpty)
             IconButton(

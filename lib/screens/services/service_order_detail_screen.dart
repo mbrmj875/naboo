@@ -13,6 +13,7 @@ import '../../utils/iqd_money.dart';
 import '../../utils/iraqi_currency_format.dart';
 import '../invoices/add_invoice_screen.dart';
 import 'service_order_form_screen.dart';
+import '../../verticals/oil_change/utils/oil_odometer_unit.dart';
 
 class ServiceOrderDetailScreen extends StatefulWidget {
   const ServiceOrderDetailScreen({
@@ -782,7 +783,7 @@ class _ServiceOrderDetailScreenState extends State<ServiceOrderDetailScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text('القراءة الحالية', style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
-                        Text(odomCurrent.isEmpty ? '—' : '$odomCurrent كم', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                        Text(odomCurrent.isEmpty ? '—' : '$odomCurrent ${OilOdometerUnit.labelOf(o)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
                       ],
                     ),
                     Icon(Icons.arrow_back_rounded, color: cs.primary, size: 20),
@@ -790,7 +791,7 @@ class _ServiceOrderDetailScreenState extends State<ServiceOrderDetailScreen> {
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
                         Text('القراءة اللاحقة', style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
-                        Text(odomNext.isEmpty ? '—' : '$odomNext كم', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: cs.primary)),
+                        Text(odomNext.isEmpty ? '—' : '$odomNext ${OilOdometerUnit.labelOf(o)}', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: cs.primary)),
                       ],
                     ),
                   ],

@@ -59,6 +59,8 @@ dependencies:
 
   # إشعارات شريط النظام على Android (وما يعادلها لاحقاً على iOS).
   flutter_local_notifications: ^19.0.0
+  # جدولة تذكيرات المساعد بوقت ثابت (zonedSchedule).
+  timezone: ^0.10.1
 
   # مطلوب لـ lib/firebase_options.dart (FlutterFire)؛ التهيئة الفعلية اختيارية في main.
   firebase_core: ^3.8.0

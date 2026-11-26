@@ -14,19 +14,17 @@ import '../utils/oil_change_finance.dart';
 import '../utils/oil_change_order_status.dart';
 import '../utils/oil_change_filter_format.dart';
 import '../utils/oil_change_log_format.dart';
+import '../utils/oil_order_has_oil.dart';
 import '../models/oil_change_filter_kind.dart';
 import '../utils/oil_change_customer_debt.dart';
 import '../utils/oil_service_whatsapp_message.dart';
 import 'oil_change_form_screen.dart';
 import '../widgets/oil_change_form_theme.dart';
+import '../../../assistant/ui/assistant_context_scope.dart';
 
 /// عرض بطاقة غيار زيت — بدون تذكرة صيانة أو قطع غيار.
 class OilChangeDetailScreen extends StatefulWidget {
-  const OilChangeDetailScreen({
-    super.key,
-    required this.orderId,
-    required this.orderGlobalId,
-  });
+  const OilChangeDetailScreen({super.key, required this.orderId, required this.orderGlobalId});
 
   final int orderId;
   final String orderGlobalId;
@@ -45,6 +43,8 @@ class _OilChangeDetailScreenState extends State<OilChangeDetailScreen> {
   @override
   void initState() {
     super.initState();
+    // ق67: «هذا/هنا» في المساعد تعني عنصر هذه الشاشة.
+    AssistantScreenContext.push(AssistantContextItem(kind: 'oil_card', id: widget.orderId, label: 'بطاقة الغيار المفتوحة'));
     unawaited(_load());
   }
 
@@ -54,8 +54,7 @@ class _OilChangeDetailScreenState extends State<OilChangeDetailScreen> {
       _error = null;
     });
     try {
-      final order = await ServiceOrdersRepository.instance
-          .getServiceOrderByGlobalId(widget.orderGlobalId);
+      final order = await ServiceOrdersRepository.instance.getServiceOrderByGlobalId(widget.orderGlobalId);
       if (!mounted) return;
       if (order == null || !ServiceOrderKinds.isOilChange(order)) {
         setState(() {
@@ -102,14 +101,11 @@ class _OilChangeDetailScreenState extends State<OilChangeDetailScreen> {
     if (o == null) return;
     final phone = (o['customerPhone'] ?? '').toString().trim();
     if (phone.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('لا يوجد رقم هاتف في البطاقة')),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('لا يوجد رقم هاتف في البطاقة')));
       return;
     }
     final printData = await EffectiveStoreBranding.resolveFromContext(context);
-    final askRating =
-        await OilChangeSettings.whatsappAskRatingAfterSaveEnabled();
+    final askRating = await OilChangeSettings.whatsappAskRatingAfterSaveEnabled();
     final visitRem = oilChangeVisitRemainderFils(o);
     final priorDebt = await loadCustomerPriorOpenDebtFils(
       customerId: (o['customerId'] as num?)?.toInt(),
@@ -138,11 +134,7 @@ class _OilChangeDetailScreenState extends State<OilChangeDetailScreen> {
             width: 120,
             child: Text(
               label,
-              style: TextStyle(
-                fontSize: 12,
-                color: cs.onSurfaceVariant,
-                fontWeight: FontWeight.w600,
-              ),
+              style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant, fontWeight: FontWeight.w600),
               textAlign: TextAlign.start,
             ),
           ),
@@ -158,15 +150,10 @@ class _OilChangeDetailScreenState extends State<OilChangeDetailScreen> {
     );
   }
 
-  List<Widget> _filterDetailRows(
-    BuildContext context,
-    Map<String, dynamic> o,
-  ) {
+  List<Widget> _filterDetailRows(BuildContext context, Map<String, dynamic> o) {
     final lines = oilFilterLinesFromRow(o);
     if (lines.isNotEmpty) {
-      return lines
-          .map((line) => _row(context, 'فلتر', line))
-          .toList(growable: false);
+      return lines.map((line) => _row(context, 'فلتر', line)).toList(growable: false);
     }
     for (final kind in OilChangeFilterKind.all) {
       final name = (o[kind.nameColumnKey] ?? '').toString().trim();
@@ -182,6 +169,12 @@ class _OilChangeDetailScreenState extends State<OilChangeDetailScreen> {
   }
 
   @override
+  void dispose() {
+    AssistantScreenContext.pop(AssistantContextItem(kind: 'oil_card', id: widget.orderId, label: 'بطاقة الغيار المفتوحة'));
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
 
@@ -189,11 +182,7 @@ class _OilChangeDetailScreenState extends State<OilChangeDetailScreen> {
       return Theme(
         data: OilChangeFormTheme.wrap(context, Theme.of(context)),
         child: Scaffold(
-          appBar: OilChangeFormTheme.appBar(
-            context: context,
-            title: 'بطاقة غيار زيت',
-            actions: const [],
-          ),
+          appBar: OilChangeFormTheme.appBar(context: context, title: 'بطاقة غيار زيت', actions: const []),
           body: const Center(child: CircularProgressIndicator()),
         ),
       );
@@ -203,24 +192,14 @@ class _OilChangeDetailScreenState extends State<OilChangeDetailScreen> {
       return Theme(
         data: OilChangeFormTheme.wrap(context, Theme.of(context)),
         child: Scaffold(
-          appBar: OilChangeFormTheme.appBar(
-            context: context,
-            title: 'بطاقة غيار زيت',
-            actions: const [],
-          ),
+          appBar: OilChangeFormTheme.appBar(context: context, title: 'بطاقة غيار زيت', actions: const []),
           body: Center(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(
-                  'تعذّر عرض البطاقة',
-                  style: TextStyle(color: cs.error),
-                ),
+                Text('تعذّر عرض البطاقة', style: TextStyle(color: cs.error)),
                 const SizedBox(height: 8),
-                FilledButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('رجوع'),
-                ),
+                FilledButton(onPressed: () => Navigator.pop(context), child: const Text('رجوع')),
               ],
             ),
           ),
@@ -236,168 +215,128 @@ class _OilChangeDetailScreenState extends State<OilChangeDetailScreen> {
     final estF = (o['estimatedPriceFils'] as num?)?.toInt() ?? 0;
     final servicesF = agreedF ?? estF;
     final invoiceEstF = servicesF + _oilMaterialEstFils;
-    final customerOil =
-        ((o['oilCustomerProvided'] as num?)?.toInt() ?? 0) != 0;
+    final customerOil = ((o['oilCustomerProvided'] as num?)?.toInt() ?? 0) != 0;
     final oilLiters = (o['oilLitersUsed'] as num?)?.toDouble() ?? 0;
+    final hasOil = oilOrderHasOil(o);
     final stockVoucherId = (o['stockVoucherId'] as num?)?.toInt() ?? 0;
     final invId = (o['invoiceId'] as num?)?.toInt() ?? 0;
 
     return Theme(
       data: OilChangeFormTheme.wrap(context, Theme.of(context)),
       child: Scaffold(
-      appBar: OilChangeFormTheme.appBar(
-        context: context,
-        title: 'بطاقة غيار زيت',
-        actions: [
-          IconButton(
-            tooltip: 'واتساب',
-            onPressed: _sendWhatsApp,
-            icon: const Icon(Icons.chat_rounded),
-          ),
-          IconButton(
-            tooltip: 'تعديل',
-            onPressed: _openEdit,
-            icon: const Icon(Icons.edit_rounded),
-          ),
-        ],
-      ),
-      body: ListView(
-        padding: const EdgeInsetsDirectional.fromSTEB(14, 14, 14, 24),
-        children: [
-          Material(
-            color: cs.primaryContainer.withValues(alpha: 0.35),
-            borderRadius: BorderRadius.circular(14),
-            child: Padding(
-              padding: const EdgeInsets.all(14),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(
-                    customer.isEmpty ? 'عميل' : customer,
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w900,
-                        ),
-                    textAlign: TextAlign.start,
-                  ),
-                  if ((o['customerPhone'] ?? '').toString().trim().isNotEmpty)
+        appBar: OilChangeFormTheme.appBar(
+          context: context,
+          title: 'بطاقة غيار زيت',
+          actions: [
+            IconButton(tooltip: 'واتساب', onPressed: _sendWhatsApp, icon: const Icon(Icons.chat_rounded)),
+            IconButton(tooltip: 'تعديل', onPressed: _openEdit, icon: const Icon(Icons.edit_rounded)),
+          ],
+        ),
+        body: ListView(
+          padding: const EdgeInsetsDirectional.fromSTEB(14, 14, 14, 24),
+          children: [
+            Material(
+              color: cs.primaryContainer.withValues(alpha: 0.35),
+              borderRadius: BorderRadius.circular(14),
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
                     Text(
-                      (o['customerPhone'] ?? '').toString(),
-                      textDirection: TextDirection.ltr,
+                      customer.isEmpty ? 'عميل' : customer,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w900),
                       textAlign: TextAlign.start,
                     ),
-                ],
+                    if ((o['customerPhone'] ?? '').toString().trim().isNotEmpty)
+                      Text(
+                        (o['customerPhone'] ?? '').toString(),
+                        textDirection: TextDirection.ltr,
+                        textAlign: TextAlign.start,
+                      ),
+                  ],
+                ),
               ),
             ),
-          ),
-          const SizedBox(height: 12),
-          _section(context, 'المركبة', Icons.directions_car_filled_rounded, [
-            _row(context, 'السيارة', (o['deviceName'] ?? '').toString()),
-            _row(context, 'الموديل', (o['carModel'] ?? '').toString()),
-            _row(context, 'اللوحة', (o['deviceSerial'] ?? '').toString()),
-            _row(context, 'المحرك', (o['engineSize'] ?? '').toString()),
-          ]),
-          _section(context, 'الزيت والعداد', Icons.opacity_rounded, [
-            _row(context, 'قراءة حالية', '${oilFormatOdo((o['odometerCurrent'] ?? '').toString())} كم'),
-            _row(context, 'قراءة لاحقة', '${oilFormatOdo((o['odometerNext'] ?? '').toString())} كم'),
-            _row(context, 'نوع الزيت', (o['oilType'] ?? '').toString()),
-            _row(context, 'اللزوجة', (o['oilViscosity'] ?? '').toString()),
-            _row(context, 'الحجم', (o['oilSize'] ?? '').toString()),
-            ..._filterDetailRows(context, o),
-            _row(context, 'زيت كير', oilYesNo(flags.gearOil)),
-          ]),
-          _section(context, 'المخزون', Icons.inventory_2_outlined, [
-            _row(
-              context,
-              'مصدر الزيت',
-              customerOil ? 'زيت العميل' : 'زيت المحل',
-            ),
-            if (!customerOil) ...[
+            const SizedBox(height: 12),
+            _section(context, 'المركبة', Icons.directions_car_filled_rounded, [
+              _row(context, 'السيارة', (o['deviceName'] ?? '').toString()),
+              _row(context, 'الموديل', (o['carModel'] ?? '').toString()),
+              _row(context, 'اللوحة', (o['deviceSerial'] ?? '').toString()),
+              _row(context, 'المحرك', (o['engineSize'] ?? '').toString()),
+            ]),
+            _section(context, 'الزيت والعداد', Icons.opacity_rounded, [
+              _row(context, 'قراءة حالية', oilFormatOdoWithUnit(o['odometerCurrent'], o)),
+              _row(context, 'قراءة لاحقة', oilFormatOdoWithUnit(o['odometerNext'], o)),
+              // بطاقة بلا زيت (فلتر أو هيدروليك فقط): لا سطور زيت.
+              if (hasOil) ...[
+                _row(context, 'نوع الزيت', (o['oilType'] ?? '').toString()),
+                _row(context, 'اللزوجة', (o['oilViscosity'] ?? '').toString()),
+                _row(context, 'الحجم', (o['oilSize'] ?? '').toString()),
+              ],
+              ..._filterDetailRows(context, o),
+              _row(context, 'زيت كير', oilYesNo(flags.gearOil)),
+            ]),
+            if (hasOil)
+              _section(context, 'المخزون', Icons.inventory_2_outlined, [
+                _row(context, 'مصدر الزيت', customerOil ? 'زيت العميل' : 'زيت المحل'),
+                if (!customerOil) ...[
+                  _row(context, 'صنف من المخزون', _oilProductName ?? '—'),
+                  if (oilLiters > 0) _row(context, 'لترات مُصرفة', '${oilLiters.toStringAsFixed(1)} لتر'),
+                  _row(context, 'سند الصرف', stockVoucherId > 0 ? '#$stockVoucherId' : '—'),
+                ],
+              ]),
+            if (services.isNotEmpty)
+              _section(context, 'خدمات إضافية', Icons.checklist_rounded, [
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: services
+                      .map(
+                        (s) => Chip(
+                          label: Text(s, style: const TextStyle(fontSize: 11.5)),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                      )
+                      .toList(),
+                ),
+              ]),
+            _section(context, 'المالية', Icons.payments_outlined, [
               _row(
                 context,
-                'صنف من المخزون',
-                _oilProductName ?? '—',
+                'مبلغ الخدمات',
+                servicesF > 0 ? IraqiCurrencyFormat.formatIqd(IqdMoney.fromFils(servicesF)) : '—',
               ),
-              if (oilLiters > 0)
+              if (!customerOil && _oilMaterialEstFils > 0)
                 _row(
                   context,
-                  'لترات مُصرفة',
-                  '${oilLiters.toStringAsFixed(1)} لتر',
+                  'مادة الزيت (تقدير)',
+                  IraqiCurrencyFormat.formatIqd(IqdMoney.fromFils(_oilMaterialEstFils)),
                 ),
-              _row(
-                context,
-                'سند الصرف',
-                stockVoucherId > 0 ? '#$stockVoucherId' : '—',
-              ),
-            ],
-          ]),
-          if (services.isNotEmpty)
-            _section(context, 'خدمات إضافية', Icons.checklist_rounded, [
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: services
-                    .map(
-                      (s) => Chip(
-                        label: Text(s, style: const TextStyle(fontSize: 11.5)),
-                        visualDensity: VisualDensity.compact,
-                      ),
-                    )
-                    .toList(),
-              ),
+              if (!customerOil && _oilMaterialEstFils > 0)
+                _row(context, 'إجمالي الفاتورة (تقدير)', IraqiCurrencyFormat.formatIqd(IqdMoney.fromFils(invoiceEstF))),
+              if (invId > 0) _row(context, 'فاتورة البيع', '#$invId'),
+              _row(context, 'التاريخ', oilFormatDate((o['createdAt'] ?? '').toString())),
+              _row(context, 'الفني', (o['technicianName'] ?? '').toString()),
+              if ((o['issueDescription'] ?? '').toString().trim().isNotEmpty)
+                _row(context, 'ملاحظات', (o['issueDescription'] ?? '').toString()),
             ]),
-          _section(context, 'المالية', Icons.payments_outlined, [
-            _row(
-              context,
-              'مبلغ الخدمات',
-              servicesF > 0
-                  ? IraqiCurrencyFormat.formatIqd(IqdMoney.fromFils(servicesF))
-                  : '—',
-            ),
-            if (!customerOil && _oilMaterialEstFils > 0)
-              _row(
-                context,
-                'مادة الزيت (تقدير)',
-                IraqiCurrencyFormat.formatIqd(
-                  IqdMoney.fromFils(_oilMaterialEstFils),
-                ),
+            const SizedBox(height: 12),
+            // البيع من البطاقة نفسها فقط، فيمر بفحص الرصيد والأجرة والخصم
+            // والعربون وسقف الدين كما يبيعها الموظف.
+            if (invId <= 0 && (o['status'] ?? '').toString() != OilChangeOrderStatus.cancelled)
+              FilledButton.icon(
+                onPressed: _openEdit,
+                icon: const Icon(Icons.point_of_sale_rounded),
+                label: const Text('فتح البطاقة للبيع'),
               ),
-            if (!customerOil && _oilMaterialEstFils > 0)
-              _row(
-                context,
-                'إجمالي الفاتورة (تقدير)',
-                IraqiCurrencyFormat.formatIqd(
-                  IqdMoney.fromFils(invoiceEstF),
-                ),
-              ),
-            if (invId > 0)
-              _row(context, 'فاتورة البيع', '#$invId'),
-            _row(context, 'التاريخ', oilFormatDate((o['createdAt'] ?? '').toString())),
-            _row(context, 'الفني', (o['technicianName'] ?? '').toString()),
-            if ((o['issueDescription'] ?? '').toString().trim().isNotEmpty)
-              _row(context, 'ملاحظات', (o['issueDescription'] ?? '').toString()),
-          ]),
-          const SizedBox(height: 12),
-          // البيع من البطاقة نفسها فقط، فيمر بفحص الرصيد والأجرة والخصم
-          // والعربون وسقف الدين كما يبيعها الموظف.
-          if (invId <= 0 &&
-              (o['status'] ?? '').toString() != OilChangeOrderStatus.cancelled)
-            FilledButton.icon(
-              onPressed: _openEdit,
-              icon: const Icon(Icons.point_of_sale_rounded),
-              label: const Text('فتح البطاقة للبيع'),
-            ),
-        ],
-      ),
+          ],
+        ),
       ),
     );
   }
 
-  Widget _section(
-    BuildContext context,
-    String title,
-    IconData icon,
-    List<Widget> children,
-  ) {
+  Widget _section(BuildContext context, String title, IconData icon, List<Widget> children) {
     final cs = Theme.of(context).colorScheme;
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),

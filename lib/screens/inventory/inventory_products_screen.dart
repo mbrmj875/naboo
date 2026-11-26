@@ -17,7 +17,6 @@ import '../../utils/screen_layout.dart';
 import '../../guides/guide_anchor.dart';
 import 'add_product_screen.dart';
 import 'barcode_labels_screen.dart';
-import 'inventory_settings_screen.dart';
 import 'product_edit_screen.dart';
 
 final class _AddProductShortcut extends Intent {
@@ -303,16 +302,6 @@ class _InventoryProductsScreenState extends State<InventoryProductsScreen>
             ),
           ),
           actions: [
-            IconButton(
-              icon: const Icon(Icons.settings_outlined, size: 22, color: AppColors.accentGold),
-              tooltip: 'الإعدادات',
-              onPressed: () => Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => const InventorySettingsScreen(),
-                ),
-              ),
-            ),
             PopupMenuButton<String>(
               tooltip: 'المزيد',
               icon: const Icon(Icons.more_horiz_rounded, color: AppColors.accentGold),

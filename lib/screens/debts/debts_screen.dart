@@ -266,10 +266,17 @@ class _DebtsScreenState extends State<DebtsScreen>
             r.invoiceId.toString(),
             r.customerId?.toString() ?? '',
             _invoiceKeys[r.invoiceId] ?? '',
+            // لوحات وهواتف العميل كلها (سيارة أخرى بلا دين تجد فواتيره).
+            if (r.customerId != null) _customerKeys[r.customerId] ?? '',
           ]),
         )
         .toList();
   }
+
+  Map<int, String> get _customerKeys => {
+    for (final x in _summaries)
+      if (x.customerId != null) x.customerId!: x.searchText,
+  };
 
   List<CustomerDebtSummary> _filteredSummaries() {
     final q = _search.text;
@@ -529,19 +536,6 @@ class _DebtsScreenState extends State<DebtsScreen>
                       unawaited(_load());
                     },
                     icon: Icon(Icons.link_rounded, color: cs.onSurface),
-                  ),
-                  IconButton(
-                    tooltip: 'إعدادات الدين',
-                    onPressed: () async {
-                      await Navigator.push<void>(
-                        context,
-                        MaterialPageRoute<void>(
-                          builder: (_) => const DebtSettingsScreen(),
-                        ),
-                      );
-                      unawaited(_load());
-                    },
-                    icon: Icon(Icons.tune_rounded, color: cs.onSurface),
                   ),
                   IconButton(
                     tooltip: 'تحديث (F5)',

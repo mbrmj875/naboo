@@ -5,6 +5,7 @@ import '../models/invoice.dart';
 import '../services/database_helper.dart';
 import '../theme/design_tokens.dart';
 import '../utils/screen_layout.dart';
+import '../assistant/ui/assistant_context_scope.dart';
 
 final _numFmt = NumberFormat('#,##0', 'ar');
 final _dateFmt = DateFormat('dd/MM/yyyy HH:mm', 'ar');
@@ -122,9 +123,14 @@ class _InvoiceDetailPanelState extends State<InvoiceDetailPanel> {
   bool _loading = false;
   int? _loadedId;
 
+  // ق67: «هذه الفاتورة» في المساعد تعني الفاتورة المعروضة هنا.
+  static AssistantContextItem _ctx(int? id) =>
+      AssistantContextItem(kind: 'invoice', id: id ?? 0, label: 'الفاتورة المفتوحة');
+
   @override
   void initState() {
     super.initState();
+    AssistantScreenContext.push(_ctx(widget.invoiceId));
     _loadIfNeeded();
   }
 
@@ -132,8 +138,16 @@ class _InvoiceDetailPanelState extends State<InvoiceDetailPanel> {
   void didUpdateWidget(covariant InvoiceDetailPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.invoiceId != widget.invoiceId) {
+      AssistantScreenContext.pop(_ctx(oldWidget.invoiceId));
+      AssistantScreenContext.push(_ctx(widget.invoiceId));
       _loadIfNeeded();
     }
+  }
+
+  @override
+  void dispose() {
+    AssistantScreenContext.pop(_ctx(widget.invoiceId));
+    super.dispose();
   }
 
   Future<void> _loadIfNeeded() async {

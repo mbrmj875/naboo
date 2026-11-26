@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../../theme/sale_brand.dart';
 import '../utils/oil_change_finance.dart';
 import '../utils/oil_change_filter_format.dart';
+import '../utils/oil_order_has_oil.dart';
 import '../utils/oil_change_layout.dart';
 import '../utils/oil_change_log_format.dart';
 import '../../../utils/screen_layout.dart';
@@ -184,6 +185,7 @@ class _OilChangeLogDetailSheetState extends State<OilChangeLogDetailSheet> {
     final services = parseOilRequestedServices(r['requestedServices']?.toString());
     final flags = OilExcelStyleFlags.fromRow(r);
     final customerOil = oilIsCustomerProvided(r);
+    final hasOil = oilOrderHasOil(r);
     final invId = (r['invoiceId'] as num?)?.toInt() ?? 0;
     final stockVid = (r['stockVoucherId'] as num?)?.toInt() ?? 0;
     final liters = (r['oilLitersUsed'] as num?)?.toDouble() ?? 0;
@@ -308,19 +310,22 @@ class _OilChangeLogDetailSheetState extends State<OilChangeLogDetailSheet> {
                               _detailRow(
                                 cs,
                                 'قراءة حالية',
-                                '${oilFormatOdo((r['odometerCurrent'] ?? '').toString())} كم',
+                                oilFormatOdoWithUnit(r['odometerCurrent'], r),
                                 valueDirection: TextDirection.ltr,
                               ),
                               _detailRow(
                                 cs,
                                 'قراءة لاحقة',
-                                '${oilFormatOdo((r['odometerNext'] ?? '').toString())} كم',
+                                oilFormatOdoWithUnit(r['odometerNext'], r),
                                 valueDirection: TextDirection.ltr,
                               ),
-                              _detailRow(cs, 'مصدر الزيت', oilFormatOilSource(r)),
-                              _detailRow(cs, 'نوع الزيت', (r['oilType'] ?? '').toString()),
-                              _detailRow(cs, 'اللزوجة', (r['oilViscosity'] ?? '').toString()),
-                              _detailRow(cs, 'اللترات / الحجم', oilFormatLitersOrSize(r)),
+                              // بطاقة بلا زيت (فلتر أو هيدروليك فقط): لا سطور زيت.
+                              if (hasOil) ...[
+                                _detailRow(cs, 'مصدر الزيت', oilFormatOilSource(r)),
+                                _detailRow(cs, 'نوع الزيت', (r['oilType'] ?? '').toString()),
+                                _detailRow(cs, 'اللزوجة', (r['oilViscosity'] ?? '').toString()),
+                                _detailRow(cs, 'اللترات / الحجم', oilFormatLitersOrSize(r)),
+                              ],
                               ..._filterDetailRows(cs, r),
                               if (!customerOil && _loadingExtra)
                                 const Padding(

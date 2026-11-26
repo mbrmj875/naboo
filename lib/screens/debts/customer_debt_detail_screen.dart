@@ -11,7 +11,7 @@ import '../../providers/invoice_provider.dart';
 import '../../providers/notification_provider.dart';
 import '../../providers/shift_provider.dart';
 import '../../models/debt_settings_data.dart';
-import '../../printing/receipt_printer.dart';
+import '../../printing/invoice_receipt_screen.dart';
 import '../../services/customer_debt_statement.dart';
 import '../../services/database_helper.dart';
 import '../../services/effective_store_branding.dart';
@@ -20,7 +20,6 @@ import '../../theme/design_tokens.dart';
 import '../../utils/sale_receipt_pdf.dart';
 import '../../utils/shift_actor_conflict_guard.dart';
 import '../../utils/customer_phone_launch.dart';
-import '../../widgets/customer_contact_bar.dart';
 import '../../widgets/invoice_detail_sheet.dart';
 import 'void_payment_dialog.dart';
 
@@ -357,7 +356,12 @@ class _CustomerDebtDetailScreenState extends State<CustomerDebtDetailScreen> {
     if (!mounted || choice == null) return;
     final st = _statement();
     if (choice == 'print') {
-      await ReceiptPrinter.printWithFeedback(context, () async => st.toReceipt());
+      // معاينة أولاً (بالصورة نفسها التي تُطبع)، ثم «طباعة» أو «مشاركة».
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => InvoiceReceiptScreen(document: st.toReceipt()),
+        ),
+      );
     } else {
       final store = await _storeName();
       if (!mounted) return;
@@ -505,11 +509,13 @@ class _CustomerDebtDetailScreenState extends State<CustomerDebtDetailScreen> {
                       ),
                     ),
                   ),
-                  CustomerContactBar(phones: _contactPhones),
+                  // شريط واحد: التسديد عريضاً، والاتصال وواتساب أيقونتان بجانبه
+                  // (كانا شريطين يأكلان مساحة الفواتير والدفعات).
                   _PayBar(
                     enabled: _openTotalFils > 0 && (_party?.customerId ?? 0) > 0,
                     openTotal: _openTotal,
                     onPay: _openPayDialog,
+                    phones: _contactPhones,
                   ),
                 ],
               ),
@@ -839,36 +845,86 @@ class _PayBar extends StatelessWidget {
     required this.enabled,
     required this.openTotal,
     required this.onPay,
+    required this.phones,
   });
 
   final bool enabled;
   final double openTotal;
   final VoidCallback onPay;
+  final List<String> phones;
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final hasPhones = phones.isNotEmpty;
+    Widget contact({
+      required Key key,
+      required IconData icon,
+      required String tip,
+      required VoidCallback onTap,
+      Color? color,
+    }) {
+      return Tooltip(
+        message: hasPhones ? tip : 'لا يوجد رقم للعميل',
+        child: IconButton.filledTonal(
+          key: key,
+          onPressed: hasPhones ? onTap : null,
+          style: IconButton.styleFrom(
+            minimumSize: const Size(48, 48),
+            shape: const RoundedRectangleBorder(borderRadius: AppShape.none),
+          ),
+          icon: Icon(icon, color: hasPhones ? color : null),
+        ),
+      );
+    }
+
     return Material(
       elevation: 8,
       color: cs.surface,
       child: SafeArea(
         top: false,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 14),
-          child: FilledButton.icon(
-            onPressed: enabled ? onPay : null,
-            style: FilledButton.styleFrom(
-              padding: const EdgeInsets.symmetric(vertical: 14),
-              shape: const RoundedRectangleBorder(borderRadius: AppShape.none),
-              backgroundColor: AppColors.accent,
-            ),
-            icon: const Icon(Icons.payments_rounded),
-            label: Text(
-              enabled
-                  ? 'تسديد دين (متبقٍّ ${_numFmt.format(openTotal)} د.ع)'
-                  : 'لا يوجد متبقٍ',
-              style: const TextStyle(fontWeight: FontWeight.w700),
-            ),
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+          child: Row(
+            children: [
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: enabled ? onPay : null,
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size(0, 48),
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    shape: const RoundedRectangleBorder(
+                      borderRadius: AppShape.none,
+                    ),
+                    backgroundColor: AppColors.accent,
+                  ),
+                  icon: const Icon(Icons.payments_rounded),
+                  label: Text(
+                    enabled
+                        ? 'تسديد (متبقٍّ ${_numFmt.format(openTotal)} د.ع)'
+                        : 'لا يوجد متبقٍ',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              contact(
+                key: const Key('debtCallButton'),
+                icon: Icons.phone_rounded,
+                tip: 'اتصال',
+                onTap: () => launchCustomerDial(context, phones),
+              ),
+              const SizedBox(width: 8),
+              contact(
+                key: const Key('debtWhatsAppButton'),
+                icon: Icons.chat_rounded,
+                tip: 'واتساب',
+                color: const Color(0xFF25D366),
+                onTap: () => launchCustomerWhatsApp(context, phones),
+              ),
+            ],
           ),
         ),
       ),

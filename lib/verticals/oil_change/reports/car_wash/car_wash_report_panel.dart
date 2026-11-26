@@ -1,3 +1,4 @@
+import 'package:naboo/utils/arabic_count.dart';
 import 'package:flutter/material.dart';
 
 import '../kit/report_kit.dart';
@@ -68,7 +69,7 @@ class CarWashReportPanel extends StatelessWidget {
                   : '${returningPct.toStringAsFixed(0)}%',
               icon: Icons.replay_rounded,
               accent: _accent,
-              caption: '${data.returningCars} من ${data.uniqueCars} سيارة',
+              caption: '${data.returningCars} من ${arabicCarsCount(data.uniqueCars)}',
             ),
           ],
         ),
@@ -135,7 +136,7 @@ class CarWashReportPanel extends StatelessWidget {
                   (
                     w.label,
                     w.count.toDouble(),
-                    '${w.count} سيارة · ${reportMoneyCompact(w.amountFils)}',
+                    '${arabicCarsCount(w.count)} · ${reportMoneyCompact(w.amountFils)}',
                   ),
               ],
             ),
@@ -143,7 +144,7 @@ class CarWashReportPanel extends StatelessWidget {
           second: ReportCard(
             title: 'أكثر السيارات تكراراً',
             subtitle:
-                '${data.repeatCarsInRange} سيارة غُسلت أكثر من مرة في الفترة',
+                '${arabicCarsCount(data.repeatCarsInRange)} غُسلت أكثر من مرة في الفترة',
             accent: _accent,
             child: ReportRankBars(
               accent: _accent,

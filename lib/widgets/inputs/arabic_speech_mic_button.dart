@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart' show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:speech_to_text/speech_recognition_error.dart';
 import 'package:speech_to_text/speech_recognition_result.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
@@ -22,6 +23,51 @@ bool get _blockSpeechEngineOnPlatform {
 /// محسَّن للهجة العراقية: تهيئة مبكرة، تفضيل `ar_IQ`/خليجي، سحابة عند الاتصال،
 /// إعادة استماع تلقائية حتى يضغط المستخدم للإيقاف، وصمت أطول في البداية
 /// للأصوات الهادئة ثم تقصير الصمت بعد أول كلام للاستجابة السريعة.
+/// حالة التسجيل بالضغط المطوّل (ط8)، يرسم منها الحقل شريط التسجيل مكان النص.
+class SpeechHoldState {
+  const SpeechHoldState({
+    required this.startedAt,
+    this.level = 0,
+    this.cancelProgress = 0,
+    this.lockProgress = 0,
+    this.locked = false,
+  });
+
+  final DateTime startedAt;
+
+  /// مستوى الصوت 0..1 للموجة.
+  final double level;
+
+  /// 0..1: كم سحب باتجاه الإلغاء (1 = يُلغى عند الرفع).
+  final double cancelProgress;
+
+  /// 0..1: كم سحب للأعلى باتجاه القفل.
+  final double lockProgress;
+
+  /// مقفل: يستمر التسجيل بلا إصبع حتى يضغط «إرسال» أو «إلغاء».
+  final bool locked;
+
+  SpeechHoldState copyWith({double? level, double? cancelProgress, double? lockProgress, bool? locked}) =>
+      SpeechHoldState(
+        startedAt: startedAt,
+        level: level ?? this.level,
+        cancelProgress: cancelProgress ?? this.cancelProgress,
+        lockProgress: lockProgress ?? this.lockProgress,
+        locked: locked ?? this.locked,
+      );
+}
+
+/// أوامر شريط التسجيل المقفل (إرسال أو إلغاء) تصل للزر بهذا المتحكم.
+class SpeechHoldController {
+  _ArabicSpeechMicButtonState? _owner;
+
+  /// ينهي التسجيل المقفل ويرسل النص.
+  void finish() => _owner?._finishHold(send: true);
+
+  /// يلغي التسجيل ويعيد الحقل كما كان.
+  void cancel() => _owner?._finishHold(send: false);
+}
+
 class ArabicSpeechMicButton extends StatefulWidget {
   const ArabicSpeechMicButton({
     super.key,
@@ -29,12 +75,28 @@ class ArabicSpeechMicButton extends StatefulWidget {
     this.enabled = true,
     this.onTextUpdated,
     this.tooltip = 'إملاء بالصوت',
+    this.onListeningChanged,
+    this.size = 40,
+    this.holdState,
+    this.holdController,
+    this.onHoldSend,
   });
+
+  /// ط8 (المساعد فقط): الضغط المطوّل يسجّل مثل واتساب. null = السلوك القديم وحده.
+  final ValueNotifier<SpeechHoldState?>? holdState;
+  final SpeechHoldController? holdController;
+
+  /// رفع الإصبع بعد كلام: يُرسل نص الحقل.
+  final ValueChanged<String>? onHoldSend;
 
   final TextEditingController controller;
   final bool enabled;
   final VoidCallback? onTextUpdated;
   final String tooltip;
+
+  /// يُبلَّغ عند بدء الاستماع وانتهائه (لرمز المساعد).
+  final ValueChanged<bool>? onListeningChanged;
+  final double size;
 
   /// يجهّز محرك الصوت مسبقاً (locale + صلاحية) لتقليل تأخير أول ضغط.
   static Future<void> warmUp() => _ArabicSpeechMicButtonState.warmUpShared();
@@ -51,6 +113,7 @@ class _ArabicSpeechMicButtonState extends State<ArabicSpeechMicButton> {
   static DateTime? _onlineCheckedAt;
 
   var _listening = false;
+  var _reportedActive = false;
   var _starting = false;
   var _wantListening = false;
   var _heardWords = false;
@@ -64,6 +127,79 @@ class _ArabicSpeechMicButtonState extends State<ArabicSpeechMicButton> {
 
   Timer? _restartTimer;
   Timer? _soundDecayTimer;
+
+  // ط8: التسجيل بالضغط المطوّل.
+  bool _holding = false;
+  String _holdPrefix = '';
+  static const _cancelDistance = 110.0;
+  static const _lockDistance = 80.0;
+
+  bool get _holdEnabled => widget.holdState != null;
+
+  void _setHold(SpeechHoldState? v) {
+    final n = widget.holdState;
+    if (n != null) n.value = v;
+  }
+
+  Future<void> _startHold() async {
+    if (!widget.enabled || _starting || _holding) return;
+    if (_blockSpeechEngineOnPlatform) {
+      _showSnack('الإملاء بالصوت غير متاح على هذا الجهاز — اكتب يدوياً');
+      return;
+    }
+    if (_wantListening || _listening || _speech.isListening) await _stopByUser();
+    _holding = true;
+    _holdPrefix = widget.controller.text;
+    unawaited(HapticFeedback.mediumImpact());
+    _setHold(SpeechHoldState(startedAt: DateTime.now()));
+    await _toggleListening();
+  }
+
+  void _moveHold(Offset delta) {
+    final h = widget.holdState?.value;
+    if (!_holding || h == null || h.locked) return;
+    // في العربية الزر في طرف الحقل الأيسر، فالسحب نحو بداية السطر (اليمين) يلغي.
+    final rtl = Directionality.of(context) == TextDirection.rtl;
+    final toward = rtl ? delta.dx : -delta.dx;
+    final cancel = (toward / _cancelDistance).clamp(0.0, 1.0);
+    final lock = (-delta.dy / _lockDistance).clamp(0.0, 1.0);
+    if (lock >= 1) {
+      unawaited(HapticFeedback.selectionClick());
+      _setHold(h.copyWith(locked: true, lockProgress: 1, cancelProgress: 0));
+      return;
+    }
+    _setHold(h.copyWith(cancelProgress: cancel, lockProgress: lock));
+  }
+
+  void _endHold() {
+    final h = widget.holdState?.value;
+    if (!_holding || h == null) return;
+    if (h.locked) return; // يكمل حتى «إرسال» أو «إلغاء» من الشريط.
+    unawaited(_finishHold(send: h.cancelProgress < 1));
+  }
+
+  Future<void> _finishHold({required bool send}) async {
+    if (!_holding) return;
+    _holding = false;
+    final started = widget.holdState?.value?.startedAt;
+    _setHold(null);
+    await _stopByUser();
+    if (!mounted) return;
+    final tooShort = started != null && DateTime.now().difference(started) < const Duration(milliseconds: 450);
+    if (!send || tooShort) {
+      widget.controller.text = _holdPrefix;
+      widget.controller.selection = TextSelection.collapsed(offset: _holdPrefix.length);
+      if (tooShort && send) _showSnack('اضغط مطوّلاً وتكلّم، ثم ارفع إصبعك');
+      return;
+    }
+    final text = widget.controller.text.trim();
+    if (text.isEmpty) {
+      _showSnack('ما سمعت كلام — اضغط مطوّلاً وتكلّم مرة ثانية');
+      return;
+    }
+    unawaited(HapticFeedback.lightImpact());
+    widget.onHoldSend?.call(text);
+  }
 
   static const _maxAutoRestarts = 40;
   static const _initialPause = Duration(seconds: 12);
@@ -133,6 +269,7 @@ class _ArabicSpeechMicButtonState extends State<ArabicSpeechMicButton> {
   @override
   void initState() {
     super.initState();
+    widget.holdController?._owner = this;
     // لا تهيئة تلقائية على macOS — تمنع قتل التطبيق عند فتح بطاقة الزيت.
     if (!_blockSpeechEngineOnPlatform) {
       unawaited(_warmUpIfAlreadyPermitted());
@@ -154,6 +291,8 @@ class _ArabicSpeechMicButtonState extends State<ArabicSpeechMicButton> {
 
   @override
   void dispose() {
+    if (widget.holdController?._owner == this) widget.holdController?._owner = null;
+    if (_holding) widget.holdState?.value = null;
     _restartTimer?.cancel();
     _soundDecayTimer?.cancel();
     final shouldStop = _wantListening || _ownsSession || _listening;
@@ -484,6 +623,8 @@ class _ArabicSpeechMicButtonState extends State<ArabicSpeechMicButton> {
     final normalized = ((level + 2) / 10).clamp(0.0, 1.0);
     if ((normalized - _soundLevel).abs() < 0.05 && normalized > 0) return;
     setState(() => _soundLevel = normalized.toDouble());
+    final h = widget.holdState?.value;
+    if (_holding && h != null) _setHold(h.copyWith(level: normalized.toDouble()));
     _soundDecayTimer?.cancel();
     _soundDecayTimer = Timer(const Duration(milliseconds: 350), () {
       if (!mounted) return;
@@ -546,23 +687,53 @@ class _ArabicSpeechMicButtonState extends State<ArabicSpeechMicButton> {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final active = _wantListening || _listening || _starting || _speech.isListening;
+    if (active != _reportedActive) {
+      _reportedActive = active;
+      final cb = widget.onListeningChanged;
+      if (cb != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) cb(active);
+        });
+      }
+    }
     final hearing = active && _soundLevel > 0.12;
     final pulse = hearing ? (0.55 + 0.45 * math.min(1.0, _soundLevel)) : 1.0;
 
-    return IconButton(
-      tooltip: widget.tooltip,
+    final button = IconButton(
+      // مع الضغط المطوّل لا تلميح: التلميح يأخذ الضغطة المطوّلة فلا يبدأ التسجيل. الاسم يبقى لقارئ الشاشة بالأسفل.
+      tooltip: _holdEnabled ? null : widget.tooltip,
       visualDensity: VisualDensity.compact,
       padding: EdgeInsets.zero,
-      constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
-      onPressed: !widget.enabled ? null : () => unawaited(_toggleListening()),
+      constraints: BoxConstraints(minWidth: widget.size, minHeight: widget.size),
+      onPressed: !widget.enabled ? null : () => unawaited(_holding ? _finishHold(send: true) : _toggleListening()),
       icon: Transform.scale(
         scale: pulse,
         child: Icon(
           active ? Icons.mic_rounded : Icons.mic_none_rounded,
           color: hearing
               ? cs.error
-              : (active ? cs.error.withValues(alpha: 0.85) : cs.primary),
+              : (active
+                    ? cs.error.withValues(alpha: 0.85)
+                    // الكحلي يختفي على الخلفية الداكنة.
+                    : (cs.brightness == Brightness.dark ? cs.onSurface : cs.primary)),
         ),
+      ),
+    );
+    if (!_holdEnabled || !widget.enabled) return button;
+    // ط8: الضغطة القصيرة كما هي (تبدأ وتوقف)، والمطوّلة تسجّل مثل واتساب.
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onLongPressStart: (_) => unawaited(_startHold()),
+      onLongPressMoveUpdate: (d) => _moveHold(d.offsetFromOrigin),
+      onLongPressEnd: (_) => _endHold(),
+      onLongPressCancel: () {
+        if (_holding) unawaited(_finishHold(send: false));
+      },
+      child: Semantics(
+        button: true,
+        label: widget.tooltip,
+        hint: 'اضغط مطوّلاً وتكلّم',
+        child: button,
       ),
     );
   }

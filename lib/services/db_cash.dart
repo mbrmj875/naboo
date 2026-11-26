@@ -640,13 +640,20 @@ extension DbCash on DatabaseHelper {
     int? openShiftId;
     int? openShiftOwnerUserId;
     String? openShiftGlobalId;
-    final ws = await db.query(
-      'work_shifts',
-      columns: ['id', 'global_id', 'shiftStaffUserId'],
-      where: 'closedAt IS NULL AND tenantId = ? AND deleted_at IS NULL',
-      whereArgs: [tid],
-      limit: 1,
+    final actorShiftId = await _resolveActorOpenShiftId(
+      db,
+      tenantId: tid,
+      actorUserId: actorUserId,
     );
+    final ws = actorShiftId == null
+        ? const <Map<String, Object?>>[]
+        : await db.query(
+            'work_shifts',
+            columns: ['id', 'global_id', 'shiftStaffUserId'],
+            where: 'id = ?',
+            whereArgs: [actorShiftId],
+            limit: 1,
+          );
     if (ws.isNotEmpty) {
       openShiftId = ws.first['id'] as int;
       openShiftGlobalId = ws.first['global_id'] as String?;

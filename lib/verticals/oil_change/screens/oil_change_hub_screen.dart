@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import '../../../navigation/shell/reload_when_shown.dart';
 import 'package:provider/provider.dart';
 
 import '../../../guides/guide_anchor.dart';
@@ -57,7 +58,7 @@ class OilChangeHubScreen extends StatefulWidget {
 }
 
 class _OilChangeHubScreenState extends State<OilChangeHubScreen>
-    with RouteAware, WidgetsBindingObserver, SingleTickerProviderStateMixin {
+    with RouteAware, WidgetsBindingObserver, SingleTickerProviderStateMixin, ReloadWhenShown {
   static const _royalGold = SaleBrandColors.gold;
 
   final _searchController = TextEditingController();
@@ -150,24 +151,6 @@ class _OilChangeHubScreenState extends State<OilChangeHubScreen>
         _logTabController.index != 1 &&
         !_logTabController.indexIsChanging) {
       _logTabController.animateTo(1);
-    }
-  }
-
-  void _syncGuideHubSettings(GuideController guide) {
-    final step = guide.currentStep;
-    final needSheet = guide.isRunning &&
-        step != null &&
-        (step.action == 'oil.open_hub_settings' ||
-            step.anchorId.startsWith('oil.settings.'));
-    if (needSheet) {
-      if (!_hubSettingsSheetVisible) {
-        unawaited(_openHubSettings(fromGuide: true));
-      } else {
-        _hubSettingsOpenedByGuide = true;
-      }
-    } else if (_hubSettingsOpenedByGuide && _hubSettingsSheetVisible) {
-      // أغلق فقط الورقة التي فتحتها الجولة — لا تلمس فتح المستخدم اليدوي.
-      _closeHubSettingsIfOpen();
     }
   }
 
@@ -297,6 +280,13 @@ class _OilChangeHubScreenState extends State<OilChangeHubScreen>
       _suppressNextPopRefresh = false;
       return;
     }
+    unawaited(_refreshSilently());
+  }
+
+  /// العودة للسجل من تبويب آخر (مثلاً بعد حفظ بطاقة) — الوحدة كانت مخفية حيّة.
+  @override
+  void onShownAgain() {
+    _invalidateTabCaches();
     unawaited(_refreshSilently());
   }
 
@@ -735,38 +725,20 @@ class _OilChangeHubScreenState extends State<OilChangeHubScreen>
   }
 
   bool _hubSettingsSheetVisible = false;
-  bool _hubSettingsOpenedByGuide = false;
-  BuildContext? _hubSettingsSheetContext;
 
-  Future<void> _openHubSettings({bool fromGuide = false}) async {
-    if (_hubSettingsSheetVisible) {
-      if (fromGuide) _hubSettingsOpenedByGuide = true;
-      return;
-    }
+  /// من شريط انقطاع واتساب فقط — المدخل الدائم في شاشة الإعدادات.
+  Future<void> _openHubSettings() async {
+    if (_hubSettingsSheetVisible) return;
     _hubSettingsSheetVisible = true;
-    _hubSettingsOpenedByGuide = fromGuide;
     try {
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-        builder: (sheetCtx) {
-          _hubSettingsSheetContext = sheetCtx;
-          return const _OilChangeHubSettingsSheet();
-        },
+      await showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (_) => const _OilChangeHubSettingsSheet(),
       );
     } finally {
-      _hubSettingsSheetContext = null;
       _hubSettingsSheetVisible = false;
-      _hubSettingsOpenedByGuide = false;
-    }
-  }
-
-  void _closeHubSettingsIfOpen() {
-    final sheetCtx = _hubSettingsSheetContext;
-    if (sheetCtx == null) return;
-    if (Navigator.of(sheetCtx).canPop()) {
-      Navigator.of(sheetCtx).pop();
     }
   }
 
@@ -1620,26 +1592,20 @@ class _OilChangeHubScreenState extends State<OilChangeHubScreen>
         Expanded(child: _buildSearchField()),
         const SizedBox(width: 12),
         // نفس زر «إرسال واتساب» الموجود على الهاتف — سجل الإرسال والرسائل المعلّقة.
-        FilledButton.icon(
-          onPressed: () => unawaited(_openWhatsAppMessages()),
-          style: FilledButton.styleFrom(
-            backgroundColor: OilChangeLogStitchMetrics.secondaryContainer,
-            foregroundColor: OilChangeLogStitchMetrics.onSecondaryContainer,
-            padding: const EdgeInsetsDirectional.symmetric(
-              horizontal: 18,
-              vertical: 14,
+        GuideAnchor(
+          id: OilGuideAnchors.hubWhatsappMessages,
+          child: FilledButton.icon(
+            onPressed: () => unawaited(_openWhatsAppMessages()),
+            style: FilledButton.styleFrom(
+              backgroundColor: OilChangeLogStitchMetrics.secondaryContainer,
+              foregroundColor: OilChangeLogStitchMetrics.onSecondaryContainer,
+              padding: const EdgeInsetsDirectional.symmetric(horizontal: 18, vertical: 14),
+              shape: pill,
             ),
-            shape: pill,
-          ),
-          icon: _whatsappPending > 0
-              ? Badge.count(
-                  count: _whatsappPending,
-                  child: const Icon(Icons.chat_rounded),
-                )
-              : const Icon(Icons.chat_rounded),
-          label: const Text(
-            'إرسال واتساب',
-            style: TextStyle(fontWeight: FontWeight.w800),
+            icon: _whatsappPending > 0
+                ? Badge.count(count: _whatsappPending, child: const Icon(Icons.chat_rounded))
+                : const Icon(Icons.chat_rounded),
+            label: const Text('إرسال واتساب', style: TextStyle(fontWeight: FontWeight.w800)),
           ),
         ),
         const SizedBox(width: 10),
@@ -1705,14 +1671,6 @@ class _OilChangeHubScreenState extends State<OilChangeHubScreen>
           onPressed: _loading ? null : () => unawaited(_reload()),
           icon: const Icon(Icons.refresh_rounded),
         ),
-        GuideAnchor(
-          id: OilGuideAnchors.hubSettings,
-          child: IconButton(
-            tooltip: 'إعدادات غيار الزيت',
-            onPressed: () => unawaited(_openHubSettings()),
-            icon: const Icon(Icons.tune_rounded),
-          ),
-        ),
       ],
     );
 
@@ -1723,7 +1681,6 @@ class _OilChangeHubScreenState extends State<OilChangeHubScreen>
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (!mounted) return;
             _syncGuidePendingTab(guide);
-            _syncGuideHubSettings(guide);
           });
           return Scaffold(
         backgroundColor: OilChangeLogStitchMetrics.background,
@@ -1904,6 +1861,26 @@ class _OilChangeLogSearchSliverDelegate extends SliverPersistentHeaderDelegate {
 }
 
 /// لوحة إعدادات السجل — مفاتيح تشغيل بدل قائمة ⋮.
+/// لوحة «إعدادات غيار الزيت» نفسها — تُفتح من شاشة الإعدادات الموحّدة.
+/// [onSheetContext] يعطي سياق اللوحة لمن يريد إغلاقها (جولة الدليل).
+Future<void> showOilChangeHubSettingsSheet(
+  BuildContext context, {
+  void Function(BuildContext sheetContext)? onSheetContext,
+}) {
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    builder: (sheetCtx) {
+      onSheetContext?.call(sheetCtx);
+      return Theme(
+        data: OilChangeFormTheme.wrap(sheetCtx, Theme.of(sheetCtx)),
+        child: const _OilChangeHubSettingsSheet(),
+      );
+    },
+  );
+}
+
 class _OilChangeHubSettingsSheet extends StatefulWidget {
   const _OilChangeHubSettingsSheet();
 

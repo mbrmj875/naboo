@@ -60,16 +60,10 @@ class _GuideChatSheetState extends State<GuideChatSheet> {
     if (saved.isNotEmpty) {
       _messages = [
         for (final t in saved)
-          _ChatLine(
-            fromUser: t.fromUser,
-            text: t.text,
-            rateable: !t.fromUser,
-          ),
+          _ChatLine(fromUser: t.fromUser, text: t.text, rateable: !t.fromUser),
       ];
     } else {
-      _messages = [
-        _ChatLine(fromUser: false, text: _scope.welcomeMessage()),
-      ];
+      _messages = [_ChatLine(fromUser: false, text: _scope.welcomeMessage())];
     }
   }
 
@@ -169,7 +163,8 @@ class _GuideChatSheetState extends State<GuideChatSheet> {
       }
 
       if (!mounted) return;
-      final offerTour = result.tourId != GuideTourIds.none &&
+      final offerTour =
+          result.tourId != GuideTourIds.none &&
           _scope.canStartTour(result.tourId);
       final line = _ChatLine(
         fromUser: false,
@@ -188,7 +183,8 @@ class _GuideChatSheetState extends State<GuideChatSheet> {
       _scrollToEnd();
 
       // طلب صريح لفتح الجولة / متابعة بعد عرضها → ابدأ فوراً بدون تكرار النص.
-      final autoStart = offerTour &&
+      final autoStart =
+          offerTour &&
           (result.source == 'followup' ||
               GuideChatFollowUp.looksLikeTourAffirmation(q));
       if (autoStart) {
@@ -412,7 +408,10 @@ class _GuideChatSheetState extends State<GuideChatSheet> {
     final media = MediaQuery.of(context);
     final keyboard = media.viewInsets.bottom;
     // المساحة فوق الكيبورد (الـ Padding الخارجي يرفع الورقة أيضاً).
-    final usable = (media.size.height - keyboard).clamp(240.0, media.size.height);
+    final usable = (media.size.height - keyboard).clamp(
+      240.0,
+      media.size.height,
+    );
     // مع الكيبورد نوسّع النسبة حتى يبقى حقل الإدخال ظاهراً فوقه.
     final fraction = keyboard > 0 ? 0.92 : 0.72;
     final height = (usable * fraction).clamp(240.0, usable);
@@ -478,9 +477,9 @@ class _GuideChatSheetState extends State<GuideChatSheet> {
                           onPressed: _loading
                               ? null
                               : () => _send(
-                                    chip.question,
-                                    forcedTourId: chip.tourId,
-                                  ),
+                                  chip.question,
+                                  forcedTourId: chip.tourId,
+                                ),
                         ),
                       ),
                     ],
@@ -508,7 +507,8 @@ class _GuideChatSheetState extends State<GuideChatSheet> {
                     );
                   }
                   final m = _messages[i];
-                  final offerTour = !m.fromUser &&
+                  final offerTour =
+                      !m.fromUser &&
                       m.tourId != null &&
                       m.tourId != GuideTourIds.none &&
                       _scope.canStartTour(m.tourId!);
@@ -555,16 +555,21 @@ class _GuideChatSheetState extends State<GuideChatSheet> {
                                     ? null
                                     : () => _startTourFromMessage(m),
                                 child: Padding(
-                                  padding: const EdgeInsetsDirectional
-                                      .fromSTEB(12, 10, 12, 10),
+                                  padding: const EdgeInsetsDirectional.fromSTEB(
+                                    12,
+                                    10,
+                                    12,
+                                    10,
+                                  ),
                                   child: Row(
                                     children: [
                                       Container(
                                         width: 36,
                                         height: 36,
                                         decoration: BoxDecoration(
-                                          color: cs.onPrimary
-                                              .withValues(alpha: 0.16),
+                                          color: cs.onPrimary.withValues(
+                                            alpha: 0.16,
+                                          ),
                                           shape: BoxShape.circle,
                                         ),
                                         child: Icon(
@@ -593,8 +598,9 @@ class _GuideChatSheetState extends State<GuideChatSheet> {
                                               style: TextStyle(
                                                 fontSize: 11.5,
                                                 height: 1.25,
-                                                color: cs.onPrimary
-                                                    .withValues(alpha: 0.88),
+                                                color: cs.onPrimary.withValues(
+                                                  alpha: 0.88,
+                                                ),
                                               ),
                                               textAlign: TextAlign.start,
                                             ),
@@ -604,8 +610,9 @@ class _GuideChatSheetState extends State<GuideChatSheet> {
                                       Icon(
                                         Icons.arrow_back_ios_new_rounded,
                                         size: 16,
-                                        color: cs.onPrimary
-                                            .withValues(alpha: 0.9),
+                                        color: cs.onPrimary.withValues(
+                                          alpha: 0.9,
+                                        ),
                                       ),
                                     ],
                                   ),
@@ -686,9 +693,7 @@ class _GuideChatSheetState extends State<GuideChatSheet> {
                   ),
                   const SizedBox(width: 8),
                   IconButton.filled(
-                    onPressed: _loading
-                        ? null
-                        : () => _send(_controller.text),
+                    onPressed: _loading ? null : () => _send(_controller.text),
                     icon: const Icon(Icons.send_rounded),
                     tooltip: 'إرسال',
                   ),

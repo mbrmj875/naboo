@@ -15,6 +15,7 @@ import '../verticals/oil_change/services/oil_change_direct_sale_service.dart';
 import '../verticals/oil_change/utils/oil_change_filter_format.dart';
 import 'receipt_model.dart';
 import '../verticals/oil_change/utils/oil_order_has_oil.dart';
+import '../verticals/oil_change/utils/oil_odometer_unit.dart';
 
 /// يبني [ReceiptDocument] من بيانات المنظومة لكل نوع عمل.
 abstract final class ReceiptBuilders {
@@ -23,11 +24,51 @@ abstract final class ReceiptBuilders {
     final helper = DatabaseHelper();
     final invoice = await helper.getInvoiceById(invoiceId);
     if (invoice == null) return null;
+    final order = await linkedOrder(invoiceId);
     return fromInvoice(
       invoice,
-      order: await linkedOrder(invoiceId),
+      order: order,
       accountBalanceFils: await accountBalanceFilsFor(invoice),
+      cardDebtPayment: await cardDebtPaymentFor(order),
     );
+  }
+
+  /// ما سُدِّد من الدين السابق في بطاقة الغيار نفسها (الزائد عن الزيارة):
+  /// دفعة الدين التي سجّلها حفظ البطاقة بملاحظة «من بطاقة غيار #رقمها».
+  static Future<({int paidFils, int beforeFils})?> cardDebtPaymentFor(
+    Map<String, dynamic>? order,
+  ) async {
+    final id = (order?['id'] as num?)?.toInt() ?? 0;
+    final cid = (order?['customerId'] as num?)?.toInt() ?? 0;
+    if (id <= 0 || cid <= 0) return null;
+    try {
+      final helper = DatabaseHelper();
+      final db = await helper.database;
+      final rows = await db.query(
+        'customer_debt_payments',
+        columns: ['amount', 'debtBefore'],
+        where: 'tenantId = ? AND customerId = ? AND note = ?',
+        whereArgs: [
+          await helper.resolveLocalBusinessTenantId(),
+          cid,
+          'من بطاقة غيار #$id',
+        ],
+        orderBy: 'id DESC',
+        limit: 1,
+      );
+      if (rows.isEmpty) return null;
+      final paid = IqdMoney.toFils((rows.first['amount'] as num?)?.toDouble() ?? 0);
+      if (paid <= 0) return null;
+      return (
+        paidFils: paid,
+        beforeFils: IqdMoney.toFils(
+          (rows.first['debtBefore'] as num?)?.toDouble() ?? 0,
+        ),
+      );
+    } catch (e, st) {
+      AppLogger.error('ReceiptBuilders', 'تعذّر جلب تسديد البطاقة', e, st);
+      return null;
+    }
   }
 
   /// دين العميل المسجّل المفتوح الآن (كل فواتيره الآجلة)، أو `null`.
@@ -88,8 +129,8 @@ abstract final class ReceiptBuilders {
       final chunk = ids.sublist(i, math.min(i + 400, ids.length));
       final marks = List.filled(chunk.length, '?').join(',');
       final rows = await db.rawQuery(
-        'SELECT invoiceId, orderKind, oilType, odometerCurrent '
-        'FROM service_orders '
+        // البطاقة كاملة: نوعها، ومحتواها لاسم العمل («تبديل فلتر»…).
+        'SELECT * FROM service_orders '
         'WHERE tenantId = ? AND deletedAt IS NULL AND invoiceId IN ($marks) '
         'ORDER BY id DESC',
         [tenantId, ...chunk],
@@ -102,14 +143,28 @@ abstract final class ReceiptBuilders {
     return out;
   }
 
+  /// اسم العمل على بطاقة الفاتورة في القوائم: بطاقة غيار بلا زيت تُسمّى
+  /// بمحتواها («تبديل فلتر»، «هيدروليك»…) كما في عنوان إيصالها.
+  static String workLabelOf(ReceiptKind kind, Map<String, dynamic>? order) {
+    if (kind == ReceiptKind.oilChange && order != null) {
+      return oilCardWorkLabel(order);
+    }
+    return kind.shortLabel;
+  }
+
   /// يبني الإيصال من فاتورة محمّلة، ومعها بطاقة الخدمة المرتبطة إن وُجدت.
   ///
   /// [accountBalanceFils]: دين العميل المفتوح الآن؛ إن كان عليه دين غير هذه
   /// الفاتورة يُطبع «دين سابق» و«رصيد الحساب الآن».
+  ///
+  /// [cardDebtPayment]: ما سدّده العميل من دينه السابق في هذه البطاقة؛ يُطبع
+  /// «دين سابق» و«تسديد من الدين السابق» و«المستلم» كله و«رصيد الحساب الآن»
+  /// حتى لو صار الرصيد صفراً.
   static ReceiptDocument fromInvoice(
     Invoice invoice, {
     Map<String, dynamic>? order,
     int? accountBalanceFils,
+    ({int paidFils, int beforeFils})? cardDebtPayment,
   }) {
     final kind = kindOf(invoice, order: order);
     if (kind == ReceiptKind.saleReturn) return saleReturn(invoice);
@@ -154,7 +209,7 @@ abstract final class ReceiptBuilders {
         fields.add(
           ReceiptField(
             'العداد',
-            '${_groupDigits(odo)} كم',
+            '${_groupDigits(odo)} ${OilOdometerUnit.labelOf(o)}',
             section: ReceiptSection.odometer,
           ),
         );
@@ -206,7 +261,7 @@ abstract final class ReceiptBuilders {
         highlights.add(
           ReceiptHighlight(
             'الغيار القادم عند',
-            '${_groupDigits(next)} كم',
+            '${_groupDigits(next)} ${OilOdometerUnit.labelOf(o)}',
             section: ReceiptSection.nextService,
           ),
         );
@@ -267,7 +322,37 @@ abstract final class ReceiptBuilders {
       if (isCredit) ReceiptTotal('المدفوع', paid),
       if (isCredit && total - paid > 0) ReceiptTotal('المتبقي', total - paid),
     ];
-    if (!isAnonymous && accountBalanceFils != null) {
+    final settled = isAnonymous ? null : cardDebtPayment;
+    if (settled != null) {
+      const sec = ReceiptSection.accountBalance;
+      final visitPaid = isCredit ? paid : total;
+      final visitRemaining = isCredit && total - paid > 0 ? total - paid : 0;
+      totals
+        ..add(ReceiptTotal('دين سابق', settled.beforeFils, section: sec))
+        ..add(
+          ReceiptTotal(
+            'تسديد من الدين السابق',
+            settled.paidFils,
+            section: sec,
+          ),
+        )
+        ..add(
+          ReceiptTotal(
+            'المستلم',
+            visitPaid + settled.paidFils,
+            section: sec,
+          ),
+        )
+        ..add(
+          ReceiptTotal(
+            'رصيد الحساب الآن',
+            // من أرقام الإيصال نفسه لا من الرصيد الحي: إعادة طباعة إيصال قديم
+            // بعد ديون لاحقة تُبقي الرصيد كما كان عند البيع.
+            settled.beforeFils - settled.paidFils + visitRemaining,
+            section: sec,
+          ),
+        );
+    } else if (!isAnonymous && accountBalanceFils != null) {
       final thisRemaining = isCredit && total - paid > 0 ? total - paid : 0;
       final prior = accountBalanceFils - thisRemaining;
       if (prior > 500) {

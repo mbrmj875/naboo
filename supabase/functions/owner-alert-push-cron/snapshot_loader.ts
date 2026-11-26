@@ -18,8 +18,9 @@ export async function loadSnapshotTables(
   if (payload.chunked === true) {
     const syncId = String(payload.sync_id ?? '');
     if (!syncId) return null;
-    payload = await loadChunkedPayload(admin, userId, syncId);
-    if (!payload) return null;
+    const full = await loadChunkedPayload(admin, userId, syncId);
+    if (!full) return null;
+    payload = full;
   }
 
   const tables = payload.tables;

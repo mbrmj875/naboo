@@ -134,6 +134,9 @@ class _InvoicesScreenState extends State<InvoicesScreen>
 
   /// نوع العمل لكل فاتورة (غيار زيت، غسيل، بيع مباشر، استرجاع، بيع).
   Map<int, ReceiptKind> _kindById = {};
+
+  /// اسم العمل المكتوب على البطاقة («غيار زيت»، «تبديل فلتر»…).
+  Map<int, String> _labelById = {};
   String _kindIdsSig = '';
 
   /// الفاتورة المحدّدة لعرض تفاصيلها في الـ Detail Panel
@@ -233,6 +236,7 @@ class _InvoicesScreenState extends State<InvoicesScreen>
       AppLogger.error('Invoices', 'تعذّر جلب بطاقة الخدمة للفاتورة', e, st);
     }
     final balanceFils = await ReceiptBuilders.accountBalanceFilsFor(full);
+    final settled = await ReceiptBuilders.cardDebtPaymentFor(order);
     if (!mounted) return;
     if (ReceiptBuilders.kindOf(full, order: order).isWorkSpecific) {
       await Navigator.of(context).push<void>(
@@ -242,6 +246,7 @@ class _InvoicesScreenState extends State<InvoicesScreen>
               full,
               order: order,
               accountBalanceFils: balanceFils,
+              cardDebtPayment: settled,
             ),
             onOpenDetails: (c) => showInvoiceDetailSheet(c, _db, id),
           ),
@@ -307,6 +312,10 @@ class _InvoicesScreenState extends State<InvoicesScreen>
         for (final inv in invoices)
           if (inv.id != null)
             inv.id!: ReceiptBuilders.kindOf(inv, order: orders[inv.id]),
+      };
+      _labelById = {
+        for (final e in _kindById.entries)
+          e.key: ReceiptBuilders.workLabelOf(e.value, orders[e.key]),
       };
     });
   }
@@ -400,6 +409,7 @@ class _InvoicesScreenState extends State<InvoicesScreen>
                 groupByShift: _groupByShift,
                 shiftById: _shiftById,
                 kindById: _kindById,
+                labelById: _labelById,
                 compareShiftKeys: _compareShiftKeys,
                 dateTimeFmt: _dateTimeFmt,
                 onInvoiceTap: _openInvoiceDetails,
@@ -1030,6 +1040,9 @@ class _InvoiceList extends StatelessWidget {
 
   /// نوع العمل لكل فاتورة (يُكتب على البطاقة).
   final Map<int, ReceiptKind> kindById;
+
+  /// اسم العمل لكل فاتورة (بطاقة بلا زيت تُسمّى بمحتواها).
+  final Map<int, String> labelById;
   final int Function(int? a, int? b) compareShiftKeys;
   final DateFormat dateTimeFmt;
   final Future<void> Function(Invoice) onInvoiceTap;
@@ -1057,6 +1070,7 @@ class _InvoiceList extends StatelessWidget {
     required this.groupByShift,
     required this.shiftById,
     this.kindById = const {},
+    this.labelById = const {},
     required this.compareShiftKeys,
     required this.dateTimeFmt,
     required this.onInvoiceTap,
@@ -1111,6 +1125,7 @@ class _InvoiceList extends StatelessWidget {
             isDark: isDark,
             shiftStaffLabel: _labelFor(inv.workShiftId),
             workKind: inv.id == null ? null : kindById[inv.id],
+            workLabel: inv.id == null ? null : labelById[inv.id],
             isSelected: inv.id != null && inv.id == selectedInvoiceId,
             serviceProductIds: serviceProductIds,
             hideReturnAction: hideReturnAction,
@@ -1163,6 +1178,7 @@ class _InvoiceList extends StatelessWidget {
           isDark: isDark,
           shiftStaffLabel: _labelFor(inv.workShiftId),
           workKind: inv.id == null ? null : kindById[inv.id],
+          workLabel: inv.id == null ? null : labelById[inv.id],
           isSelected: inv.id != null && inv.id == selectedInvoiceId,
           serviceProductIds: serviceProductIds,
           hideReturnAction: hideReturnAction,
@@ -1334,11 +1350,15 @@ class _InvoiceCard extends StatelessWidget {
   /// نوع العمل (غيار زيت، غسيل…)؛ `null` أو بيع عام = لا علامة.
   final ReceiptKind? workKind;
 
+  /// اسم العمل المكتوب؛ `null` = الاسم القصير للنوع.
+  final String? workLabel;
+
   const _InvoiceCard({
     required this.invoice,
     required this.isDark,
     this.shiftStaffLabel,
     this.workKind,
+    this.workLabel,
     required this.onTap,
     required this.serviceProductIds,
     this.hideReturnAction = false,
@@ -1461,7 +1481,11 @@ class _InvoiceCard extends StatelessWidget {
                       ),
                       if (kind != null) ...[
                         const SizedBox(height: 5),
-                        _WorkKindChip(kind: kind, isDark: isDark),
+                        _WorkKindChip(
+                          kind: kind,
+                          label: workLabel,
+                          isDark: isDark,
+                        ),
                       ],
                       const SizedBox(height: 5),
                       Row(
@@ -1605,9 +1629,14 @@ IconData invoiceWorkKindIcon(ReceiptKind kind) => switch (kind) {
 
 /// علامة صغيرة باسم نوع العمل: «غيار زيت»، «غسيل سيارة»…
 class _WorkKindChip extends StatelessWidget {
-  const _WorkKindChip({required this.kind, required this.isDark});
+  const _WorkKindChip({
+    required this.kind,
+    required this.isDark,
+    this.label,
+  });
 
   final ReceiptKind kind;
+  final String? label;
   final bool isDark;
 
   @override
@@ -1632,7 +1661,7 @@ class _WorkKindChip extends StatelessWidget {
             const SizedBox(width: 4),
             Flexible(
               child: Text(
-                kind.shortLabel,
+                label ?? kind.shortLabel,
                 style: TextStyle(
                   color: fg,
                   fontSize: 11.5,

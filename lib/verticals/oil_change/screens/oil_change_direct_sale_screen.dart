@@ -25,6 +25,7 @@ import '../widgets/oil_change_customer_name_field.dart';
 import '../widgets/oil_change_form_theme.dart';
 import '../widgets/oil_change_log_stitch.dart';
 import '../widgets/product_picker_dialog.dart';
+import '../../../guides/guide_anchor.dart';
 
 /// بيع مباشر لمنتجات المخزون — بدون بطاقة غيار.
 class OilChangeDirectSaleScreen extends StatefulWidget {
@@ -400,15 +401,21 @@ class _OilChangeDirectSaleScreenState extends State<OilChangeDirectSaleScreen> {
           context: context,
           title: 'بيع مباشر',
           actions: [
-            IconButton(
-              tooltip: 'مسح باركود',
-              onPressed: _saving ? null : () => unawaited(_scanBarcode()),
-              icon: const Icon(Icons.qr_code_scanner_rounded),
+            GuideAnchor(
+              id: OilGuideAnchors.directSaleScan,
+              child: IconButton(
+                tooltip: 'مسح باركود',
+                onPressed: _saving ? null : () => unawaited(_scanBarcode()),
+                icon: const Icon(Icons.qr_code_scanner_rounded),
+              ),
             ),
-            IconButton(
-              tooltip: 'اختيار من المخزون',
-              onPressed: _saving ? null : () => unawaited(_openWidePicker()),
-              icon: const Icon(Icons.grid_view_rounded),
+            GuideAnchor(
+              id: OilGuideAnchors.directSalePick,
+              child: IconButton(
+                tooltip: 'اختيار من المخزون',
+                onPressed: _saving ? null : () => unawaited(_openWidePicker()),
+                icon: const Icon(Icons.grid_view_rounded),
+              ),
             ),
           ],
         ),

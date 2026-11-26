@@ -30,6 +30,7 @@ class EmployeeAccessPolicy {
       case AppContentRoutes.customers:
         return PermissionKeys.customersView;
       case AppContentRoutes.loyaltySettings:
+      case AppContentRoutes.loyaltyLedger:
         return PermissionKeys.loyaltyAccess;
       case AppContentRoutes.installments:
         return PermissionKeys.installmentsPlans;
@@ -46,6 +47,24 @@ class EmployeeAccessPolicy {
         return PermissionKeys.usersView;
       case AppContentRoutes.staffShiftsWeek:
         return PermissionKeys.shiftsAccess;
+      // ── بنود شاشة الإعدادات: ما يغيّر إعدادات المحل كله لا يراه الموظف
+      // إلا بصلاحيته. المالك والمدير يملكان كل المفاتيح.
+      case AppContentRoutes.debtSettings:
+        return PermissionKeys.debtsSettings;
+      case AppContentRoutes.installmentSettings:
+        return PermissionKeys.installmentsSettings;
+      case AppContentRoutes.inventorySettings:
+        return PermissionKeys.inventoryPoliciesManage;
+      case AppContentRoutes.settingsPrintingInline:
+        return PermissionKeys.printingAccess;
+      case AppContentRoutes.settingsRestore:
+        return PermissionKeys.inventoryProductsManage;
+      case AppContentRoutes.salePosSettings:
+      case AppContentRoutes.settingsBusinessFeatures:
+      case AppContentRoutes.settingsSubscriptionAccount:
+      case AppContentRoutes.settingsDashboardLayout:
+      case AppContentRoutes.settingsOilHub:
+        return PermissionKeys.settingsApp;
       default:
         return null;
     }

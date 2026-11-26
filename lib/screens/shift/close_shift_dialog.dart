@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../navigation/app_root_navigator_key.dart';
+import '../../notifications/notification_event_outbox.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/notification_provider.dart';
 import '../../providers/shift_provider.dart';
@@ -181,6 +182,24 @@ class _CloseShiftDialogState extends State<_CloseShiftDialog> {
         ).showSnackBar(SnackBar(content: Text('تعذر الإغلاق: $e')));
       }
       return;
+    }
+
+    // إشعار المالك على هاتفه (خطة الإشعارات، المرحلة 2).
+    if (mounted) {
+      final auth = context.read<AuthProvider>();
+      unawaited(NotificationEventOutbox.instance.record(
+        type: 'shift_close',
+        ref: '${widget.shiftId}',
+        staffName: _shiftStaffName.isNotEmpty ? _shiftStaffName : auth.displayName,
+        actorRole: auth.roleKey,
+        staffGlobalId: auth.userGlobalId,
+        payload: {
+          'shift_id': widget.shiftId,
+          'declared_fils': NotificationEventOutbox.fils(inBox),
+          'system_fils': NotificationEventOutbox.fils(systemNow),
+          'withdrawn_fils': NotificationEventOutbox.fils(withdraw),
+        },
+      ));
     }
 
     final staffLabel = _shiftStaffName.isEmpty ? '—' : _shiftStaffName;

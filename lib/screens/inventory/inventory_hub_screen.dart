@@ -21,7 +21,6 @@ import 'price_lists_screen.dart';
 import 'stocktaking_screen.dart';
 import 'purchase_orders_screen.dart';
 import 'stock_analytics_screen.dart';
-import 'inventory_settings_screen.dart';
 
 class InventoryHubScreen extends StatefulWidget {
   const InventoryHubScreen({super.key});
@@ -114,14 +113,6 @@ class _InventoryHubScreenState extends State<InventoryHubScreen> {
       icon: Icons.bar_chart_outlined,
       color: Colors.blue,
       builder: (_) => const StockAnalyticsScreen(),
-    ),
-    _InvModule(
-      id: 'settings',
-      title: 'إعدادات المخزون',
-      subtitle: 'نوع النشاط، خصائص المنتج، تفعيل الميزات',
-      icon: Icons.tune_outlined,
-      color: Colors.grey.shade700,
-      builder: (_) => const InventorySettingsScreen(),
     ),
   ];
 

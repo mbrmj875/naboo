@@ -154,13 +154,15 @@ class CloudDegradedBanner extends StatelessWidget {
       child: SafeArea(
         bottom: false,
         child: Padding(
-          padding: EdgeInsetsDirectional.fromSTEB(16, 8, 16, 8),
+          padding: EdgeInsetsDirectional.fromSTEB(12, 4, 12, 4),
           child: Text(
-            'السحابة غير مستقرة — نعيد المحاولة. البيع المحلي مستمر.',
+            'السحابة غير مستقرة — البيع المحلي مستمر',
             textAlign: TextAlign.center,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
             style: TextStyle(
               color: Colors.white,
-              fontSize: 13,
+              fontSize: 12,
               fontWeight: FontWeight.w600,
             ),
           ),

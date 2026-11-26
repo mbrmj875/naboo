@@ -6,6 +6,7 @@ import '../../utils/screen_layout.dart';
 import 'stock_voucher_screen.dart';
 
 import '../../theme/design_tokens.dart';
+import '../../guides/guide_anchor.dart';
 
 const _green = Color(0xFF10B981);
 const _red = Color(0xFFEF4444);
@@ -96,18 +97,18 @@ class _InventoryManagementScreenState extends State<InventoryManagementScreen> {
         foregroundColor: cs.onSurface,
         elevation: 0,
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        backgroundColor: AppColors.accentGold,
-        onPressed: () => Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => const StockVoucherScreen()),
+      floatingActionButton: GuideAnchor(
+        id: OilGuideAnchors.inventoryMovementAdd,
+        child: FloatingActionButton.extended(
+          backgroundColor: AppColors.accentGold,
+          onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const StockVoucherScreen())),
+          icon: Icon(Icons.add_rounded, color: _isDark ? AppColors.primaryDark : Colors.white),
+          label: Text(
+            'سند جديد',
+            style: TextStyle(color: _isDark ? AppColors.primaryDark : Colors.white, fontWeight: FontWeight.bold),
+          ),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         ),
-        icon: Icon(Icons.add_rounded, color: _isDark ? AppColors.primaryDark : Colors.white),
-        label: Text(
-          'سند جديد',
-          style: TextStyle(color: _isDark ? AppColors.primaryDark : Colors.white, fontWeight: FontWeight.bold),
-        ),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       ),
       body: Column(
         children: [

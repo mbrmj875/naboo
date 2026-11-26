@@ -9,8 +9,12 @@ const PRIMARY: { href: string; label: string }[] = [
   { href: "/inbox", label: "الصندوق" },
   { href: "/channels", label: "القنوات" },
   { href: "/licenses", label: "التراخيص" },
+  { href: "/notifications", label: "الإشعارات" },
   { href: "/reps", label: "المندوبون" },
   { href: "/market/stores", label: "السوق" },
+  { href: "/assistant-videos", label: "فيديوهات المساعد" },
+  { href: "/assistant-knowledge", label: "معرفة المساعد" },
+  { href: "/assistant-learning", label: "تعلّم المساعد" },
   { href: "/settings", label: "إعدادات المنصة" },
 ];
 

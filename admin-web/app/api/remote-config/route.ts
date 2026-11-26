@@ -49,10 +49,23 @@ export async function POST(req: Request) {
       );
     }
     const supabase = getSupabaseAdmin();
+    // دمج مع الموجود: حقول لا تديرها هذه الصفحة (مثل assistant) تبقى كما هي.
+    const { data: existing, error: readErr } = await supabase
+      .from("app_remote_config")
+      .select("config")
+      .eq("id", 1)
+      .maybeSingle();
+    if (readErr) {
+      return NextResponse.json({ error: readErr.message }, { status: 400 });
+    }
+    const prev =
+      existing?.config && typeof existing.config === "object"
+        ? (existing.config as Record<string, unknown>)
+        : {};
     const { error } = await supabase.from("app_remote_config").upsert(
       {
         id: 1,
-        config,
+        config: { ...prev, ...config },
         updated_at: new Date().toISOString(),
       },
       { onConflict: "id" },

@@ -314,8 +314,9 @@ class GuideNarrator {
     return parts;
   }
 
-  Future<bool> speak(String text) async {
-    if (!_enabled) return false;
+  /// [force]: ينطق حتى لو كان صوت الجولات مطفأً (رد المساعد له زر كتم خاص).
+  Future<bool> speak(String text, {bool force = false}) async {
+    if (!_enabled && !force) return false;
     final t = text.trim();
     if (t.isEmpty) return false;
     if (_pluginMissing) {

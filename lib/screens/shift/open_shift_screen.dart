@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
+import '../../notifications/notification_event_outbox.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/notification_provider.dart';
 import '../../providers/shift_provider.dart';
@@ -258,6 +259,19 @@ class _OpenShiftScreenState extends State<OpenShiftScreen> {
 
       final detail = detailBuf.toString().trim();
       openedShiftId = shiftId;
+
+      // إشعار المالك على هاتفه (خطة الإشعارات، المرحلة 2).
+      unawaited(NotificationEventOutbox.instance.record(
+        type: 'shift_open',
+        ref: '$shiftId',
+        staffName: name,
+        actorRole: auth.roleKey,
+        staffGlobalId: auth.userGlobalId,
+        payload: {
+          'shift_id': shiftId,
+          'declared_fils': NotificationEventOutbox.fils(physical + addPart),
+        },
+      ));
       openedDetail = detail;
 
       // [NotificationProvider.refresh] ثقيل (عدة استعلامات للإشعارات) — لا ننتظره على

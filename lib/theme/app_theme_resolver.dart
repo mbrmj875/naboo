@@ -324,10 +324,18 @@ abstract final class AppThemeResolver {
           shape: RoundedRectangleBorder(borderRadius: ac.md),
         ).merge(themedBase.filledButtonTheme.style),
       ),
+      // الكحلي يختفي على الخلفية الداكنة: الأزرار النصية والمحدّدة بالذهبي هناك.
+      textButtonTheme: TextButtonThemeData(
+        style: TextButton.styleFrom(
+          foregroundColor: brightness == Brightness.dark ? palette.gold : palette.navy,
+        ).merge(themedBase.textButtonTheme.style),
+      ),
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
-          foregroundColor: palette.navy,
-          side: BorderSide(color: palette.navy.withValues(alpha: 0.45)),
+          foregroundColor: brightness == Brightness.dark ? palette.gold : palette.navy,
+          side: BorderSide(
+            color: (brightness == Brightness.dark ? palette.gold : palette.navy).withValues(alpha: 0.45),
+          ),
           shape: RoundedRectangleBorder(borderRadius: ac.md),
         ).merge(themedBase.outlinedButtonTheme.style),
       ),

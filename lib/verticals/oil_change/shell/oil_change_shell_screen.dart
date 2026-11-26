@@ -653,6 +653,10 @@ class _OilChangeShellScreenState extends State<OilChangeShellScreen>
       GuideHostBridge(
         currentRouteId: () => _shell.currentRouteId,
         ensureRoute: _ensureGuideRoute,
+        pushRoute: (route) async {
+          if (!mounted) return;
+          await (_shell.visibleNavigator ?? Navigator.of(context)).push<void>(route);
+        },
         runAction: (action) async {
           if (!mounted || !_isScreenGuideAction(action)) return;
           // تلتقطها الشاشات عبر currentStep.action
@@ -833,6 +837,7 @@ class _OilChangeShellScreenState extends State<OilChangeShellScreen>
         AppAssistantAppBarButton(
           currentRouteId: AppContentRoutes.home,
           buttonStyle: shellBarActionStyle(context),
+          canOverride: widget.canOverride,
         ),
         ShellNotificationsButton(
           contentNavigator: () => _shell.visibleNavigator,

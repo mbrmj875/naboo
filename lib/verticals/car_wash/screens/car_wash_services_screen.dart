@@ -7,6 +7,7 @@ import '../../../utils/iqd_money.dart';
 import '../../../utils/iraqi_currency_format.dart';
 import '../../../utils/screen_layout.dart';
 import '../../oil_change/widgets/oil_change_form_theme.dart';
+import '../../../guides/guide_anchor.dart';
 
 /// أنواع الغسيل وأسعارها — يُختار منها عند إنشاء بطاقة غسيل.
 class CarWashServicesScreen extends StatefulWidget {
@@ -132,10 +133,13 @@ class _CarWashServicesScreenState extends State<CarWashServicesScreen> {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _addOrEdit(),
-        icon: const Icon(Icons.add_rounded),
-        label: const Text('نوع غسيل'),
+      floatingActionButton: GuideAnchor(
+        id: OilGuideAnchors.carWashServicesAdd,
+        child: FloatingActionButton.extended(
+          onPressed: () => _addOrEdit(),
+          icon: const Icon(Icons.add_rounded),
+          label: const Text('نوع غسيل'),
+        ),
       ),
       body: _buildBody(cs, pad),
     );

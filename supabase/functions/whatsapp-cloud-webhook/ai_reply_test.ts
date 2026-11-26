@@ -235,3 +235,17 @@ Deno.test('سؤال الضمان يُميَّز وله رد محسوب', () => {
   assertStringIncludes(reply ?? '', '5,000 كم');
   assertStringIncludes(reply ?? '', 'باقر');
 });
+
+Deno.test('ضمان سيارة بالميل يُذكر بالميل لا بالكم', () => {
+  const card = { odo_current: '5000 ميل', odo_next: '8000 ميل' };
+  const facts = buildCardFacts(card).join('\n');
+  assertStringIncludes(facts, 'ضمان الزيت بالميل: 3,000 ميل');
+  const reply = buildWarrantyReply({ card, customerName: 'علي' }) ?? '';
+  assertStringIncludes(reply, '3,000 ميل');
+  assertEquals(reply.includes('كم'), false);
+});
+
+Deno.test('ضمان بالكم يبقى كما هو', () => {
+  const card = { odo_current: '5000 كم', odo_next: '10000 كم' };
+  assertStringIncludes(buildCardFacts(card).join('\n'), 'ضمان الزيت بالكيلومتر: 5,000 كم');
+});

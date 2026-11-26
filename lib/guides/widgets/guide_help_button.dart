@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../assistant/assistant_access.dart';
 import '../guide_controller.dart';
-import 'guide_chat_sheet.dart';
+import '../../assistant/ui/assistant_screen.dart';
 
 /// زر مساعدة عائم لمسارات غيار الزيت.
 class GuideHelpFab extends StatelessWidget {
@@ -17,6 +18,9 @@ class GuideHelpFab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (!AssistantAccess.canSeeAssistant(context)) {
+      return const SizedBox.shrink();
+    }
     return Consumer<GuideController>(
       builder: (context, guide, _) {
         if (!visible || guide.isRunning) return const SizedBox.shrink();
@@ -29,8 +33,8 @@ class GuideHelpFab extends StatelessWidget {
             tooltip: 'مساعدة غيار الزيت',
             backgroundColor: cs.secondaryContainer,
             foregroundColor: cs.onSecondaryContainer,
-            onPressed: () => showGuideChatSheet(
-              context: context,
+            onPressed: () => openNabooAssistant(
+              context,
               currentRouteId: currentRouteId,
             ),
             child: const Icon(Icons.help_outline_rounded),

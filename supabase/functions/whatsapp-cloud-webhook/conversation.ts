@@ -188,6 +188,8 @@ export async function logAutoReply(
     orderRef: string | null;
     /** مفتاح منع التكرار لنفس رسالة الزبون الواردة. */
     idempotencyKey?: string | null;
+    /** دور المجيب في assistant_turns، لزر «رد خاطئ» (م6-13). */
+    assistantTurnId?: string | null;
   },
 ): Promise<void> {
   try {
@@ -201,6 +203,7 @@ export async function logAutoReply(
           body: args.body,
           employee_name: args.employeeName,
           order_ref: args.orderRef,
+          assistant_turn_id: args.assistantTurnId ?? null,
         })
         .eq('tenant_user_id', args.tenantUserId)
         .eq('idempotency_key', key)
@@ -221,6 +224,7 @@ export async function logAutoReply(
       employee_name: args.employeeName,
       order_ref: args.orderRef,
       idempotency_key: key || null,
+      assistant_turn_id: args.assistantTurnId ?? null,
     });
   } catch (e) {
     console.warn('auto reply log failed', e);

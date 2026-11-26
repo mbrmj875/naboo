@@ -12,6 +12,7 @@ import '../../widgets/permission_guard.dart';
 
 import '../../theme/design_tokens.dart';
 import '../../services/tenant_context_service.dart';
+import '../../guides/guide_anchor.dart';
 
 const _red = Color(0xFFEF4444);
 
@@ -307,14 +308,17 @@ class _WarehousesScreenState extends State<WarehousesScreen> {
             foregroundColor: cs.onSurface,
             elevation: 0,
           ),
-          floatingActionButton: FloatingActionButton.extended(
-            backgroundColor: AppColors.accentGold,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            onPressed: () => _openSheet(null),
-            icon: Icon(Icons.add_rounded, color: isDark ? AppColors.primaryDark : Colors.white),
-            label: Text(
-              'مستودع جديد',
-              style: TextStyle(color: isDark ? AppColors.primaryDark : Colors.white, fontWeight: FontWeight.bold),
+          floatingActionButton: GuideAnchor(
+            id: OilGuideAnchors.warehousesAdd,
+            child: FloatingActionButton.extended(
+              backgroundColor: AppColors.accentGold,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              onPressed: () => _openSheet(null),
+              icon: Icon(Icons.add_rounded, color: isDark ? AppColors.primaryDark : Colors.white),
+              label: Text(
+                'مستودع جديد',
+                style: TextStyle(color: isDark ? AppColors.primaryDark : Colors.white, fontWeight: FontWeight.bold),
+              ),
             ),
           ),
           body: Column(

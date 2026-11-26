@@ -6,6 +6,8 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../notifications/ui/owner_phone_banner.dart';
+import '../../notifications/ui/push_settings_screen.dart';
 import '../../platform/web_pwa_install.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/notification_provider.dart';
@@ -33,6 +35,26 @@ import '../../services/business_setup_settings.dart';
 import '../../verticals/car_wash/screens/wash_offers_settings_screen.dart';
 import 'sync_queue_health_screen.dart';
 import 'cash_ledger_audit_screen.dart';
+import 'settings_help_screen.dart';
+import '../../guides/guide_anchor.dart';
+import '../../guides/guide_controller.dart';
+import 'settings_registry.dart';
+import '../../home/employee_access_policy.dart';
+import '../../home/home_dashboard_resolver.dart';
+import '../../providers/permissions_provider.dart';
+import '../../models/marketplace_order.dart';
+import '../../services/marketplace/marketplace_orders_service.dart';
+import '../../printing/printing_center_screen.dart';
+import '../../owner/widgets/owner_dashboard_layout_sheet.dart';
+import '../../verticals/oil_change/screens/oil_change_hub_screen.dart'
+    show showOilChangeHubSettingsSheet;
+import '../debts/debt_settings_screen.dart';
+import '../installments/installment_settings_screen.dart';
+import '../inventory/inventory_settings_screen.dart';
+import '../loyalty/loyalty_settings_screen.dart';
+import '../online_orders/market_pickup_settings_screen.dart';
+import 'package:package_info_plus/package_info_plus.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 const _kTeal = Color(0xFF0D9488);
 const _kAmber = Color(0xFFF59E0B);
@@ -77,15 +99,116 @@ AppBar _settingsAppBar(
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-class SettingsScreen extends StatelessWidget {
+class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
+
+  @override
+  State<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends State<SettingsScreen> {
+  final _search = TextEditingController();
+  String _query = '';
+
+  // لوحة «إعدادات غيار الزيت»: من فتحها، حتى تغلق الجولة ما فتحته هي فقط.
+  bool _oilSheetOpen = false;
+  bool _oilSheetByGuide = false;
+  BuildContext? _oilSheetContext;
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  SettingsAccess _access(BuildContext context) {
+    final auth = context.watch<AuthProvider>();
+    final features = context.watch<BusinessFeaturesProvider>().data;
+    final perms = context.watch<PermissionsProvider>();
+    final policy = EmployeeAccessPolicy(
+      can: perms.can,
+      features: features,
+      restricted: LicenseService.instance.state.status ==
+          LicenseStatus.restricted,
+      hiddenRouteIds: HomeDashboardResolver.resolve(features).hideNavRouteIds,
+    );
+    return SettingsAccess(
+      isOwner: auth.isOwner,
+      features: features,
+      canSeeRoute: policy.isVisible,
+      pwaInstallSupported: kIsWeb && WebPwaInstall.isWebSupported,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final cs = Theme.of(context).colorScheme;
-    final auth = context.watch<AuthProvider>();
-    final isOwner = auth.isOwner;
+    final guide = context.watch<GuideController>();
+    final visible = visibleSettingsEntries(_access(context));
+    // يُحسب هنا داخل البناء، لأن قراءة الصلاحيات خارج البناء ممنوعة.
+    final canOilHub = visible.any((e) => e.id == SettingsEntryIds.oilHub);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _syncGuide(guide, canOilHub: canOilHub);
+    });
+    final searching = _query.trim().isNotEmpty;
+    final results = searching
+        ? visible.where((e) => settingsEntryMatches(e, _query)).toList()
+        : visible;
+
+    final children = <Widget>[
+      _SettingsSearchField(
+        controller: _search,
+        onChanged: (v) => setState(() => _query = v),
+      ),
+      const SizedBox(height: 14),
+    ];
+
+    if (searching) {
+      if (results.isEmpty) {
+        children.add(
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 32),
+            child: Text(
+              'لا يوجد إعداد بهذا الاسم.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: cs.onSurfaceVariant),
+            ),
+          ),
+        );
+      } else {
+        children.add(
+          _SettingsGroup(
+            title: 'نتائج البحث',
+            isDark: isDark,
+            items: [
+              for (final e in results)
+                _anchored(e, _tileFor(context, e, showGroup: true, isDark: isDark)),
+            ],
+          ),
+        );
+      }
+    } else {
+      children
+        ..add(const _CompanyCard())
+        ..add(const SizedBox(height: 16));
+      for (final g in SettingsGroupId.values) {
+        final items = results.where((e) => e.group == g).toList();
+        if (items.isEmpty) continue;
+        children
+          ..add(
+            _SettingsGroup(
+              title: kSettingsGroupTitles[g]!,
+              isDark: isDark,
+              items: [
+                for (final e in items) _anchored(e, _tileFor(context, e, isDark: isDark)),
+              ],
+            ),
+          )
+          ..add(const SizedBox(height: 14));
+      }
+      children.add(const SizedBox(height: 10));
+    }
 
     return SecureScreen(
       child: Directionality(
@@ -109,322 +232,7 @@ class SettingsScreen extends StatelessWidget {
                           horizontal: gap,
                           vertical: 16,
                         ),
-                        child: Column(
-                          children: [
-                            // ── بطاقة الشركة ─────────────────────────────────────────────
-                            const _CompanyCard(),
-                            const SizedBox(height: 16),
-                            // ── المجموعات ────────────────────────────────────────────────
-                            _SettingsGroup(
-                              title: 'المتجر والحساب',
-                              isDark: isDark,
-                              items: [
-                                if (kIsWeb && WebPwaInstall.isWebSupported)
-                                  _SettingItem(
-                                    icon: Icons.add_to_home_screen_rounded,
-                                    iconColor: const Color(0xFF071A36),
-                                    title: 'تثبيت نابو على الشاشة الرئيسية',
-                                    subtitle: WebPwaInstall.isStandalone()
-                                        ? 'التطبيق مثبّت — يفتح بدون شريط المتصفح'
-                                        : 'أيقونة مثل التطبيق على هاتفك أو جهازك',
-                                    onTap: () {
-                                      if (WebPwaInstall.isStandalone()) {
-                                        ScaffoldMessenger.of(
-                                          context,
-                                        ).showSnackBar(
-                                          const SnackBar(
-                                            content: Text(
-                                              'نابو مثبّت مسبقاً على هذا الجهاز.',
-                                            ),
-                                          ),
-                                        );
-                                        return;
-                                      }
-                                      WebPwaInstall.clearBannerDismiss();
-                                      showModalBottomSheet<void>(
-                                        context: context,
-                                        showDragHandle: true,
-                                        builder: (ctx) => const SafeArea(
-                                          child: SingleChildScrollView(
-                                            child: WebPwaInstallBanner(
-                                              compact: false,
-                                              margin: EdgeInsetsDirectional.all(
-                                                8,
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-                                      );
-                                    },
-                                  ),
-                                if (isOwner)
-                                  _SettingItem(
-                                    icon: Icons.store_rounded,
-                                    iconColor: cs.primary,
-                                    title: 'بيانات المتجر',
-                                    subtitle:
-                                        'الاسم، العنوان، وأرقام الهاتف للإيصال',
-                                    onTap: () => _goTo(
-                                      context,
-                                      const StoreInfoScreen(),
-                                      routeId:
-                                          AppContentRoutes.settingsStoreInfo,
-                                      breadcrumbTitle: 'بيانات المتجر',
-                                    ),
-                                  )
-                                else
-                                  _SettingItem(
-                                    icon: Icons.storefront_rounded,
-                                    iconColor: cs.primary,
-                                    title: 'بيانات فرعي',
-                                    subtitle:
-                                        'اسم فرعك وشعارك وهاتفك — لواتساب والإيصال',
-                                    onTap: () => _goTo(
-                                      context,
-                                      const StoreInfoScreen(
-                                        scope: StoreInfoScope.myBranch,
-                                      ),
-                                      routeId:
-                                          AppContentRoutes.settingsMyBranchInfo,
-                                      breadcrumbTitle: 'بيانات فرعي',
-                                    ),
-                                  ),
-                                if (isOwner) const _DebtsFeatureToggleTile(),
-                                if (isOwner)
-                                  _SettingItem(
-                                    icon: Icons.fact_check_outlined,
-                                    iconColor: _kTeal,
-                                    title: 'فحص قيود الصندوق',
-                                    subtitle:
-                                        'يبحث عن مبالغ زادت الصندوق بغير حق من أخطاء قديمة',
-                                    onTap: () => Navigator.push<void>(
-                                      context,
-                                      MaterialPageRoute<void>(
-                                        builder: (_) =>
-                                            const CashLedgerAuditScreen(),
-                                      ),
-                                    ),
-                                  ),
-                                _SettingItem(
-                                  icon: Icons.receipt_long_rounded,
-                                  iconColor: _kTeal,
-                                  title: 'إعدادات الفواتير',
-                                  subtitle:
-                                      'رقم البداية، التذييل، الضريبة، الخصم',
-                                  onTap: () => _goTo(
-                                    context,
-                                    const _InvoiceSettingsScreen(),
-                                    routeId: AppContentRoutes.settingsInvoice,
-                                    breadcrumbTitle: 'إعدادات الفواتير',
-                                  ),
-                                ),
-                                if (isOwner)
-                                  _SettingItem(
-                                    icon: Icons.assignment_return_outlined,
-                                    iconColor: cs.error,
-                                    title: 'سياسة الاسترجاع',
-                                    subtitle:
-                                        'المدة، وما بعدها، والموافقة — للمالك برمزه',
-                                    onTap: () => _goTo(
-                                      context,
-                                      const ReturnPolicySettingsScreen(),
-                                      routeId:
-                                          AppContentRoutes.settingsReturnPolicy,
-                                      breadcrumbTitle: 'سياسة الاسترجاع',
-                                    ),
-                                  ),
-                                if (isOwner && _isServiceShop(context))
-                                  _SettingItem(
-                                    icon: Icons.local_car_wash_rounded,
-                                    iconColor: _kTeal,
-                                    title: 'عروض الغسيل',
-                                    subtitle:
-                                        'تكرار الغسل وخصم زبون الزيت — مطفأة حتى تفعّلها',
-                                    onTap: () => _goTo(
-                                      context,
-                                      const WashOffersSettingsScreen(),
-                                      routeId:
-                                          AppContentRoutes.settingsWashOffers,
-                                      breadcrumbTitle: 'عروض الغسيل',
-                                    ),
-                                  ),
-                                _SettingItem(
-                                  icon: Icons.tune_rounded,
-                                  iconColor: _kAmber,
-                                  title: 'ميزات المتجر',
-                                  subtitle:
-                                      'العملاء، الولاء، الضريبة، الخصم، الديون، التقسيط، الوزن، الملابس، والخدمات',
-                                  onTap: () => _goTo(
-                                    context,
-                                    const BusinessSetupWizardScreen(
-                                      openedFromSettings: true,
-                                    ),
-                                    routeId: AppContentRoutes
-                                        .settingsBusinessFeatures,
-                                    breadcrumbTitle: 'ميزات المتجر',
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 14),
-                            _SettingsGroup(
-                              title: 'المظهر والإشعارات',
-                              isDark: isDark,
-                              items: [
-                                _SettingItem(
-                                  icon: Icons.dashboard_customize_rounded,
-                                  iconColor: _kBlue,
-                                  title: 'تخصيص الشاشة الرئيسية',
-                                  subtitle:
-                                      'إظهار أو إخفاء أقسام لوحة التحكم وترتيبها بالسحب',
-                                  onTap: () => _goTo(
-                                    context,
-                                    const DashboardLayoutSettingsScreen(),
-                                    routeId: AppContentRoutes
-                                        .settingsDashboardLayout,
-                                    breadcrumbTitle: 'تخصيص الشاشة الرئيسية',
-                                  ),
-                                ),
-                                _SettingItem(
-                                  icon: Icons.palette_outlined,
-                                  iconColor: cs.primary,
-                                  title: 'ألوان وهوية التطبيق',
-                                  subtitle:
-                                      'مخططات جاهزة، مخصص، وزوايا البطاقات — تُطبَّق على كل الشاشات',
-                                  onTap: () => _goTo(
-                                    context,
-                                    const SalePosSettingsScreen(
-                                      appearanceOnly: true,
-                                    ),
-                                    routeId: AppContentRoutes
-                                        .settingsSalePosAppearance,
-                                    breadcrumbTitle: 'ألوان وهوية التطبيق',
-                                  ),
-                                ),
-                                _CompactSnackNotificationsTile(isDark: isDark),
-                                _ThemeToggleTile(isDark: isDark),
-                                _SettingItem(
-                                  icon: Icons.language_rounded,
-                                  iconColor: _kTeal,
-                                  title: 'اللغة',
-                                  subtitle: 'العربية',
-                                  trailing: Text(
-                                    'العربية',
-                                    style: TextStyle(
-                                      color: cs.onSurfaceVariant,
-                                      fontSize: 13,
-                                    ),
-                                  ),
-                                  onTap: () {},
-                                ),
-                                _SettingItem(
-                                  icon: Icons.notifications_rounded,
-                                  iconColor: _kAmber,
-                                  title: 'الإشعارات',
-                                  subtitle:
-                                      'تنبيهات المخزون، الفواتير، الأقساط',
-                                  onTap: () => _goTo(
-                                    context,
-                                    const _NotificationsScreen(),
-                                    routeId:
-                                        AppContentRoutes.settingsNotifications,
-                                    breadcrumbTitle: 'الإشعارات',
-                                  ),
-                                ),
-                                _SettingItem(
-                                  icon: Icons.print_rounded,
-                                  iconColor: cs.primary,
-                                  title: 'إعدادات الطباعة',
-                                  subtitle: 'حجم الورق، الطابعة الافتراضية',
-                                  onTap: () => _goTo(
-                                    context,
-                                    const PrintingScreen(),
-                                    routeId:
-                                        AppContentRoutes.settingsPrintingInline,
-                                    breadcrumbTitle: 'إعدادات الطباعة',
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 14),
-                            _SettingsGroup(
-                              title: 'البيانات والنسخ الاحتياطي',
-                              isDark: isDark,
-                              items: [
-                                _SettingItem(
-                                  icon: Icons.restore_rounded,
-                                  iconColor: _kBlue,
-                                  title: 'استعادة البيانات',
-                                  subtitle: 'من ملف أو سحابة',
-                                  onTap: () => _goTo(
-                                    context,
-                                    const MarketPosImportScreen(),
-                                    routeId: AppContentRoutes.settingsRestore,
-                                    breadcrumbTitle: 'استيراد مواد وأسعار',
-                                  ),
-                                ),
-                                _SettingItem(
-                                  icon: Icons.sync_problem_rounded,
-                                  iconColor: _kRed,
-                                  title: 'حالة المزامنة والعمليات العالقة',
-                                  subtitle:
-                                      'مراقبة pending/failed/dead وإعادة المحاولة',
-                                  onTap: () => _goTo(
-                                    context,
-                                    const SyncQueueHealthScreen(),
-                                    routeId: AppContentRoutes
-                                        .settingsSyncQueueHealth,
-                                    breadcrumbTitle:
-                                        'حالة المزامنة والعمليات العالقة',
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 14),
-                            _SettingsGroup(
-                              title: 'الاشتراك والدعم',
-                              isDark: isDark,
-                              items: [
-                                ListenableBuilder(
-                                  listenable: LicenseService.instance,
-                                  builder: (context, _) {
-                                    return _SettingItem(
-                                      icon: Icons.star_rounded,
-                                      iconColor: _kAmber,
-                                      title: 'خطة الاشتراك',
-                                      subtitle: _subscriptionRowSubtitle(
-                                        LicenseService.instance.state,
-                                      ),
-                                      onTap: () => _goTo(
-                                        context,
-                                        const AccountSubscriptionScreen(),
-                                        routeId: AppContentRoutes
-                                            .settingsSubscriptionAccount,
-                                        breadcrumbTitle: 'خطة الاشتراك والحساب',
-                                      ),
-                                    );
-                                  },
-                                ),
-                                _SettingItem(
-                                  icon: Icons.help_rounded,
-                                  iconColor: _kBlue,
-                                  title: 'المساعدة والدعم',
-                                  subtitle: 'الأسئلة الشائعة والتواصل مع الدعم',
-                                  onTap: () {},
-                                ),
-                                _SettingItem(
-                                  icon: Icons.info_rounded,
-                                  iconColor: Colors.grey,
-                                  title: 'عن التطبيق',
-                                  subtitle:
-                                      'الإصدار 1.0.0 · NaBoo Store Manager',
-                                  onTap: () => _showAbout(context),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 24),
-                          ],
-                        ),
+                        child: Column(children: children),
                       ),
                     ),
                   ),
@@ -439,20 +247,216 @@ class SettingsScreen extends StatelessWidget {
 
   static const _kBlue = Color(0xFF3B82F6);
 
-  /// يمرّ عبر نفس [Navigator] الرئيسي مع [RouteSettings.name] حتى يحدّث [NavigatorObserver] فتات الخبز.
-  static bool _isServiceShop(BuildContext context) {
-    final biz = context.read<BusinessFeaturesProvider>().data;
-    return biz.enableOilChange ||
-        biz.effectiveVertical == BusinessVertical.oilChange;
+  Color _iconColor(ColorScheme cs, SettingsEntry e) {
+    switch (e.group) {
+      case SettingsGroupId.store:
+      case SettingsGroupId.printing:
+        return cs.primary;
+      case SettingsGroupId.sales:
+      case SettingsGroupId.oilShop:
+        return _kTeal;
+      case SettingsGroupId.debts:
+      case SettingsGroupId.notifications:
+        return _kAmber;
+      case SettingsGroupId.data:
+        return e.id == SettingsEntryIds.syncHealth ? _kRed : _kBlue;
+      case SettingsGroupId.help:
+        return e.id == SettingsEntryIds.about ? Colors.grey : _kBlue;
+      default:
+        return _kBlue;
+    }
   }
 
-  void _goTo(
+  /// كل بند له مرساة باسمه ليشير إليه المساعد (ب3). بند الزيت له مرساته القديمة.
+  Widget _anchored(SettingsEntry e, Widget tile) => e.id == SettingsEntryIds.oilHub
+      ? tile
+      : GuideAnchor(id: OilGuideAnchors.settingsEntryFor(e.id), child: tile);
+
+  Widget _tileFor(
+    BuildContext context,
+    SettingsEntry e, {
+    required bool isDark,
+    bool showGroup = false,
+  }) {
+    final cs = Theme.of(context).colorScheme;
+    // بنود تعرض مفتاحاً أو حالة حيّة داخل الصف نفسه.
+    switch (e.id) {
+      case SettingsEntryIds.debtsToggle:
+        return const _DebtsFeatureToggleTile();
+      case SettingsEntryIds.compactSnack:
+        return _CompactSnackNotificationsTile(isDark: isDark);
+      case SettingsEntryIds.themeToggle:
+        return _ThemeToggleTile(isDark: isDark);
+      case SettingsEntryIds.oilHub:
+        return GuideAnchor(
+          id: OilGuideAnchors.settingsEntry,
+          child: _SettingItem(
+            icon: e.icon,
+            iconColor: _iconColor(cs, e),
+            title: e.title,
+            subtitle: showGroup
+                ? '${kSettingsGroupTitles[e.group]} · ${e.subtitle}'
+                : e.subtitle,
+            onTap: () => _open(context, e),
+          ),
+        );
+      case SettingsEntryIds.subscription:
+        return ListenableBuilder(
+          listenable: LicenseService.instance,
+          builder: (context, _) => _SettingItem(
+            icon: e.icon,
+            iconColor: _kAmber,
+            title: e.title,
+            subtitle: _subscriptionRowSubtitle(LicenseService.instance.state),
+            onTap: () => _open(context, e),
+          ),
+        );
+    }
+    final group = kSettingsGroupTitles[e.group]!;
+    return _SettingItem(
+      icon: e.icon,
+      iconColor: _iconColor(cs, e),
+      title: e.title,
+      subtitle: showGroup ? '$group · ${e.subtitle}' : e.subtitle,
+      trailing: e.enabled
+          ? null
+          : Text(
+              'قريباً',
+              style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
+            ),
+      onTap: e.enabled ? () => _open(context, e) : null,
+    );
+  }
+
+  /// ما يفتحه كل بند. البنود التي تفتح شاشة تمرّ بمعرّف مسارها حتى تبقى فتات الخبز صحيحة.
+  Future<void> _open(BuildContext context, SettingsEntry e) async {
+    final features = context.read<BusinessFeaturesProvider>().data;
+    final isOilShop = features.enableOilChange ||
+        features.effectiveVertical == BusinessVertical.oilChange;
+    Widget? screen;
+    switch (e.id) {
+      case SettingsEntryIds.pwaInstall:
+        _openPwaInstall(context);
+        return;
+      case SettingsEntryIds.storeInfo:
+        screen = const StoreInfoScreen();
+      case SettingsEntryIds.branchInfo:
+        screen = const StoreInfoScreen(scope: StoreInfoScope.myBranch);
+      case SettingsEntryIds.businessFeatures:
+        screen = const BusinessSetupWizardScreen(openedFromSettings: true);
+      case SettingsEntryIds.subscription:
+        screen = const AccountSubscriptionScreen();
+      case SettingsEntryIds.salePos:
+        screen = const SalePosSettingsScreen();
+      case SettingsEntryIds.returnPolicy:
+        screen = const ReturnPolicySettingsScreen();
+      case SettingsEntryIds.loyalty:
+        screen = const LoyaltySettingsScreen();
+      case SettingsEntryIds.debtSettings:
+        screen = const DebtSettingsScreen();
+      case SettingsEntryIds.installmentSettings:
+        screen = const InstallmentSettingsScreen();
+      case SettingsEntryIds.inventorySettings:
+        screen = const InventorySettingsScreen();
+      case SettingsEntryIds.oilHub:
+        await _openOilSheet();
+        return;
+      case SettingsEntryIds.washOffers:
+        screen = const WashOffersSettingsScreen();
+      case SettingsEntryIds.marketPickup:
+        await _openMarketPickup(context, e);
+        return;
+      case SettingsEntryIds.printing:
+        // نفس اختيار القائمة: محل الزيت يستخدم قسم الطباعة الجديد.
+        screen = isOilShop
+            ? const PrintingCenterScreen()
+            : const PrintingScreen();
+      case SettingsEntryIds.notifications:
+        screen = const _NotificationsScreen();
+      case SettingsEntryIds.ownerAlerts:
+      case SettingsEntryIds.ownerDashboardCards:
+        await showOwnerDashboardLayoutSheet(context);
+        return;
+      case SettingsEntryIds.colors:
+        screen = const SalePosSettingsScreen(appearanceOnly: true);
+      case SettingsEntryIds.dashboardLayout:
+        screen = const DashboardLayoutSettingsScreen();
+      case SettingsEntryIds.import:
+        screen = const MarketPosImportScreen();
+      case SettingsEntryIds.syncHealth:
+        screen = const SyncQueueHealthScreen();
+      case SettingsEntryIds.cashAudit:
+        screen = const CashLedgerAuditScreen();
+      case SettingsEntryIds.help:
+        screen = const SettingsHelpScreen();
+      case SettingsEntryIds.about:
+        await _showAbout(context);
+        return;
+    }
+    if (screen == null || !context.mounted) return;
+    await _goTo(
+      context,
+      screen,
+      routeId: e.routeId ?? AppContentRoutes.settings,
+      breadcrumbTitle: e.title,
+    );
+  }
+
+  Future<void> _openOilSheet({bool fromGuide = false}) async {
+    if (_oilSheetOpen) {
+      if (fromGuide) _oilSheetByGuide = true;
+      return;
+    }
+    _oilSheetOpen = true;
+    _oilSheetByGuide = fromGuide;
+    try {
+      await showOilChangeHubSettingsSheet(
+        context,
+        onSheetContext: (c) => _oilSheetContext = c,
+      );
+    } finally {
+      _oilSheetOpen = false;
+      _oilSheetByGuide = false;
+      _oilSheetContext = null;
+    }
+  }
+
+  /// جولة «إعدادات غيار الزيت»: تفتح اللوحة لخطوات مفاتيحها وتغلقها بعدها.
+  void _syncGuide(GuideController guide, {required bool canOilHub}) {
+    final step = guide.currentStep;
+    final running = guide.isRunning && step != null;
+    if (running &&
+        (step.anchorId == OilGuideAnchors.settingsEntry ||
+            step.anchorId.startsWith(OilGuideAnchors.settingsEntryPrefix)) &&
+        _query.isNotEmpty) {
+      // البحث قد يخفي البند الذي تشير إليه الجولة.
+      _search.clear();
+      setState(() => _query = '');
+    }
+    // لا تُفتح اللوحة عبر الدليل لمن لا يرى بندها ([canOilHub]).
+    final needSheet = running &&
+        canOilHub &&
+        (step.action == 'oil.open_hub_settings' ||
+            step.anchorId.startsWith('oil.settings.'));
+    if (needSheet) {
+      if (!_oilSheetOpen) {
+        unawaited(_openOilSheet(fromGuide: true));
+      } else {
+        _oilSheetByGuide = true;
+      }
+    } else if (_oilSheetByGuide && _oilSheetOpen) {
+      final c = _oilSheetContext;
+      if (c != null && Navigator.of(c).canPop()) Navigator.of(c).pop();
+    }
+  }
+
+  Future<void> _goTo(
     BuildContext context,
     Widget screen, {
     required String routeId,
     required String breadcrumbTitle,
   }) {
-    Navigator.push<void>(
+    return Navigator.push<void>(
       context,
       FastContentPageRoute(
         settings: RouteSettings(
@@ -464,11 +468,68 @@ class SettingsScreen extends StatelessWidget {
     );
   }
 
-  void _showAbout(BuildContext context) {
+  void _openPwaInstall(BuildContext context) {
+    if (WebPwaInstall.isStandalone()) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('نابو مثبّت مسبقاً على هذا الجهاز.')),
+      );
+      return;
+    }
+    WebPwaInstall.clearBannerDismiss();
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => const SafeArea(
+        child: SingleChildScrollView(
+          child: WebPwaInstallBanner(
+            compact: false,
+            margin: EdgeInsetsDirectional.all(8),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// يفتح إعداد الاستلام لأول متجر Market مربوط — نفس سلوك شاشة الطلبات.
+  Future<void> _openMarketPickup(BuildContext context, SettingsEntry e) async {
+    final messenger = ScaffoldMessenger.of(context);
+    void say(String m) => messenger.showSnackBar(SnackBar(content: Text(m)));
+    if (Supabase.instance.client.auth.currentUser == null) {
+      say('سجّل الدخول للحساب السحابي أولاً.');
+      return;
+    }
+    List<MarketplaceStoreSummary> stores;
+    try {
+      stores = await MarketplaceOrdersService().fetchLinkedStores();
+    } catch (_) {
+      say('تعذر جلب متجر Market. تحقق من الاتصال.');
+      return;
+    }
+    if (stores.isEmpty) {
+      say('لا يوجد متجر Market مربوط بحسابك.');
+      return;
+    }
+    if (!context.mounted) return;
+    final store = stores.first;
+    await _goTo(
+      context,
+      MarketPickupSettingsScreen(storeId: store.id, storeName: store.name),
+      routeId: e.routeId!,
+      breadcrumbTitle: e.title,
+    );
+  }
+
+  Future<void> _showAbout(BuildContext context) async {
+    var version = '';
+    try {
+      final pkg = await PackageInfo.fromPlatform();
+      version = '${pkg.version} (${pkg.buildNumber})';
+    } catch (_) {}
+    if (!context.mounted) return;
     showAboutDialog(
       context: context,
       applicationName: 'نابو لإدارة المتاجر',
-      applicationVersion: 'الإصدار 1.0.0',
+      applicationVersion: version.isEmpty ? null : 'الإصدار $version',
       applicationLegalese: '© 2026 نابو. جميع الحقوق محفوظة.',
       children: const [
         Padding(
@@ -479,6 +540,53 @@ class SettingsScreen extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// حقل البحث في أعلى الإعدادات.
+class _SettingsSearchField extends StatelessWidget {
+  const _SettingsSearchField({
+    required this.controller,
+    required this.onChanged,
+  });
+
+  final TextEditingController controller;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return TextField(
+      controller: controller,
+      onChanged: onChanged,
+      textInputAction: TextInputAction.search,
+      decoration: InputDecoration(
+        hintText: 'ابحث في الإعدادات',
+        prefixIcon: const Icon(Icons.search_rounded),
+        suffixIcon: ValueListenableBuilder<TextEditingValue>(
+          valueListenable: controller,
+          builder: (context, v, _) => v.text.isEmpty
+              ? const SizedBox.shrink()
+              : IconButton(
+                  tooltip: 'مسح البحث',
+                  icon: const Icon(Icons.close_rounded),
+                  onPressed: () {
+                    controller.clear();
+                    onChanged('');
+                  },
+                ),
+        ),
+        filled: true,
+        fillColor: cs.surfaceContainerHighest,
+        isDense: true,
+        border: OutlineInputBorder(
+          borderRadius: context.appCorners.md,
+          borderSide: BorderSide(
+            color: cs.outlineVariant.withValues(alpha: 0.45),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -858,7 +966,7 @@ class _SettingItem extends StatelessWidget {
   final String title;
   final String subtitle;
   final Widget? trailing;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   const _SettingItem({
     required this.icon,
@@ -1060,132 +1168,6 @@ class _ThemeToggleTile extends StatelessWidget {
 // ═════════════════════════════════════════════════════════════════════════════
 
 /// إعدادات الفواتير
-class _InvoiceSettingsScreen extends StatefulWidget {
-  const _InvoiceSettingsScreen();
-  @override
-  State<_InvoiceSettingsScreen> createState() => _InvoiceSettingsScreenState();
-}
-
-class _InvoiceSettingsScreenState extends State<_InvoiceSettingsScreen> {
-  bool _showTax = true;
-  bool _showDiscount = true;
-  bool _showLogo = true;
-  bool _showFooter = true;
-  double _taxRate = 0.0;
-  final _startNum = TextEditingController(text: '1');
-  final _footer = TextEditingController(text: 'شكراً لتعاملكم معنا');
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final cs = Theme.of(context).colorScheme;
-    return Directionality(
-      textDirection: TextDirection.rtl,
-      child: Scaffold(
-        backgroundColor: cs.surface,
-        appBar: _settingsAppBar(
-          context,
-          'إعدادات الفواتير',
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              style: TextButton.styleFrom(
-                foregroundColor: const Color(0xFFD4AF37),
-              ),
-              child: const Text(
-                'حفظ',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
-          ],
-        ),
-        body: SingleChildScrollView(
-          padding: EdgeInsets.symmetric(
-            horizontal: ScreenLayout.of(context).pageHorizontalGap,
-            vertical: 16,
-          ),
-          child: Column(
-            children: [
-              _SwitchTile(
-                title: 'إظهار الضريبة',
-                value: _showTax,
-                onChange: (v) => setState(() => _showTax = v),
-                isDark: isDark,
-              ),
-              _SwitchTile(
-                title: 'إظهار الخصم',
-                value: _showDiscount,
-                onChange: (v) => setState(() => _showDiscount = v),
-                isDark: isDark,
-              ),
-              _SwitchTile(
-                title: 'إظهار الشعار',
-                value: _showLogo,
-                onChange: (v) => setState(() => _showLogo = v),
-                isDark: isDark,
-              ),
-              _SwitchTile(
-                title: 'إظهار التذييل',
-                value: _showFooter,
-                onChange: (v) => setState(() => _showFooter = v),
-                isDark: isDark,
-              ),
-              const SizedBox(height: 16),
-              // نسبة الضريبة
-              _SectionCard(
-                isDark: isDark,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'نسبة الضريبة',
-                      style: TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    SliderTheme(
-                      data: SliderTheme.of(context).copyWith(
-                        activeTrackColor: cs.primary,
-                        inactiveTrackColor: cs.surfaceContainerHighest,
-                        thumbColor: cs.primary,
-                        overlayColor: cs.primary.withValues(alpha: 0.12),
-                      ),
-                      child: Slider(
-                        value: _taxRate,
-                        min: 0,
-                        max: 25,
-                        divisions: 25,
-                        label: '${_taxRate.round()}%',
-                        onChanged: (v) => setState(() => _taxRate = v),
-                      ),
-                    ),
-                    Text(
-                      '${_taxRate.round()}%',
-                      style: TextStyle(color: cs.onSurfaceVariant),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
-              _Field(
-                controller: _startNum,
-                label: 'رقم بداية الفواتير',
-                icon: Icons.tag_rounded,
-                keyboard: TextInputType.number,
-              ),
-              const SizedBox(height: 12),
-              _Field(
-                controller: _footer,
-                label: 'نص التذييل',
-                icon: Icons.notes_rounded,
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// إعدادات الإشعارات
 class _NotificationsScreen extends StatefulWidget {
   const _NotificationsScreen();
   @override
@@ -1284,7 +1266,33 @@ class _NotificationsScreenState extends State<_NotificationsScreen> {
                             : Colors.grey.shade700,
                       ),
                     ),
+                    const SizedBox(height: 10),
+                    const OwnerPhoneBanner(margin: EdgeInsets.only(bottom: 8)),
+                    Card(
+                      margin: EdgeInsets.zero,
+                      child: ListTile(
+                        leading: Icon(Icons.phone_iphone_rounded, color: cs.primary),
+                        title: const Text(
+                          'إشعارات المحل على الهاتف',
+                          style: TextStyle(fontWeight: FontWeight.w800),
+                        ),
+                        subtitle: const Text(
+                          'هاتف المالك، ما يصلك، ساعات الهدوء، الملخص، وإشعار تجريبي',
+                        ),
+                        trailing: const Icon(Icons.chevron_left_rounded),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => const PushSettingsScreen(),
+                          ),
+                        ),
+                      ),
+                    ),
                     const SizedBox(height: 14),
+                    Text(
+                      'تنبيهات داخل التطبيق على هذا الجهاز',
+                      style: TextStyle(fontWeight: FontWeight.w800, color: cs.onSurface),
+                    ),
+                    const SizedBox(height: 6),
                     _SwitchTile(
                       title: 'تنبيه نقص المخزون',
                       subtitle:
@@ -1424,47 +1432,6 @@ class _NotificationsScreenState extends State<_NotificationsScreen> {
 }
 
 // ── مساعدات UI ────────────────────────────────────────────────────────────────
-class _Field extends StatelessWidget {
-  final TextEditingController controller;
-  final String label;
-  final IconData icon;
-  final TextInputType keyboard;
-  const _Field({
-    required this.controller,
-    required this.label,
-    required this.icon,
-    this.keyboard = TextInputType.text,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final ac = context.appCorners;
-    return TextField(
-      controller: controller,
-      keyboardType: keyboard,
-      textDirection: TextDirection.rtl,
-      decoration: InputDecoration(
-        labelText: label,
-        prefixIcon: Icon(icon, size: 20),
-        border: OutlineInputBorder(borderRadius: ac.sm),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: ac.sm,
-          borderSide: BorderSide(color: cs.outline.withValues(alpha: 0.65)),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: ac.sm,
-          borderSide: BorderSide(color: cs.primary, width: 2),
-        ),
-        contentPadding: const EdgeInsets.symmetric(
-          horizontal: 14,
-          vertical: 14,
-        ),
-      ),
-    );
-  }
-}
-
 class _SwitchTile extends StatelessWidget {
   final String title;
   final String? subtitle;
@@ -1516,38 +1483,6 @@ class _SwitchTile extends StatelessWidget {
               )
             : null,
         shape: RoundedRectangleBorder(borderRadius: ac.md),
-      ),
-    );
-  }
-}
-
-class _SectionCard extends StatelessWidget {
-  final Widget child;
-  final bool isDark;
-  const _SectionCard({required this.child, required this.isDark});
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final ac = context.appCorners;
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: cs.surfaceContainerHighest,
-        borderRadius: ac.md,
-        border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.45)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: isDark ? 0.16 : 0.05),
-            blurRadius: ac.isRounded ? 8 : 0,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: DefaultTextStyle.merge(
-        style: TextStyle(color: cs.onSurface),
-        child: child,
       ),
     );
   }

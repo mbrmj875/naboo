@@ -164,6 +164,24 @@ void main() {
       expect(keys[inv], contains('12ب345'));
     });
 
+    test('البحث يجد العميل بلوحة سيارة أخرى بلا دين', () async {
+      final a = await customer('أحمد', '07701234567');
+      await credit(customerId: a, name: 'أحمد', daysAgo: 3, dinars: 15000);
+      // بطاقة قديمة مسدَّدة لسيارة ثانية، غير مرتبطة بفاتورة الدين.
+      await OilChangeOrdersRepository.instance.createOilChangeOrder(
+        customerId: a,
+        customerNameSnapshot: 'أحمد',
+        deviceName: 'كيا',
+        deviceSerial: '67 ج 890',
+        estimatedPriceFils: 5000 * _k,
+        agreedPriceFils: 5000 * _k,
+        status: 'completed',
+      );
+      final s = (await DatabaseHelper().getCustomerDebtSummaries()).single;
+      expect(debtSearchMatches('67ج890', [s.searchText]), isTrue);
+      expect(debtSearchMatches('67 ج 890', [s.searchText]), isTrue);
+    });
+
     test('المسدَّدة لا تُحمَّل مع المفتوحة، وتأتي صفحةً صفحة', () async {
       final a = await customer('أحمد', '07700000001');
       final open = await credit(

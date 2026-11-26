@@ -5,7 +5,10 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../utils/app_logger.dart';
 
-/// إرسال تقييم رد المساعد + ترقية خفيفة لأمثلة معتمدة عند 👍.
+/// إرسال تقييم رد المساعد.
+///
+/// الهاتف لا يرقّي الأمثلة بعد الآن (عيب ع8 في خطة المساعد): الدروس
+/// تُنشأ على الخادم فقط بعد اختبار الأمان.
 class GuideFeedbackClient {
   GuideFeedbackClient._();
   static final GuideFeedbackClient instance = GuideFeedbackClient._();
@@ -20,7 +23,6 @@ class GuideFeedbackClient {
     required String routeId,
     required String roleKey,
     String source = 'ai',
-    bool promoteOnPositive = true,
   }) async {
     if (rating != 1 && rating != -1) return;
     final client = Supabase.instance.client;
@@ -33,91 +35,19 @@ class GuideFeedbackClient {
 
     final hash = _hashQuestion(q);
     try {
-      final inserted = await client
-          .from('assistant_feedback')
-          .insert({
-            'user_id': user.id,
-            'role_key': roleKey.length > 40 ? roleKey.substring(0, 40) : roleKey,
-            'route_id': routeId.length > 120 ? routeId.substring(0, 120) : routeId,
-            'question_hash': hash,
-            'question_text': q,
-            'answer_text': a,
-            'rating': rating,
-            'source': source,
-          })
-          .select('id')
-          .maybeSingle();
-
-      if (rating == 1 && promoteOnPositive) {
-        await _maybePromoteExample(
-          client: client,
-          userId: user.id,
-          question: q,
-          answer: a,
-          questionHash: hash,
-          feedbackId: inserted?['id']?.toString(),
-          routeId: routeId,
-        );
-      }
+      await client.from('assistant_feedback').insert({
+        'user_id': user.id,
+        'role_key': roleKey.length > 40 ? roleKey.substring(0, 40) : roleKey,
+        'route_id': routeId.length > 120 ? routeId.substring(0, 120) : routeId,
+        'question_hash': hash,
+        'question_text': q,
+        'answer_text': a,
+        'rating': rating,
+        'source': source,
+      });
     } catch (e, st) {
       AppLogger.warn('guide_feedback', 'submit failed: $e');
       AppLogger.error('guide_feedback', 'submit', e, st);
-    }
-  }
-
-  Future<void> _maybePromoteExample({
-    required SupabaseClient client,
-    required String userId,
-    required String question,
-    required String answer,
-    required String questionHash,
-    required String? feedbackId,
-    required String routeId,
-  }) async {
-    try {
-      // ترقية متوسطة: بعد تقييمين إيجابيين لنفس السؤال، أو أول 👍 إن لم يوجد مثال.
-      final positives = await client
-          .from('assistant_feedback')
-          .select('id')
-          .eq('question_hash', questionHash)
-          .eq('rating', 1)
-          .limit(5);
-
-      final count = (positives as List).length;
-      if (count < 1) return;
-
-      final topic = _topicFromRoute(routeId);
-      final ids = <String>[
-        if (feedbackId != null && feedbackId.isNotEmpty) feedbackId,
-      ];
-
-      // تفعيل بعد تقييمين إيجابيين لنفس السؤال (وزن متوسط).
-      final existing = await client
-          .from('assistant_approved_examples')
-          .select('id')
-          .eq('question_hash', questionHash)
-          .maybeSingle();
-      final payload = {
-        'question_hash': questionHash,
-        'question': question,
-        'answer': answer,
-        'topic_key': topic,
-        'active': count >= 2,
-        'approved_by': userId,
-        'approved_at': DateTime.now().toUtc().toIso8601String(),
-        'source_feedback_ids': ids,
-      };
-      if (existing != null && existing['id'] != null) {
-        await client
-            .from('assistant_approved_examples')
-            .update(payload)
-            .eq('id', existing['id']);
-      } else {
-        await client.from('assistant_approved_examples').insert(payload);
-      }
-    } catch (e, st) {
-      AppLogger.warn('guide_feedback', 'promote failed: $e');
-      AppLogger.error('guide_feedback', 'promote', e, st);
     }
   }
 
@@ -141,13 +71,5 @@ class GuideFeedbackClient {
         .replaceAll(RegExp(r'\s+'), ' ')
         .trim();
     return sha256.convert(utf8.encode(norm)).toString().substring(0, 32);
-  }
-
-  static String _topicFromRoute(String routeId) {
-    if (routeId.contains('whatsapp')) return 'whatsapp';
-    if (routeId.contains('service')) return 'services';
-    if (routeId.contains('oil')) return 'oil';
-    if (routeId.contains('settings')) return 'settings';
-    return 'general';
   }
 }

@@ -7,7 +7,6 @@ import 'warehouses_screen.dart';
 import 'price_lists_screen.dart';
 import 'stocktaking_screen.dart';
 import 'inventory_management_screen.dart';
-import 'inventory_settings_screen.dart';
 
 // ── Design tokens ──────────────────────────────────────────────────────────────
 const _navy   = Color(0xFF1E3A5F);
@@ -58,12 +57,6 @@ class InventoryScreen extends StatelessWidget {
               icon: const Icon(Icons.notifications_outlined, size: 22),
               tooltip: 'التنبيهات',
               onPressed: () => showAppNotificationsSheet(context),
-            ),
-            IconButton(
-              icon: const Icon(Icons.settings_outlined, size: 22),
-              tooltip: 'إعدادات المخزون',
-              onPressed: () => Navigator.push(context,
-                  MaterialPageRoute(builder: (_) => const InventorySettingsScreen())),
             ),
             const SizedBox(width: 4),
           ],
@@ -385,15 +378,6 @@ class _ModulesGrid extends StatelessWidget {
         sub: 'تسوية الفروقات الفعلية',
         onTap: () => Navigator.push(context,
             MaterialPageRoute(builder: (_) => const StocktakingScreen())),
-      ),
-      _ModDef(
-        icon: Icons.settings_outlined,
-        color: const Color(0xFF37474F),
-        bg: const Color(0xFFECEFF1),
-        title: 'إعدادات المخزون',
-        sub: 'وحدات، تصنيفات، طباعة',
-        onTap: () => Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const InventorySettingsScreen())),
       ),
     ];
 

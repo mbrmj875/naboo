@@ -678,8 +678,6 @@ class _BusinessSetupWizardScreenState extends State<BusinessSetupWizardScreen> {
           _buildSwitchRow('إدارة المقاسات والألوان', _enableClothingVariants, (v) => setState(() => _enableClothingVariants = v)),
           _buildSwitchRow('الخدمات (صيانة/توصيل/أخرى)', _enableServices, (v) => setState(() => _enableServices = v)),
           _buildSwitchRow('نقطة البيع الكلاسيكية (POS)', _enablePos, (v) => setState(() => _enablePos = v)),
-          _buildSwitchRow('حساب الضريبة على الفاتورة', _enableTaxOnSale, (v) => setState(() => _enableTaxOnSale = v)),
-          _buildSwitchRow('تفعيل خصم الفاتورة', _enableInvoiceDiscount, (v) => setState(() => _enableInvoiceDiscount = v)),
         ],
       ),
     );

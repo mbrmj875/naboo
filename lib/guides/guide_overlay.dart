@@ -16,6 +16,10 @@ import '../widgets/raw_keyboard_inset.dart';
 class GuideOverlayHost extends StatefulWidget {
   const GuideOverlayHost({super.key});
 
+  /// بطاقة المساعد بدل بطاقة الجولة حين يبدأ الإرشادَ المساعد (ب3).
+  /// يضبطها المساعد عند تشغيله؛ تُرجع عنصراً مموضعاً داخل [Stack].
+  static Widget Function(BuildContext context, GuideController guide, Rect? target)? assistantBubble;
+
   @override
   State<GuideOverlayHost> createState() => _GuideOverlayHostState();
 }
@@ -178,6 +182,16 @@ class _GuideOverlayLayerState extends State<_GuideOverlayLayer>
     final step = guide.currentStep;
     if (step == null) return const SizedBox.shrink();
 
+    final assistantBubble = GuideOverlayHost.assistantBubble;
+    final byAssistant = guide.fromAssistant && assistantBubble != null;
+    // خرج المستخدم من المسار: لا تظليل، فقط سؤال «نكمل أم نرجع؟».
+    if (byAssistant && guide.offRouteId != null) {
+      return Material(
+        type: MaterialType.transparency,
+        child: Stack(fit: StackFit.expand, children: [assistantBubble(context, guide, null)]),
+      );
+    }
+
     final media = MediaQuery.sizeOf(context);
     final padding = MediaQuery.paddingOf(context);
     // لا تستخدم viewInsetsOf هنا — يعيد بناء الطبقة مع كل إطار كيبورد.
@@ -242,6 +256,9 @@ class _GuideOverlayLayerState extends State<_GuideOverlayLayer>
               child: block,
             ),
           ],
+          if (byAssistant)
+            assistantBubble(context, guide, _target)
+          else
           _GuideBubble(
             title: step.title,
             body: step.body,

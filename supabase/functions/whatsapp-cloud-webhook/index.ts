@@ -27,6 +27,8 @@ import {
   saveInboundNote,
 } from './inbound_ratings.ts';
 import { sendRatingReply } from './rating_reply.ts';
+import { isMediaMessage } from './responder_v2.ts';
+import { endHandoffs, loadActiveProfile, ownNumberTenant } from './responder_v2_run.ts';
 import { handleColdOrUnknownInbound } from './tenant_isolation.ts';
 import { touchOilCardPdfIdleJob } from './pdf_jobs.ts';
 import { looksLikePdfFileRequest } from './inbound_intent.ts';
@@ -429,6 +431,17 @@ async function handleMetaWebhook(
     }
   }
 
+  // ب7: رد كتبه المحل بنفسه من واتساب للأعمال ينهي صمت المجيب لهذا الزبون.
+  for (const echo of meta.echoes) {
+    try {
+      const r = await resolveCached(echo.phoneNumberId, echo.toPhone);
+      const tenant = r.status === 'bound' ? r.tenantUserId : await ownNumberTenant(supabase, echo.phoneNumberId);
+      if (tenant) await endHandoffs(supabase, tenant, echo.toPhone, 'shop_reply');
+    } catch (e) {
+      console.warn('echo handling failed', String(e).slice(0, 160));
+    }
+  }
+
   let stored = 0;
   let ratings = 0;
   let unmatched = 0;
@@ -440,6 +453,46 @@ async function handleMetaWebhook(
   for (const msg of meta.messages) {
     try {
       const resolution = await resolveCached(msg.phoneNumberId, msg.fromPhone);
+
+      if (resolution.status === 'cold') {
+        // ق81: غريب على رقم خاص بمحل واحد فعّل المجيب الجديد = زبون محتمل.
+        // رقم نابو المشترك لا يمر هنا (ownNumberTenant يرفضه).
+        const own = await ownNumberTenant(supabase, msg.phoneNumberId);
+        if (own && await loadActiveProfile(supabase, own)) {
+          const { error: insErr } = await supabase.from('whatsapp_inbound_messages').insert({
+            tenant_user_id: own,
+            provider: 'cloud_api',
+            provider_message_id: msg.messageId,
+            from_phone: msg.fromPhone,
+            body: msg.body,
+            message_type: msg.messageType,
+            context_message_id: msg.contextMessageId,
+            resolution: 'bound',
+            raw: msg as unknown as Record<string, unknown>,
+          });
+          if (insErr) {
+            if (insErr.code !== '23505') console.warn('stranger inbound insert failed', insErr.message);
+            continue;
+          }
+          stored++;
+          const outcome = await sendRatingReply(supabase, {
+            tenantUserId: own,
+            phoneNumberId: msg.phoneNumberId,
+            toPhone: msg.fromPhone,
+            score: null,
+            hasNote: true,
+            message: msg.body,
+            employeeName: null,
+            card: null,
+            orderRef: null,
+            inboundMessageId: msg.messageId,
+            messageType: msg.messageType,
+            stranger: true,
+          });
+          if (outcome.sent) replies++;
+          continue;
+        }
+      }
 
       if (resolution.status !== 'bound') {
         unmatched++;
@@ -494,7 +547,9 @@ async function handleMetaWebhook(
           immediate: looksLikePdfFileRequest(msg.body ?? ''),
         });
       }
-      if (result.score == null && !result.hasNote) continue;
+      if (
+        result.score == null && !result.hasNote && !isMediaMessage(msg.messageType, msg.body)
+      ) continue;
 
       const outcome = await sendRatingReply(supabase, {
         tenantUserId,
@@ -507,6 +562,7 @@ async function handleMetaWebhook(
         card: result.cardPayload ?? null,
         orderRef: result.orderRef ?? null,
         inboundMessageId: msg.messageId,
+        messageType: msg.messageType,
       });
       if (outcome.sent) {
         replies++;

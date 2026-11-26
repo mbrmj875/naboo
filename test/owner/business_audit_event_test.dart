@@ -17,6 +17,22 @@ void main() {
       expect(e.isSensitive, isTrue);
     });
 
+    test('assistant_action shows what was done and by whom, in Arabic (ق16)', () {
+      final e = BusinessAuditEvent(
+        id: 3,
+        tenantId: 1,
+        eventType: 'assistant_action',
+        entityType: 'service_order',
+        entityId: '41',
+        username: 'سجاد',
+        newValueJson: '{"tool":"prepare_oil_card","turn_id":"t1"}',
+        createdAt: at,
+      );
+      expect(e.showInOwnerSensitivePanel, isTrue);
+      expect(BusinessAuditEventPresentation.labelAr(e), 'تنفيذ عبر مساعد نابو');
+      expect(BusinessAuditEventPresentation.detailAr(e), 'بطاقة خدمة #41 · بواسطة سجاد');
+    });
+
     test('product_create is product not sensitive', () {
       final e = BusinessAuditEvent(
         id: 2,

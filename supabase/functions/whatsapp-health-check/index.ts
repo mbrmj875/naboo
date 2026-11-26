@@ -259,7 +259,7 @@ async function notifyOwner(
 
   let sent = 0;
   for (const row of tokens ?? []) {
-    const ok = await sendFcmDataMessage(row.token, alert);
+    const ok = await sendFcmDataMessage(row.token, alert, args.userId);
     if (ok) sent += 1;
   }
   if (sent > 0) {

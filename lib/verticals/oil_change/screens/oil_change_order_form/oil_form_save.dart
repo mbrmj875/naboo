@@ -15,6 +15,7 @@ extension _OilFormSave on _OilChangeOrderFormScreenState {
         ? slot.catalogSellPerLiterFils
         : null;
     return {
+      'odometerUnit': _odometerUnit,
       'oilLaborFils': _oilLaborFils(),
       'hydraulicLaborFils': _gearHydraulic.customerProvided
           ? _hydraulicLaborFilsFor(_gearHydraulic)
@@ -1059,41 +1060,13 @@ extension _OilFormSave on _OilChangeOrderFormScreenState {
       if (req(f) && empty) missing.add(label);
     }
 
-    need(
-      OilCardField.carName,
-      _deviceName.text.trim().isEmpty,
-      'بيانات السيارة: اسم السيارة',
-    );
-    need(
-      OilCardField.plate,
-      _deviceSerial.text.trim().isEmpty,
-      'بيانات السيارة: رقم اللوحة',
-    );
-    need(
-      OilCardField.carModel,
-      _carModel.text.trim().isEmpty,
-      'بيانات السيارة: موديل السيارة',
-    );
-    need(
-      OilCardField.engineSize,
-      _engineSize.text.trim().isEmpty,
-      'بيانات السيارة: حجم المحرك',
-    );
-    need(
-      OilCardField.odometerCurrent,
-      _odometerDigits(_odometerCurrent.text).isEmpty,
-      'تغيير الزيت: القراءة الحالية (كم)',
-    );
-    need(
-      OilCardField.odometerNext,
-      _odometerDigits(_odometerNext.text).isEmpty,
-      'تغيير الزيت: القراءة اللاحقة (كم)',
-    );
-    need(
-      OilCardField.technician,
-      _technicianName.text.trim().isEmpty,
-      'الفني: اسم الفني',
-    );
+    need(OilCardField.carName, _deviceName.text.trim().isEmpty, 'بيانات السيارة: اسم السيارة');
+    need(OilCardField.plate, _deviceSerial.text.trim().isEmpty, 'بيانات السيارة: رقم اللوحة');
+    need(OilCardField.carModel, _carModel.text.trim().isEmpty, 'بيانات السيارة: موديل السيارة');
+    need(OilCardField.engineSize, _engineSize.text.trim().isEmpty, 'بيانات السيارة: حجم المحرك');
+    need(OilCardField.odometerCurrent, _odometerDigits(_odometerCurrent.text).isEmpty, 'العداد: القراءة الحالية');
+    need(OilCardField.odometerNext, _odometerDigits(_odometerNext.text).isEmpty, 'العداد: القراءة اللاحقة');
+    need(OilCardField.technician, _technicianName.text.trim().isEmpty, 'الفني: اسم الفني');
 
     if (req(OilCardField.oil)) {
       final liters = _oilLitersForPricing();
@@ -2044,12 +2017,13 @@ extension _OilFormSave on _OilChangeOrderFormScreenState {
     if (!_computeOdometerLower()) return true;
     final prev = IraqiCurrencyFormat.formatInt(_previousOdometerKm!);
     final cur = IraqiCurrencyFormat.formatInt(_currentOdometerKm!);
+    final unit = OilOdometerUnit.label(_odometerUnit);
     final keep = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('القراءة أقل من السابقة'),
         content: Text(
-          'القراءة الحالية $cur كم أقل من قراءة الزيارة السابقة $prev كم. '
+          'القراءة الحالية $cur $unit أقل من قراءة الزيارة السابقة $prev $unit. '
           'غالباً خطأ في الكتابة. إن تغيّر العداد أو صُفّر فاحفظ كما هي.',
         ),
         actions: [

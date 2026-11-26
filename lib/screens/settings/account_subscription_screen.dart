@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../notifications/ui/owner_phone_prompt.dart';
 import '../../navigation/content_navigation.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/cloud_sync_service.dart';
@@ -83,6 +84,16 @@ class _AccountSubscriptionScreenState extends State<AccountSubscriptionScreen> {
       _busy = false;
       _message = err ?? 'تمت المزامنة بنجاح';
     });
+  }
+
+  Future<void> _unflagOwnerPhone(AccountDevice d) async {
+    final ok = await OwnerPhonePrompt.confirmAndSetOwnerPhone(
+      context,
+      enable: false,
+      deviceId: d.deviceId,
+      deviceName: d.deviceName,
+    );
+    if (ok) await CloudSyncService.instance.refreshDevices();
   }
 
   Future<void> _approveDevice(AccountDevice d) async {
@@ -367,6 +378,33 @@ class _AccountSubscriptionScreenState extends State<AccountSubscriptionScreen> {
                                     Text(
                                       '${d.platform} • آخر نشاط: ${_fmtDate(d.lastSeenAt)}',
                                     ),
+                                    if (d.ownerNotify && !d.isRevoked)
+                                      Row(
+                                        children: [
+                                          const Icon(
+                                            Icons.notifications_active_rounded,
+                                            size: 16,
+                                            color: _kTeal,
+                                          ),
+                                          const SizedBox(width: 4),
+                                          const Expanded(
+                                            child: Text(
+                                              'هاتف المالك: يستلم إشعارات المحل',
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                color: _kTeal,
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                            ),
+                                          ),
+                                          TextButton(
+                                            onPressed: _busy
+                                                ? null
+                                                : () => _unflagOwnerPhone(d),
+                                            child: const Text('إزالة'),
+                                          ),
+                                        ],
+                                      ),
                                     if (d.isRevoked)
                                       Padding(
                                         padding: const EdgeInsets.only(top: 4),

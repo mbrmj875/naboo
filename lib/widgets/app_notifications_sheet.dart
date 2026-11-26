@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../notifications/server_notifications_repository.dart';
+import '../notifications/ui/owner_phone_banner.dart';
+import '../notifications/ui/server_notifications_list.dart';
 import '../providers/notification_provider.dart';
 import '../theme/design_tokens.dart';
 import 'notification_navigation.dart';
@@ -84,6 +87,11 @@ class _NotificationsSheet extends StatefulWidget {
 class _NotificationsSheetState extends State<_NotificationsSheet> {
   final Set<String> _hiddenIds = {};
 
+  /// 0 = تنبيهات هذا الجهاز، 1 = إشعارات المحل (السجل الموحد على الخادم).
+  int _tab = 0;
+  int? _serverUnread;
+  final bool _hasServer = ServerNotificationsRepository.available;
+
   @override
   Widget build(BuildContext context) {
     final nav = widget.contentNavigator;
@@ -144,27 +152,68 @@ class _NotificationsSheetState extends State<_NotificationsSheet> {
                           ),
                           TextButton(
                             onPressed: n.isLoading ? null : () => n.refresh(),
-                            style: TextButton.styleFrom(foregroundColor: AppColors.accentGold),
+                            style: TextButton.styleFrom(
+                              foregroundColor: AppColors.accentGold,
+                            ),
                             child: const Text('تحديث'),
                           ),
                           if (n.unreadCount > 0)
                             TextButton(
                               onPressed: () => n.markAllAsRead(),
-                              style: TextButton.styleFrom(foregroundColor: AppColors.accentGold),
+                              style: TextButton.styleFrom(
+                                foregroundColor: AppColors.accentGold,
+                              ),
                               child: const Text('تعليم الكل مقروءاً'),
                             ),
                         ],
                       ),
                     ),
                   ),
-                  if (n.isLoading)
+                  const OwnerPhoneBanner(
+                    margin: EdgeInsets.fromLTRB(12, 6, 12, 2),
+                  ),
+                  if (_hasServer)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 6, 12, 4),
+                      child: SegmentedButton<int>(
+                        showSelectedIcon: false,
+                        segments: [
+                          const ButtonSegment(
+                            value: 0,
+                            label: Text('هذا الجهاز'),
+                          ),
+                          ButtonSegment(
+                            value: 1,
+                            label: Text(
+                              (_serverUnread ?? 0) > 0
+                                  ? 'إشعارات المحل ($_serverUnread)'
+                                  : 'إشعارات المحل',
+                            ),
+                          ),
+                        ],
+                        selected: {_tab},
+                        onSelectionChanged: (v) =>
+                            setState(() => _tab = v.first),
+                      ),
+                    ),
+                  if (_tab == 1)
+                    Expanded(
+                      child: ServerNotificationsList(
+                        scrollController: scrollController,
+                        onUnreadChanged: (c) {
+                          if (mounted && c != _serverUnread)
+                            setState(() => _serverUnread = c);
+                        },
+                      ),
+                    ),
+                  if (_tab == 0 && n.isLoading)
                     LinearProgressIndicator(
                       minHeight: 2,
                       backgroundColor: theme.colorScheme.surfaceContainerHighest
                           .withValues(alpha: 0.45),
                       color: AppColors.accentGold,
                     ),
-                  if (n.lastError != null)
+                  if (_tab == 0 && n.lastError != null)
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 16),
                       child: Text(
@@ -175,203 +224,210 @@ class _NotificationsSheetState extends State<_NotificationsSheet> {
                         ),
                       ),
                     ),
-                  Expanded(
-                    child: n.isLoading && visible.isEmpty
-                        ? const Center(child: CircularProgressIndicator())
-                        : visible.isEmpty
-                        ? Center(
-                            child: Padding(
-                              padding: const EdgeInsets.all(24),
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(
-                                    Icons.notifications_off_outlined,
-                                    size: 56,
-                                    color: theme.colorScheme.outlineVariant,
-                                  ),
-                                  const SizedBox(height: 14),
-                                  Text(
-                                    'لا توجد تنبيهات حالياً',
-                                    textAlign: TextAlign.center,
-                                    style: theme.textTheme.titleMedium
-                                        ?.copyWith(
-                                          color: theme
-                                              .colorScheme
-                                              .onSurfaceVariant,
-                                        ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          )
-                        : ListView.builder(
-                            controller: scrollController,
-                            padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
-                            itemCount: visible.length,
-                            itemBuilder: (context, i) {
-                              final item = visible[i];
-                              final unread = !item.isRead;
-                              final bg = unread
-                                  ? theme.colorScheme.primaryContainer
-                                        .withValues(alpha: 0.22)
-                                  : theme.colorScheme.surfaceContainerHighest
-                                        .withValues(alpha: 0.35);
-                              final badgeBg = _badgeBackground(item);
-
-                              return Padding(
-                                padding: const EdgeInsets.only(bottom: 8),
-                                child: Dismissible(
-                                  key: ValueKey('nid-${item.id}'),
-                                  direction: DismissDirection.endToStart,
-                                  confirmDismiss: (_) async =>
-                                      _confirmDismissImportant(context, item),
-                                  onDismissed: (_) {
-                                    n.markAsRead(item.id);
-                                    setState(() {
-                                      _hiddenIds.add(item.id);
-                                    });
-                                  },
-                                  child: Material(
-                                    color: bg,
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                      side: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.5)),
+                  if (_tab == 0)
+                    Expanded(
+                      child: n.isLoading && visible.isEmpty
+                          ? const Center(child: CircularProgressIndicator())
+                          : visible.isEmpty
+                          ? Center(
+                              child: Padding(
+                                padding: const EdgeInsets.all(24),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      Icons.notifications_off_outlined,
+                                      size: 56,
+                                      color: theme.colorScheme.outlineVariant,
                                     ),
-                                    clipBehavior: Clip.antiAlias,
-                                    child: InkWell(
-                                      onTap: () {
-                                        n.markAsRead(item.id);
-                                        Navigator.of(context).maybePop<void>();
-                                        final navLocal =
-                                            nav ??
-                                            Navigator.maybeOf(
-                                              context,
-                                              rootNavigator: false,
-                                            ) ??
-                                            Navigator.maybeOf(context);
-                                        if (navLocal != null) {
-                                          WidgetsBinding.instance
-                                              .addPostFrameCallback((_) {
-                                                navigateFromAppNotification(
-                                                  navLocal,
-                                                  item,
-                                                );
-                                              });
-                                        }
-                                      },
-                                      child: Padding(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 12,
-                                          vertical: 11,
+                                    const SizedBox(height: 14),
+                                    Text(
+                                      'لا توجد تنبيهات حالياً',
+                                      textAlign: TextAlign.center,
+                                      style: theme.textTheme.titleMedium
+                                          ?.copyWith(
+                                            color: theme
+                                                .colorScheme
+                                                .onSurfaceVariant,
+                                          ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            )
+                          : ListView.builder(
+                              controller: scrollController,
+                              padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
+                              itemCount: visible.length,
+                              itemBuilder: (context, i) {
+                                final item = visible[i];
+                                final unread = !item.isRead;
+                                final bg = unread
+                                    ? theme.colorScheme.primaryContainer
+                                          .withValues(alpha: 0.22)
+                                    : theme.colorScheme.surfaceContainerHighest
+                                          .withValues(alpha: 0.35);
+                                final badgeBg = _badgeBackground(item);
+
+                                return Padding(
+                                  padding: const EdgeInsets.only(bottom: 8),
+                                  child: Dismissible(
+                                    key: ValueKey('nid-${item.id}'),
+                                    direction: DismissDirection.endToStart,
+                                    confirmDismiss: (_) async =>
+                                        _confirmDismissImportant(context, item),
+                                    onDismissed: (_) {
+                                      n.markAsRead(item.id);
+                                      setState(() {
+                                        _hiddenIds.add(item.id);
+                                      });
+                                    },
+                                    child: Material(
+                                      color: bg,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(12),
+                                        side: BorderSide(
+                                          color: AppColors.accentGold
+                                              .withValues(alpha: 0.5),
                                         ),
-                                        child: Row(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            Expanded(
-                                              child: Row(
-                                                crossAxisAlignment:
-                                                    CrossAxisAlignment.start,
-                                                children: [
-                                                  Icon(
-                                                    item.icon,
-                                                    color: AppColors.accentGold,
-                                                    size: 26,
-                                                  ),
-                                                  const SizedBox(width: 10),
-                                                  Expanded(
-                                                    child: Column(
-                                                      crossAxisAlignment:
-                                                          CrossAxisAlignment
-                                                              .start,
-                                                      children: [
-                                                        Text(
-                                                          item.title,
-                                                          style: TextStyle(
-                                                            fontWeight: unread
-                                                                ? FontWeight
-                                                                      .w800
-                                                                : FontWeight
-                                                                      .w600,
-                                                            fontSize: 14,
-                                                          ),
-                                                        ),
-                                                        const SizedBox(
-                                                          height: 4,
-                                                        ),
-                                                        Text(
-                                                          item.body,
-                                                          style: TextStyle(
-                                                            fontSize: 13,
-                                                            height: 1.35,
-                                                            color: theme
-                                                                .colorScheme
-                                                                .onSurfaceVariant,
-                                                          ),
-                                                        ),
-                                                        const SizedBox(
-                                                          height: 4,
-                                                        ),
-                                                        Text(
-                                                          item.timeAgo,
-                                                          style: TextStyle(
-                                                            fontSize: 11,
-                                                            color:
-                                                                theme.hintColor,
-                                                          ),
-                                                        ),
-                                                      ],
+                                      ),
+                                      clipBehavior: Clip.antiAlias,
+                                      child: InkWell(
+                                        onTap: () {
+                                          n.markAsRead(item.id);
+                                          Navigator.of(
+                                            context,
+                                          ).maybePop<void>();
+                                          final navLocal =
+                                              nav ??
+                                              Navigator.maybeOf(
+                                                context,
+                                                rootNavigator: false,
+                                              ) ??
+                                              Navigator.maybeOf(context);
+                                          if (navLocal != null) {
+                                            WidgetsBinding.instance
+                                                .addPostFrameCallback((_) {
+                                                  navigateFromAppNotification(
+                                                    navLocal,
+                                                    item,
+                                                  );
+                                                });
+                                          }
+                                        },
+                                        child: Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 12,
+                                            vertical: 11,
+                                          ),
+                                          child: Row(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Expanded(
+                                                child: Row(
+                                                  crossAxisAlignment:
+                                                      CrossAxisAlignment.start,
+                                                  children: [
+                                                    Icon(
+                                                      item.icon,
+                                                      color:
+                                                          AppColors.accentGold,
+                                                      size: 26,
                                                     ),
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
-                                            Padding(
-                                              padding:
-                                                  const EdgeInsetsDirectional.only(
-                                                    start: 8,
-                                                  ),
-                                              child: Container(
-                                                constraints:
-                                                    const BoxConstraints(
-                                                      minHeight: 24,
-                                                    ),
-                                                padding:
-                                                    const EdgeInsets.symmetric(
-                                                      horizontal: 8,
-                                                      vertical: 5,
-                                                    ),
-                                                decoration: BoxDecoration(
-                                                  color: badgeBg,
-                                                  borderRadius:
-                                                      BorderRadius.circular(
-                                                        999,
+                                                    const SizedBox(width: 10),
+                                                    Expanded(
+                                                      child: Column(
+                                                        crossAxisAlignment:
+                                                            CrossAxisAlignment
+                                                                .start,
+                                                        children: [
+                                                          Text(
+                                                            item.title,
+                                                            style: TextStyle(
+                                                              fontWeight: unread
+                                                                  ? FontWeight
+                                                                        .w800
+                                                                  : FontWeight
+                                                                        .w600,
+                                                              fontSize: 14,
+                                                            ),
+                                                          ),
+                                                          const SizedBox(
+                                                            height: 4,
+                                                          ),
+                                                          Text(
+                                                            item.body,
+                                                            style: TextStyle(
+                                                              fontSize: 13,
+                                                              height: 1.35,
+                                                              color: theme
+                                                                  .colorScheme
+                                                                  .onSurfaceVariant,
+                                                            ),
+                                                          ),
+                                                          const SizedBox(
+                                                            height: 4,
+                                                          ),
+                                                          Text(
+                                                            item.timeAgo,
+                                                            style: TextStyle(
+                                                              fontSize: 11,
+                                                              color: theme
+                                                                  .hintColor,
+                                                            ),
+                                                          ),
+                                                        ],
                                                       ),
+                                                    ),
+                                                  ],
                                                 ),
-                                                child: Center(
-                                                  child: Text(
-                                                    item.typeLabel,
-                                                    style: TextStyle(
-                                                      fontSize: 11,
-                                                      fontWeight:
-                                                          FontWeight.w700,
-                                                      color: Colors.white,
+                                              ),
+                                              Padding(
+                                                padding:
+                                                    const EdgeInsetsDirectional.only(
+                                                      start: 8,
+                                                    ),
+                                                child: Container(
+                                                  constraints:
+                                                      const BoxConstraints(
+                                                        minHeight: 24,
+                                                      ),
+                                                  padding:
+                                                      const EdgeInsets.symmetric(
+                                                        horizontal: 8,
+                                                        vertical: 5,
+                                                      ),
+                                                  decoration: BoxDecoration(
+                                                    color: badgeBg,
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                          999,
+                                                        ),
+                                                  ),
+                                                  child: Center(
+                                                    child: Text(
+                                                      item.typeLabel,
+                                                      style: TextStyle(
+                                                        fontSize: 11,
+                                                        fontWeight:
+                                                            FontWeight.w700,
+                                                        color: Colors.white,
+                                                      ),
                                                     ),
                                                   ),
                                                 ),
                                               ),
-                                            ),
-                                          ],
+                                            ],
+                                          ),
                                         ),
                                       ),
                                     ),
                                   ),
-                                ),
-                              );
-                            },
-                          ),
-                  ),
+                                );
+                              },
+                            ),
+                    ),
                 ],
               );
             },

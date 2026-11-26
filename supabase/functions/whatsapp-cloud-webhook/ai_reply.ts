@@ -9,9 +9,8 @@
 import type { AllowlistedFacts } from './tenant_ai_context.ts';
 import { buildStoreFactLines } from './tenant_ai_context.ts';
 import { guardSensitiveLeak } from './sensitive_topics.ts';
+import { chat, LlmError, type Usage } from '../_shared/llm.ts';
 
-const ENDPOINT = 'https://api.deepseek.com/chat/completions';
-const MODEL = 'deepseek-chat';
 const TIMEOUT_MS = 7000;
 const MAX_REPLY_CHARS = 420;
 
@@ -40,9 +39,13 @@ export type AiReplyResult = {
   isFeedback: boolean;
 };
 
-function apiKey(): string | null {
-  return Deno.env.get('DEEPSEEK_API_KEY')?.trim() || null;
-}
+/** ما يحتاجه العدّاد من كل نداء (خطة المساعد م6-3). */
+export type AiCallMeter = {
+  usage: Usage;
+  model: string;
+  latencyMs: number;
+  ok: boolean;
+};
 
 const CARD_LABELS: Record<string, string> = {
   customer: 'اسم الزبون',
@@ -74,7 +77,7 @@ export function parseOdometerKm(raw: string | null | undefined): number | null {
     .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
     .replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
     .replace(/[, ،_\s]/g, '')
-    .replace(/كم|كيلو|km/gi, '')
+    .replace(/كم|كيلو|km|ميل|miles?|mi/gi, '')
     .trim();
   if (!s) return null;
   const n = Number.parseInt(s, 10);
@@ -102,6 +105,17 @@ export function formatKm(km: number): string {
   return km.toLocaleString('en-US');
 }
 
+/** وحدة عداد البطاقة كما كتبها التطبيق («5000 ميل» أو «5000 كم»). */
+export function odometerUnitLabel(card: Record<string, string> | null): 'كم' | 'ميل' {
+  const blob = `${card?.odo_current ?? ''} ${card?.odo_next ?? ''}`;
+  return /ميل|\bmiles?\b|\bmi\b/i.test(blob) ? 'ميل' : 'كم';
+}
+
+/** «بالكيلومتر» أو «بالميل» حسب وحدة البطاقة. */
+function byUnit(unit: 'كم' | 'ميل'): string {
+  return unit === 'ميل' ? 'بالميل' : 'بالكيلومتر';
+}
+
 /** رد ثابت ذكي عن الضمان حين يتعذّر النموذج. */
 export function buildWarrantyReply(args: {
   card: Record<string, string> | null;
@@ -113,8 +127,9 @@ export function buildWarrantyReply(args: {
     .trim()
     .replace(/عميلنا الكريم/g, '');
   const who = name && name !== '-' && name !== '—' ? `${name}، ` : '';
+  const unit = odometerUnitLabel(args.card);
   return (
-    `${who}اي الضمان عندنا على الزيت ${formatKm(km)} كم — ` +
+    `${who}اي الضمان عندنا على الزيت ${formatKm(km)} ${unit} — ` +
     'هذا الفرق بين قراءة العداد وقت الخدمة وموعد الغيار القادم 👍'
   );
 }
@@ -140,12 +155,13 @@ export function buildCardFacts(card: Record<string, string> | null): string[] {
   if (warrantyKm != null) {
     const current = parseOdometerKm(card.odo_current);
     const next = parseOdometerKm(card.odo_next);
+    const unit = odometerUnitLabel(card);
     out.push(
-      `ضمان الزيت بالكيلومتر: ${formatKm(warrantyKm)} كم ` +
+      `ضمان الزيت ${byUnit(unit)}: ${formatKm(warrantyKm)} ${unit} ` +
         `(موعد الغيار القادم ${formatKm(next!)} ناقص قراءة الخدمة ${formatKm(current!)})`,
     );
     out.push(
-      'قاعدة الضمان: إذا سأل الزبون عن الضمان فالجواب هو هذا الرقم بالكيلومتر فقط، ' +
+      `قاعدة الضمان: إذا سأل الزبون عن الضمان فالجواب هو هذا الرقم ${byUnit(unit)} فقط، ` +
         'مو أيام ولا أشهر ولا تخمين.',
     );
   }
@@ -179,9 +195,9 @@ export function buildSystemPrompt(): string {
     '  من المحل وترد عليه، ولا تخمّن ولا تعطي جواباً تقريبياً.',
     '',
     'الضمان:',
-    '- إذا سأل عن الضمان أو الكفالة، الجواب الوحيد هو «ضمان الزيت بالكيلومتر»',
+    '- إذا سأل عن الضمان أو الكفالة، الجواب الوحيد هو «ضمان الزيت» (بالكيلومتر أو بالميل)',
     '  الموجود بالمعلومات المؤكدة: المسافة بين موعد الغيار القادم وقراءة الخدمة.',
-    '- اذكر الرقم صريحاً بالكيلومتر (مثال: الضمان عدنا 5,000 كم).',
+    '- اذكر الرقم صريحاً بنفس وحدته بالمعلومات المؤكدة (مثال: الضمان عدنا 5,000 كم، أو 3,000 ميل).',
     '- ماكو ضمان بالأيام أو الشهور إلا إذا مذكور صراحة بالمعلومات المؤكدة.',
     '- إذا ماكو رقم ضمان بالمعلومات المؤكدة، قل راح تتأكد من المحل وترد عليه.',
     '',
@@ -341,8 +357,10 @@ function replyUsesAllowlistedMaps(
 export function guardShopClaims(
   reply: string,
   facts?: AllowlistedFacts | null,
+  opts: { allowHours?: boolean } = {},
 ): string {
-  if (HOURS_CLAIM.test(reply)) return DEFLECTION_REPLY;
+  // المجيب الجديد يسمح بالدوام إن كتبه المالك في صفحة المجيب.
+  if (!opts.allowHours && HOURS_CLAIM.test(reply)) return DEFLECTION_REPLY;
 
   if (PHONE_CLAIM.test(reply) || /\d{7,}/.test(reply)) {
     if (!replyUsesAllowlistedPhone(reply, facts)) {
@@ -437,43 +455,26 @@ export function parseAiPayload(
 
 export async function generateRatingReply(
   input: AiReplyInput,
+  opts: { onCall?: (m: AiCallMeter) => void } = {},
 ): Promise<AiReplyResult | null> {
-  const key = apiKey();
-  if (!key) return null;
-
+  // الطبقة المشتركة مع مساعد التطبيق (م6-2): اسم النموذج الحالي، التفكير مطفأ.
+  const started = Date.now();
   try {
-    const res = await fetch(ENDPOINT, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${key}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: MODEL,
-        temperature: 0.9,
-        max_tokens: 300,
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: buildSystemPrompt() },
-          { role: 'user', content: buildUserPrompt(input) },
-        ],
-      }),
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
-
-    if (!res.ok) {
-      console.warn('deepseek http', res.status);
-      return null;
-    }
-
-    const data = await res.json() as {
-      choices?: Array<{ message?: { content?: string } }>;
-    };
-    return parseAiPayload(
-      data.choices?.[0]?.message?.content ?? '',
-      input.allowlisted,
-    );
+    const r = await chat({
+      messages: [
+        { role: 'system', content: buildSystemPrompt() },
+        { role: 'user', content: buildUserPrompt(input) },
+      ],
+      effort: 'off',
+      temperature: 0.9,
+      maxTokens: 300,
+      json: true,
+    }, TIMEOUT_MS);
+    const parsed = parseAiPayload(r.text, input.allowlisted);
+    opts.onCall?.({ usage: r.usage, model: r.model, latencyMs: Date.now() - started, ok: parsed != null });
+    return parsed;
   } catch (e) {
+    if (e instanceof LlmError && e.code === 'no_key') return null;
     console.warn('deepseek call failed', String(e).slice(0, 200));
     return null;
   }

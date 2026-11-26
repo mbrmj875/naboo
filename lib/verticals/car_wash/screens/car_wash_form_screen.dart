@@ -1,3 +1,5 @@
+import '../../../assistant/exec/assistant_name_match.dart';
+import '../../../assistant/exec/assistant_prefill.dart';
 import 'dart:async' show Timer, unawaited;
 import 'dart:convert';
 
@@ -39,7 +41,10 @@ import '../../../widgets/raw_keyboard_inset.dart';
 
 /// بطاقة غسيل سيارة — رقم اللوحة ونوع الغسيل وسعره، ثم حفظ وبيع.
 class CarWashFormScreen extends StatefulWidget {
-  const CarWashFormScreen({super.key, this.prefillFromOrder});
+  const CarWashFormScreen({super.key, this.prefillFromOrder, this.assistantPrefill});
+
+  /// غسلة جديدة عبّأها المساعد (م4-1). تُراجع وتُحفظ بزر الشاشة نفسه.
+  final AssistantPrefill? assistantPrefill;
 
   /// غسلة سابقة (صف service_orders) لتعبئة غسلة جديدة منها: اللوحة والزبون
   /// ونفس أنواع الغسيل بأسعارها الحالية. الغسلة القديمة لا تُمس.
@@ -334,7 +339,17 @@ class _CarWashFormScreenState extends State<CarWashFormScreen> {
   /// أسماء أنواع الغسيل في الغسلة السابقة — تُختار بعد تحميل الكتالوج.
   Set<String> _prefillServiceNames = const {};
 
+  /// أسماء الخدمات كما قالها المستخدم للمساعد؛ تُطابق بالكتالوج بعد تحميله.
+  List<String> _assistantServiceNames = const [];
+
   void _applyPrefill() {
+    final ap = widget.assistantPrefill;
+    if (ap != null && widget.prefillFromOrder == null) {
+      _plate.text = ap.str('plate') ?? '';
+      _customerName.text = ap.str('customer') ?? '';
+      _assistantServiceNames = ap.list('services');
+      return;
+    }
     final o = widget.prefillFromOrder;
     if (o == null) return;
     _plate.text = (o['deviceSerial'] ?? '').toString().trim();
@@ -372,6 +387,15 @@ class _CarWashFormScreenState extends State<CarWashFormScreen> {
           }
         }
         _prefillServiceNames = const {};
+      }
+      if (_assistantServiceNames.isNotEmpty) {
+        // كلام المستخدم لا يطابق اسم الخدمة حرفياً: «غسيل خارجي» و«خارجي».
+        final rows = [for (final i in list) <String, Object?>{'id': i.id, 'name': i.name}];
+        for (final said in _assistantServiceNames) {
+          final m = AssistantNameMatch.match(said, rows);
+          if (m.grade == AssistantMatchGrade.matched) _selectedIds.add(m.productId!);
+        }
+        _assistantServiceNames = const [];
       }
       if (selectId != null && selectId > 0 && ids.contains(selectId)) {
         _selectedIds.add(selectId);
@@ -734,6 +758,15 @@ class _CarWashFormScreenState extends State<CarWashFormScreen> {
                     ScrollViewKeyboardDismissBehavior.onDrag,
                 padding: EdgeInsetsDirectional.fromSTEB(pad, 12, pad, 24),
                 children: [
+                  if (widget.assistantPrefill case final ap?)
+                    Padding(
+                      padding: const EdgeInsetsDirectional.only(bottom: 12),
+                      child: AssistantPrefillBanner(
+                        prefill: ap,
+                        only: const {'plate', 'customer', 'services'},
+                        what: 'هذه الغسلة',
+                      ),
+                    ),
                   GuideAnchor(
                     id: OilGuideAnchors.carWashFormPlate,
                     child: OilChangeRoyalCard.section(

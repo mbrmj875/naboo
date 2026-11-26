@@ -126,6 +126,7 @@ class AccountDevice {
     required this.lastSeenAt,
     required this.createdAt,
     this.accessStatus = 'active',
+    this.ownerNotify = false,
   });
 
   final String deviceId;
@@ -136,6 +137,9 @@ class AccountDevice {
 
   /// `active` أو `revoked` (مفصول — يحتاج موافقة من جهاز نشط).
   final String accessStatus;
+
+  /// هاتف المالك: يستلم إشعارات المحل (خطة الإشعارات، المرحلة 0).
+  final bool ownerNotify;
 
   bool get isRevoked => accessStatus.toLowerCase() == 'revoked';
 
@@ -153,6 +157,7 @@ class AccountDevice {
       lastSeenAt: parseDate(map['last_seen_at']),
       createdAt: parseDate(map['created_at']),
       accessStatus: (map['access_status'] ?? 'active').toString(),
+      ownerNotify: map['owner_notify'] == true,
     );
   }
 }
@@ -4079,6 +4084,22 @@ class CloudSyncService {
           _printSettingsLocalIdentityWins(current, incomingRaw)) {
         // لا تستبدل اسم/شعار/هاتف المحل بصف فارغ أحدث زمنياً (إعادة تثبيت / جهاز جديد).
         continue;
+      }
+      final localSettingsDefault = singletonSettingsRowIsDefault(table, current);
+      if (localSettingsDefault != null) {
+        final incomingSettingsDefault =
+            singletonSettingsRowIsDefault(table, incomingRaw)!;
+        // إعدادات الدين/التقسيط: القيم الافتراضية من جهاز جديد لا تمسح إعدادات حقيقية،
+        // والإعدادات الحقيقية تحل محل الافتراضية مهما كان الوقت.
+        if (incomingSettingsDefault && !localSettingsDefault) continue;
+        if (localSettingsDefault && !incomingSettingsDefault) {
+          await txn.insert(
+            table,
+            incoming,
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          );
+          continue;
+        }
       }
       if (_incomingWins(current, incomingRaw)) {
         if (_isGenericLwwBlockedForTable(table)) {

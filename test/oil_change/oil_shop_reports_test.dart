@@ -15,6 +15,7 @@ import 'package:naboo/verticals/oil_change/reports/kit/report_math.dart';
 import 'package:naboo/verticals/oil_change/reports/products/products_report_repository.dart';
 import 'package:naboo/verticals/oil_change/services/oil_change_direct_sale_service.dart';
 import 'package:naboo/verticals/oil_change/services/oil_change_reports_repository.dart';
+import 'package:naboo/verticals/oil_change/utils/oil_change_filter_format.dart';
 
 import 'helpers/oil_change_test_harness.dart';
 
@@ -384,6 +385,43 @@ void main() {
       expect(r.revenueFils, 24000 + 6000 + 6000);
       // 20 لتراً بمعدل 6 في يوم واحد.
       expect(row.daysOfCover(r.rangeDays), closeTo(20 / 6, 0.001));
+    });
+
+    test('فلاتر المخزون على البطاقة تُحسب خارجة، لا فلتر العميل', () async {
+      final filter = await _product(h, name: 'فلتر محرك', qty: -1, buy: 3000);
+      final other = await _product(h, name: 'فلتر هواء', qty: 4, buy: 2000);
+      final card = await builder.createPending(plate: 'F1');
+      final db = await h.database;
+      await db.update(
+        'service_orders',
+        {
+          'oilFiltersJson': encodeOilFiltersJson([
+            OilFilterLineData(
+              code: 'engine',
+              name: 'فلتر محرك',
+              priceFils: 10000,
+              productId: filter,
+              qty: 2,
+            ),
+            const OilFilterLineData(
+              code: 'air',
+              name: 'من العميل',
+              priceFils: 0,
+              customerProvided: true,
+              laborFils: 1000,
+            ),
+          ]),
+        },
+        where: 'id = ?',
+        whereArgs: [card],
+      );
+
+      final r = await ProductsReportRepository.instance.loadSnapshot(_today());
+      final row = r.products.firstWhere((p) => p.id == filter);
+      expect(row.soldQtyByChannel[OilShopChannel.oilCard], 2);
+      expect(row.soldQty, 2);
+      expect(r.negative.single.soldQty, 2, reason: '«خرج في الفترة» ليس 0');
+      expect(r.idle.map((p) => p.id), contains(other));
     });
 
     test('الراكد والنواقص', () async {

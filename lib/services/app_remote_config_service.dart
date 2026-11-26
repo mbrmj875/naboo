@@ -24,6 +24,7 @@ class AppRemoteConfigData {
     required this.announcementBodyAr,
     required this.announcementUrl,
     this.oilShellDisabled = false,
+    this.assistant = AssistantRemoteFlags.off,
   });
 
   final bool maintenanceMode;
@@ -34,10 +35,13 @@ class AppRemoteConfigData {
   final String latestVersion;
   final String updateMessageAr;
   final bool forceUpdate;
+
   /// رابط APK للأندرويد (والافتراضي إن لم يُحدَّد ويندوز).
   final String updateDownloadUrl;
+
   /// رابط مُثبّت ويندوز (.exe) — إن وُجد يُستخدم على الحاسوب فقط.
   final String updateDownloadUrlWindows;
+
   /// إعلان عام (أي مناسبة) — يُعرض عند تغيير النص/العنوان/الرابط.
   final String announcementTitleAr;
   final String announcementBodyAr;
@@ -45,6 +49,9 @@ class AppRemoteConfigData {
 
   /// مفتاح رجوع: يعيد موظف الزيت إلى الرئيسية المشتركة عند أول تشغيل متصل.
   final bool oilShellDisabled;
+
+  /// مفاتيح مساعد نابو الجديد (مفتاح الإيقاف ومفاتيح القدرات).
+  final AssistantRemoteFlags assistant;
 
   static const AppRemoteConfigData fallback = AppRemoteConfigData(
     maintenanceMode: false,
@@ -90,8 +97,9 @@ class AppRemoteConfigData {
       minSupportedVersion: s('min_supported_version').isEmpty
           ? '0.0.0'
           : s('min_supported_version'),
-      latestVersion:
-          s('latest_version').isEmpty ? '0.0.0' : s('latest_version'),
+      latestVersion: s('latest_version').isEmpty
+          ? '0.0.0'
+          : s('latest_version'),
       updateMessageAr: s('update_message_ar'),
       forceUpdate: b('force_update'),
       updateDownloadUrl: s('update_download_url'),
@@ -100,7 +108,88 @@ class AppRemoteConfigData {
       announcementBodyAr: s('announcement_body_ar'),
       announcementUrl: s('announcement_url'),
       oilShellDisabled: b('oil_shell_disabled'),
+      assistant: AssistantRemoteFlags.fromJson(j['assistant']),
     );
+  }
+}
+
+/// `config.assistant` في [app_remote_config] — خطة المساعد، القسم 7.
+///
+/// - [kill]: يعيد كل المحلات إلى المساعد القديم خلال دقائق بلا تحديث.
+/// - [rollout]: `off` لا أحد، `tenants` المحلات المفعّلة في
+///   `assistant_tenant_settings` فقط، `all` الجميع.
+/// - مفتاح لكل قدرة يُطفئها وحدها.
+class AssistantRemoteFlags {
+  const AssistantRemoteFlags({
+    required this.kill,
+    required this.rollout,
+    required this.executeEnabled,
+    required this.webEnabled,
+    required this.imagesEnabled,
+    required this.whatsappResponderEnabled,
+    this.videos = const {},
+  });
+
+  final bool kill;
+
+  /// روابط فيديو الشرح لكل شاشة (م3-15)، يديرها المالك من لوحة الإدارة.
+  /// المفتاح معرّف المسار، والقيمة رابط https فقط.
+  final Map<String, String> videos;
+  final String rollout;
+  final bool executeEnabled;
+  final bool webEnabled;
+  final bool imagesEnabled;
+  final bool whatsappResponderEnabled;
+
+  /// بلا إعداد من الخادم: الجديد مطفأ، والقدرات مسموحة إن فُعّل لاحقاً.
+  static const AssistantRemoteFlags off = AssistantRemoteFlags(
+    kill: false,
+    rollout: 'off',
+    executeEnabled: true,
+    webEnabled: true,
+    imagesEnabled: true,
+    whatsappResponderEnabled: true,
+  );
+
+  static AssistantRemoteFlags fromJson(Object? raw) {
+    if (raw is! Map) return off;
+    final caps = raw['caps'] is Map ? raw['caps'] as Map : const {};
+    bool cap(String k) => caps[k] != false;
+    final rollout = (raw['v2_rollout'] ?? 'off').toString().trim();
+    return AssistantRemoteFlags(
+      kill: raw['kill'] == true,
+      rollout: const {'off', 'tenants', 'all'}.contains(rollout)
+          ? rollout
+          : 'off',
+      executeEnabled: cap('execute'),
+      webEnabled: cap('web'),
+      imagesEnabled: cap('images'),
+      whatsappResponderEnabled: cap('whatsapp_responder'),
+      videos: _videos(raw['videos']),
+    );
+  }
+
+  static Map<String, String> _videos(Object? raw) {
+    if (raw is! Map) return const {};
+    final out = <String, String>{};
+    raw.forEach((k, v) {
+      final url = (v ?? '').toString().trim();
+      final uri = Uri.tryParse(url);
+      if (k is String && k.startsWith('app_') && uri != null && uri.scheme == 'https' && uri.host.isNotEmpty) {
+        out[k] = url;
+      }
+    });
+    return out;
+  }
+
+  /// هل الجديد مفعّل لهذا المحل؟ [tenantEnabled] من `assistant_tenant_settings`.
+  bool v2EnabledFor({required bool tenantEnabled}) {
+    if (kill) return false;
+    return switch (rollout) {
+      'all' => true,
+      'tenants' => tenantEnabled,
+      _ => false,
+    };
   }
 }
 
@@ -128,10 +217,9 @@ class AppRemoteConfigService {
   /// تُرجع سالباً إذا [a] < [b]، وصفر إذا تساويا، وموجباً إذا [a] > [b].
   static int compareVersions(String a, String b) {
     List<int> parts(String v) {
-      return normalizeVersion(v)
-          .split('.')
-          .map((e) => int.tryParse(e.trim()) ?? 0)
-          .toList();
+      return normalizeVersion(
+        v,
+      ).split('.').map((e) => int.tryParse(e.trim()) ?? 0).toList();
     }
 
     final pa = parts(a);

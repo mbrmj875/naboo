@@ -17,6 +17,8 @@ import '../../verticals/oil_change/widgets/oil_change_log_detail_sheet.dart';
 import '../../widgets/invoice_detail_sheet.dart';
 import '../debts/customer_debt_detail_screen.dart';
 import '../installments/installment_details_screen.dart';
+import '../../utils/arabic_count.dart';
+import '../../verticals/oil_change/utils/oil_odometer_unit.dart';
 
 final _dateFmt = DateFormat('yyyy/MM/dd', 'en');
 
@@ -281,9 +283,10 @@ class _CustomerFinancialDetailPanelState
                     ),
                     subtitle: Text(
                       [
-                        '${(v['visits_count'] as num?)?.toInt() ?? 0} زيارة',
+                        arabicVisitsCount((v['visits_count'] as num?)?.toInt() ?? 0),
                         if ((v['last_odometer'] as num?) != null)
-                          'آخر عداد ${IraqiCurrencyFormat.formatInt((v['last_odometer'] as num).toInt())} كم',
+                          'آخر عداد ${IraqiCurrencyFormat.formatInt((v['last_odometer'] as num).toInt())} '
+                              '${OilOdometerUnit.label(OilOdometerUnit.parse(v['last_odometer_unit']))}',
                       ].join(' · '),
                     ),
                     trailing: const Icon(Icons.chevron_left_rounded),

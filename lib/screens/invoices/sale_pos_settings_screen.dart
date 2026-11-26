@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 import '../../models/sale_pos_settings_data.dart';
+import '../../providers/business_features_provider.dart';
 import '../../providers/sale_pos_settings_provider.dart';
 import '../../theme/design_tokens.dart';
 import '../../theme/sale_brand.dart';
@@ -113,6 +114,7 @@ class SalePosSettingsScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final prov = context.watch<SalePosSettingsProvider>();
     final d = prov.data;
+    final features = context.watch<BusinessFeaturesProvider>().data;
     final scheme = Theme.of(context).colorScheme;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final appBarFg = isDark ? Colors.white : AppColors.primaryDark;
@@ -159,6 +161,7 @@ class SalePosSettingsScreen extends StatelessWidget {
             _PolicyCard(
               scheme: scheme,
               children: [
+                if (features.enableDebts) ...[
                 _PolicySwitch(
                   title: 'البيع بالدين (آجل)',
                   subtitle: 'إيقافه يخفي خيار «دين» في شاشة البيع.',
@@ -169,6 +172,8 @@ class SalePosSettingsScreen extends StatelessWidget {
                   },
                 ),
                 const Divider(height: 1),
+                ],
+                if (features.enableInstallments) ...[
                 _PolicySwitch(
                   title: 'البيع بالتقسيط',
                   subtitle: 'إيقافه يخفي خيار «تقسيط».',
@@ -179,6 +184,7 @@ class SalePosSettingsScreen extends StatelessWidget {
                   },
                 ),
                 const Divider(height: 1),
+                ],
                 _PolicySwitch(
                   title: 'البيع مع التوصيل',
                   subtitle: 'إيقافه يخفي خيار «توصيل».',

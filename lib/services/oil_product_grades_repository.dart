@@ -729,3 +729,24 @@ class OilPickLine {
   String get lineTitle =>
       viscosity.isEmpty ? parentName : '$parentName · $viscosity';
 }
+
+/// صنف زيت المخزن المطابق لاسم ولزوجة مكتوبين في بطاقة سابقة: الاسم واللزوجة
+/// معاً أولاً، ثم الاسم وحده (فتُختار العائلة على الأقل). المسافات وحالة
+/// الأحرف لا تهم. null إن لم يطابق شيء.
+OilPickLine? matchOilPickLineByName(
+  List<OilPickLine> lines, {
+  required String name,
+  String? viscosity,
+}) {
+  String norm(String s) => s.trim().toLowerCase().replaceAll(RegExp(r'\s+'), '');
+  final n = norm(name);
+  if (n.isEmpty) return null;
+  final v = norm(viscosity ?? '');
+  OilPickLine? byName;
+  for (final l in lines) {
+    if (norm(l.parentName) != n) continue;
+    if (v.isNotEmpty && norm(l.viscosity) == v) return l;
+    byName ??= l;
+  }
+  return byName;
+}

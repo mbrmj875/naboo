@@ -1,6 +1,7 @@
 import '../../../utils/iqd_money.dart';
 import '../../../utils/iraqi_currency_format.dart';
 import 'oil_change_filter_format.dart';
+import 'oil_odometer_unit.dart';
 
 List<String> parseOilRequestedServices(String? raw) {
   if (raw == null || raw.trim().isEmpty) return const [];
@@ -27,6 +28,13 @@ String oilFormatDate(String? iso) {
 String oilFormatOdo(String? odo) {
   if (odo == null || odo.trim().isEmpty) return '—';
   return odo.trim();
+}
+
+/// قراءة العداد مع وحدتها («85000 كم»)، والفارغة «—» وحدها لا «— كم».
+String oilFormatOdoWithUnit(Object? odo, Map<String, dynamic> row) {
+  final v = (odo ?? '').toString().trim();
+  if (v.isEmpty) return '—';
+  return '$v ${OilOdometerUnit.labelOf(row)}';
 }
 
 String oilFormatPrice(Map<String, dynamic> r) {

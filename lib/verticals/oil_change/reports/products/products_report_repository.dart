@@ -8,6 +8,7 @@ import '../../../../services/reports_repository.dart';
 import '../../../../services/service_order_kinds.dart';
 import '../../../../services/tenant_context_service.dart';
 import '../../../../utils/stock_quantity_kind.dart';
+import '../../utils/oil_change_filter_format.dart';
 import '../kit/oil_shop_report_sql.dart';
 import '../kit/report_math.dart';
 
@@ -206,9 +207,14 @@ class ProductsReportRepository {
     // الزيت والهيدروليك المصروفان على بطاقات الغيار يخرجان من المخزون عند
     // الصرف، وسطر فاتورتهما بلا منتج؛ فيُضافان هنا للكمية دون الإيراد
     // (إيرادهما ضمن سعر البطاقة في تقرير غيار الزيت).
-    for (final (pid, liters) in await _cardFluids(db, tid, range)) {
+    // وكذلك فلاتر المخزون على البطاقة: سطرها في الفاتورة بلا منتج لأن سند
+    // البطاقة هو الذي صرفها.
+    for (final (pid, qty) in [
+      ...await _cardFluids(db, tid, range),
+      ...await _cardFilters(db, tid, range),
+    ]) {
       final m = qtyBy[pid] ??= {};
-      m[OilShopChannel.oilCard] = (m[OilShopChannel.oilCard] ?? 0) + liters;
+      m[OilShopChannel.oilCard] = (m[OilShopChannel.oilCard] ?? 0) + qty;
     }
 
     final products = <ProductReportRow>[
@@ -352,6 +358,38 @@ class ProductsReportRepository {
       }
     }
     return out;
+  }
+
+  /// قطع الفلاتر المصروفة من المخزون على بطاقات الفترة (لا ما أحضره العميل).
+  Future<List<(int, double)>> _cardFilters(
+    Database db,
+    int tenantId,
+    ReportDateRange range,
+  ) async {
+    final cols = {
+      for (final r in await db.rawQuery('PRAGMA table_info(service_orders)'))
+        (r['name'] ?? '').toString(),
+    };
+    if (!cols.contains('oilFiltersJson')) return const [];
+    final kind = cols.contains('orderKind')
+        ? "AND IFNULL(so.orderKind, '') != '${ServiceOrderKinds.carWash}'"
+        : '';
+    final (fromUtc, toUtc) = ReportMath.utcBounds(range);
+    final rows = await db.rawQuery(
+      '''
+      SELECT so.oilFiltersJson AS j
+      FROM service_orders so
+      WHERE so.tenantId = ? AND ${OilShopReportSql.aliveOrder('so')}
+        AND so.createdAt >= ? AND so.createdAt < ? $kind
+        AND IFNULL(so.oilFiltersJson, '') != ''
+      ''',
+      [tenantId, fromUtc, toUtc],
+    );
+    return [
+      for (final r in rows)
+        for (final line in parseOilFiltersJson(r['j']?.toString()))
+          if (line.issuesStock) (line.productId!, line.qty.toDouble()),
+    ];
   }
 
   /// سطور المنتجات في فواتير البيع ومرتجعاتها، مع قناة كل فاتورة.

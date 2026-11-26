@@ -8,6 +8,7 @@ import '../../../utils/iraqi_currency_format.dart';
 import '../services/oil_change_settings.dart';
 import '../utils/iraq_plate.dart';
 import 'oil_technicians_screen.dart';
+import '../../../guides/guide_anchor.dart';
 
 /// إعدادات بطاقة الغيار المستقلة.
 ///
@@ -269,17 +270,18 @@ class _OilChangeCardSettingsScreenState
                   ),
                 ),
                 const SizedBox(height: 8),
-                Card(
-                  margin: EdgeInsets.zero,
-                  child: ListTile(
-                    key: const Key('techniciansTile'),
-                    leading: const Icon(Icons.handyman_outlined),
-                    title: const Text('الفنيون'),
-                    subtitle: const Text(
-                      'حسابات الموظفين والمضافون يدوياً، والإيقاف والإعادة',
+                GuideAnchor(
+                  id: OilGuideAnchors.cardSettingsTechnicians,
+                  child: Card(
+                    margin: EdgeInsets.zero,
+                    child: ListTile(
+                      key: const Key('techniciansTile'),
+                      leading: const Icon(Icons.handyman_outlined),
+                      title: const Text('الفنيون'),
+                      subtitle: const Text('حسابات الموظفين والمضافون يدوياً، والإيقاف والإعادة'),
+                      trailing: const Icon(Icons.chevron_left_rounded),
+                      onTap: () => unawaited(OilTechniciansScreen.open(context)),
                     ),
-                    trailing: const Icon(Icons.chevron_left_rounded),
-                    onTap: () => unawaited(OilTechniciansScreen.open(context)),
                   ),
                 ),
                 const SizedBox(height: 24),

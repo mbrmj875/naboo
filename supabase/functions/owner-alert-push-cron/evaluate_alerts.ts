@@ -61,8 +61,16 @@ function isActiveRow(row: Record<string, unknown>): boolean {
   return s === '' || s === 'null';
 }
 
+/** العراق UTC+3 طوال السنة (بلا توقيت صيفي). */
+const BAGHDAD_OFFSET_MS = 3 * 3600 * 1000;
+
+/** تاريخ اليوم YYYY-MM-DD بتوقيت بغداد، لا UTC (كان خاطئا من 00:00 إلى 03:00). */
+export function baghdadYmd(now: Date = new Date()): string {
+  return new Date(now.getTime() + BAGHDAD_OFFSET_MS).toISOString().slice(0, 10);
+}
+
 function todayYmd(): string {
-  return new Date().toISOString().slice(0, 10);
+  return baghdadYmd();
 }
 
 function dateYmd(raw: unknown): string {
@@ -185,9 +193,9 @@ function countClothingSlowMovers(
     if (!prev || d > prev) lastSaleByVariant.set(variantId, d);
   }
 
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - daysThreshold);
-  const cutoffYmd = cutoff.toISOString().slice(0, 10);
+  const cutoffYmd = baghdadYmd(
+    new Date(Date.now() - daysThreshold * 24 * 3600 * 1000),
+  );
 
   let n = 0;
   for (const v of variants) {

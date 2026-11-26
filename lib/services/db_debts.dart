@@ -612,6 +612,14 @@ extension DbDebts on DatabaseHelper {
       rows.map((r) => r.invoiceId),
     );
 
+    // كل لوحات العميل (سجل السيارات وكل بطاقاته)، لا لوحات بطاقات الدين فقط:
+    // البحث بلوحة سيارة أخرى للعميل نفسه يجد دينه.
+    final platesById = await _customerPlateKeys(
+      db,
+      tid,
+      byId.keys.toList(),
+    );
+
     CustomerDebtSummary build({
       required int? customerId,
       required String display,
@@ -641,6 +649,7 @@ extension DbDebts on DatabaseHelper {
       }
       final keys = <String>{
         ...?phonesById[customerId],
+        ...?platesById[customerId],
         for (final x in list) ...?cardKeysByInvoice[x.invoiceId]?.split(' '),
       }.where((k) => k.trim().isNotEmpty);
       return CustomerDebtSummary(
@@ -679,6 +688,58 @@ extension DbDebts on DatabaseHelper {
       );
     }
     out.sort(compareCustomerDebtOverdueFirst);
+    return out;
+  }
+
+  /// لوحات سيارات كل عميل (بلا مسافات) من سجل السيارات ومن بطاقاته.
+  Future<Map<int, Set<String>>> _customerPlateKeys(
+    DatabaseExecutor db,
+    int tid,
+    List<int> customerIds,
+  ) async {
+    final ids = customerIds.where((i) => i > 0).toSet().toList();
+    final out = <int, Set<String>>{};
+    if (ids.isEmpty) return out;
+    void add(Object? cid, Object? plate) {
+      final id = (cid as num?)?.toInt();
+      final p = (plate ?? '').toString().replaceAll(' ', '').trim();
+      if (id == null || p.isEmpty) return;
+      out.putIfAbsent(id, () => <String>{}).add(p);
+    }
+
+    for (var i = 0; i < ids.length; i += 400) {
+      final chunk = ids.sublist(i, min(i + 400, ids.length));
+      final marks = List.filled(chunk.length, '?').join(',');
+      try {
+        final rs = await db.rawQuery(
+          'SELECT customerId, deviceSerial FROM service_orders '
+          'WHERE customerId IN ($marks) AND deletedAt IS NULL '
+          "AND TRIM(IFNULL(deviceSerial, '')) <> ''",
+          chunk,
+        );
+        for (final r in rs) {
+          add(r['customerId'], r['deviceSerial']);
+        }
+      } catch (e) {
+        AppLogger.warn('DbDebts', 'customer card plates failed: $e');
+      }
+      if (await _hasVehiclesTable(db)) {
+        try {
+          final rs = await db.rawQuery(
+            'SELECT customer_id, plate_display, plate_key FROM vehicles '
+            'WHERE customer_id IN ($marks) AND tenantId = ? '
+            'AND deletedAt IS NULL',
+            [...chunk, tid],
+          );
+          for (final r in rs) {
+            add(r['customer_id'], r['plate_display']);
+            add(r['customer_id'], r['plate_key']);
+          }
+        } catch (e) {
+          AppLogger.warn('DbDebts', 'customer vehicle plates failed: $e');
+        }
+      }
+    }
     return out;
   }
 
@@ -1138,13 +1199,10 @@ extension DbDebts on DatabaseHelper {
                 ? lf
                 : _toFils((led.first['amount'] as num?)?.toDouble() ?? 0);
             if (cashFils > 0) {
-              final ws = await txn.query(
-                'work_shifts',
-                columns: ['id'],
-                where:
-                    'closedAt IS NULL AND tenantId = ? AND deleted_at IS NULL',
-                whereArgs: [tid],
-                limit: 1,
+              final wsId = await _resolveActorOpenShiftId(
+                txn,
+                tenantId: tid,
+                actorName: by,
               );
               await DbCashSqlOps.insertCashLedgerEntry(txn, tid, {
                 'transactionType': 'debt_collection_reversal',
@@ -1154,7 +1212,7 @@ extension DbDebts on DatabaseHelper {
                     'إلغاء تحصيل دين — ${p['customerNameSnapshot']} '
                     '(سند #$receiptId)',
                 'invoiceId': null,
-                'workShiftId': ws.isEmpty ? null : ws.first['id'],
+                'workShiftId': wsId,
                 'createdAt': DateTime.now().toIso8601String(),
               });
             }

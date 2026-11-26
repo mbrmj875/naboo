@@ -12,9 +12,7 @@ class GuideOwnerHomeCtaStub extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('الرئيسية (للتوجيه)'),
-      ),
+      appBar: AppBar(title: const Text('الرئيسية (للتوجيه)')),
       body: Padding(
         padding: const EdgeInsetsDirectional.all(24),
         child: Column(

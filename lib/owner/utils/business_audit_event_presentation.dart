@@ -78,6 +78,8 @@ abstract final class BusinessAuditEventPresentation {
         return 'مزامنة: تعذّر رفع البيانات';
       case 'user_directory_reconciled':
         return 'تحديث قائمة المستخدمين بعد المزامنة';
+      case 'assistant_action':
+        return 'تنفيذ عبر مساعد نابو';
       default:
         return _humanizeSnakeCase(event.eventType);
     }
@@ -123,6 +125,12 @@ abstract final class BusinessAuditEventPresentation {
         return _debtPaymentDetail(oldMap, newMap, event.entityId);
       case 'debt_reminder_sent':
         return _entityRefDetail(event);
+      case 'assistant_action':
+        // ما نُفّذ فقط، لا المحادثة (ق16).
+        return [
+          _entityRefDetail(event),
+          if (event.username != null && event.username!.isNotEmpty) 'بواسطة ${event.username}',
+        ].where((x) => x.isNotEmpty).join(' · ');
       case 'debt_invoice_customer_linked':
         return _entityRefDetail(event);
       case 'stock_voucher_posted':

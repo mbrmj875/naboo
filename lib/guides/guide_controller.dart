@@ -37,11 +37,15 @@ class GuideHostBridge {
     required this.currentRouteId,
     required this.ensureRoute,
     required this.runAction,
+    this.pushRoute,
   });
 
   final String Function() currentRouteId;
   final Future<void> Function(String routeId) ensureRoute;
   final Future<void> Function(String action) runAction;
+
+  /// يدفع شاشة جاهزة (نموذج معبّأ من المساعد) في مسار المحتوى نفسه.
+  final Future<void> Function(Route<void> route)? pushRoute;
 }
 
 /// يتحكم بعرض الجولة والخطوة الحالية.
@@ -62,6 +66,29 @@ class GuideController extends ChangeNotifier {
   /// ذاكرة جلسة المحادثة (تبقى أثناء تشغيل التطبيق حتى المسح).
   final List<GuideChatTurn> _chatSession = <GuideChatTurn>[];
 
+  /// صوت الجولة يتبع مفتاح كتم المساعد (ق46). يضبطه المساعد الجديد فقط،
+  /// فيبقى سلوك الجولات القديم كما هو والمفتاح مطفأ.
+  static bool Function()? narrationMuted;
+
+  /// تُبلَّغ بانتهاء أي جولة (للدورة: المهمة تُحسب حين تكتمل جولتها).
+  static void Function(String tourId, {required bool completed})? onTourEnded;
+
+  /// نهاية جولة بدأها المساعد: إشارة التعلّم (4.7ب). [step] رقم الخطوة عند الإيقاف.
+  static void Function({required bool completed, required int step})? onAssistantTourEnded;
+
+  /// جولة بدأها المساعد (جاهزة أو مرتجلة): تُراقَب مغادرة مسارها (م3-9).
+  bool _fromAssistant = false;
+  String? _offRouteId;
+
+  bool get fromAssistant => _fromAssistant && _activeTour != null;
+  bool get isAdHoc => _activeTour?.id == adHocTourId;
+
+  /// المسار الذي ذهب إليه المستخدم بعيداً عن خطوة جارية. يُعرض سؤال
+  /// «نكمل من هنا أم نرجع؟» ما دام غير فارغ.
+  String? get offRouteId => _offRouteId;
+
+  static const adHocTourId = 'assistant_adhoc';
+
   GuideTour? get activeTour => _activeTour;
   int get stepIndex => _stepIndex;
   bool get isRunning => _activeTour != null;
@@ -69,6 +96,29 @@ class GuideController extends ChangeNotifier {
   String? get lastChatReply => _lastChatReply;
   List<GuideChatTurn> get chatSession =>
       List<GuideChatTurn>.unmodifiable(_chatSession);
+
+  /// هوية المستخدم الحالية (لحفظ محادثات المساعد لكل مستخدم في كل محل).
+  int get tenantId => _tenantId;
+  String get userKey => _userKey;
+
+  /// مسار الشاشة الظاهرة الآن كما يراه المضيف.
+  String? get hostRouteId => _host?.currentRouteId();
+
+  /// يفتح شاشة بمعرّفها عبر المضيف الحالي (لبطاقات المساعد وفتح الشاشات).
+  Future<bool> openRoute(String routeId) async {
+    final h = _host;
+    if (h == null) return false;
+    await h.ensureRoute(routeId);
+    return true;
+  }
+
+  /// يدفع شاشة جاهزة عبر المضيف وينتظر إغلاقها. false إن لم يدعم المضيف ذلك.
+  Future<bool> pushRoute(Route<void> route) async {
+    final push = _host?.pushRoute;
+    if (push == null) return false;
+    await push(route);
+    return true;
+  }
 
   void configureIdentity({required int tenantId, required String userKey}) {
     if (_userKey != userKey || _tenantId != tenantId) {
@@ -126,10 +176,39 @@ class GuideController extends ChangeNotifier {
       usersStaffTourById(id) ??
       inventoryProductTourById(id);
 
+  /// مسار يبنيه المساعد لحظياً (م3-7). لا يُحفظ كجولة منتهية.
+  Future<bool> startAdHoc(List<GuideStep> steps, {String title = 'إرشاد المساعد'}) async {
+    if (steps.isEmpty) return false;
+    _activeTour = GuideTour(id: adHocTourId, title: title, description: '', steps: steps);
+    _stepIndex = 0;
+    _markDoneTourId = null;
+    _fromAssistant = true;
+    _offRouteId = null;
+    notifyListeners();
+    await _prepareCurrentStep();
+    notifyListeners();
+    return true;
+  }
+
+  /// «نرجع»: يعيد المستخدم لمسار الخطوة الحالية.
+  Future<void> returnToStep() async {
+    _offRouteId = null;
+    notifyListeners();
+    await _prepareCurrentStep();
+    notifyListeners();
+  }
+
+  /// «نكمل من هنا»: يُنهي الإرشاد ويترك المستخدم حيث هو.
+  Future<void> continueHere() async {
+    _offRouteId = null;
+    await stop(completed: false);
+  }
+
   Future<bool> startTour(
     String tourId, {
     bool fromChat = false,
     bool markDoneOnFinish = false,
+    bool fromAssistant = false,
   }) async {
     final tour = oilChangeTourById(tourId) ??
         carWashTourById(tourId) ??
@@ -141,6 +220,8 @@ class GuideController extends ChangeNotifier {
     }
     _activeTour = tour;
     _stepIndex = 0;
+    _fromAssistant = fromAssistant;
+    _offRouteId = null;
     // أول استخدام + أي جولة تُكمَل/تُتخطى تُحفظ حتى لا تتكرر تلقائياً
     _markDoneTourId = tourId;
     notifyListeners();
@@ -170,11 +251,18 @@ class GuideController extends ChangeNotifier {
     _prepareEpoch++;
     _prepareQueued = false;
     final toMark = completed ? _markDoneTourId : null;
+    final endedId = _activeTour?.id;
+    final endedStep = _stepIndex;
+    final endedFromAssistant = _fromAssistant;
     _activeTour = null;
     _stepIndex = 0;
     _markDoneTourId = null;
     _busyNavigating = false;
+    _fromAssistant = false;
+    _offRouteId = null;
     notifyListeners();
+    if (endedId != null) onTourEnded?.call(endedId, completed: completed);
+    if (endedId != null && endedFromAssistant) onAssistantTourEnded?.call(completed: completed, step: endedStep + 1);
     if (toMark != null) {
       await GuidePrefs.instance.markDone(
         tenantId: _tenantId,
@@ -187,7 +275,22 @@ class GuideController extends ChangeNotifier {
   /// يستدعى من HomeScreen عند تغيّر المسار — يتقدم تلقائياً في خطوات awaitTap.
   Future<void> onRouteChanged(String routeId) async {
     final step = currentStep;
-    if (step == null || !step.awaitTap) return;
+    if (step == null) return;
+    if (!step.awaitTap) {
+      // الانحراف: المستخدم فتح شاشة أخرى بنفسه أثناء إرشاد المساعد.
+      final want = step.ensureRouteId;
+      if (_fromAssistant && !_busyNavigating && want != null && !_routeMatches(routeId, want)) {
+        if (_offRouteId != routeId) {
+          _offRouteId = routeId;
+          GuideNarrator.instance.unawaitedStop();
+          notifyListeners();
+        }
+      } else if (_offRouteId != null && want != null && _routeMatches(routeId, want)) {
+        _offRouteId = null;
+        notifyListeners();
+      }
+      return;
+    }
     final stayOn = step.ensureRouteId;
     // تقدّم عندما يغادر المستخدم مسار الخطوة (مثلاً فتح بطاقة جديدة).
     if (stayOn != null && routeId != stayOn) {
@@ -304,6 +407,7 @@ class GuideController extends ChangeNotifier {
 
       // الصوت لا يحجز التحضير: إن ضغط التالي يُوقف الصوت ويُجهَّز التالي
       final toSpeak = step.narration;
+      if (narrationMuted?.call() ?? false) return;
       unawaited(() async {
         final spoken = await GuideNarrator.instance.speak(toSpeak);
         if (!spoken && GuideNarrator.instance.lastError != null) {
@@ -339,6 +443,7 @@ class GuideController extends ChangeNotifier {
 
   static bool isOilGuideRoute(String routeId) {
     if (routeId == AppContentRoutes.home ||
+        routeId == AppContentRoutes.settings ||
         routeId == AppContentRoutes.settingsDashboardLayout ||
         routeId == AppContentRoutes.oilServicesLog ||
         routeId == AppContentRoutes.oilChangeHub ||

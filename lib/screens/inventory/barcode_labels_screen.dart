@@ -13,6 +13,7 @@ import '../../services/tenant_context_service.dart';
 import '../../theme/design_tokens.dart';
 import '../../utils/barcode_labels_pdf.dart';
 import '../../utils/numeric_format.dart';
+import '../../guides/guide_anchor.dart';
 
 final class _PrintLabelsIntent extends Intent {
   const _PrintLabelsIntent();
@@ -733,7 +734,9 @@ class _BarcodeLabelsScreenState extends State<BarcodeLabelsScreen> {
                             )
                           : const Icon(Icons.refresh_rounded),
                     ),
-                TextButton.icon(
+                GuideAnchor(
+  id: OilGuideAnchors.barcodeLabelsPrint,
+  child: TextButton.icon(
                   onPressed: _loading ||
                           _totalLabels <= 0 ||
                           _printBusy
@@ -749,6 +752,7 @@ class _BarcodeLabelsScreenState extends State<BarcodeLabelsScreen> {
                   label: Text('طباعة $_totalLabels ملصق'),
                   style: TextButton.styleFrom(foregroundColor: cs.onPrimary),
                 ),
+),
               ],
             ),
             body: _loading

@@ -11,6 +11,7 @@ import '../../services/tenant_context_service.dart';
 import '../../theme/design_tokens.dart';
 import '../../utils/app_logger.dart';
 import '../../widgets/permission_guard.dart';
+import '../../guides/guide_anchor.dart';
 
 /// شاشة «الجرد الدوري» — نسخة Royal Gold:
 /// - بطاقات بحواف `circular(12)` ومتوافقة مع الوضع الليلي.
@@ -152,14 +153,14 @@ class _StocktakingScreenState extends State<StocktakingScreen>
               ),
             ),
           ),
-          floatingActionButton: FloatingActionButton.extended(
-            backgroundColor: AppColors.accentGold,
-            foregroundColor: AppColors.primaryDark,
-            onPressed: _newSession,
-            icon: const Icon(Icons.fact_check_rounded),
-            label: const Text(
-              'بدء جرد جديد',
-              style: TextStyle(fontWeight: FontWeight.bold),
+          floatingActionButton: GuideAnchor(
+            id: OilGuideAnchors.stocktakingNew,
+            child: FloatingActionButton.extended(
+              backgroundColor: AppColors.accentGold,
+              foregroundColor: AppColors.primaryDark,
+              onPressed: _newSession,
+              icon: const Icon(Icons.fact_check_rounded),
+              label: const Text('بدء جرد جديد', style: TextStyle(fontWeight: FontWeight.bold)),
             ),
           ),
           body: _buildBody(cs),

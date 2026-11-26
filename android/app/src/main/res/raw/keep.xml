@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- صوت قناتي «عاجل» و«طلبات» (خطة الإشعارات). يُبقى حتى لا يحذفه تقليص الموارد. -->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@raw/naboo_alert" />

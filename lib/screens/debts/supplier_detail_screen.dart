@@ -18,7 +18,7 @@ import '../../utils/shift_actor_conflict_guard.dart';
 import '../../theme/design_tokens.dart';
 import '../../widgets/product_media_image.dart';
 import 'void_payment_dialog.dart';
-import '../../printing/receipt_printer.dart';
+import '../../printing/invoice_receipt_screen.dart';
 import '../../services/effective_store_branding.dart';
 import '../../services/supplier_statement.dart';
 import '../../utils/customer_phone_launch.dart';
@@ -121,7 +121,12 @@ class _SupplierDetailScreenState extends State<SupplierDetailScreen> {
       payouts: _payouts,
     );
     if (choice == 'print') {
-      await ReceiptPrinter.printWithFeedback(context, () async => st.toReceipt());
+      // معاينة أولاً (بالصورة نفسها التي تُطبع)، ثم «طباعة» أو «مشاركة».
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => InvoiceReceiptScreen(document: st.toReceipt()),
+        ),
+      );
     } else {
       final store = await _storeName();
       if (!mounted) return;

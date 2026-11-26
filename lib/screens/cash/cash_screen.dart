@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import '../../navigation/shell/reload_when_shown.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 import 'package:provider/provider.dart';
 
@@ -596,7 +597,7 @@ class CashScreen extends StatefulWidget {
 }
 
 class _CashScreenState extends State<CashScreen>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, ReloadWhenShown {
   late final TabController _tabs;
   final DatabaseHelper _db = DatabaseHelper();
 
@@ -620,8 +621,11 @@ class _CashScreenState extends State<CashScreen>
     _reload();
   }
 
-  Future<void> _reload() async {
-    setState(() => _loading = true);
+  @override
+  void onShownAgain() => _reload(silent: true);
+
+  Future<void> _reload({bool silent = false}) async {
+    if (!silent) setState(() => _loading = true);
     final sum = await _db.getCashSummary();
     final rows = await _db.getCashLedgerEntries(limit: 250);
     final invIds = rows.map((r) => r['invoiceId']).whereType<int>().toSet();
@@ -641,13 +645,16 @@ class _CashScreenState extends State<CashScreen>
   }
 
   Future<void> _refreshFromServer() async {
+    // المحلي أولاً: الرصيد يظهر فوراً، ثم يُحدَّث ثانية بعد المزامنة.
+    await _reload();
+    if (!mounted) return;
     await CloudSyncService.instance.syncNow(
       forcePull: true,
       forcePush: true,
       forceImportOnPull: true,
     );
     if (!mounted) return;
-    await _reload();
+    await _reload(silent: true);
   }
 
   Future<void> _openInvoiceDetail(int invoiceId) async {

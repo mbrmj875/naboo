@@ -18,6 +18,7 @@ import '../../services/cloud_sync_service.dart';
 import '../../theme/app_corner_style.dart';
 import '../../theme/design_tokens.dart';
 import '../../utils/screen_layout.dart';
+import '../../guides/guide_anchor.dart';
 
 final _numFmt = NumberFormat('#,##0', 'ar');
 final _dateFmt = DateFormat('dd/MM/yyyy', 'en');
@@ -788,50 +789,35 @@ class _DateStrip extends StatelessWidget {
     }
 
     Widget sectionMenu({required bool compact}) {
-      return PopupMenuButton<int>(
-        tooltip: 'أقسام التقارير',
-        initialValue: selectedSection,
-        onSelected: onSectionChanged,
-        itemBuilder: (context) => [
-          for (final s in sections)
-            PopupMenuItem<int>(
-              value: s.id,
-              child: Row(
-                children: [
-                  Icon(s.icon, size: 18, color: AppColors.accentGold),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          s.label,
-                          style: const TextStyle(fontWeight: FontWeight.w700),
-                        ),
-                        Text(
-                          s.subtitle,
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: cs.onSurfaceVariant,
-                          ),
-                        ),
-                      ],
+      return GuideAnchor(
+        id: OilGuideAnchors.reportsSections,
+        child: PopupMenuButton<int>(
+          tooltip: 'أقسام التقارير',
+          initialValue: selectedSection,
+          onSelected: onSectionChanged,
+          itemBuilder: (context) => [
+            for (final s in sections)
+              PopupMenuItem<int>(
+                value: s.id,
+                child: Row(
+                  children: [
+                    Icon(s.icon, size: 18, color: AppColors.accentGold),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(s.label, style: const TextStyle(fontWeight: FontWeight.w700)),
+                          Text(s.subtitle, style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
+                        ],
+                      ),
                     ),
-                  ),
-                  if (s.id == selectedSection)
-                    const Icon(
-                      Icons.check_rounded,
-                      size: 16,
-                      color: AppColors.accentGold,
-                    ),
-                ],
+                    if (s.id == selectedSection) const Icon(Icons.check_rounded, size: 16, color: AppColors.accentGold),
+                  ],
+                ),
               ),
-            ),
-        ],
-        child: _TopSlimMenuButton(
-          icon: current.icon,
-          label: current.label,
-          compact: compact,
+          ],
+          child: _TopSlimMenuButton(icon: current.icon, label: current.label, compact: compact),
         ),
       );
     }

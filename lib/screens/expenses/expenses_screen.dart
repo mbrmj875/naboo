@@ -1,3 +1,5 @@
+import '../../assistant/exec/assistant_name_match.dart';
+import '../../assistant/exec/assistant_prefill.dart';
 import 'dart:async' show Timer, unawaited;
 import 'dart:math' as math;
 
@@ -23,6 +25,7 @@ import '../../verticals/oil_change/widgets/oil_change_royal_card.dart';
 import 'expense_receipt_printer.dart';
 import 'expense_report_printer.dart';
 import 'widgets/expenses_stitch_mobile.dart';
+import '../../guides/guide_anchor.dart';
 
 final _dateDispFmt = DateFormat('dd/MM/yyyy', 'en');
 
@@ -73,7 +76,10 @@ class _ExpenseShortcutClose extends Intent {
 }
 
 class ExpensesScreen extends StatefulWidget {
-  const ExpensesScreen({super.key});
+  const ExpensesScreen({super.key, this.assistantPrefill});
+
+  /// مصروف عبّأه المساعد (م4-2): يُفتح محرر الإضافة معبّأً بعد التحميل.
+  final AssistantPrefill? assistantPrefill;
 
   @override
   State<ExpensesScreen> createState() => _ExpensesScreenState();
@@ -133,6 +139,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
       await DatabaseHelper().generateDueRecurringExpenses();
     } catch (_) {}
     await _reload();
+    final ap = widget.assistantPrefill;
+    if (ap != null && mounted) await _openEditor(assistant: ap);
   }
 
   @override
@@ -304,7 +312,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     );
   }
 
-  Future<void> _openEditor({ExpenseEntry? existing}) async {
+  Future<void> _openEditor({ExpenseEntry? existing, AssistantPrefill? assistant}) async {
     final q = MediaQuery.of(context);
     final result = await showModalBottomSheet<({bool ok, int? newId})?>(
       context: context,
@@ -322,6 +330,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
               child: _ExpenseEditorSheet(
                 categories: _categories,
                 existing: existing,
+                assistant: assistant,
               ),
             ),
           ),
@@ -498,10 +507,13 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                   ),
                 ),
                 actions: [
-                  IconButton(
-                    tooltip: 'إضافة مصروف',
-                    onPressed: () => unawaited(_openEditor()),
-                    icon: const Icon(Icons.add_rounded),
+                  GuideAnchor(
+                    id: OilGuideAnchors.expensesAdd,
+                    child: IconButton(
+                      tooltip: 'إضافة مصروف',
+                      onPressed: () => unawaited(_openEditor()),
+                      icon: const Icon(Icons.add_rounded),
+                    ),
                   ),
                   IconButton(
                     tooltip: 'تحديث',
@@ -2581,9 +2593,10 @@ class _PiePainter extends CustomPainter {
 }
 
 class _ExpenseEditorSheet extends StatefulWidget {
-  const _ExpenseEditorSheet({required this.categories, this.existing});
+  const _ExpenseEditorSheet({required this.categories, this.existing, this.assistant});
   final List<ExpenseCategory> categories;
   final ExpenseEntry? existing;
+  final AssistantPrefill? assistant;
 
   @override
   State<_ExpenseEditorSheet> createState() => _ExpenseEditorSheetState();
@@ -2632,6 +2645,29 @@ class _ExpenseEditorSheetState extends State<_ExpenseEditorSheet> {
       _taxKindCtrl.text = e.taxKind ?? '';
     } else {
       _parsedAmountUnits = 0;
+      final ap = widget.assistant;
+      if (ap != null) {
+        final amount = ap.number('amount')?.round() ?? 0;
+        if (amount > 0) {
+          _parsedAmountUnits = amount;
+          _amountCtrl.text = NumericFormat.formatNumber(amount);
+        }
+        _descCtrl.text = ap.str('note') ?? '';
+        // الفئة بالاسم كما قالها المستخدم؛ غير المطابقة يختارها بنفسه.
+        final said = ap.str('category');
+        if (said != null) {
+          final m = AssistantNameMatch.match(said, [
+            for (final c in widget.categories) {'id': c.id, 'name': c.name},
+          ]);
+          if (m.grade == AssistantMatchGrade.matched) {
+            final c = widget.categories.firstWhere((c) => c.id == m.productId);
+            _categoryId = c.id;
+            _wizardStep = 2;
+            _isRecurring = expenseCategorySuggestsRecurring(c.name);
+            _recurringDay = _isRecurring ? DateTime.now().day.clamp(1, 28) : null;
+          }
+        }
+      }
     }
   }
 
@@ -3302,6 +3338,12 @@ class _ExpenseEditorSheetState extends State<_ExpenseEditorSheet> {
                       ),
                     ),
                   ),
+                ),
+              if (widget.existing == null && widget.assistant != null)
+                AssistantPrefillBanner(
+                  prefill: widget.assistant!,
+                  only: const {'amount', 'category', 'note'},
+                  what: 'هذا المصروف',
                 ),
               Expanded(child: stepBody),
               SafeArea(

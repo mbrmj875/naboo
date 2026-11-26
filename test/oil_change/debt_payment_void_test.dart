@@ -147,6 +147,49 @@ void main() {
     expect(st.balanceFils, 30000 * _k);
   });
 
+  test('قيد العكس يُسجَّل على وردية من ألغى، لا على أي وردية مفتوحة', () async {
+    final db = await h.database;
+    final tid = await h.tenantId();
+    final now = DateTime.now().toUtc();
+    final sessionUser = await db.insert('users', {
+      'username': 'u_void_shift',
+      'displayName': 'جهاز المحل',
+      'role': 'staff',
+      'isActive': 1,
+      'createdAt': now.toIso8601String(),
+    });
+    Future<int> shift(String staff, Duration ago) => db.insert('work_shifts', {
+      'tenantId': tid,
+      'sessionUserId': sessionUser,
+      'shiftStaffName': staff,
+      'shiftStaffPin': '0000',
+      'systemBalanceAtOpen': 0.0,
+      'declaredPhysicalCash': 0.0,
+      'openedAt': now.subtract(ago).toIso8601String(),
+    });
+    // وردية المالك أقدم، ووردية علي أحدث: الاختيار العشوائي كان يأخذ إحداهما.
+    // وردية علي تُدرج أولاً: الاستعلام القديم (LIMIT 1 بلا ترتيب) كان يأخذها.
+    final aliShift = await shift('علي', const Duration(hours: 1));
+    final ownerShift = await shift('المالك', const Duration(hours: 5));
+
+    await DatabaseHelper().recordCustomerDebtPayment(
+      party: party(),
+      amount: 5000,
+      recordedByUserName: 'علي',
+    );
+    await DatabaseHelper().voidCustomerDebtPayment(
+      paymentId: (await rows()).single.id,
+      reason: 'خطأ',
+      voidedByUserName: 'المالك',
+    );
+    final rev = await db.query(
+      'cash_ledger',
+      where: "transactionType = 'debt_collection_reversal'",
+    );
+    expect(rev.single['workShiftId'], ownerShift);
+    expect(rev.single['workShiftId'], isNot(aliShift));
+  });
+
   test('لا تُلغى مرتين، ولا بلا سبب', () async {
     await DatabaseHelper().recordCustomerDebtPayment(
       party: party(),

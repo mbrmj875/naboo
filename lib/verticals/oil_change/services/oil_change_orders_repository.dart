@@ -71,7 +71,7 @@ class OilChangeOrdersRepository {
   }
 
   /// آخر قراءة عداد للسيارة قبل هذه البطاقة (انظر [VehicleRegistry.previousReading]).
-  Future<({int? km, String? at})?> previousOdometerReading(
+  Future<({int? km, String? at, String unit})?> previousOdometerReading(
     String plate, {
     int? excludeOrderId,
   }) async {

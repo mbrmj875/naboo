@@ -179,7 +179,8 @@ void main() {
       await settle(t, rounds: 4);
       expect(editable('4242'), findsNothing);
       expect(editable('تاهو'), findsNothing);
-      expect(find.byKey(const Key('customerCarNew')), findsNothing);
+      // القائمة تبقى في مكانها فلا تقفز الحقول تحتها.
+      expect(find.byKey(const Key('customerCarNew')), findsOneWidget);
     });
 
     testWidgets('عميل بسيارة واحدة: تُجلب سيارته لا التي باعها', (t) async {

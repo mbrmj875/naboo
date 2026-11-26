@@ -10,6 +10,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../firebase_options.dart';
 import '../../navigation/app_root_navigator_key.dart';
+import '../../notifications/push_channels.dart';
+import '../../notifications/push_device_registry.dart';
+import '../../notifications/push_router.dart';
 import '../../providers/auth_provider.dart';
 import '../../services/system_notification_service.dart';
 import '../../services/tenant_context_service.dart';
@@ -85,7 +88,7 @@ class OwnerFcmListenerService {
       FirebaseMessaging.onBackgroundMessage(ownerFcmBackgroundHandler);
 
       final messaging = FirebaseMessaging.instance;
-      await messaging.requestPermission(alert: true, badge: true, sound: true);
+      // لا نطلب الإذن عند فتح التطبيق: يُطلب بعد شرح الفائدة (OwnerPhonePrompt).
       // العرض في المقدمة يتم يدوياً عبر SystemNotificationService.
       await messaging.setForegroundNotificationPresentationOptions(
         alert: false,
@@ -93,7 +96,8 @@ class OwnerFcmListenerService {
         sound: false,
       );
 
-      messaging.onTokenRefresh.listen(_registerTokenIfOwner);
+      // رمز جديد: يُسجَّل لكل الأدوار في push_devices (النظام الموحد).
+      messaging.onTokenRefresh.listen((_) => unawaited(PushDeviceRegistry.instance.syncNow()));
 
       FirebaseMessaging.onMessage.listen(_onForegroundMessage);
       FirebaseMessaging.onMessageOpenedApp.listen(_onOpenedFromNotification);
@@ -115,25 +119,16 @@ class OwnerFcmListenerService {
     if (_pendingMessage == before) return;
   }
 
-  Future<void> _registerTokenIfOwner(String token) async {
+  Future<void> _registerToken() async {
     if (!_firebaseReady) return;
     if (Supabase.instance.client.auth.currentUser == null) return;
-
-    final ctx = appRootNavigatorKey.currentContext;
-    if (ctx != null && ctx.mounted) {
-      final auth = Provider.of<AuthProvider>(ctx, listen: false);
-      if (!auth.isOwner) return;
-    }
-
-    final tenantId = TenantContextService.instance.activeTenantId;
-    await OwnerAlertCloudSyncService.registerFcmToken(
-      localTenantId: tenantId,
-      token: token,
-    );
+    await PushDeviceRegistry.instance.syncNow();
   }
 
   void _onForegroundMessage(RemoteMessage message) {
     unawaited(_showTrayFromMessage(message));
+    // إشعار النظام الموحد لا يفتح شاشة وحده وهو في المقدمة: يفتحها الضغط عليه.
+    if (PushRouter.isUnifiedPayload(message.data)) return;
     _routeMessage(message);
   }
 
@@ -157,8 +152,22 @@ class OwnerFcmListenerService {
         .trim();
     if (title.isEmpty && body.isEmpty) return;
 
+    final data = message.data;
+    if (PushRouter.isUnifiedPayload(data)) {
+      await SystemNotificationService.instance.show(
+        id: 'n${data['notification_id']}',
+        title: title.isEmpty ? 'نابو' : title,
+        body: body.isEmpty ? title : body,
+        channel: PushChannels.forCategory(
+          '${data['category'] ?? ''}',
+          '${data['priority'] ?? 'normal'}',
+        ),
+        payload: PushRouter.encodeForLocal(data),
+      );
+      return;
+    }
     final alertId =
-        (message.data[OwnerPushPayload.dataAlertId] ?? 'owner_push').toString();
+        (data[OwnerPushPayload.dataAlertId] ?? 'owner_push').toString();
     await SystemNotificationService.instance.show(
       id: 'fcm_fg_$alertId',
       title: title.isEmpty ? 'نابو' : title,
@@ -170,6 +179,11 @@ class OwnerFcmListenerService {
   void _routeMessage(RemoteMessage message) {
     final data = message.data;
     if (data.isEmpty) return;
+    if (PushRouter.isUnifiedPayload(data)) {
+      if (_pendingMessage == message) _pendingMessage = null;
+      PushRouter.instance.handleData(Map<String, dynamic>.from(data));
+      return;
+    }
 
     final ctx = appRootNavigatorKey.currentContext;
     if (ctx == null || !ctx.mounted) {
@@ -199,9 +213,7 @@ class OwnerFcmListenerService {
   /// يُستدعى بعد تسجيل دخول المالك — تسجيل التوكن + مزامنة التفضيلات.
   void refreshTokenRegistration() {
     if (!_firebaseReady) return;
-    unawaited(FirebaseMessaging.instance.getToken().then((token) {
-      if (token != null) _registerTokenIfOwner(token);
-    }));
+    unawaited(_registerToken());
     // يضمن رفع push_alert_ids الافتراضية الحرجة حتى لو لم يفتح Studio.
     OwnerAlertCloudSyncService.scheduleResyncActiveTenantPreferences();
     flushPendingIfReady();

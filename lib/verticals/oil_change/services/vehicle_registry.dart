@@ -5,6 +5,7 @@ import '../../../utils/app_logger.dart';
 import '../utils/iraq_plate.dart';
 import '../utils/oil_change_lookup_normalize.dart';
 import '../utils/oil_change_order_status.dart';
+import '../utils/oil_odometer_unit.dart';
 
 /// سجل السيارات (المرحلة 6 — الشريحة 1).
 ///
@@ -46,6 +47,7 @@ abstract final class VehicleRegistry {
         customer_name TEXT,
         customer_phone TEXT,
         last_odometer INTEGER,
+        last_odometer_unit TEXT,
         last_visit_at TEXT,
         visits_count INTEGER NOT NULL DEFAULT 0,
         createdAt TEXT NOT NULL,
@@ -57,6 +59,36 @@ abstract final class VehicleRegistry {
       'CREATE INDEX IF NOT EXISTS idx_vehicles_plate '
       'ON vehicles(tenantId, plate_key)',
     );
+    // وحدة آخر عداد (كم/ميل) — سجل قديم بلا العمود يُكمَّل من آخر بطاقة.
+    // وإعادة الحساب القديمة كانت تكتب «كم» لكل سيارة (لم تقرأ وحدة البطاقة)،
+    // فتُصحَّح في كل فتح السيارات التي لها زيارة بالميل فقط (عدد صغير).
+    final vcols = await db.rawQuery('PRAGMA table_info(vehicles)');
+    final fresh = !vcols.any((c) => c['name'] == 'last_odometer_unit');
+    if (fresh) {
+      await db.execute(
+        'ALTER TABLE vehicles ADD COLUMN last_odometer_unit TEXT',
+      );
+    }
+    try {
+      await db.execute('''
+        UPDATE vehicles SET last_odometer_unit = (
+          SELECT so.odometerUnit FROM service_orders so
+          WHERE so.vehicle_global_id = vehicles.global_id
+            AND so.deletedAt IS NULL
+            AND TRIM(IFNULL(so.status, '')) NOT IN ('suspended', 'cancelled')
+            AND TRIM(IFNULL(so.odometerCurrent, '')) <> ''
+          ORDER BY so.createdAt DESC, so.id DESC
+          LIMIT 1
+        )
+        ${fresh ? '' : '''
+        WHERE global_id IN (
+          SELECT vehicle_global_id FROM service_orders
+          WHERE odometerUnit = 'mi' AND deletedAt IS NULL
+        )'''}
+      ''');
+    } catch (e) {
+      AppLogger.warn('VehicleRegistry', 'odometer unit backfill: $e');
+    }
     final cols = await db.rawQuery('PRAGMA table_info(service_orders)');
     if (cols.isEmpty) return;
     final has = cols.any((c) => c['name'] == 'vehicle_global_id');
@@ -172,6 +204,7 @@ abstract final class VehicleRegistry {
     'carModel',
     'engineSize',
     'odometerCurrent',
+    'odometerUnit',
     'customerId',
     'customerNameSnapshot',
     'customerPhone',
@@ -351,6 +384,7 @@ abstract final class VehicleRegistry {
         .where((o) => !OilChangeOrderStatus.isSuspended(o))
         .toList();
     int? lastOdo;
+    String? lastOdoUnit;
     for (final o in visits.reversed) {
       final d = OilChangeLookupNormalize.toWesternDigits(
         _s(o['odometerCurrent']),
@@ -358,6 +392,7 @@ abstract final class VehicleRegistry {
       final n = int.tryParse(d);
       if (n != null && n > 0) {
         lastOdo = n;
+        lastOdoUnit = OilOdometerUnit.of(o);
         break;
       }
     }
@@ -407,6 +442,7 @@ abstract final class VehicleRegistry {
       'customer_name': owner == null ? null : _s(owner['customerNameSnapshot']),
       'customer_phone': owner == null ? null : _s(owner['customerPhone']),
       'last_odometer': lastOdo,
+      'last_odometer_unit': lastOdoUnit,
       'last_visit_at': visits.isEmpty ? null : _s(visits.last['createdAt']),
       'visits_count': visits.length,
       'deletedAt': null,
@@ -436,7 +472,8 @@ abstract final class VehicleRegistry {
   /// آخر قراءة عداد مسجّلة لسيارة [plate] قبل هذه البطاقة. عند تعديل بطاقة
   /// ([excludeOrderId]) تُؤخذ القراءات التي قبلها فقط. المعلّقة والملغاة
   /// ليست زيارات. null إن لم تُعرف السيارة؛ `km == null` إن لم تُسجَّل قراءة.
-  static Future<({int? km, String? at})?> previousReading(
+  /// [unit]: وحدة تلك القراءة ('km' أو 'mi') — الرقم بوحدة السيارة لا بالكيلومتر.
+  static Future<({int? km, String? at, String unit})?> previousReading(
     DatabaseExecutor db,
     int tenantId, {
     required String plate,
@@ -459,7 +496,7 @@ abstract final class VehicleRegistry {
     final rows = [
       ...await db.query(
         'service_orders',
-        columns: ['id', 'createdAt', 'odometerCurrent', 'status'],
+        columns: ['id', 'createdAt', 'odometerCurrent', 'odometerUnit', 'status'],
         where:
             'tenantId = ? AND vehicle_global_id = ? AND deletedAt IS NULL '
             "AND status NOT IN ('${OilChangeOrderStatus.suspended}', "
@@ -478,9 +515,15 @@ abstract final class VehicleRegistry {
       final n = int.tryParse(
         OilChangeLookupNormalize.toWesternDigits(_s(o['odometerCurrent'])),
       );
-      if (n != null && n > 0) return (km: n, at: _s(o['createdAt']));
+      if (n != null && n > 0) {
+        return (
+          km: n,
+          at: _s(o['createdAt']),
+          unit: OilOdometerUnit.of(o),
+        );
+      }
     }
-    return (km: null, at: null);
+    return (km: null, at: null, unit: OilOdometerUnit.km);
   }
 
   /// أول رقم في اللوحة (قبل أي شرطة أو رمز)، بأرقام غربية.

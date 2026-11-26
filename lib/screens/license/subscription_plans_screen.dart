@@ -46,7 +46,7 @@ Color _priceHighlightOnDark(Color accent) {
 }
 
 /// عرض للواجهة — نسخ الرقم للواتساب/الاتصال.
-const String _kSupportPhoneDisplay = '0780 428 9711';
+const String _kSupportPhoneDisplay = '0788 428 9711';
 const String _kSupportPhoneCopy = '07884289711';
 const String _kSupportEmail = 'mbrmjbaqer@gmail.com';
 

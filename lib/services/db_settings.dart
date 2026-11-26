@@ -1,5 +1,23 @@
 part of 'database_helper.dart';
 
+/// وقت الصف الافتراضي لإعدادات الدين والتقسيط: أقدم من أي حفظ حقيقي،
+/// فلا يغلب جهازٌ جديد بقيمه الافتراضية إعدادات المالك عند دمج المزامنة.
+const String kSettingsDefaultRowStamp = '1970-01-01T00:00:00.000Z';
+
+/// هل صف إعدادات (دين/تقسيط) يحمل القيم الافتراضية فقط؟ null = ليس جدول إعدادات من هذا النوع.
+bool? singletonSettingsRowIsDefault(String table, Map<String, dynamic> row) {
+  final raw = row['payload']?.toString();
+  switch (table) {
+    case 'debt_settings':
+      return DebtSettingsData.mergeFromJsonString(raw).toJsonString() ==
+          DebtSettingsData.defaults().toJsonString();
+    case 'installment_settings':
+      return InstallmentSettingsData.mergeFromJsonString(raw).toJsonString() ==
+          InstallmentSettingsData.defaults().toJsonString();
+  }
+  return null;
+}
+
 // ── إعدادات التقسيط ───────────────────────────────────────────────────────
 
 extension DbSettings on DatabaseHelper {

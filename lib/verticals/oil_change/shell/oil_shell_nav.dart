@@ -7,7 +7,6 @@ import '../../../screens/cash/cash_screen.dart';
 import '../../../screens/customers/customer_contacts_screen.dart';
 import '../../../screens/customers/customer_form_screen.dart';
 import '../../../screens/customers/customers_screen.dart';
-import '../../../screens/debts/debt_settings_screen.dart';
 import '../../../screens/debts/debts_screen.dart';
 import '../../../screens/expenses/expenses_screen.dart';
 import '../../../screens/inventory/add_product_screen.dart';
@@ -15,7 +14,6 @@ import '../../../screens/inventory/barcode_labels_screen.dart';
 import '../../../screens/inventory/inventory_hub_screen.dart';
 import '../../../screens/inventory/inventory_management_screen.dart';
 import '../../../screens/inventory/inventory_products_screen.dart';
-import '../../../screens/inventory/inventory_settings_screen.dart';
 import '../../../screens/inventory/purchase_orders_screen.dart';
 import '../../../screens/inventory/quick_product_update_screen.dart';
 import '../../../screens/inventory/stock_analytics_screen.dart';
@@ -114,18 +112,6 @@ List<ShellNavItem> _catalog() => [
     iconColor: Colors.amber,
     routeId: AppContentRoutes.debts,
     destination: (_) => const DebtsScreen(),
-    subItems: [
-      ShellNavSubItem(
-        title: 'لوحة الديون (آجل)',
-        routeId: AppContentRoutes.debts,
-        destination: (_) => const DebtsScreen(),
-      ),
-      ShellNavSubItem(
-        title: 'إعدادات الدين',
-        routeId: AppContentRoutes.debtSettings,
-        destination: (_) => const DebtSettingsScreen(),
-      ),
-    ],
   ),
   ShellNavItem(
     icon: Icons.inventory_2,
@@ -178,11 +164,6 @@ List<ShellNavItem> _catalog() => [
         title: 'تحليلات المخزون',
         routeId: AppContentRoutes.inventoryAnalytics,
         destination: (_) => const StockAnalyticsScreen(),
-      ),
-      ShellNavSubItem(
-        title: 'إعدادات المخزون',
-        routeId: AppContentRoutes.inventorySettings,
-        destination: (_) => const InventorySettingsScreen(),
       ),
     ],
   ),
@@ -249,6 +230,10 @@ List<ShellNavItem> _catalog() => [
     destination: (_) => const SettingsScreen(),
   ),
 ];
+
+/// كتالوج القائمة كاملاً قبل الصلاحيات: منه تُولَّد مسارات الإرشاد ويُفحص
+/// أن لكل شاشة وصفاً في خريطة المساعد.
+List<ShellNavItem> oilShellCatalog() => _catalog();
 
 /// قائمة تنقل موظف الزيت بعد الصلاحيات والميزات، بالترتيب المحفوظ.
 List<ShellNavItem> buildOilShellNav(

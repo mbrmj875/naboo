@@ -94,3 +94,4 @@ admin-web/out/
 *.tsbuildinfo
 /package-lock.json
 env/prod.env
+tool/assistant_eval.local.env

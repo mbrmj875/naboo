@@ -48,9 +48,33 @@ Future<int?> _resolveWorkShiftIdForInvoice(
   if (invoice.workShiftId != null && invoice.workShiftId! > 0) {
     return invoice.workShiftId;
   }
+  return _resolveActorOpenShiftId(
+    txn,
+    tenantId: tenantId,
+    actorName: invoice.createdByUserName,
+  );
+}
 
-  final actor = (invoice.createdByUserName ?? '').trim();
-  if (actor.isNotEmpty) {
+/// وردية المنفّذ المفتوحة: بمعرّف المستخدم، ثم باسمه، ثم أحدث وردية مفتوحة.
+/// تُستعمل لكل قيد صندوق (فاتورة، عكس تحصيل، عكس دفعة مورد، قيد يدوي)
+/// حتى لا يُسجَّل القيد على وردية موظف آخر.
+Future<int?> _resolveActorOpenShiftId(
+  DatabaseExecutor txn, {
+  required int tenantId,
+  String? actorName,
+  int? actorUserId,
+}) async {
+  const openShift = '''
+    deleted_at IS NULL
+    AND (closedAt IS NULL OR TRIM(IFNULL(closedAt, '')) = '')
+    AND (
+      tenantId = ?
+      OR NOT EXISTS (SELECT 1 FROM tenants t WHERE t.id = tenantId)
+    )
+  ''';
+  final actor = (actorName ?? '').trim();
+  var uid = (actorUserId != null && actorUserId > 0) ? actorUserId : null;
+  if (uid == null && actor.isNotEmpty) {
     final userRows = await txn.rawQuery(
       '''
       SELECT id FROM users
@@ -60,57 +84,37 @@ Future<int?> _resolveWorkShiftIdForInvoice(
       ''',
       [actor, actor],
     );
-    if (userRows.isNotEmpty) {
-      final uid = userRows.first['id'] as int;
-      final wsRows = await txn.rawQuery(
-        '''
-        SELECT id FROM work_shifts
-        WHERE deleted_at IS NULL
-          AND (closedAt IS NULL OR TRIM(IFNULL(closedAt, '')) = '')
-          AND shiftStaffUserId = ?
-          AND (
-            tenantId = ?
-            OR NOT EXISTS (SELECT 1 FROM tenants t WHERE t.id = tenantId)
-          )
-        ORDER BY datetime(openedAt) DESC, id DESC
-        LIMIT 1
-        ''',
-        [uid, tenantId],
-      );
-      if (wsRows.isNotEmpty) {
-        return wsRows.first['id'] as int?;
-      }
-    }
-
-    final byName = await txn.rawQuery(
+    if (userRows.isNotEmpty) uid = userRows.first['id'] as int?;
+  }
+  if (uid != null) {
+    final wsRows = await txn.rawQuery(
       '''
       SELECT id FROM work_shifts
-      WHERE deleted_at IS NULL
-        AND (closedAt IS NULL OR TRIM(IFNULL(closedAt, '')) = '')
-        AND LOWER(TRIM(COALESCE(shiftStaffName, ''))) = LOWER(?)
-        AND (
-          tenantId = ?
-          OR NOT EXISTS (SELECT 1 FROM tenants t WHERE t.id = tenantId)
-        )
+      WHERE $openShift AND shiftStaffUserId = ?
       ORDER BY datetime(openedAt) DESC, id DESC
       LIMIT 1
       ''',
-      [actor, tenantId],
+      [tenantId, uid],
     );
-    if (byName.isNotEmpty) {
-      return byName.first['id'] as int?;
-    }
+    if (wsRows.isNotEmpty) return wsRows.first['id'] as int?;
   }
-
+  if (actor.isNotEmpty) {
+    final byName = await txn.rawQuery(
+      '''
+      SELECT id FROM work_shifts
+      WHERE $openShift
+        AND LOWER(TRIM(COALESCE(shiftStaffName, ''))) = LOWER(?)
+      ORDER BY datetime(openedAt) DESC, id DESC
+      LIMIT 1
+      ''',
+      [tenantId, actor],
+    );
+    if (byName.isNotEmpty) return byName.first['id'] as int?;
+  }
   final fallback = await txn.rawQuery(
     '''
     SELECT id FROM work_shifts
-    WHERE deleted_at IS NULL
-      AND (closedAt IS NULL OR TRIM(IFNULL(closedAt, '')) = '')
-      AND (
-        tenantId = ?
-        OR NOT EXISTS (SELECT 1 FROM tenants t WHERE t.id = tenantId)
-      )
+    WHERE $openShift
     ORDER BY datetime(openedAt) DESC, id DESC
     LIMIT 1
     ''',

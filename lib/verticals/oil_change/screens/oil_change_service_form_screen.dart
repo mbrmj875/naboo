@@ -7,6 +7,7 @@ import '../../../utils/iqd_money.dart';
 import '../../../utils/iraqi_currency_format.dart';
 import '../../../utils/screen_layout.dart';
 import '../../../widgets/adaptive/adaptive_form_container.dart';
+import '../../../guides/guide_anchor.dart';
 
 /// إضافة أو تعديل خدمة إضافية في كتالوج غيار الزيت.
 class OilChangeServiceFormScreen extends StatefulWidget {
@@ -142,7 +143,9 @@ class _OilChangeServiceFormScreenState extends State<OilChangeServiceFormScreen>
                 },
               ),
               const SizedBox(height: 24),
-              FilledButton.icon(
+              GuideAnchor(
+  id: OilGuideAnchors.serviceFormSave,
+  child: FilledButton.icon(
                 onPressed: _saving ? null : _save,
                 icon: _saving
                     ? SizedBox(
@@ -156,6 +159,7 @@ class _OilChangeServiceFormScreenState extends State<OilChangeServiceFormScreen>
                     : const Icon(Icons.save_rounded),
                 label: Text(_saving ? 'جارٍ الحفظ…' : 'حفظ الخدمة'),
               ),
+),
             ],
           ),
         ),

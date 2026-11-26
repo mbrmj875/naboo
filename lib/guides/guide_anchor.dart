@@ -146,7 +146,9 @@ abstract final class OilGuideAnchors {
   static const hubNewCard = 'oil.hub.new_card';
   static const hubWhatsappConnect = 'oil.hub.whatsapp_connect';
   static const hubPendingTab = 'oil.hub.pending_tab';
-  static const hubSettings = 'oil.hub.settings';
+  /// بند «إعدادات غيار الزيت» في شاشة الإعدادات الموحّدة.
+  /// لا يبدأ بـ `oil.settings.` حتى لا يفتح اللوحة قبل أن يراه المستخدم.
+  static const settingsEntry = 'oil.settings_entry';
 
   /// صفوف لوحة إعدادات السجل.
   static const settingsStockOil = 'oil.settings.stock_oil';
@@ -244,4 +246,29 @@ abstract final class OilGuideAnchors {
   static const waRelink = 'oil.wa.relink';
   static const waDisconnect = 'oil.wa.disconnect';
   static const waTips = 'oil.wa.tips';
+  static const waWallet = 'oil.wa.wallet';
+  static const waFollowup = 'oil.wa.followup';
+
+  /// خريطة المساعد (ب3): الأزرار الرئيسية في بقية الشاشات.
+  static const hubWhatsappMessages = 'oil.hub.wa_messages';
+  static const cardSettingsTechnicians = 'oil.card_settings.technicians';
+  static const directSaleScan = 'oil.direct_sale.scan';
+  static const directSalePick = 'oil.direct_sale.pick';
+  static const carWashServicesAdd = 'car_wash.services.add';
+  static const customersAdd = 'customers.add';
+  static const customerFormSave = 'customers.form.save';
+  static const contactsAdd = 'customers.contacts.add';
+  static const expensesAdd = 'expenses.add';
+  static const inventoryMovementAdd = 'inventory.movements.add';
+  static const warehousesAdd = 'inventory.warehouses.add';
+  static const stocktakingNew = 'inventory.stocktaking.new';
+  static const purchaseOrderNew = 'inventory.po.new';
+  static const barcodeLabelsPrint = 'inventory.barcode.print';
+  static const quickUpdateSave = 'inventory.quick_update.save';
+  static const reportsSections = 'reports.sections';
+  static const serviceFormSave = 'oil.service_form.save';
+
+  /// بند في شاشة الإعدادات: `settings.entry.<SettingsEntryIds>`. بند الزيت له [settingsEntry].
+  static const settingsEntryPrefix = 'settings.entry.';
+  static String settingsEntryFor(String entryId) => '$settingsEntryPrefix$entryId';
 }

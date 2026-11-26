@@ -541,6 +541,20 @@ class DatabaseHelper {
     }
   }
 
+  /// الإصدار 53: وحدة عداد السيارة في بطاقة الغيار: 'km' أو 'mi'
+  /// (null في البطاقات القديمة = كيلومتر). تُنسخ من آخر زيارة للسيارة.
+  Future<void> _ensureServiceOrdersOdometerUnit(Database db) async {
+    try {
+      if (!await _tableHasColumn(db, 'service_orders', 'odometerUnit')) {
+        await db.execute(
+          'ALTER TABLE service_orders ADD COLUMN odometerUnit TEXT',
+        );
+      }
+    } catch (e, st) {
+      AppLogger.error('DatabaseHelper', 'service_orders odometerUnit', e, st);
+    }
+  }
+
   Future<void> _ensureServiceOrdersOilChangeFilterColumns(Database db) async {
     try {
       final cols = <(String, String)>[
@@ -572,7 +586,7 @@ class DatabaseHelper {
     String path = join(await getDatabasesPath(), 'business_app.db');
     return await openDatabase(
       path,
-      version: 52,
+      version: 53,
       onConfigure: (db) async {
         await db.execute('PRAGMA foreign_keys = ON');
         // Reduce "database locked" warnings under concurrent access.
@@ -648,6 +662,7 @@ class DatabaseHelper {
     await _ensureOilChangeFilterCatalogTable(db);
     await _ensureServiceOrdersOilChangeFilterColumns(db);
     await _ensureCustomerDebtExceptionColumns(db);
+    await _ensureServiceOrdersOdometerUnit(db);
     await ensureOilProductGradesSchema(db);
     await ensureBusinessAuditEventsTable(db);
     await ensureOwnerDashboardQueryIndexes(db);
@@ -2494,6 +2509,9 @@ class DatabaseHelper {
     if (oldVersion < 52) {
       await _ensureCustomerDebtExceptionColumns(db);
     }
+    if (oldVersion < 53) {
+      await _ensureServiceOrdersOdometerUnit(db);
+    }
     await _ensureRbacFoundation(db);
     await _ensureBranchTopology(db);
   }
@@ -2977,7 +2995,8 @@ class DatabaseHelper {
       await db.insert('installment_settings', {
         'id': 1,
         'payload': InstallmentSettingsData.defaults().toJsonString(),
-        'updatedAt': DateTime.now().toIso8601String(),
+        // وقت قديم عمداً: الصف الافتراضي لا يغلب أي حفظ حقيقي عند دمج المزامنة.
+        'updatedAt': kSettingsDefaultRowStamp,
       });
     }
   }
@@ -3002,7 +3021,8 @@ class DatabaseHelper {
       await db.insert('debt_settings', {
         'id': 1,
         'payload': DebtSettingsData.defaults().toJsonString(),
-        'updatedAt': DateTime.now().toIso8601String(),
+        // وقت قديم عمداً: الصف الافتراضي لا يغلب أي حفظ حقيقي عند دمج المزامنة.
+        'updatedAt': kSettingsDefaultRowStamp,
       }, conflictAlgorithm: ConflictAlgorithm.ignore);
     }
   }

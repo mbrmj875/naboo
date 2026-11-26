@@ -1261,27 +1261,30 @@ class _ConnectedPanelState extends State<_ConnectedPanel> {
           textAlign: TextAlign.center,
         ),
         const SizedBox(height: 16),
-        _WalletDetailsTile(
-          balance: _balance,
-          loading: _walletLoading,
-          onTap: () async {
-            await OilChangeWhatsappWalletScreen.open(context);
-            if (!mounted) return;
-            await _loadBalance();
-          },
+        GuideAnchor(
+          id: OilGuideAnchors.waWallet,
+          child: _WalletDetailsTile(
+            balance: _balance,
+            loading: _walletLoading,
+            onTap: () async {
+              await OilChangeWhatsappWalletScreen.open(context);
+              if (!mounted) return;
+              await _loadBalance();
+            },
+          ),
         ),
         const SizedBox(height: 10),
-        _FollowupDetailsTile(
-          summary: _followupSummary,
-          loading: _followupLoading,
-          onTap: () async {
-            await OilChangeWhatsappFollowupScreen.open(
-              context,
-              isOfficialTransport: widget.isOfficialTransport,
-            );
-            if (!mounted) return;
-            await _loadFollowupSummary();
-          },
+        GuideAnchor(
+          id: OilGuideAnchors.waFollowup,
+          child: _FollowupDetailsTile(
+            summary: _followupSummary,
+            loading: _followupLoading,
+            onTap: () async {
+              await OilChangeWhatsappFollowupScreen.open(context, isOfficialTransport: widget.isOfficialTransport);
+              if (!mounted) return;
+              await _loadFollowupSummary();
+            },
+          ),
         ),
       ],
     );

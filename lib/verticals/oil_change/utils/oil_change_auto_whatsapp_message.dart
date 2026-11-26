@@ -4,6 +4,7 @@ import '../../../utils/iqd_money.dart';
 import '../../../utils/iraqi_currency_format.dart';
 import 'oil_change_filter_format.dart';
 import 'oil_order_has_oil.dart';
+import 'oil_odometer_unit.dart';
 
 /// دعوة تقييم في نهاية الرسالة — تشجّع الزبون على الرد وبدء محادثة.
 const oilChangeWhatsAppRatingAskText =
@@ -52,7 +53,9 @@ Map<String, String> buildOilChangeCardTemplateParams({
 
   String odometer(Object? raw) {
     final v = (raw ?? '').toString().trim();
-    return v.isEmpty ? oilChangeCardEmptyField : '$v كم';
+    return v.isEmpty
+        ? oilChangeCardEmptyField
+        : '$v ${OilOdometerUnit.labelOf(order)}';
   }
 
   final agreedF = (order['agreedPriceFils'] as num?)?.toInt();
@@ -253,8 +256,9 @@ void _appendCardDetails(
   _line(buf, '📅', 'موديل السيارة', model);
   _line(buf, '⚙️', 'حجم المحرك', engineSize);
   _line(buf, '🔖', 'رقم اللوحة', plate);
-  _line(buf, '🔢', 'القراءة الحالية', odomCur.isEmpty ? '' : '$odomCur كم');
-  _line(buf, '📍', 'القراءة اللاحقة', odomNext.isEmpty ? '' : '$odomNext كم');
+  final odoUnit = OilOdometerUnit.labelOf(order);
+  _line(buf, '🔢', 'القراءة الحالية', odomCur.isEmpty ? '' : '$odomCur $odoUnit');
+  _line(buf, '📍', 'القراءة اللاحقة', odomNext.isEmpty ? '' : '$odomNext $odoUnit');
 
   final hasOil = oilBrand.isNotEmpty || oilGrade.isNotEmpty || oilSize.isNotEmpty;
   if (hasOil) {

@@ -116,7 +116,7 @@ class _SupplierApTabState extends State<SupplierApTab> {
                   start: gap,
                   end: gap,
                   top: 12,
-                  bottom: 100,
+                  bottom: 24,
                 ),
                 children: [
                   Container(
@@ -125,7 +125,9 @@ class _SupplierApTabState extends State<SupplierApTab> {
                     decoration: BoxDecoration(
                       color: cs.surfaceContainerHighest.withValues(alpha: 0.3),
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: AppColors.accentGold.withValues(alpha: 0.5)),
+                      border: Border.all(
+                        color: AppColors.accentGold.withValues(alpha: 0.5),
+                      ),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -163,32 +165,70 @@ class _SupplierApTabState extends State<SupplierApTab> {
                     _DueSection(entries: prov.due, onOpen: openSupplier),
                   ],
                   const SizedBox(height: 12),
-                  TextField(
-                    controller: _search,
-                    decoration: InputDecoration(
-                      hintText: 'بحث باسم المورد…',
-                      prefixIcon: const Icon(Icons.search_rounded, color: AppColors.accentGold),
-                      suffixIcon: _search.text.isNotEmpty
-                          ? IconButton(
-                              icon: const Icon(Icons.clear_rounded),
-                              onPressed: () => _search.clear(),
-                            )
-                          : null,
-                      filled: true,
-                      fillColor: isDark ? AppColors.surfaceDark : cs.surface,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.5)),
+                  // زر الإضافة بجانب البحث بدل زر عائم كان يغطي مبالغ البطاقات.
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _search,
+                          decoration: InputDecoration(
+                            hintText: 'بحث باسم المورد…',
+                            prefixIcon: const Icon(
+                              Icons.search_rounded,
+                              color: AppColors.accentGold,
+                            ),
+                            suffixIcon: _search.text.isNotEmpty
+                                ? IconButton(
+                                    icon: const Icon(Icons.clear_rounded),
+                                    onPressed: () => _search.clear(),
+                                  )
+                                : null,
+                            filled: true,
+                            fillColor: isDark
+                                ? AppColors.surfaceDark
+                                : cs.surface,
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide(
+                                color: AppColors.accentGold.withValues(
+                                  alpha: 0.5,
+                                ),
+                              ),
+                            ),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide(
+                                color: AppColors.accentGold.withValues(
+                                  alpha: 0.5,
+                                ),
+                              ),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: const BorderSide(
+                                color: AppColors.accentGold,
+                                width: 2,
+                              ),
+                            ),
+                          ),
+                        ),
                       ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.5)),
+                      const SizedBox(width: 8),
+                      FilledButton.icon(
+                        key: const Key('addSupplierButton'),
+                        onPressed: _addSupplierDialog,
+                        style: FilledButton.styleFrom(
+                          backgroundColor: AppColors.accentGold,
+                          foregroundColor: Colors.white,
+                          minimumSize: const Size(0, 52),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        icon: const Icon(Icons.add_rounded),
+                        label: const Text('مورد'),
                       ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(color: AppColors.accentGold, width: 2),
-                      ),
-                    ),
+                    ],
                   ),
                   const SizedBox(height: 12),
                   if (filtered.isEmpty)
@@ -196,7 +236,7 @@ class _SupplierApTabState extends State<SupplierApTab> {
                       height: 220,
                       child: Center(
                         child: Text(
-                          'لا موردين بعد — اضغط + لإضافة مورد',
+                          'لا موردين بعد — اضغط «+ مورد» لإضافة مورد',
                           style: TextStyle(color: cs.onSurfaceVariant),
                         ),
                       ),
@@ -206,11 +246,17 @@ class _SupplierApTabState extends State<SupplierApTab> {
                       Padding(
                         padding: const EdgeInsets.only(bottom: 10),
                         child: Material(
-                          color: cs.surfaceContainerHighest.withValues(alpha: 0.3),
+                          color: cs.surfaceContainerHighest.withValues(
+                            alpha: 0.3,
+                          ),
                           elevation: 0,
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(12),
-                            side: BorderSide(color: AppColors.accentGold.withValues(alpha: 0.5)),
+                            side: BorderSide(
+                              color: AppColors.accentGold.withValues(
+                                alpha: 0.5,
+                              ),
+                            ),
                           ),
                           clipBehavior: Clip.antiAlias,
                           child: InkWell(
@@ -387,13 +433,6 @@ class _SupplierApTabState extends State<SupplierApTab> {
               ),
             ),
           ),
-          floatingActionButton: FloatingActionButton.extended(
-            onPressed: _addSupplierDialog,
-            backgroundColor: AppColors.accentGold,
-            foregroundColor: Colors.white,
-            icon: const Icon(Icons.add_rounded),
-            label: const Text('مورد'),
-          ),
         );
       },
     );
@@ -510,10 +549,7 @@ class _NewSupplierDialogState extends State<_NewSupplierDialog> {
             },
             child: const Text('إلغاء'),
           ),
-          FilledButton(
-            onPressed: _submit,
-            child: const Text('حفظ'),
-          ),
+          FilledButton(onPressed: _submit, child: const Text('حفظ')),
         ],
       ),
     );

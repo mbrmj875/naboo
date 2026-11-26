@@ -19,9 +19,14 @@ import {
   buildWarrantyMissingReply,
 } from './card_faq.ts';
 import {
+  type AiReplyInput,
+  type AiReplyResult,
   buildWarrantyReply,
   generateRatingReply,
 } from './ai_reply.ts';
+import { addCost, checkBudget, recordTurnStep } from '../_shared/assistant_meter.ts';
+import { costMicroUsd } from '../_shared/llm.ts';
+import { sanitizeForLog } from '../_shared/sanitize.ts';
 import {
   classifyInboundIntent,
   THANKS_CLOSE_REPLY,
@@ -41,6 +46,8 @@ import {
 import { buildTenantAiContext } from './tenant_ai_context.ts';
 import { lookupInventoryReply } from './inventory_lookup.ts';
 import { sendOilCardPdfNow } from '../whatsapp-oil-card-pdf-cron/send_job.ts';
+import { ASK_SHOP_REPLY, HANDOFF_REPLY, isMediaMessage } from './responder_v2.ts';
+import { loadActiveProfile, openHandoff, respondV2, startHandoff, strangerSmartLeft } from './responder_v2_run.ts';
 
 export type RatingReplyInput = {
   tenantUserId: string;
@@ -53,6 +60,10 @@ export type RatingReplyInput = {
   card?: Record<string, string> | null;
   orderRef?: string | null;
   inboundMessageId?: string | null;
+  /** نوع رسالة واتساب (text، image، audio…). */
+  messageType?: string | null;
+  /** رقم غريب على رقم المحل الخاص، بلا بطاقة (ق81). */
+  stranger?: boolean;
 };
 
 export type RatingReplyOutcome = {
@@ -115,6 +126,7 @@ async function deliverReply(
   isFeedback: boolean,
   typingStartedAt: number,
   fast: boolean,
+  assistantTurnId: string | null = null,
 ): Promise<RatingReplyOutcome> {
   const target = humanTypingDelayMs(body, { fast });
   const elapsed = Date.now() - typingStartedAt;
@@ -139,6 +151,7 @@ async function deliverReply(
     employeeName: input.employeeName,
     orderRef: input.orderRef ?? null,
     idempotencyKey: autoReplyIdempotencyKey(input.inboundMessageId),
+    assistantTurnId,
   });
   return { sent: true, isFeedback, detail: 'sent' };
 }
@@ -150,8 +163,16 @@ export async function sendRatingReply(
   const message = (input.message ?? '').trim();
   const heuristicFeedback = input.score != null || looksLikeFeedback(message);
 
+  // ب7: المجيب الجديد يعمل فقط إن فعّل المالك صفحته. بعد التسليم لإنسان يصمت.
+  const profile = await loadActiveProfile(db, input.tenantUserId);
+  if (profile && await openHandoff(db, input.tenantUserId, input.toPhone)) {
+    return { sent: false, isFeedback: heuristicFeedback, detail: 'handoff_silent' };
+  }
+  const media = isMediaMessage(input.messageType ?? 'text', message);
+  if (media && !profile) return { sent: false, isFeedback: false, detail: 'empty' };
+
   const fallback = buildRatingReplyText(input);
-  if (!fallback && !message) {
+  if (!fallback && !message && !media) {
     return { sent: false, isFeedback: false, detail: 'empty' };
   }
   if (!(await autoReplyEnabled(db, input.tenantUserId))) {
@@ -173,7 +194,63 @@ export async function sendRatingReply(
   }
 
   const typingStartedAt = await showReadAndTyping(input);
+
+  // ق86: صورة أو صوت = رد واحد بطلب النص، وتنبيه المحل.
+  if (profile && media) {
+    await startHandoff(db, {
+      tenantUserId: input.tenantUserId,
+      phone: input.toPhone,
+      reason: 'media',
+      question: `أرسل ${input.messageType === 'image' ? 'صورة' : input.messageType === 'audio' ? 'رسالة صوتية' : 'ملفاً'}`,
+      profile,
+    });
+    return await deliverReply(db, input, HANDOFF_REPLY.media, false, typingStartedAt, true);
+  }
+
   const intent = classifyInboundIntent(message, input.score);
+
+  if (profile && intent !== 'pdf_file' && intent !== 'thanks' && intent !== 'sensitive') {
+    const smart = !input.stranger || await strangerSmartLeft(db, input.tenantUserId, input.toPhone);
+    if (!smart) {
+      // الغريب استهلك ردوده الذكية اليوم: المحل يرد بنفسه.
+      await startHandoff(db, {
+        tenantUserId: input.tenantUserId,
+        phone: input.toPhone,
+        reason: 'no_answer',
+        question: message,
+        profile,
+      });
+      return await deliverReply(db, input, ASK_SHOP_REPLY, false, typingStartedAt, true);
+    }
+    const { history } = await loadConversationBundle(db, {
+      tenantUserId: input.tenantUserId,
+      customerPhone: input.toPhone,
+      excludeInboundMessageId: input.inboundMessageId,
+    });
+    const v2 = await respondV2(db, {
+      tenantUserId: input.tenantUserId,
+      phone: input.toPhone,
+      message,
+      score: input.score,
+      card: input.stranger ? null : input.card ?? null,
+      employeeName: input.stranger ? null : input.employeeName,
+      history,
+      stranger: input.stranger === true,
+      profile,
+    });
+    if (v2) {
+      if (Date.now() - typingStartedAt > 8000) await showReadAndTyping(input);
+      return await deliverReply(
+        db,
+        input,
+        v2.reply,
+        v2.isFeedback || input.score != null,
+        typingStartedAt,
+        false,
+        v2.turnId,
+      );
+    }
+  }
 
   if (intent === 'pdf_file') {
     const pdf = await sendOilCardPdfNow(db, {
@@ -330,7 +407,7 @@ export async function sendRatingReply(
   }
 
   if (intent === 'rating' && fallback) {
-    const aiPromise = generateRatingReply({
+    const aiPromise = meteredAiReply(db, input.tenantUserId, {
       score: input.score,
       message,
       employeeName: input.employeeName,
@@ -359,7 +436,7 @@ export async function sendRatingReply(
     excludeInboundMessageId: input.inboundMessageId,
   });
 
-  const ai = await generateRatingReply({
+  const ai = await meteredAiReply(db, input.tenantUserId, {
     score: input.score,
     message,
     employeeName: input.employeeName,
@@ -387,6 +464,56 @@ export async function sendRatingReply(
     typingStartedAt,
     false,
   );
+}
+
+/**
+ * نداء النموذج للمجيب مع عدّاده المستقل (م6-3): رصيد واتساب منفصل عن المساعد،
+ * وعند نفاده يُرسل الرد الثابت. كل رد يُسجَّل في assistant_turns بقناة whatsapp
+ * بعد تنظيف الأسماء والأرقام. رقم الزبون لا يُحفظ.
+ */
+export async function meteredAiReply(
+  db: SupabaseClient,
+  tenantUserId: string,
+  aiInput: AiReplyInput,
+): Promise<AiReplyResult | null> {
+  const budget = await checkBudget(db, tenantUserId, 'whatsapp', false);
+  if (budget.mode === 'exhausted') return null;
+
+  let meter: { usage: { miss: number; hit: number; out: number }; model: string; latencyMs: number } | null = null;
+  const ai = await generateRatingReply(aiInput, { onCall: (m) => (meter = m) });
+  if (!meter) return ai;
+  const m = meter as { usage: { miss: number; hit: number; out: number }; model: string; latencyMs: number };
+
+  const cost = costMicroUsd(m.usage);
+  const names = [aiInput.card?.customer, aiInput.employeeName].filter((n): n is string => !!n && n.trim().length > 1);
+  try {
+    await addCost(db, tenantUserId, 'whatsapp', cost);
+    await recordTurnStep(db, {
+      turnId: crypto.randomUUID(),
+      threadId: crypto.randomUUID(),
+      tenantId: tenantUserId,
+      userId: null,
+      channel: 'whatsapp',
+      roleKey: 'customer',
+      isOwner: false,
+      routeId: null,
+      appVersion: null,
+      questionClean: sanitizeForLog(aiInput.message, { names, maxLength: 600 }),
+      answerClean: ai ? sanitizeForLog(ai.reply, { names, maxLength: 600 }) : null,
+      tools: [],
+      usage: m.usage,
+      costMicroUsd: cost,
+      latencyMs: m.latencyMs,
+      model: m.model,
+      finish: ai ? 'stop' : 'rejected',
+      budgetMode: budget.mode,
+      hasImage: false,
+      usedWeb: false,
+    });
+  } catch (e) {
+    console.warn('whatsapp meter failed', String(e).slice(0, 200));
+  }
+  return ai;
 }
 
 async function autoReplyEnabled(

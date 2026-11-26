@@ -59,6 +59,8 @@ android {
         versionCode = flutter.versionCode
         versionName = flutter.versionName
         manifestPlaceholders["googleMapsApiKey"] = googleMapsApiKey
+        // روابط الاختبار naboo-qa:// مفعّلة في نسخة الاختبار وحدها (م7-1).
+        manifestPlaceholders["qaLinksEnabled"] = if (qaBuild) "true" else "false"
     }
 
     signingConfigs {

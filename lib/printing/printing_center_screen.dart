@@ -5,8 +5,6 @@ import 'package:provider/provider.dart';
 
 import '../models/print_settings_data.dart';
 import '../providers/print_settings_provider.dart';
-import '../providers/auth_provider.dart';
-import '../screens/settings/store_info_screen.dart';
 import '../services/effective_store_branding.dart';
 import 'printer_connection.dart';
 import 'receipt_builders.dart';
@@ -53,7 +51,7 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
     if (mounted) setState(() => _conn = c);
   }
 
-  /// يعيد حساب بيانات المحل عند تغيّر الإعدادات أو بعد الرجوع من «بيانات المحل».
+  /// يعيد حساب بيانات المحل عند تغيّر الإعدادات .
   Future<void> _refreshBranding(PrintSettingsData base) async {
     _brandedFrom = base;
     PrintSettingsData b;
@@ -63,21 +61,6 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
       b = base;
     }
     if (mounted && identical(_brandedFrom, base)) setState(() => _branded = b);
-  }
-
-  Future<void> _openStoreInfo() async {
-    final isOwner = context.read<AuthProvider>().isOwner;
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => StoreInfoScreen(
-          scope: isOwner ? StoreInfoScope.workspace : StoreInfoScope.myBranch,
-        ),
-      ),
-    );
-    if (!mounted) return;
-    final prov = context.read<PrintSettingsProvider>();
-    await prov.load();
-    if (mounted) await _refreshBranding(prov.data);
   }
 
   /// الإعدادات للرسم: القوالب من إعدادات المحل، والرأس من بيانات المحل الفعلية.
@@ -151,19 +134,6 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
       child: Scaffold(
         appBar: AppBar(
           title: const Text('الطباعة'),
-          actions: [
-            // لون أزرار الشريط نفسه، فلا يختفي الزر على الشريط الداكن.
-            Builder(
-              builder: (ctx) => TextButton.icon(
-                style: TextButton.styleFrom(
-                  foregroundColor: IconTheme.of(ctx).color,
-                ),
-                onPressed: _openStoreInfo,
-                icon: const Icon(Icons.storefront_outlined),
-                label: const Text('بيانات المحل'),
-              ),
-            ),
-          ],
         ),
         body: Consumer<PrintSettingsProvider>(
           builder: (context, prov, _) {
@@ -814,7 +784,7 @@ class _PreviewPanel extends StatelessWidget {
         if (settings.storeTitleLine.trim().isEmpty) ...[
           const SizedBox(height: 10),
           Text(
-            'اسم المحل فارغ. أضفه من «بيانات المحل» أعلى الشاشة.',
+            'اسم المحل فارغ. أضفه من الإعدادات ← «بيانات المتجر».',
             textAlign: TextAlign.center,
             style: TextStyle(color: cs.error),
           ),

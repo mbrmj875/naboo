@@ -78,7 +78,7 @@ Deno.serve(async (req) => {
 
   let sent = 0;
   for (const row of tokens ?? []) {
-    const ok = await sendFcmDataMessage(row.token, alert);
+    const ok = await sendFcmDataMessage(row.token, alert, userId);
     if (ok) sent += 1;
   }
 

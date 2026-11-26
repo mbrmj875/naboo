@@ -4,6 +4,8 @@ import 'package:intl/intl.dart' hide TextDirection;
 import '../../../guides/guide_anchor.dart';
 import '../utils/oil_change_log_format.dart';
 import '../utils/oil_change_log_grouping.dart';
+import '../utils/oil_odometer_unit.dart';
+import '../../../utils/arabic_count.dart';
 
 /// ألوان ومقاسات Stitch — سجل غيارات الزيت (Premium + Desktop).
 abstract final class OilChangeLogStitchMetrics {
@@ -211,28 +213,25 @@ class OilChangeLogStitchActionButtons extends StatelessWidget {
       ),
     );
 
-    final waBtn = SizedBox(
-      height: OilChangeLogStitchMetrics.actionHeight,
-      width: double.infinity,
-      child: FilledButton.icon(
-        onPressed: onWhatsApp,
-        style: FilledButton.styleFrom(
-          backgroundColor: OilChangeLogStitchMetrics.primaryContainer,
-          foregroundColor: Colors.white,
-          elevation: 2,
-          shadowColor:
-              OilChangeLogStitchMetrics.primaryContainer.withValues(alpha: 0.35),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(OilChangeLogStitchMetrics.pillRadius),
+    final waBtn = GuideAnchor(
+      id: OilGuideAnchors.hubWhatsappMessages,
+      child: SizedBox(
+        height: OilChangeLogStitchMetrics.actionHeight,
+        width: double.infinity,
+        child: FilledButton.icon(
+          onPressed: onWhatsApp,
+          style: FilledButton.styleFrom(
+            backgroundColor: OilChangeLogStitchMetrics.primaryContainer,
+            foregroundColor: Colors.white,
+            elevation: 2,
+            shadowColor: OilChangeLogStitchMetrics.primaryContainer.withValues(alpha: 0.35),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(OilChangeLogStitchMetrics.pillRadius)),
           ),
+          icon: pendingCount > 0
+              ? Badge.count(count: pendingCount, child: const Icon(Icons.chat_rounded))
+              : const Icon(Icons.chat_rounded),
+          label: Text(waLabel, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13)),
         ),
-        icon: pendingCount > 0
-            ? Badge.count(
-                count: pendingCount,
-                child: const Icon(Icons.chat_rounded),
-              )
-            : const Icon(Icons.chat_rounded),
-        label: Text(waLabel, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13)),
       ),
     );
 
@@ -318,7 +317,7 @@ class OilChangeLogStitchDayHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = group.summary;
-    final badge = '${s.visitCount} ${s.visitCount == 1 ? 'زيارة' : 'زيارات'}';
+    final badge = arabicVisitsCount(s.visitCount);
 
     if (compact) {
       return Padding(
@@ -685,7 +684,7 @@ class OilChangeLogStitchVisitCard extends StatelessWidget {
                         if (odoCurrent.isNotEmpty && odoCurrent != '—')
                           OilChangeLogStitchInfoChip(
                             icon: Icons.speed_rounded,
-                            label: '$odoCurrent كم',
+                            label: '$odoCurrent ${OilOdometerUnit.labelOf(row)}',
                           ),
                       ],
                     ),
@@ -708,11 +707,18 @@ class OilChangeLogStitchVisitCard extends StatelessWidget {
                         ),
                         textDirection: TextDirection.ltr,
                       ),
+                      // العلامة تأخذ كل المسافة الفارغة (لا نصفها مع Spacer)
+                      // فلا يُقصّ «دين 15,000 د.ع» على الهاتف.
                       if (debt.isNotEmpty) ...[
                         const SizedBox(width: 8),
-                        Flexible(child: OilChangeLogStitchDebtBadge(label: debt)),
-                      ],
-                      const Spacer(),
+                        Expanded(
+                          child: Align(
+                            alignment: AlignmentDirectional.centerStart,
+                            child: OilChangeLogStitchDebtBadge(label: debt),
+                          ),
+                        ),
+                      ] else
+                        const Spacer(),
                       TextButton(
                         onPressed: onDetail,
                         style: TextButton.styleFrom(
@@ -1122,7 +1128,7 @@ class OilChangeLogStitchDesktopTableCard extends StatelessWidget {
                   DataColumn(label: Text('المركبة')),
                   DataColumn(label: Text('رقم اللوحة')),
                   DataColumn(label: Text('نوع الزيت')),
-                  DataColumn(label: Text('المسافة الحالية (كم)')),
+                  DataColumn(label: Text('العداد')),
                   DataColumn(label: Text('السعر')),
                   DataColumn(label: Text('إجراءات')),
                 ],
@@ -1209,10 +1215,10 @@ class OilChangeLogStitchDesktopTableCard extends StatelessWidget {
           ),
         ),
         DataCell(
-          Text(
-            oilFormatOdo((r['odometerCurrent'] ?? '').toString()),
-            textDirection: TextDirection.ltr,
-          ),
+          Text(() {
+            final v = oilFormatOdo((r['odometerCurrent'] ?? '').toString());
+            return v.isEmpty || v == '—' ? v : '$v ${OilOdometerUnit.labelOf(r)}';
+          }()),
         ),
         DataCell(
           Row(

@@ -5,7 +5,6 @@ import '../../guides/widgets/app_assistant_app_bar_button.dart';
 import '../../navigation/content_navigation.dart';
 import '../../providers/theme_provider.dart';
 import 'owner_account_profile_menu.dart';
-import 'owner_dashboard_layout_sheet.dart';
 
 /// ألوان شريط لوحة المالك — من [ColorScheme] فقط (فاتح/داكن).
 abstract final class OwnerDashboardChromeStyle {
@@ -71,13 +70,6 @@ class OwnerDashboardTopChrome extends StatelessWidget {
                   minimumSize: const Size(40, 40),
                   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 ),
-              ),
-              IconButton(
-                tooltip: 'إعدادات اللوحة',
-                onPressed: () => showOwnerDashboardLayoutSheet(context),
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
-                icon: Icon(Icons.settings_outlined, color: fg, size: 22),
               ),
               IconButton(
                 tooltip: 'تغيير المظهر',

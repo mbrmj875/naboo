@@ -164,13 +164,13 @@ final List<GuideTour> oilChangeTours = [
         ensureRouteId: AppContentRoutes.oilServicesLog,
       ),
       GuideStep(
-        anchorId: OilGuideAnchors.hubSettings,
+        anchorId: OilGuideAnchors.settingsEntry,
         title: 'ماذا تضبط في الإعدادات؟',
         body:
-            'من هنا تختار: إرسال واتساب تلقائي بعد الحفظ أو يدوياً، وطلب تقييم الزبون بعد الخدمة. اضبطها حسب أسلوب عملك في المحل.',
+            'في شاشة الإعدادات، تحت «محل الزيت»، تجد «إعدادات غيار الزيت». منها تختار إرسال واتساب تلقائياً بعد الحفظ أو يدوياً، وطلب تقييم الزبون بعد الخدمة. اضبطها حسب أسلوب عملك في المحل.',
         speakText:
-            'من الإعدادات تختار إرسال واتس آب تلقائي أو يدوي بعد الحفظ، وهل تطلب تقييم الزبون بعد الخدمة.',
-        ensureRouteId: AppContentRoutes.oilServicesLog,
+            'في الإعدادات، تحت محل الزيت، تجد إعدادات غيار الزيت. منها تختار إرسال واتس آب تلقائي أو يدوي بعد الحفظ، وهل تطلب تقييم الزبون.',
+        ensureRouteId: AppContentRoutes.settings,
       ),
     ],
   ),
@@ -326,16 +326,16 @@ final List<GuideTour> oilChangeTours = [
   GuideTour(
     id: GuideTourIds.oilHubSettings,
     title: 'إعدادات غيار الزيت',
-    description: 'لوحة مفاتيح السجل: مخزون وواتساب وتقييم',
+    description: 'من شاشة الإعدادات: مخزون وواتساب وتقييم',
     steps: [
       GuideStep(
-        anchorId: OilGuideAnchors.hubSettings,
+        anchorId: OilGuideAnchors.settingsEntry,
         title: 'افتح إعدادات غيار الزيت',
         body:
-            'من أيقونة الضبط هنا تُفتح لوحة إعدادات تشغيل غيار الزيت: صرف المخزون وواتساب والتقييم.',
+            'إعدادات تشغيل غيار الزيت في شاشة الإعدادات، تحت «محل الزيت»: صرف المخزون وواتساب والتقييم. اضغط هذا البند لتفتح لوحتها.',
         speakText:
-            'من أيقونة الضبط تفتح إعدادات غيار الزيت. التالي لشرح كل مفتاح.',
-        ensureRouteId: AppContentRoutes.oilServicesLog,
+            'إعدادات غيار الزيت في شاشة الإعدادات، تحت محل الزيت. التالي لشرح كل مفتاح.',
+        ensureRouteId: AppContentRoutes.settings,
       ),
       GuideStep(
         anchorId: OilGuideAnchors.settingsStockOil,
@@ -344,7 +344,7 @@ final List<GuideTour> oilChangeTours = [
             'عند التشغيل يخصم لترات الزيت من عائلة المخزون عند الحفظ. عند الإيقاف يبقى التسجيل يدوياً بلا خصم.',
         speakText:
             'صرف الزيت من المخزون: عند التشغيل يخصم اللترات عند الحفظ. عند الإيقاف تسجيل بلا خصم.',
-        ensureRouteId: AppContentRoutes.oilServicesLog,
+        ensureRouteId: AppContentRoutes.settings,
         action: 'oil.open_hub_settings',
       ),
       GuideStep(
@@ -354,7 +354,7 @@ final List<GuideTour> oilChangeTours = [
             'نفس الفكرة للهيدروليك: خصم لترات من عائلات المخزون عند الحفظ إن كان مفعّلاً.',
         speakText:
             'صرف الهيدروليك من المخزون يعمل بنفس فكرة الزيت لعائلات الهيدروليك.',
-        ensureRouteId: AppContentRoutes.oilServicesLog,
+        ensureRouteId: AppContentRoutes.settings,
         action: 'oil.open_hub_settings',
       ),
       GuideStep(
@@ -364,7 +364,7 @@ final List<GuideTour> oilChangeTours = [
             'بعد حفظ بطاقة جديدة تُرسل الرسالة من رقم المحل دون فتح واتساب. يحتاج ربطاً ناجحاً ورقم زبون.',
         speakText:
             'الإرسال التلقائي يرسل رسالة واتس آب بعد الحفظ من رقم المحل. يحتاج ربطاً ورقم زبون.',
-        ensureRouteId: AppContentRoutes.oilServicesLog,
+        ensureRouteId: AppContentRoutes.settings,
         action: 'oil.open_hub_settings',
       ),
       GuideStep(
@@ -374,7 +374,7 @@ final List<GuideTour> oilChangeTours = [
             'يفتح واتساب برسالة جاهزة بعد الحفظ. متعارض مع التلقائي — اختر أسلوباً واحداً.',
         speakText:
             'الفتح اليدوي يفتح واتس آب برسالة جاهزة. لا يجتمع مع الإرسال التلقائي.',
-        ensureRouteId: AppContentRoutes.oilServicesLog,
+        ensureRouteId: AppContentRoutes.settings,
         action: 'oil.open_hub_settings',
       ),
       GuideStep(
@@ -384,7 +384,7 @@ final List<GuideTour> oilChangeTours = [
             'يُلحق دعوة تقييم من 1 إلى 10 أو ملاحظة قصيرة بنهاية رسالة واتساب.',
         speakText:
             'طلب التقييم يضيف دعوة تقييم في نهاية رسالة واتس آب للزبون.',
-        ensureRouteId: AppContentRoutes.oilServicesLog,
+        ensureRouteId: AppContentRoutes.settings,
         action: 'oil.open_hub_settings',
       ),
       GuideStep(
@@ -394,7 +394,7 @@ final List<GuideTour> oilChangeTours = [
             'من هنا تنتقل لشاشة الربط (رقم نابو أو Meta أو QR). بدونه لن تخرج رسائل للزبائن.',
         speakText:
             'من صف ربط واتساب المحل تفتح شاشة الربط. بدونه لا تخرج رسائل للزبائن.',
-        ensureRouteId: AppContentRoutes.oilServicesLog,
+        ensureRouteId: AppContentRoutes.settings,
         action: 'oil.open_hub_settings',
       ),
     ],

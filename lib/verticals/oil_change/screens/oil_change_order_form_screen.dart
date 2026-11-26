@@ -1,4 +1,4 @@
-
+import '../../../assistant/exec/assistant_prefill.dart';
 import 'dart:convert';
 import '../../../printing/receipt_printer.dart';
 import 'dart:async';
@@ -98,13 +98,15 @@ import '../../../models/print_settings_data.dart';
 import '../../../navigation/content_navigation.dart';
 import '../utils/oil_change_order_status.dart';
 import '../utils/oil_order_has_oil.dart';
+import '../utils/oil_odometer_unit.dart';
 import '../utils/oil_card_labor.dart';
 import 'oil_change_form_screen.dart';
+import '../../../utils/arabic_count.dart';
+import '../../../assistant/ui/assistant_context_scope.dart';
 
 part 'oil_change_order_form/oil_form_types.dart';
 part 'oil_change_order_form/oil_form_sections.dart';
 part 'oil_change_order_form/oil_form_save.dart';
-
 
 class OilChangeOrderFormScreen extends StatefulWidget {
   const OilChangeOrderFormScreen({
@@ -113,10 +115,11 @@ class OilChangeOrderFormScreen extends StatefulWidget {
     this.editOrderGlobalId,
     this.prefillFromOrder,
     this.amendInvoicedOrder = false,
-  }) : assert(
-          !amendInvoicedOrder || editOrderId != null,
-          'تصحيح الفاتورة يتطلب بطاقة موجودة',
-        );
+    this.assistantPrefill,
+  }) : assert(!amendInvoicedOrder || editOrderId != null, 'تصحيح الفاتورة يتطلب بطاقة موجودة');
+
+  /// بطاقة جديدة عبّأها المساعد (م4-1). تُراجع وتُحفظ بزر البطاقة نفسه.
+  final AssistantPrefill? assistantPrefill;
 
   final int? editOrderId;
   final String? editOrderGlobalId;
@@ -132,8 +135,7 @@ class OilChangeOrderFormScreen extends StatefulWidget {
   bool get isOilNewCard => isNewCard;
 
   @override
-  State<OilChangeOrderFormScreen> createState() =>
-      _OilChangeOrderFormScreenState();
+  State<OilChangeOrderFormScreen> createState() => _OilChangeOrderFormScreenState();
 }
 
 class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
@@ -145,21 +147,21 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   bool _hydraulicCatalogGuideOpen = false;
 
   final _formKey = GlobalKey<FormState>();
-  
+
   // Controllers
   final _customerName = TextEditingController();
   final _customerFocus = FocusNode();
   final _customerPhone = TextEditingController(text: '07');
-  
+
   final _deviceName = TextEditingController(); // اسم السيارة
-  final _carModel = TextEditingController();    // موديل السيارة
+  final _carModel = TextEditingController(); // موديل السيارة
   final _deviceSerial = TextEditingController(); // رقم اللوحة
-  final _engineSize = TextEditingController();   // حجم المحرك
+  final _engineSize = TextEditingController(); // حجم المحرك
 
   final _odometerCurrent = TextEditingController(); // القراءة الحالية
-  final _odometerNext = TextEditingController();    // القراءة اللاحقة
-  final _oilType = TextEditingController();         // نوع الزيت
-  
+  final _odometerNext = TextEditingController(); // القراءة اللاحقة
+  final _oilType = TextEditingController(); // نوع الزيت
+
   final _estimated = TextEditingController(text: '0');
   final _agreed = TextEditingController();
   final _advance = TextEditingController(text: '0');
@@ -172,13 +174,15 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   String? _notesExtrasDismissedKey;
   OilNotesMoneyParseResult _notesMoneyPreview = OilNotesMoneyParseResult.empty;
   Timer? _notesMoneyDebounce;
+
   /// يجمع ضربات الحجم/المبالغ حتى لا يُعاد بناء النموذج كاملاً كل إطار.
   Timer? _checkoutUiDebounce;
   bool _notesMoneyAiLoading = false;
   final _notesMoneyAi = OilNotesMoneyAiClient();
+
   /// نتيجة محلية أخيرة — تُمرَّر كتلميح للتحليل الذكي.
-  OilNotesMoneyParseResult _notesMoneyLocalHint =
-      OilNotesMoneyParseResult.empty;
+  OilNotesMoneyParseResult _notesMoneyLocalHint = OilNotesMoneyParseResult.empty;
+
   /// نص الملاحظات الذي بُني عليه آخر تحليل AI.
   String? _notesMoneyAiForText;
 
@@ -206,15 +210,16 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   List<OilChangeOilCatalogEntry> _oilViscosityEntriesCache = const [];
   List<OilChangeHydraulicCatalogEntry>? _hydraulicBrandItemsSource;
   List<String> _hydraulicBrandItemsCache = const [];
-  final Map<OilChangeHydraulicCardSlot, _HydraulicGradeCache>
-      _hydraulicGradeEntriesCache = {};
+  final Map<OilChangeHydraulicCardSlot, _HydraulicGradeCache> _hydraulicGradeEntriesCache = {};
 
   /// الكتابة الجارية في حقل المبلغ مصدرها الحساب التلقائي لا المستخدم.
   bool _syncingAdvance = false;
 
   bool _oilCustomerProvided = false;
+
   /// إعداد المحل: ربط بطاقة الغيار بأصناف المخزون (زيت المحل).
   bool _stockFromWarehouseEnabled = true;
+
   /// إعداد المحل: إظهار كل قسم من «إضافات عند الحاجة» على حدة.
   final Map<_OilFormOptionalSection, bool> _optionalExtraVisible = {
     for (final s in _OilFormOptionalSection.values) s: true,
@@ -235,6 +240,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   bool _hydraulicProductCatalogLoading = false;
   List<OilPickLine> _oilStockPickLines = const [];
   bool _oilStockPickLinesLoading = false;
+
   /// مفتاح العائلة: [parentProductId] أو سالب [linkedProductId] للأصناف المفردة.
   int? _selectedOilFamilyKey;
 
@@ -245,15 +251,12 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
 
   /// مصدر قسم هيدروليك بعينه: المخزون أو أسماء وأسعار فقط.
   bool _hydraulicStockEnabledFor(OilChangeHydraulicCardSlot slot) =>
-      identical(slot, _powerHydraulic)
-          ? _powerHydraulicStockEnabled
-          : _gearHydraulicStockEnabled;
+      identical(slot, _powerHydraulic) ? _powerHydraulicStockEnabled : _gearHydraulicStockEnabled;
   final _gearHydraulic = OilChangeHydraulicCardSlot.gear();
   final _powerHydraulic = OilChangeHydraulicCardSlot.power();
   List<OilChangeFilterCatalogEntry> _filterProductCatalog = const [];
   bool _filterProductCatalogLoading = false;
-  List<OilChangeFilterKind> _filterKinds =
-      List<OilChangeFilterKind>.from(OilChangeFilterKind.builtins);
+  List<OilChangeFilterKind> _filterKinds = List<OilChangeFilterKind>.from(OilChangeFilterKind.builtins);
   final Map<String, OilChangeFilterSlot> _filterSlotsByCode = {};
 
   /// مصدر الفلاتر: أصناف المخزون حسب «الصنف»، أو كتالوج الأسماء والأسعار.
@@ -287,14 +290,17 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   int? _editOilWarehouseId;
   bool _editOilCustomerProvided = false;
   int _editInvoiceId = 0;
+
   /// هاتف البطاقة عند فتح التصحيح (مقفول بعد التحميل) — لكشف تغيّر الرقم فقط.
   String? _baselineCustomerPhoneDigits;
   bool _baselineCustomerPhoneLocked = false;
 
   bool _hydratingEdit = false;
   bool _saving = false;
+
   /// بعد حفظ ناجح أو موافقة المستخدم على المغادرة.
   bool _leaveGateAllowPop = false;
+
   /// بصمة الحقول بعد التحميل/الفتح — للمقارنة عند الرجوع.
   String? _leaveGateCleanFingerprint;
   Object? _error;
@@ -302,6 +308,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
 
   int? _customerId;
   bool _suspendCustomerIdClear = false;
+
   /// يمنع مسح الهاتف بعد اختيار العميل من القائمة (سباق تحديث الحقل على التابلت/الحاسوب).
   String? _linkedCustomerName;
 
@@ -316,8 +323,10 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   /// البطاقة المفتوحة للتعديل مرتبطة بفاتورة.
   bool _editHasInvoice = false;
   final Set<_OilFormOptionalSection> _expandedOptional = {};
+
   /// يمنع جدولة مزامنة الدليل في كل إطار — فقط عند تغيّر الخطوة.
   String? _lastGuideSyncKey;
+
   /// يُبطِل ردود DeepSeek المتأخرة بعد مغادرة/تعديل النص.
   int _notesMoneyAiGeneration = 0;
   final List<OilChangeProductLine> _oilProductLines = [];
@@ -338,6 +347,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   Timer? _plateVehicleSyncDebounce;
   bool _vehicleSyncInFlight = false;
   bool _vehicleSyncQueued = false;
+
   /// آخر لوحة جُلب لها سجل تلقائياً بنجاح — يمنع إعادة المزامنة لنفس اللوحة.
   String? _lastAutoSyncedPlate;
 
@@ -363,24 +373,35 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
 
   /// آخر رقم كامل فُحص للربط الفوري.
   String? _phoneLinkCheckedKey;
+
   /// فتح من صف الجدول — لا جلب تلقائي من «آخر زيارة» حتى يغيّر المستخدم اللوحة أو يضغط مزامنة.
   bool _allowAutoVisitLookup = true;
   String? _prefillPlateAtOpen;
+
   /// منع إعادة تعبئة النموذج من `_prefill` أو مزامنة مخزون متأخرة بعد تعديل المستخدم.
   bool _initialPrefillApplied = false;
   bool _oilFluidUserEdited = false;
   bool _hydraulicGearUserEdited = false;
   bool _hydraulicPowerUserEdited = false;
+
   /// بعد أول مزامنة كتالوج/مخزون لبطاقة مفتوحة من الجدول — لا إعادة كتابة الزيت/الهيدروليك.
   bool _prefillCatalogSyncedOnce = false;
   bool _prefillBootstrapInProgress = false;
+
   /// قراءة العداد في الزيارة السابقة: تُعرض تلميحاً تحت القراءة الحالية.
   String? _previousVisitOdometer;
+
+  /// وحدة القراءة السابقة؛ لا مقارنة «أقل من السابقة» بين وحدتين مختلفتين.
+  String _previousOdometerUnit = OilOdometerUnit.km;
+
+  /// وحدة عداد هذه السيارة ('km' أو 'mi')؛ تُنسخ من آخر زيارة لها.
+  String _odometerUnit = OilOdometerUnit.km;
 
   /// تاريخ القراءة السابقة (من سجل السيارة)، يُعرض بجانبها.
   String? _previousOdometerAt;
   Timer? _previousOdometerDebounce;
   bool _odometerLowerThanPrevious = false;
+
   /// الحقول الإلزامية من إعدادات المحل (الافتراضي يطابق السلوك القديم).
   OilCardRequiredFields _requiredFields = OilCardRequiredFields.defaults;
   bool _isFieldRequired(OilCardField f) => _requiredFields.isRequired(f);
@@ -391,27 +412,25 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
 
   /// أجرة التبديل الفعلية (الأساسية، أو أجرة زيت العميل، أو ما كُتب هنا).
   int _oilLaborFils() => effectiveOilLaborFils(
-        customerOil: _oilCustomerProvided,
-        baseFils: _basePriceFils,
-        customerOilSettingFils: _customerLabor.oilFils,
-        cardFils: _oilLaborCardFils,
-      );
+    customerOil: _oilCustomerProvided,
+    baseFils: _basePriceFils,
+    customerOilSettingFils: _customerLabor.oilFils,
+    cardFils: _oilLaborCardFils,
+  );
 
-  int _hydraulicLaborFilsFor(OilChangeHydraulicCardSlot slot) =>
-      effectiveCustomerItemLaborFils(
-        customerProvided: slot.customerProvided,
-        settingFils: identical(slot, _powerHydraulic)
-            ? _customerLabor.hydraulicPowerFils
-            : _customerLabor.hydraulicGearFils,
-        cardFils: slot.laborCardFils,
-      );
+  int _hydraulicLaborFilsFor(OilChangeHydraulicCardSlot slot) => effectiveCustomerItemLaborFils(
+    customerProvided: slot.customerProvided,
+    settingFils: identical(slot, _powerHydraulic)
+        ? _customerLabor.hydraulicPowerFils
+        : _customerLabor.hydraulicGearFils,
+    cardFils: slot.laborCardFils,
+  );
 
-  int _filterLaborFilsFor(OilChangeFilterSlot slot) =>
-      effectiveCustomerItemLaborFils(
-        customerProvided: slot.customerProvided,
-        settingFils: _customerLabor.filterFils,
-        cardFils: slot.laborCardFils,
-      );
+  int _filterLaborFilsFor(OilChangeFilterSlot slot) => effectiveCustomerItemLaborFils(
+    customerProvided: slot.customerProvided,
+    settingFils: _customerLabor.filterFils,
+    cardFils: slot.laborCardFils,
+  );
 
   final DatabaseHelper _customersDb = DatabaseHelper();
 
@@ -420,6 +439,8 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   @override
   void initState() {
     super.initState();
+    // ق67: «هذا/هنا» في المساعد تعني عنصر هذه الشاشة.
+    AssistantScreenContext.push(AssistantContextItem(kind: 'oil_card', id: widget.editOrderId ?? 0, label: 'البطاقة التي تعدّلها'));
     if (!widget.isEdit) {
       _status = 'pending';
       // الافتراضي: الزيت إلزامي فقسمه مفتوح من أول إطار.
@@ -484,14 +505,19 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
         unawaited(_loadOilCatalog());
         unawaited(_loadOilProductCatalog());
         unawaited(_loadFluidStockSettings());
-        unawaited(_offerDraftRestore());
+        // بطاقة عبّأها المساعد لا تعرض استرجاع مسودة قديمة فوقها.
+        if (widget.assistantPrefill == null) unawaited(_offerDraftRestore());
       });
+      final ap = widget.assistantPrefill;
+      if (ap != null) {
+        // بعد أول إطار: مستمعو الحقول يستدعون setState.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) setState(() => _applyAssistantPrefill(ap));
+        });
+      }
     }
     if (!widget.isEdit) {
-      _draftTimer = Timer.periodic(
-        const Duration(seconds: 4),
-        (_) => unawaited(_autosaveDraft()),
-      );
+      _draftTimer = Timer.periodic(const Duration(seconds: 4), (_) => unawaited(_autosaveDraft()));
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _attachOilBarcodeHandler();
@@ -533,9 +559,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     final guide = _guideListenable;
     if (guide == null || !mounted) return;
     final step = guide.currentStep;
-    final syncKey = guide.isRunning
-        ? '${step?.anchorId}|${step?.action}|${step?.title}'
-        : 'off';
+    final syncKey = guide.isRunning ? '${step?.anchorId}|${step?.action}|${step?.title}' : 'off';
     if (_lastGuideSyncKey == syncKey) return;
     _lastGuideSyncKey = syncKey;
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -595,21 +619,15 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     final regName = (row['name'] ?? '').toString().trim();
     if (regName.isEmpty) return;
     final typed = _customerName.text.trim();
-    final sameName = typed.isEmpty ||
-        OilChangeLookupNormalize.normalizeNameKey(typed) ==
-            OilChangeLookupNormalize.normalizeNameKey(regName);
+    final sameName =
+        typed.isEmpty ||
+        OilChangeLookupNormalize.normalizeNameKey(typed) == OilChangeLookupNormalize.normalizeNameKey(regName);
     if (!sameName) {
-      final link = await _askLinkPhoneToRegistered(
-        registeredName: regName,
-        typedName: typed,
-      );
+      final link = await _askLinkPhoneToRegistered(registeredName: regName, typedName: typed);
       if (!mounted || _phoneLinkCheckedKey != key) return;
       if (link != true) {
         // الرقم لعميل آخر: يُعدَّل الرقم، فلا يُحفظ باسم غير صاحبه.
-        _customerPhone.selection = TextSelection(
-          baseOffset: 0,
-          extentOffset: _customerPhone.text.length,
-        );
+        _customerPhone.selection = TextSelection(baseOffset: 0, extentOffset: _customerPhone.text.length);
         _phoneLinkCheckedKey = null;
         return;
       }
@@ -625,10 +643,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     );
   }
 
-  Future<bool?> _askLinkPhoneToRegistered({
-    required String registeredName,
-    required String typedName,
-  }) {
+  Future<bool?> _askLinkPhoneToRegistered({required String registeredName, required String typedName}) {
     return showDialog<bool>(
       context: context,
       barrierDismissible: false,
@@ -640,14 +655,8 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
           textAlign: TextAlign.start,
         ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('تعديل الرقم'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: Text('ربط بـ $registeredName'),
-          ),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('تعديل الرقم')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text('ربط بـ $registeredName')),
         ],
       ),
     );
@@ -658,8 +667,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     final phone = _customerPhone.text.trim();
     if (phone.length != 11 || phone == _waReminderCheckedPhone) return;
     _waReminderCheckedPhone = phone;
-    final prior =
-        await WaOilFollowupScheduler.instance.recipientConsentStatus(phone);
+    final prior = await WaOilFollowupScheduler.instance.recipientConsentStatus(phone);
     if (!mounted || _customerPhone.text.trim() != phone) return;
     setState(() {
       _waReminderPrior = prior;
@@ -674,10 +682,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
         _waAskRatingAfterSave != null) {
       return;
     }
-    final results = await Future.wait([
-      _loadStoreBrandingForCustomer(),
-      OilChangeSettings.loadCardSettings(),
-    ]);
+    final results = await Future.wait([_loadStoreBrandingForCustomer(), OilChangeSettings.loadCardSettings()]);
     if (!mounted) return;
     final card = results[1] as OilChangeCardSettings;
     _cachedPrintSettings = results[0] as PrintSettingsData;
@@ -705,15 +710,12 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
         _filterSourceChanged = true;
       }
       for (final section in _OilFormOptionalSection.values) {
-        _optionalExtraVisible[section] =
-            extras[_toOptionalExtraKind(section)] ?? true;
+        _optionalExtraVisible[section] = extras[_toOptionalExtraKind(section)] ?? true;
       }
       _expandedOptional.removeWhere((s) {
         if (s == _OilFormOptionalSection.oil) {
           // بطاقة جديدة: الزيت مفتوح ما دام إلزامياً، ومطوي إن صار اختيارياً.
-          return !widget.isEdit &&
-              !_isFieldRequired(OilCardField.oil) &&
-              !_oilSectionHasData();
+          return !widget.isEdit && !_isFieldRequired(OilCardField.oil) && !_oilSectionHasData();
         }
         if (_optionalExtraVisible[s] ?? true) return false;
         return !_optionalSectionHasData(s);
@@ -751,13 +753,10 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   OilOptionalExtraKind _toOptionalExtraKind(_OilFormOptionalSection section) {
     return switch (section) {
       // لا مفتاح إعداد للزيت؛ [_isOptionalSectionEnabled] يعيده دائماً.
-      _OilFormOptionalSection.oil ||
-      _OilFormOptionalSection.products => OilOptionalExtraKind.products,
+      _OilFormOptionalSection.oil || _OilFormOptionalSection.products => OilOptionalExtraKind.products,
       _OilFormOptionalSection.filters => OilOptionalExtraKind.filters,
-      _OilFormOptionalSection.hydraulicGear =>
-        OilOptionalExtraKind.hydraulicGear,
-      _OilFormOptionalSection.hydraulicPower =>
-        OilOptionalExtraKind.hydraulicPower,
+      _OilFormOptionalSection.hydraulicGear => OilOptionalExtraKind.hydraulicGear,
+      _OilFormOptionalSection.hydraulicPower => OilOptionalExtraKind.hydraulicPower,
       _OilFormOptionalSection.services => OilOptionalExtraKind.services,
     };
   }
@@ -777,20 +776,15 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       _oilSizeAmount.text.trim().isNotEmpty ||
       _parseOilLitersStock() > 0;
 
-  bool get _anyOptionalExtrasEnabled =>
-      _OilFormOptionalSection.values.any(_shouldRenderOptionalSection);
+  bool get _anyOptionalExtrasEnabled => _OilFormOptionalSection.values.any(_shouldRenderOptionalSection);
 
   bool _optionalSectionHasData(_OilFormOptionalSection section) {
     return switch (section) {
       _OilFormOptionalSection.oil => _oilSectionHasData(),
       _OilFormOptionalSection.products => _oilProductLines.isNotEmpty,
-      _OilFormOptionalSection.filters => _filterKinds.any(
-          (k) => _filterSlotFor(k).hasSelection,
-        ),
-      _OilFormOptionalSection.hydraulicGear =>
-        _hydraulicSlotHasData(_gearHydraulic),
-      _OilFormOptionalSection.hydraulicPower =>
-        _hydraulicSlotHasData(_powerHydraulic),
+      _OilFormOptionalSection.filters => _filterKinds.any((k) => _filterSlotFor(k).hasSelection),
+      _OilFormOptionalSection.hydraulicGear => _hydraulicSlotHasData(_gearHydraulic),
+      _OilFormOptionalSection.hydraulicPower => _hydraulicSlotHasData(_powerHydraulic),
       _OilFormOptionalSection.services => _selectedOilServiceIds.isNotEmpty,
     };
   }
@@ -811,18 +805,16 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
 
   bool get _isPrefillFromLog => widget.prefillFromOrder != null;
 
-  bool _shouldBlockFluidReconcileAfterPrefill() =>
-      shouldBlockFluidReconcileAfterPrefill(
-        isPrefillFromLog: _isPrefillFromLog,
-        prefillCatalogSyncedOnce: _prefillCatalogSyncedOnce,
-      );
+  bool _shouldBlockFluidReconcileAfterPrefill() => shouldBlockFluidReconcileAfterPrefill(
+    isPrefillFromLog: _isPrefillFromLog,
+    prefillCatalogSyncedOnce: _prefillCatalogSyncedOnce,
+  );
 
-  bool _blocksAutoVisitLookup({bool force = false}) =>
-      shouldBlockAutoVisitLookup(
-        isPrefillFromLog: widget.prefillFromOrder != null,
-        allowAutoVisitLookup: _allowAutoVisitLookup,
-        force: force,
-      );
+  bool _blocksAutoVisitLookup({bool force = false}) => shouldBlockAutoVisitLookup(
+    isPrefillFromLog: widget.prefillFromOrder != null,
+    allowAutoVisitLookup: _allowAutoVisitLookup,
+    force: force,
+  );
 
   void _sealPrefillFluidSnapshot() {
     if (_isPrefillFromLog) {
@@ -865,8 +857,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
 
   /// أعلى مبلغ مستلم: الزيارة + الدين السابق. الزائد عن الزيارة يُسدَّد من
   /// الدين القديم عند البيع.
-  int _maxReceivableFils() =>
-      _oilCheckoutTotalFils() + _collectibleOldDebtFils();
+  int _maxReceivableFils() => _oilCheckoutTotalFils() + _collectibleOldDebtFils();
 
   /// المبلغ المستلم لا يتجاوز الزيارة + الدين السابق — قص فوري عند التعديل.
   void _clampAdvanceToCheckoutTotal() {
@@ -908,10 +899,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       if (mounted) setState(() => _notesMoneyAiLoading = false);
     }
     _notesMoneyDebounce?.cancel();
-    _notesMoneyDebounce = Timer(
-      const Duration(milliseconds: 400),
-      _refreshNotesMoneyPreview,
-    );
+    _notesMoneyDebounce = Timer(const Duration(milliseconds: 400), _refreshNotesMoneyPreview);
   }
 
   void _refreshNotesMoneyPreview() {
@@ -925,8 +913,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       });
       return;
     }
-    if (_notesExtrasDismissedKey != null &&
-        _notesExtrasDismissedKey != key) {
+    if (_notesExtrasDismissedKey != null && _notesExtrasDismissedKey != key) {
       _notesExtrasDismissedKey = null;
     }
 
@@ -968,9 +955,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     setState(() => _notesMoneyAiLoading = true);
     final ai = await _notesMoneyAi.analyze(
       notes: text,
-      localHint: _notesMoneyLocalHint.isNotEmpty
-          ? _notesMoneyLocalHint
-          : parseOilNotesMoney(text),
+      localHint: _notesMoneyLocalHint.isNotEmpty ? _notesMoneyLocalHint : parseOilNotesMoney(text),
     );
     if (!mounted || gen != _notesMoneyAiGeneration) return;
     setState(() {
@@ -982,9 +967,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text(
-              'تعذّر التحليل الذكي الآن — يمكنك الاعتماد على الاكتشاف المحلي أو إعادة المحاولة',
-            ),
+            content: Text('تعذّر التحليل الذكي الآن — يمكنك الاعتماد على الاكتشاف المحلي أو إعادة المحاولة'),
           ),
         );
       }
@@ -1048,8 +1031,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   }
 
   void _onOdometerNextTyped() {
-    if (_odometerDigits(_odometerNext.text).isNotEmpty) {
-    }
+    if (_odometerDigits(_odometerNext.text).isNotEmpty) {}
   }
 
   void _onOilCheckoutFieldsChanged() {
@@ -1059,18 +1041,14 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   }
 
   /// تحديث واجهة الدفع/الإجمالي بدون عاصفة setState أثناء الكتابة أو الضغط المطوّل.
-  void _scheduleCheckoutUiRefresh({
-    Duration delay = const Duration(milliseconds: 90),
-  }) {
+  void _scheduleCheckoutUiRefresh({Duration delay = const Duration(milliseconds: 90)}) {
     _checkoutUiDebounce?.cancel();
     _checkoutUiDebounce = Timer(delay, () {
       if (mounted) setState(() {});
     });
   }
 
-  void _onOilOrHydraulicVolumeChanged({
-    required void Function() syncStockLiters,
-  }) {
+  void _onOilOrHydraulicVolumeChanged({required void Function() syncStockLiters}) {
     syncStockLiters();
     _agreedTotalManual = false;
     _recalculateOilTotal();
@@ -1082,9 +1060,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     controller.text = value;
   }
 
-  static final _carModelDigitFormatters = [
-    FilteringTextInputFormatter.allow(RegExp(r'[0-9٠-٩۰-۹]')),
-  ];
+  static final _carModelDigitFormatters = [FilteringTextInputFormatter.allow(RegExp(r'[0-9٠-٩۰-۹]'))];
 
   /// حجم المحرك: أرقام + فاصلة عشرية واحدة (مثل 1.8).
   static final _engineSizeInputFormatters = [
@@ -1096,15 +1072,11 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     }),
   ];
 
-  String get _carModelForSave =>
-      OilChangeLookupNormalize.toWesternDigits(_carModel.text.trim());
+  String get _carModelForSave => OilChangeLookupNormalize.toWesternDigits(_carModel.text.trim());
 
-  static final _odometerInputFormatters = [
-    IraqiCurrencyFormat.moneyInputFormatter(),
-  ];
+  static final _odometerInputFormatters = [IraqiCurrencyFormat.moneyInputFormatter()];
 
-  static final _iraqiMobilePhoneFormatters =
-      CustomerValidation.iraqiMobileInputFormatters();
+  static final _iraqiMobilePhoneFormatters = CustomerValidation.iraqiMobileInputFormatters();
 
   void _resetCustomerPhonePrefix() {
     _setCustomerPhoneField(null);
@@ -1112,9 +1084,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
 
   void _setCustomerPhoneField(String? raw) {
     final t = (raw ?? '').trim();
-    final next = t.isEmpty
-        ? '07'
-        : CustomerValidation.coerceIraqiMobileDigits(t);
+    final next = t.isEmpty ? '07' : CustomerValidation.coerceIraqiMobileDigits(t);
     _settingPhoneProgrammatically = true;
     try {
       _assignControllerText(_customerPhone, next);
@@ -1130,12 +1100,10 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     return t.isEmpty || t == '07';
   }
 
-  String _odometerDigits(String display) =>
-      display.replaceAll(',', '').trim();
+  String _odometerDigits(String display) => display.replaceAll(',', '').trim();
 
   String _formatOdometerDisplay(String? raw) {
-    final digits = OilChangeLookupNormalize.toWesternDigits(raw ?? '')
-        .replaceAll(RegExp(r'[^0-9]'), '');
+    final digits = OilChangeLookupNormalize.toWesternDigits(raw ?? '').replaceAll(RegExp(r'[^0-9]'), '');
     if (digits.isEmpty) return '';
     final n = int.tryParse(digits);
     if (n == null || n <= 0) return digits;
@@ -1151,18 +1119,15 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
 
   String get _odometerCurrentForSave => _odometerDigits(_odometerCurrent.text);
 
-  int? get _previousOdometerKm => int.tryParse(
-    OilChangeLookupNormalize.toWesternDigits(_previousVisitOdometer ?? ''),
-  );
+  int? get _previousOdometerKm => int.tryParse(OilChangeLookupNormalize.toWesternDigits(_previousVisitOdometer ?? ''));
 
-  int? get _currentOdometerKm => int.tryParse(
-    OilChangeLookupNormalize.toWesternDigits(_odometerCurrentForSave),
-  );
+  int? get _currentOdometerKm => int.tryParse(OilChangeLookupNormalize.toWesternDigits(_odometerCurrentForSave));
 
   /// القراءة المكتوبة أقل من آخر قراءة للسيارة؟ (غالباً خطأ كتابة 58 بدل 85.)
   bool _computeOdometerLower() {
     final prev = _previousOdometerKm;
     final cur = _currentOdometerKm;
+    if (_previousOdometerUnit != _odometerUnit) return false;
     return prev != null && prev > 0 && cur != null && cur > 0 && cur < prev;
   }
 
@@ -1175,10 +1140,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
 
   void _schedulePreviousOdometer() {
     _previousOdometerDebounce?.cancel();
-    _previousOdometerDebounce = Timer(
-      const Duration(milliseconds: 400),
-      () => unawaited(_refreshPreviousOdometer()),
-    );
+    _previousOdometerDebounce = Timer(const Duration(milliseconds: 400), () => unawaited(_refreshPreviousOdometer()));
   }
 
   /// آخر قراءة للسيارة من سجلها، قبل هذه البطاقة إن كانت تُعدَّل. سيارة غير
@@ -1187,12 +1149,15 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     final plate = _deviceSerial.text.trim();
     if (plate.length < 3) return;
     try {
-      final r = await OilChangeOrdersRepository.instance
-          .previousOdometerReading(plate, excludeOrderId: widget.editOrderId);
+      final r = await OilChangeOrdersRepository.instance.previousOdometerReading(
+        plate,
+        excludeOrderId: widget.editOrderId,
+      );
       if (!mounted || _deviceSerial.text.trim() != plate || r == null) return;
       setState(() {
         _previousVisitOdometer = r.km?.toString();
         _previousOdometerAt = r.at;
+        _previousOdometerUnit = r.unit;
         _odometerLowerThanPrevious = _computeOdometerLower();
       });
     } catch (_) {}
@@ -1200,21 +1165,22 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
 
   /// نص التلميح تحت القراءة الحالية: «السابقة: 85,000 كم · 12/03/2026».
   String? get _previousOdometerHelper {
+    final prevUnit = OilOdometerUnit.label(_previousOdometerUnit);
     final prev = _previousOdometerKm;
     if (prev == null || prev <= 0) {
       final raw = (_previousVisitOdometer ?? '').trim();
-      return raw.isEmpty ? null : 'السابقة: $raw كم';
+      return raw.isEmpty ? null : 'السابقة: $raw $prevUnit';
     }
     final km = IraqiCurrencyFormat.formatInt(prev);
     if (_odometerLowerThanPrevious) {
-      return 'أقل من السابقة ($km كم) — تأكّد من القراءة';
+      return 'أقل من السابقة ($km $prevUnit) — تأكّد من القراءة';
     }
     final at = DateTime.tryParse(_previousOdometerAt ?? '');
     final day = at == null
         ? ''
         : ' · ${at.day.toString().padLeft(2, '0')}/'
               '${at.month.toString().padLeft(2, '0')}/${at.year}';
-    return 'السابقة: $km كم$day';
+    return 'السابقة: $km $prevUnit$day';
   }
 
   String get _odometerNextForSave => _odometerDigits(_odometerNext.text);
@@ -1238,11 +1204,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     if (_oilCustomerProvided) return;
     final brand = _selectedOilBrand;
     final vis = _selectedViscosity;
-    if (brand == null ||
-        brand.isEmpty ||
-        vis == null ||
-        vis.isEmpty ||
-        _oilProductCatalog.isEmpty) {
+    if (brand == null || brand.isEmpty || vis == null || vis.isEmpty || _oilProductCatalog.isEmpty) {
       return;
     }
     final entry = OilChangeOilCatalogRepository.entryForBrandViscosity(
@@ -1255,16 +1217,10 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     }
   }
 
-  void _syncHydraulicCatalogPricingFromSelectionFor(
-    OilChangeHydraulicCardSlot slot,
-  ) {
+  void _syncHydraulicCatalogPricingFromSelectionFor(OilChangeHydraulicCardSlot slot) {
     final brand = slot.selectedBrand;
     final grade = slot.selectedGrade;
-    if (brand == null ||
-        brand.isEmpty ||
-        grade == null ||
-        grade.isEmpty ||
-        _hydraulicProductCatalog.isEmpty) {
+    if (brand == null || brand.isEmpty || grade == null || grade.isEmpty || _hydraulicProductCatalog.isEmpty) {
       return;
     }
     final entry = OilChangeHydraulicCatalogRepository.entryForBrandGrade(
@@ -1306,14 +1262,11 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     return paid;
   }
 
-  bool get _usesWarehouseOilPicker =>
-      _stockFromWarehouseEnabled && !_oilCustomerProvided;
+  bool get _usesWarehouseOilPicker => _stockFromWarehouseEnabled && !_oilCustomerProvided;
 
-  bool get _showCatalogOilFields =>
-      !_oilCustomerProvided && !_usesWarehouseOilPicker;
+  bool get _showCatalogOilFields => !_oilCustomerProvided && !_usesWarehouseOilPicker;
 
-  static int _oilFamilyKey(OilPickLine line) =>
-      line.parentProductId ?? -line.linkedProductId;
+  static int _oilFamilyKey(OilPickLine line) => line.parentProductId ?? -line.linkedProductId;
 
   List<({int key, String label})> get _oilFamilyDropdownOptions {
     final seen = <int>{};
@@ -1331,12 +1284,8 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   List<OilPickLine> get _oilStockLinesForSelectedFamily {
     final key = _selectedOilFamilyKey;
     if (key == null) return const [];
-    return _oilStockPickLines
-        .where((l) => _oilFamilyKey(l) == key)
-        .toList()
-      ..sort(
-        (a, b) => a.viscosity.toLowerCase().compareTo(b.viscosity.toLowerCase()),
-      );
+    return _oilStockPickLines.where((l) => _oilFamilyKey(l) == key).toList()
+      ..sort((a, b) => a.viscosity.toLowerCase().compareTo(b.viscosity.toLowerCase()));
   }
 
   int? get _oilStockViscosityProductId {
@@ -1350,17 +1299,29 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
 
   void _reconcileOilStockLineSelection() {
     if (_oilFluidUserEdited || _shouldBlockFluidReconcileAfterPrefill()) return;
+    if (_oilStockPickLines.isEmpty) return;
     final pid = _oilStockProductId;
-    if (pid == null || pid <= 0 || _oilStockPickLines.isEmpty) return;
-    for (final line in _oilStockPickLines) {
-      if (line.linkedProductId == pid) {
-        _selectedOilFamilyKey = _oilFamilyKey(line);
-        _oilType.text = line.parentName;
-        _selectedViscosity =
-            line.viscosity.isEmpty ? null : line.viscosity;
-        _oilPickSellPerLiter = line.sellPerLiterIqd;
-        return;
+    if (pid != null && pid > 0) {
+      for (final line in _oilStockPickLines) {
+        if (line.linkedProductId == pid) {
+          _selectedOilFamilyKey = _oilFamilyKey(line);
+          _oilType.text = line.parentName;
+          _selectedViscosity = line.viscosity.isEmpty ? null : line.viscosity;
+          _oilPickSellPerLiter = line.sellPerLiterIqd;
+          return;
+        }
       }
+    }
+    // جلب اللوحة: البطاقة السابقة بلا رقم صنف (أو دُمجت دون استبدال) —
+    // نطابق بالاسم واللزوجة حتى تُختار عائلة الزيت تلقائياً.
+    if (_oilCustomerProvided) return;
+    final line = matchOilPickLineByName(_oilStockPickLines, name: _oilType.text, viscosity: _selectedViscosity);
+    if (line == null) return;
+    _selectedOilFamilyKey = _oilFamilyKey(line);
+    final sameViscosity = line.viscosity.trim().toLowerCase() == (_selectedViscosity ?? '').trim().toLowerCase();
+    if (sameViscosity) {
+      _oilStockProductId = line.linkedProductId;
+      _oilPickSellPerLiter = line.sellPerLiterIqd;
     }
   }
 
@@ -1375,7 +1336,6 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     _selectedOilBrand = null;
     _agreedTotalManual = false;
   }
-
 
   double _parseOilLitersStock() {
     final raw = _oilLitersStock.text.trim().replaceAll(',', '');
@@ -1421,12 +1381,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
         await _refreshAvailableLiters();
       }
     } catch (e, st) {
-      AppLogger.error(
-        'ServiceOrderForm',
-        'loadOilStockMeta failed',
-        e,
-        st,
-      );
+      AppLogger.error('ServiceOrderForm', 'loadOilStockMeta failed', e, st);
       if (mounted) {
         setState(() {
           _oilStockMetaLoading = false;
@@ -1445,10 +1400,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       return;
     }
     try {
-      final q = await OilChangeStockService.instance.availableLiters(
-        productId: pid,
-        warehouseId: wid ?? 0,
-      );
+      final q = await OilChangeStockService.instance.availableLiters(productId: pid, warehouseId: wid ?? 0);
       if (mounted) setState(() => _oilAvailableLiters = q);
     } catch (_) {}
   }
@@ -1471,8 +1423,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   }
 
   void _reconcileHydraulicStockLineSelectionFor(OilChangeHydraulicCardSlot slot) {
-    if (_hydraulicFluidUserEditedFor(slot) ||
-        _shouldBlockFluidReconcileAfterPrefill()) {
+    if (_hydraulicFluidUserEditedFor(slot) || _shouldBlockFluidReconcileAfterPrefill()) {
       return;
     }
     final pid = slot.stockProductId;
@@ -1481,8 +1432,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       if (line.linkedProductId == pid) {
         slot.selectedFamilyKey = _oilFamilyKey(line);
         slot.type.text = line.parentName;
-        slot.selectedGrade =
-            line.viscosity.isEmpty ? null : line.viscosity;
+        slot.selectedGrade = line.viscosity.isEmpty ? null : line.viscosity;
         slot.pickSellPerLiter = line.sellPerLiterIqd;
         return;
       }
@@ -1510,8 +1460,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
           }
         });
       }
-      final lines =
-          await OilChangeStockService.instance.listHydraulicPickLines();
+      final lines = await OilChangeStockService.instance.listHydraulicPickLines();
       if (!mounted) return;
       setState(() {
         _hydraulicStockPickLines = lines;
@@ -1522,17 +1471,11 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       if (_gearHydraulic.stockProductId != null && _gearHydraulic.warehouseId != null) {
         await _refreshHydraulicAvailableLitersFor(_gearHydraulic);
       }
-      if (_powerHydraulic.stockProductId != null &&
-          _powerHydraulic.warehouseId != null) {
+      if (_powerHydraulic.stockProductId != null && _powerHydraulic.warehouseId != null) {
         await _refreshHydraulicAvailableLitersFor(_powerHydraulic);
       }
     } catch (e, st) {
-      AppLogger.error(
-        'ServiceOrderForm',
-        'loadHydraulicStockMeta failed',
-        e,
-        st,
-      );
+      AppLogger.error('ServiceOrderForm', 'loadHydraulicStockMeta failed', e, st);
       if (mounted) {
         setState(() {
           _hydraulicStockPickLinesLoading = false;
@@ -1542,9 +1485,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     }
   }
 
-  Future<void> _refreshHydraulicAvailableLitersFor(
-    OilChangeHydraulicCardSlot slot,
-  ) async {
+  Future<void> _refreshHydraulicAvailableLitersFor(OilChangeHydraulicCardSlot slot) async {
     final pid = slot.stockProductId;
     final wid = slot.warehouseId;
     if (pid == null || pid <= 0) {
@@ -1552,14 +1493,10 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       return;
     }
     try {
-      final q = await OilChangeStockService.instance.availableLiters(
-        productId: pid,
-        warehouseId: wid ?? 0,
-      );
+      final q = await OilChangeStockService.instance.availableLiters(productId: pid, warehouseId: wid ?? 0);
       if (mounted) setState(() => slot.availableLiters = q);
     } catch (_) {}
   }
-
 
   Future<void> _loadOilCatalog() async {
     try {
@@ -1567,8 +1504,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
         OilChangeSettings.loadCardSettings(),
         OilChangeServicesRepository.instance.listActive(),
       ]);
-      final base =
-          (results[0] as OilChangeCardSettings).baseOilChangePriceFils;
+      final base = (results[0] as OilChangeCardSettings).baseOilChangePriceFils;
       final list = results[1] as List<OilChangeServiceItem>;
       if (!mounted) return;
       setState(() {
@@ -1587,8 +1523,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       setState(() => _oilProductCatalogLoading = true);
     }
     try {
-      final list =
-          await OilChangeOilCatalogRepository.instance.listActive();
+      final list = await OilChangeOilCatalogRepository.instance.listActive();
       if (!mounted) return;
       setState(() {
         _oilProductCatalog = list;
@@ -1613,8 +1548,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   List<String> get _oilBrandDropdownItems {
     if (!identical(_oilBrandItemsSource, _oilProductCatalog)) {
       _oilBrandItemsSource = _oilProductCatalog;
-      _oilBrandItemsCache =
-      OilChangeOilCatalogRepository.brandNamesFrom(_oilProductCatalog);
+      _oilBrandItemsCache = OilChangeOilCatalogRepository.brandNamesFrom(_oilProductCatalog);
     }
     return _oilBrandItemsCache;
   }
@@ -1622,15 +1556,10 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   List<OilChangeOilCatalogEntry> get _oilViscosityDropdownEntries {
     final brand = _selectedOilBrand;
     if (brand == null || brand.isEmpty) return const [];
-    if (!identical(_oilViscosityEntriesSource, _oilProductCatalog) ||
-        _oilViscosityEntriesBrand != brand) {
+    if (!identical(_oilViscosityEntriesSource, _oilProductCatalog) || _oilViscosityEntriesBrand != brand) {
       _oilViscosityEntriesSource = _oilProductCatalog;
       _oilViscosityEntriesBrand = brand;
-      _oilViscosityEntriesCache =
-          OilChangeOilCatalogRepository.entriesForBrand(
-      _oilProductCatalog,
-      brand,
-    );
+      _oilViscosityEntriesCache = OilChangeOilCatalogRepository.entriesForBrand(_oilProductCatalog, brand);
     }
     return _oilViscosityEntriesCache;
   }
@@ -1654,10 +1583,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   }
 
   OilChangeOilCatalogEntry? _uniqueCatalogEntryForBrand(String brand) {
-    final entries = OilChangeOilCatalogRepository.entriesForBrand(
-      _oilProductCatalog,
-      brand,
-    );
+    final entries = OilChangeOilCatalogRepository.entriesForBrand(_oilProductCatalog, brand);
     return entries.length == 1 ? entries.first : null;
   }
 
@@ -1696,10 +1622,10 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     OilChangeOilCatalogEntry? entry;
     if (vis != null && vis.isNotEmpty) {
       entry = OilChangeOilCatalogRepository.entryForBrandViscosity(
-      _oilProductCatalog,
-      brandName: _selectedOilBrand!,
-      viscosity: vis,
-    );
+        _oilProductCatalog,
+        brandName: _selectedOilBrand!,
+        viscosity: vis,
+      );
     }
     entry ??= _uniqueCatalogEntryForBrand(_selectedOilBrand!);
     if (entry != null) {
@@ -1723,8 +1649,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       if (_oilSizeAmount.text.trim().isEmpty) {
         final liters = (r['oilLitersUsed'] as num?)?.toDouble();
         if (liters != null && liters > 0) {
-          _oilSizeAmount.text =
-              formatOilVolumeDisplay((liters * 1000).round());
+          _oilSizeAmount.text = formatOilVolumeDisplay((liters * 1000).round());
         }
       }
     }
@@ -1749,7 +1674,6 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     _agreedTotalManual = false;
   }
 
-
   void _onOilBrandDropdownChanged(String? brand) {
     _markOilFluidUserEdited();
     _selectedOilBrand = brand;
@@ -1758,10 +1682,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       _selectedViscosity = null;
       _catalogSellPerLiterFils = null;
     } else {
-      final entries = OilChangeOilCatalogRepository.entriesForBrand(
-        _oilProductCatalog,
-        brand,
-      );
+      final entries = OilChangeOilCatalogRepository.entriesForBrand(_oilProductCatalog, brand);
       final currentVis = _selectedViscosity;
       OilChangeOilCatalogEntry? keep;
       if (currentVis != null && currentVis.isNotEmpty) {
@@ -1837,7 +1758,6 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     return names.join(',');
   }
 
-
   void _recalculateOilTotal() {
     if (_agreedTotalManual) return;
     final total = _cardGrandTotalFils();
@@ -1859,8 +1779,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       setState(() => _hydraulicProductCatalogLoading = true);
     }
     try {
-      final list =
-          await OilChangeHydraulicCatalogRepository.instance.listActive();
+      final list = await OilChangeHydraulicCatalogRepository.instance.listActive();
       if (!mounted) return;
       setState(() {
         _hydraulicProductCatalog = list;
@@ -1882,18 +1801,14 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   Future<void> _loadFilterProductCatalog() async {
     if (mounted) setState(() => _filterProductCatalogLoading = true);
     try {
-      final loaded =
-          await OilChangeFilterKindsRepository.instance.listActive();
-      final kinds = loaded.isEmpty
-          ? List<OilChangeFilterKind>.from(OilChangeFilterKind.builtins)
-          : loaded;
+      final loaded = await OilChangeFilterKindsRepository.instance.listActive();
+      final kinds = loaded.isEmpty ? List<OilChangeFilterKind>.from(OilChangeFilterKind.builtins) : loaded;
       _filterSourceChanged = false;
       final List<OilChangeFilterCatalogEntry> resolved;
       if (_filtersStockEnabled) {
         resolved = await OilFilterStockCatalog.load(kinds);
       } else {
-        final list =
-            await OilChangeFilterCatalogRepository.instance.listActive();
+        final list = await OilChangeFilterCatalogRepository.instance.listActive();
         resolved = [for (final e in list) e.withResolvedKind(kinds)];
       }
       if (!mounted) return;
@@ -1917,10 +1832,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       final pid = slot.productId;
       slot.catalogEntryId = null;
       if (pid == null || pid <= 0) return;
-      for (final e in OilChangeFilterCatalogRepository.entriesForKind(
-        _filterProductCatalog,
-        kind,
-      )) {
+      for (final e in OilChangeFilterCatalogRepository.entriesForKind(_filterProductCatalog, kind)) {
         if (e.productId == pid) {
           slot.catalogEntryId = e.id;
           return;
@@ -1930,10 +1842,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     }
     final id = slot.catalogEntryId;
     if (id != null && id > 0) {
-      final entry = OilChangeFilterCatalogRepository.entryById(
-        _filterProductCatalog,
-        id,
-      );
+      final entry = OilChangeFilterCatalogRepository.entryById(_filterProductCatalog, id);
       if (entry == null || entry.kind.code != kind.code) {
         slot.catalogEntryId = null;
       } else {
@@ -1943,10 +1852,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     }
     final name = (slot.name ?? '').trim();
     if (name.isEmpty) return;
-    for (final e in OilChangeFilterCatalogRepository.entriesForKind(
-      _filterProductCatalog,
-      kind,
-    )) {
+    for (final e in OilChangeFilterCatalogRepository.entriesForKind(_filterProductCatalog, kind)) {
       if (e.name.toLowerCase() == name.toLowerCase()) {
         slot.applyEntry(e);
         return;
@@ -1965,9 +1871,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     for (final kind in _filterKinds) {
       final slot = _filterSlotFor(kind);
       if (!slot.hasSelection) continue;
-      total += slot.customerProvided
-          ? _filterLaborFilsFor(slot)
-          : slot.priceFils;
+      total += slot.customerProvided ? _filterLaborFilsFor(slot) : slot.priceFils;
     }
     return total;
   }
@@ -1977,11 +1881,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     for (final kind in _filterKinds) {
       final slot = _filterSlotFor(kind);
       if (!slot.hasSelection) continue;
-      final line = oilFilterLineLabel(
-        kindLabel: kind.label,
-        name: slot.name ?? '',
-        priceFils: slot.priceFils,
-      );
+      final line = oilFilterLineLabel(kindLabel: kind.label, name: slot.name ?? '', priceFils: slot.priceFils);
       if (line != null) parts.add(line);
     }
     return parts.isEmpty ? null : parts.join(' · ');
@@ -2023,10 +1923,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     final lines = oilFilterLinesDataFromRow(row);
     if (lines.isNotEmpty) {
       for (final line in lines) {
-        final slot = _filterSlotsByCode.putIfAbsent(
-          line.code,
-          OilChangeFilterSlot.new,
-        );
+        final slot = _filterSlotsByCode.putIfAbsent(line.code, OilChangeFilterSlot.new);
         slot.catalogEntryId = line.catalogEntryId;
         slot.name = line.name.isEmpty ? null : line.name;
         slot.priceFils = line.priceFils;
@@ -2039,11 +1936,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       }
     } else {
       for (final kind in OilChangeFilterKind.builtins) {
-        _filterSlotFor(kind).loadFromRow(
-          row,
-          nameKey: kind.nameColumnKey,
-          priceKey: kind.priceColumnKey,
-        );
+        _filterSlotFor(kind).loadFromRow(row, nameKey: kind.nameColumnKey, priceKey: kind.priceColumnKey);
       }
     }
     final hasAny = _filterSlotsByCode.values.any((s) => s.hasSelection);
@@ -2062,10 +1955,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   List<String> get _hydraulicBrandDropdownItems {
     if (!identical(_hydraulicBrandItemsSource, _hydraulicProductCatalog)) {
       _hydraulicBrandItemsSource = _hydraulicProductCatalog;
-      _hydraulicBrandItemsCache =
-      OilChangeHydraulicCatalogRepository.brandNamesFrom(
-        _hydraulicProductCatalog,
-      );
+      _hydraulicBrandItemsCache = OilChangeHydraulicCatalogRepository.brandNamesFrom(_hydraulicProductCatalog);
     }
     return _hydraulicBrandItemsCache;
   }
@@ -2106,19 +1996,14 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     }
   }
 
-  bool _usesCatalogHydraulicPricingFor(OilChangeHydraulicCardSlot slot) =>
-      (slot.catalogSellPerLiterFils ?? 0) > 0;
+  bool _usesCatalogHydraulicPricingFor(OilChangeHydraulicCardSlot slot) => (slot.catalogSellPerLiterFils ?? 0) > 0;
 
-  bool get _usesCatalogOilPricing =>
-      _catalogSellPerLiterFils != null && _catalogSellPerLiterFils! > 0;
-
+  bool get _usesCatalogOilPricing => _catalogSellPerLiterFils != null && _catalogSellPerLiterFils! > 0;
 
   bool get _showOilVolumeStepper {
     if (_oilCustomerProvided) return true;
     if (_usesCatalogOilPricing) return true;
-    if (_showCatalogOilFields &&
-        _oilBrandDropdownValue != null &&
-        _oilViscosityDropdownValue != null) {
+    if (_showCatalogOilFields && _oilBrandDropdownValue != null && _oilViscosityDropdownValue != null) {
       return true;
     }
     if (_usesWarehouseOilPicker) {
@@ -2154,16 +2039,10 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       if ((slot.stockProductId ?? 0) <= 0) return 0;
       final sell = _selectedHydraulicSellPerLiterIqdFor(slot);
       if (sell == null || sell <= 0) return 0;
-      return sellFilsForVolumeMl(
-        sellPerLiterFils: IqdMoney.toFils(sell),
-        milliliters: ml,
-      );
+      return sellFilsForVolumeMl(sellPerLiterFils: IqdMoney.toFils(sell), milliliters: ml);
     }
     if (_usesCatalogHydraulicPricingFor(slot)) {
-      return sellFilsForVolumeMl(
-        sellPerLiterFils: slot.catalogSellPerLiterFils!,
-        milliliters: ml,
-      );
+      return sellFilsForVolumeMl(sellPerLiterFils: slot.catalogSellPerLiterFils!, milliliters: ml);
     }
     return 0;
   }
@@ -2179,11 +2058,10 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       _oilProductLinesTotalFils() +
       _notesExtrasFils;
 
-  String? _hydraulicSizeValueForSaveFor(OilChangeHydraulicCardSlot slot) =>
-      slot.sizeValueForSave(
-        usesWarehousePicker: _usesWarehouseHydraulicPickerFor(slot),
-        effectiveCustomerProvided: _effectiveHydraulicCustomerProvidedFor(slot),
-      );
+  String? _hydraulicSizeValueForSaveFor(OilChangeHydraulicCardSlot slot) => slot.sizeValueForSave(
+    usesWarehousePicker: _usesWarehouseHydraulicPickerFor(slot),
+    effectiveCustomerProvided: _effectiveHydraulicCustomerProvidedFor(slot),
+  );
 
   /// كانت تقترح «الحالية + 5000» تلقائياً — أُوقفت بطلب المستخدم.
   void _parseOilSize(String? stored) {
@@ -2233,150 +2111,136 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
 
     _applyingVehicleRecord = true;
     try {
-    if (!fillCustomer) {
-      // لا شيء: الزبون يُختار أو يُكتب، لا يُستنتج من اللوحة.
-    } else if (replaceAll) {
-      _customerId = (r['customerId'] as num?)?.toInt();
-      textCtrl(_customerName, 'customerNameSnapshot');
-      assignStoredPhone();
-    } else {
-      if (_customerId == null) {
-        final cid = (r['customerId'] as num?)?.toInt();
-        if (cid != null && cid > 0) _customerId = cid;
+      if (!fillCustomer) {
+        // لا شيء: الزبون يُختار أو يُكتب، لا يُستنتج من اللوحة.
+      } else if (replaceAll) {
+        _customerId = (r['customerId'] as num?)?.toInt();
+        textCtrl(_customerName, 'customerNameSnapshot');
+        assignStoredPhone();
+      } else {
+        if (_customerId == null) {
+          final cid = (r['customerId'] as num?)?.toInt();
+          if (cid != null && cid > 0) _customerId = cid;
+        }
+        textCtrl(_customerName, 'customerNameSnapshot');
+        assignStoredPhone();
       }
-      textCtrl(_customerName, 'customerNameSnapshot');
-      assignStoredPhone();
-    }
 
-    textCtrl(_deviceName, 'deviceName');
-    textCtrl(_carModel, 'carModel');
-    _normalizeCarModelDisplay();
-    // البحث باللوحة لا يغيّر اللوحة المكتوبة (قد تكون أكمل من القديمة).
-    if (fillCustomer) textCtrl(_deviceSerial, 'deviceSerial');
-    textCtrl(_engineSize, 'engineSize');
-    if (newVisit) {
-      final prev = _odometerDigits((r['odometerCurrent'] ?? '').toString());
-      _previousVisitOdometer = prev.isEmpty ? null : prev;
-      _previousOdometerAt = (r['createdAt'] ?? '').toString();
-      _odometerLowerThanPrevious = _computeOdometerLower();
-    } else if (!widget.isEdit) {
-      if (replaceAll || _odometerDigits(_odometerCurrent.text).isEmpty) {
-        _assignOdometerText(
-          _odometerCurrent,
-          (r['odometerCurrent'] ?? '').toString(),
-        );
+      textCtrl(_deviceName, 'deviceName');
+      textCtrl(_carModel, 'carModel');
+      _normalizeCarModelDisplay();
+      // البحث باللوحة لا يغيّر اللوحة المكتوبة (قد تكون أكمل من القديمة).
+      if (fillCustomer) textCtrl(_deviceSerial, 'deviceSerial');
+      textCtrl(_engineSize, 'engineSize');
+      // السيارة تتذكّر وحدة عدادها (كم أو ميل) من آخر زيارة.
+      _odometerUnit = OilOdometerUnit.of(r);
+      if (newVisit) {
+        final prev = _odometerDigits((r['odometerCurrent'] ?? '').toString());
+        _previousVisitOdometer = prev.isEmpty ? null : prev;
+        _previousOdometerUnit = _odometerUnit;
+        _previousOdometerAt = (r['createdAt'] ?? '').toString();
+        _odometerLowerThanPrevious = _computeOdometerLower();
+      } else if (!widget.isEdit) {
+        if (replaceAll || _odometerDigits(_odometerCurrent.text).isEmpty) {
+          _assignOdometerText(_odometerCurrent, (r['odometerCurrent'] ?? '').toString());
+        }
+        final nextOdo = (r['odometerNext'] ?? '').toString();
+        if (replaceAll || _odometerDigits(_odometerNext.text).isEmpty) {
+          _assignOdometerText(_odometerNext, nextOdo);
+        }
       }
-      final nextOdo = (r['odometerNext'] ?? '').toString();
-      if (replaceAll || _odometerDigits(_odometerNext.text).isEmpty) {
-        _assignOdometerText(_odometerNext, nextOdo);
+      if (!skipOilAndHydraulic) {
+        textCtrl(_oilType, 'oilType');
+        if (replaceAll) {
+          _oilCustomerProvided = ((r['oilCustomerProvided'] as num?)?.toInt() ?? 0) != 0;
+          if (!_stockFromWarehouseEnabled) {
+            _oilStockProductId = null;
+            _oilWarehouseId = null;
+            _oilLitersStock.clear();
+          } else {
+            _oilStockProductId = (r['oilProductId'] as num?)?.toInt();
+            _oilWarehouseId = (r['oilWarehouseId'] as num?)?.toInt();
+            final liters = (r['oilLitersUsed'] as num?)?.toDouble();
+            if (liters != null && liters > 0) {
+              _oilLitersStock.text = liters % 1 == 0 ? liters.toInt().toString() : liters.toString();
+            }
+          }
+        }
+        if (replaceAll || _selectedViscosity == null) {
+          final vis = r['oilViscosity']?.toString();
+          _selectedViscosity = vis == null || vis.isEmpty ? null : vis;
+        }
+        if (replaceAll || _oilSizeAmount.text.trim().isEmpty) {
+          _parseOilSize(r['oilSize']?.toString());
+          if (_oilSizeAmount.text.trim().isEmpty) {
+            final liters = (r['oilLitersUsed'] as num?)?.toDouble();
+            if (liters != null && liters > 0) {
+              _oilSizeAmount.text = formatOilVolumeDisplay((liters * 1000).round());
+            }
+          }
+        }
+        if (replaceAll || (_catalogSellPerLiterFils ?? 0) <= 0) {
+          final catSell = (r['oilSellPerLiterFils'] as num?)?.toInt();
+          if (catSell != null && catSell > 0) {
+            _catalogSellPerLiterFils = catSell;
+          }
+        }
       }
-    }
-    if (!skipOilAndHydraulic) {
-      textCtrl(_oilType, 'oilType');
       if (replaceAll) {
-        _oilCustomerProvided =
-            ((r['oilCustomerProvided'] as num?)?.toInt() ?? 0) != 0;
-        if (!_stockFromWarehouseEnabled) {
-          _oilStockProductId = null;
-          _oilWarehouseId = null;
-          _oilLitersStock.clear();
-        } else {
-          _oilStockProductId = (r['oilProductId'] as num?)?.toInt();
-          _oilWarehouseId = (r['oilWarehouseId'] as num?)?.toInt();
-          final liters = (r['oilLitersUsed'] as num?)?.toDouble();
-          if (liters != null && liters > 0) {
-            _oilLitersStock.text = liters % 1 == 0
-                ? liters.toInt().toString()
-                : liters.toString();
-          }
+        if (!skipHydraulicGear) {
+          _gearHydraulic.loadFromRow(r, stockEnabled: _gearHydraulicStockEnabled);
+        }
+        if (!skipHydraulicPower) {
+          _powerHydraulic.loadFromRow(r, stockEnabled: _powerHydraulicStockEnabled);
         }
       }
-      if (replaceAll || _selectedViscosity == null) {
-        final vis = r['oilViscosity']?.toString();
-        _selectedViscosity =
-            vis == null || vis.isEmpty ? null : vis;
-      }
-      if (replaceAll || _oilSizeAmount.text.trim().isEmpty) {
-        _parseOilSize(r['oilSize']?.toString());
-        if (_oilSizeAmount.text.trim().isEmpty) {
-          final liters = (r['oilLitersUsed'] as num?)?.toDouble();
-          if (liters != null && liters > 0) {
-            _oilSizeAmount.text =
-                formatOilVolumeDisplay((liters * 1000).round());
-          }
-        }
-      }
-      if (replaceAll || (_catalogSellPerLiterFils ?? 0) <= 0) {
-        final catSell = (r['oilSellPerLiterFils'] as num?)?.toInt();
-        if (catSell != null && catSell > 0) {
-          _catalogSellPerLiterFils = catSell;
-        }
-      }
-    }
-    if (replaceAll) {
-      if (!skipHydraulicGear) {
-        _gearHydraulic.loadFromRow(
-          r,
-          stockEnabled: _gearHydraulicStockEnabled,
-        );
-      }
-      if (!skipHydraulicPower) {
-        _powerHydraulic.loadFromRow(
-          r,
-          stockEnabled: _powerHydraulicStockEnabled,
-        );
-      }
-    }
-    if (!newVisit) {
-      textCtrl(_technicianName, 'technicianName');
-      textCtrl(_issue, 'issueDescription');
-    }
-    if (replaceAll) {
-      _loadFiltersFromRow(r);
-    }
-
-    if (replaceAll) {
-      _estimated.text = IraqiCurrencyFormat.formatDecimal2(
-        IqdMoney.fromFils((r['estimatedPriceFils'] as num?)?.toInt() ?? 0),
-      );
-      final agreedF = (r['agreedPriceFils'] as num?)?.toInt();
-      _syncingAgreed = true;
-      try {
-        _agreed.text = agreedF == null ? '' : _formatIqdWhole(agreedF);
-      } finally {
-        _syncingAgreed = false;
-      }
-      _advance.text = _formatAdvanceIqd(
-        (r['advancePaymentFils'] as num?)?.toInt() ?? 0,
-      );
-      _serviceId = (r['serviceId'] as num?)?.toInt();
       if (!newVisit) {
-        final req =
-            parseOilRequestedServices(r['requestedServices']?.toString());
-        _selectedOilServiceIds.clear();
-        _matchServiceNamesToIds(req);
+        textCtrl(_technicianName, 'technicianName');
+        textCtrl(_issue, 'issueDescription');
       }
-    } else {
-      if (_agreed.text.trim().isEmpty) {
+      if (replaceAll) {
+        _loadFiltersFromRow(r);
+      }
+
+      if (replaceAll) {
+        _estimated.text = IraqiCurrencyFormat.formatDecimal2(
+          IqdMoney.fromFils((r['estimatedPriceFils'] as num?)?.toInt() ?? 0),
+        );
         final agreedF = (r['agreedPriceFils'] as num?)?.toInt();
-        if (agreedF != null) {
-          _syncingAgreed = true;
-          try {
-            _agreed.text = _formatIqdWhole(agreedF);
-          } finally {
-            _syncingAgreed = false;
+        _syncingAgreed = true;
+        try {
+          _agreed.text = agreedF == null ? '' : _formatIqdWhole(agreedF);
+        } finally {
+          _syncingAgreed = false;
+        }
+        _advance.text = _formatAdvanceIqd((r['advancePaymentFils'] as num?)?.toInt() ?? 0);
+        _serviceId = (r['serviceId'] as num?)?.toInt();
+        if (!newVisit) {
+          final req = parseOilRequestedServices(r['requestedServices']?.toString());
+          _selectedOilServiceIds.clear();
+          _matchServiceNamesToIds(req);
+        }
+      } else {
+        if (_agreed.text.trim().isEmpty) {
+          final agreedF = (r['agreedPriceFils'] as num?)?.toInt();
+          if (agreedF != null) {
+            _syncingAgreed = true;
+            try {
+              _agreed.text = _formatIqdWhole(agreedF);
+            } finally {
+              _syncingAgreed = false;
+            }
           }
         }
+        if (!newVisit && _selectedOilServiceIds.isEmpty) {
+          final req = parseOilRequestedServices(r['requestedServices']?.toString());
+          _matchServiceNamesToIds(req);
+        }
       }
-      if (!newVisit && _selectedOilServiceIds.isEmpty) {
-        final req = parseOilRequestedServices(r['requestedServices']?.toString());
-        _matchServiceNamesToIds(req);
-      }
-    }
 
-    if (_customerId != null && _customerId! > 0) {
-      _linkedCustomerName = _customerName.text.trim();
-    }
+      if (_customerId != null && _customerId! > 0) {
+        _linkedCustomerName = _customerName.text.trim();
+      }
     } finally {
       _applyingVehicleRecord = false;
     }
@@ -2388,8 +2252,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       final row = await ProductRepository().getProductById(_serviceId!);
       if (row != null && mounted) {
         setState(() {
-          if (_estimated.text.trim().isEmpty ||
-              _estimated.text.trim() == '0') {
+          if (_estimated.text.trim().isEmpty || _estimated.text.trim() == '0') {
             final sp = (row['sellPrice'] as num?)?.toDouble() ?? 0.0;
             _estimated.text = IraqiCurrencyFormat.formatDecimal2(sp);
           }
@@ -2411,11 +2274,9 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     final key = OilChangeLookupNormalize.normalizePlateKey(plate);
     if (key.isEmpty || _declinedLegacyPlates.contains(key)) return null;
     if (_adoptPlateKey == key && _adoptVehicleGid != null) {
-      return OilChangeOrdersRepository.instance
-          .getLatestOilChangeForVehicle(_adoptVehicleGid!);
+      return OilChangeOrdersRepository.instance.getLatestOilChangeForVehicle(_adoptVehicleGid!);
     }
-    final candidates = await OilChangeOrdersRepository.instance
-        .legacyVehicleCandidates(plate);
+    final candidates = await OilChangeOrdersRepository.instance.legacyVehicleCandidates(plate);
     if (candidates.isEmpty || !mounted) return null;
     final gid = await showDialog<String>(
       context: context,
@@ -2446,12 +2307,11 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
                     subtitle: Text(
                       [
                         (v['customer_name'] ?? '').toString(),
-                        '${v['visits_count'] ?? 0} زيارة',
+                        arabicVisitsCount((v['visits_count'] as num?)?.toInt() ?? 0),
                       ].where((s) => s.trim().isNotEmpty).join(' · '),
                     ),
                     trailing: const Text('هي'),
-                    onTap: () =>
-                        Navigator.pop(ctx, (v['global_id'] ?? '').toString()),
+                    onTap: () => Navigator.pop(ctx, (v['global_id'] ?? '').toString()),
                   ),
                 ),
             ],
@@ -2487,15 +2347,12 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     final plate = _deviceSerial.text.trim();
     if (plate.length < 3) return;
     final plateKey = OilChangeLookupNormalize.normalizePlateKey(plate);
-    if (!force &&
-        plateKey.isNotEmpty &&
-        plateKey == _lastAutoSyncedPlate) {
+    if (!force && plateKey.isNotEmpty && plateKey == _lastAutoSyncedPlate) {
       return;
     }
     await _applyLastVisitFromRepository(
       fetch: () async {
-        final exact = await OilChangeOrdersRepository.instance
-            .getLatestOilChangeByPlate(plate);
+        final exact = await OilChangeOrdersRepository.instance.getLatestOilChangeByPlate(plate);
         if (exact != null || !askLegacy) return exact;
         return _askLegacyPlateMatch(plate);
       },
@@ -2510,10 +2367,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     );
   }
 
-  Future<void> _syncVehicleFromCustomer(
-    int customerId, {
-    String? fallbackName,
-  }) async {
+  Future<void> _syncVehicleFromCustomer(int customerId, {String? fallbackName}) async {
     if (widget.isEdit || customerId <= 0) return;
     if (_blocksAutoVisitLookup()) return;
     final customerKey = 'id:$customerId';
@@ -2523,8 +2377,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     // واحدة = آخر زيارة لها هي (لا لسيارة باعها).
     var vehicles = const <Map<String, dynamic>>[];
     try {
-      vehicles = await OilChangeOrdersRepository.instance
-          .vehiclesForCustomer(customerId);
+      vehicles = await OilChangeOrdersRepository.instance.vehiclesForCustomer(customerId);
     } catch (_) {}
     if (!mounted || _customerId != customerId) return;
     setState(() {
@@ -2539,19 +2392,16 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     await _applyLastVisitFromRepository(
       fetch: () async {
         if (vehicles.length == 1) {
-          final own = await OilChangeOrdersRepository.instance
-              .getLatestOilChangeForVehicle(
-                (vehicles.single['global_id'] ?? '').toString(),
-              );
+          final own = await OilChangeOrdersRepository.instance.getLatestOilChangeForVehicle(
+            (vehicles.single['global_id'] ?? '').toString(),
+          );
           if (own != null) return own;
         }
-        final byId = await OilChangeOrdersRepository.instance
-            .getLatestOilChangeByCustomerId(customerId);
+        final byId = await OilChangeOrdersRepository.instance.getLatestOilChangeByCustomerId(customerId);
         if (byId != null) return byId;
         final name = (fallbackName ?? _customerName.text).trim();
         if (name.isEmpty) return null;
-        return OilChangeOrdersRepository.instance
-            .getLatestOilChangeByCustomerName(name);
+        return OilChangeOrdersRepository.instance.getLatestOilChangeByCustomerName(name);
       },
       foundMessage: widget.isOilNewCard
           ? 'تم جلب آخر زيارة لهذا العميل — بطاقة جديدة (السجل السابق لم يُعدَّل)'
@@ -2585,21 +2435,16 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       _previousVisitOdometer = null;
       _previousOdometerAt = null;
       _odometerLowerThanPrevious = false;
+      _odometerUnit = OilOdometerUnit.km;
+      _previousOdometerUnit = OilOdometerUnit.km;
       _lastAutoSyncedPlate = null;
-      _customerVehicles = const [];
+      // قائمة سيارات العميل تبقى ظاهرة: إخفاؤها كان يرفع كل الحقول تحتها
+      // فيقع ما يُكتب في «القراءة اللاحقة» بدل اللوحة.
     });
   }
 
-  void _applyLastVisitForNewCard(
-    Map<String, dynamic> r, {
-    bool fillCustomer = true,
-  }) {
-    _applyVehicleRecord(
-      r,
-      replaceAll: true,
-      newVisit: true,
-      fillCustomer: fillCustomer,
-    );
+  void _applyLastVisitForNewCard(Map<String, dynamic> r, {bool fillCustomer = true}) {
+    _applyVehicleRecord(r, replaceAll: true, newVisit: true, fillCustomer: fillCustomer);
     _reconcileOilFluidAfterVisitLoad(r);
     _advanceManuallyEdited = false;
     _agreedTotalManual = false;
@@ -2609,10 +2454,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     }
   }
 
-  void _mergeLastVisitForNewCard(
-    Map<String, dynamic> r, {
-    bool fillCustomer = true,
-  }) {
+  void _mergeLastVisitForNewCard(Map<String, dynamic> r, {bool fillCustomer = true}) {
     _applyVehicleRecord(
       r,
       replaceAll: false,
@@ -2654,11 +2496,8 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       // بعد await: ألغِ التطبيق إن تغيّرت اللوحة/العميل (نتيجة متأخرة).
       if (onPlateApplied != null && onPlateApplied.trim().isNotEmpty) {
         final expected = onPlateApplied.trim();
-        final currentKey = OilChangeLookupNormalize.normalizePlateKey(
-          _deviceSerial.text.trim(),
-        );
-        if (currentKey != expected &&
-            _deviceSerial.text.trim() != expected) {
+        final currentKey = OilChangeLookupNormalize.normalizePlateKey(_deviceSerial.text.trim());
+        if (currentKey != expected && _deviceSerial.text.trim() != expected) {
           return;
         }
       }
@@ -2668,20 +2507,15 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
           final id = int.tryParse(expected.substring(3));
           if (id != null && id > 0 && _customerId != id) return;
         } else {
-          final nameKey = OilChangeLookupNormalize.normalizeNameKey(
-            _customerName.text.trim(),
-          );
-          if (nameKey != expected &&
-              _customerName.text.trim() != expected) {
+          final nameKey = OilChangeLookupNormalize.normalizeNameKey(_customerName.text.trim());
+          if (nameKey != expected && _customerName.text.trim() != expected) {
             return;
           }
         }
       }
       if (row == null) {
         if (showFeedback) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(notFoundMessage)),
-          );
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(notFoundMessage)));
         }
         return;
       }
@@ -2698,11 +2532,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
         } else {
           final cid = (row['customerId'] as num?)?.toInt();
           final name = (row['customerNameSnapshot'] ?? '').toString().trim();
-          _applyVehicleRecord(
-            row,
-            replaceAll: false,
-            fillCustomer: fillCustomer,
-          );
+          _applyVehicleRecord(row, replaceAll: false, fillCustomer: fillCustomer);
           if (fillCustomer && cid != null && cid > 0 && _customerId == null) {
             _customerId = cid;
             if (name.isNotEmpty) {
@@ -2712,9 +2542,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
           }
         }
       });
-      if (widget.isOilNewCard &&
-          !_oilFluidUserEdited &&
-          catalogWasEmpty) {
+      if (widget.isOilNewCard && !_oilFluidUserEdited && catalogWasEmpty) {
         await _loadOilProductCatalog();
         if (mounted) {
           setState(() {
@@ -2734,9 +2562,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
         _lastAutoSyncedCustomerKey = onCustomerApplied.trim();
       }
       if (showFeedback) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(foundMessage)),
-        );
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(foundMessage)));
       }
     } finally {
       _vehicleSyncInFlight = false;
@@ -2756,31 +2582,20 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     // لا تعبئة تلقائية بالاسم — الاختيار من قائمة الاقتراحات فقط.
   }
 
-  bool get _oilEditCompletingSuspended =>
-      widget.isEdit &&
-      _status == OilChangeOrderStatus.suspended;
+  bool get _oilEditCompletingSuspended => widget.isEdit && _status == OilChangeOrderStatus.suspended;
 
   /// بطاقة حُفظت مكتملة ولم يتم بيعها (تعذّر البيع عند الحفظ، كسقف الدين):
   /// تُباع من هنا كالمعلّقة.
   bool get _oilEditSellsUnbilled =>
-      widget.isEdit &&
-      !widget.amendInvoicedOrder &&
-      _status == OilChangeOrderStatus.completed &&
-      !_editHasInvoice;
+      widget.isEdit && !widget.amendInvoicedOrder && _status == OilChangeOrderStatus.completed && !_editHasInvoice;
 
   /// زر الحفظ في التعديل يبيع أيضاً.
-  bool get _oilEditOffersSale =>
-      _oilEditCompletingSuspended || _oilEditSellsUnbilled;
+  bool get _oilEditOffersSale => _oilEditCompletingSuspended || _oilEditSellsUnbilled;
 
-  bool get _oilCheckoutFinalized =>
-      !widget.amendInvoicedOrder &&
-      (_status == 'delivered' || _status == 'cancelled');
-
+  bool get _oilCheckoutFinalized => !widget.amendInvoicedOrder && (_status == 'delivered' || _status == 'cancelled');
 
   void _onPlateFieldChanged() {
-    if (widget.isEdit ||
-        _hydratingEdit ||
-        _applyingVehicleRecord) {
+    if (widget.isEdit || _hydratingEdit || _applyingVehicleRecord) {
       return;
     }
     final plate = _deviceSerial.text.trim();
@@ -2788,9 +2603,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       _lastAutoSyncedPlate = null;
       return;
     }
-    if (widget.prefillFromOrder != null &&
-        _prefillPlateAtOpen != null &&
-        plate != _prefillPlateAtOpen) {
+    if (widget.prefillFromOrder != null && _prefillPlateAtOpen != null && plate != _prefillPlateAtOpen) {
       _enableAutoVisitLookupAfterPrefillEdit();
     }
     final plateKey = OilChangeLookupNormalize.normalizePlateKey(plate);
@@ -2821,10 +2634,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       await _loadFluidStockSettings(awaitStockLoads: true);
       if (widget.isOilNewCard) {
         // زيت + خدمات أولاً؛ فلاتر/هيدروليك تُحمَّل إن وُجدت بيانات أو عند التوسيع.
-        await Future.wait([
-          _loadOilCatalog(),
-          _loadOilProductCatalog(),
-        ]);
+        await Future.wait([_loadOilCatalog(), _loadOilProductCatalog()]);
       }
       if (!mounted) return;
       setState(() {
@@ -2878,10 +2688,8 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   Future<void> _resolveCustomerLinkFromPrefill(Map<String, dynamic> r) async {
     if (!widget.isOilNewCard || widget.isEdit) return;
 
-    final snapshotName =
-        (r['customerNameSnapshot'] ?? _customerName.text).toString().trim();
-    final snapshotPhone =
-        (r['customerPhone'] ?? _customerPhone.text).toString().trim();
+    final snapshotName = (r['customerNameSnapshot'] ?? _customerName.text).toString().trim();
+    final snapshotPhone = (r['customerPhone'] ?? _customerPhone.text).toString().trim();
 
     if (_customerId != null &&
         _customerId! > 0 &&
@@ -2900,9 +2708,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       if (cid == null && snapshotPhone.isNotEmpty) {
         final digits = CustomerValidation.normalizePhoneDigits(snapshotPhone);
         if (digits != null && digits.isNotEmpty) {
-          cid = await _customersDb.findCustomerIdOwningNormalizedPhoneAnywhere(
-            digits,
-          );
+          cid = await _customersDb.findCustomerIdOwningNormalizedPhoneAnywhere(digits);
         }
       }
 
@@ -2913,13 +2719,10 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       if (cid != null && cid > 0) {
         if (!mounted) return;
         final row = await _customersDb.getCustomerById(cid);
-        final dbName = row != null
-            ? (row['name'] ?? '').toString().trim()
-            : snapshotName;
+        final dbName = row != null ? (row['name'] ?? '').toString().trim() : snapshotName;
         setState(() {
           _customerId = cid;
-          _linkedCustomerName =
-              dbName.isNotEmpty ? dbName : snapshotName;
+          _linkedCustomerName = dbName.isNotEmpty ? dbName : snapshotName;
           if (dbName.isNotEmpty &&
               OilChangeLookupNormalize.normalizeNameKey(_customerName.text) !=
                   OilChangeLookupNormalize.normalizeNameKey(dbName)) {
@@ -2978,8 +2781,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   Future<void> _loadOilProductLinesForOrder(String orderGlobalId) async {
     final og = orderGlobalId.trim();
     if (og.isEmpty) return;
-    final rows =
-        await OilChangeOrdersRepository.instance.getOilChangeItems(og);
+    final rows = await OilChangeOrdersRepository.instance.getOilChangeItems(og);
     if (!mounted) return;
     setState(() {
       _orderGlobalId = og;
@@ -3009,11 +2811,35 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     return Map<String, dynamic>.from(warm);
   }
 
+  /// م4-1: ما قاله المستخدم للمساعد يملأ الحقول نفسها التي يكتبها بيده،
+  /// فتعمل بعدها كل قواعد البطاقة (آخر زيارة باللوحة، تنبيه العدّاد، الزيت).
+  void _applyAssistantPrefill(AssistantPrefill p) {
+    final plate = p.str('plate');
+    final customer = p.str('customer');
+    final odo = p.number('odometer');
+    final oil = p.str('oil');
+    final liters = p.number('liters');
+    final extras = p.list('extras');
+    // ب7: طلب زيارة من واتساب يحمل رقم الزبون وسيارته كما كتبها.
+    final phone = p.str('phone');
+    final car = p.str('car');
+    if (customer != null) _customerName.text = customer;
+    if (phone != null) _setCustomerPhoneField(phone);
+    if (car != null && _deviceName.text.trim().isEmpty) _deviceName.text = car;
+    if (odo != null) _assignOdometerText(_odometerCurrent, '${odo.toInt()}');
+    if (oil != null) {
+      _oilType.text = oil;
+      _markOilFluidUserEdited();
+    }
+    if (liters != null && liters > 0) _oilLitersStock.text = '$liters';
+    if (extras.isNotEmpty) _issue.text = extras.join('، ');
+    // اللوحة أخيراً: مستمعها يجلب آخر زيارة ويكمل الفارغ فقط.
+    if (plate != null) _deviceSerial.text = plate;
+  }
+
   void _seedPhoneBaselineFromRow(Map<String, dynamic> row) {
     if (_baselineCustomerPhoneLocked) return;
-    _baselineCustomerPhoneDigits = _normalizedPhoneKey(
-      (row['customerPhone'] ?? _customerPhone.text).toString(),
-    );
+    _baselineCustomerPhoneDigits = _normalizedPhoneKey((row['customerPhone'] ?? _customerPhone.text).toString());
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || _baselineCustomerPhoneLocked) return;
       _baselineCustomerPhoneDigits = _normalizedPhoneKey(_customerPhone.text);
@@ -3033,29 +2859,18 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     _setCustomerPhoneField((row['customerPhone'] ?? '').toString());
 
     _deviceName.text = (row['deviceName'] ?? '').toString();
-    _carModel.text = OilChangeLookupNormalize.toWesternDigits(
-      (row['carModel'] ?? '').toString(),
-    );
+    _carModel.text = OilChangeLookupNormalize.toWesternDigits((row['carModel'] ?? '').toString());
     _deviceSerial.text = (row['deviceSerial'] ?? '').toString();
     _engineSize.text = (row['engineSize'] ?? '').toString();
 
-    _assignOdometerText(
-      _odometerCurrent,
-      (row['odometerCurrent'] ?? '').toString(),
-    );
-    _assignOdometerText(
-      _odometerNext,
-      (row['odometerNext'] ?? '').toString(),
-    );
-    if (_odometerDigits(_odometerNext.text).isNotEmpty) {
-    }
+    _odometerUnit = OilOdometerUnit.of(row);
+    _assignOdometerText(_odometerCurrent, (row['odometerCurrent'] ?? '').toString());
+    _assignOdometerText(_odometerNext, (row['odometerNext'] ?? '').toString());
+    if (_odometerDigits(_odometerNext.text).isNotEmpty) {}
     _oilType.text = (row['oilType'] ?? '').toString();
-    _selectedViscosity = row['oilViscosity']?.toString().isEmpty == true
-        ? null
-        : row['oilViscosity']?.toString();
+    _selectedViscosity = row['oilViscosity']?.toString().isEmpty == true ? null : row['oilViscosity']?.toString();
     final catSell = (row['oilSellPerLiterFils'] as num?)?.toInt();
-    _catalogSellPerLiterFils =
-        catSell != null && catSell > 0 ? catSell : null;
+    _catalogSellPerLiterFils = catSell != null && catSell > 0 ? catSell : null;
     _reconcileOilCatalogSelection();
     _reconcileOilStockLineSelection();
     _parseOilSize(row['oilSize']?.toString());
@@ -3082,29 +2897,20 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     _issue.text = (row['issueDescription'] ?? '').toString();
     _technicianName.text = (row['technicianName'] ?? '').toString();
 
-    _workStartedAtUtc =
-        DateTime.tryParse((row['workStartedAt'] ?? '').toString())?.toUtc();
+    _workStartedAtUtc = DateTime.tryParse((row['workStartedAt'] ?? '').toString())?.toUtc();
     _etaHours = h;
     _etaMinutes = m;
 
-    _matchServiceNamesToIds(
-      parseOilRequestedServices(row['requestedServices']?.toString()),
-    );
-    _advanceManuallyEdited = OilChangeAdvanceAutofill.isManualOnHydration(
-      agreedFils: agreedF,
-      advanceFils: advF,
-    );
-    _oilCustomerProvided =
-        ((row['oilCustomerProvided'] as num?)?.toInt() ?? 0) != 0;
+    _matchServiceNamesToIds(parseOilRequestedServices(row['requestedServices']?.toString()));
+    _advanceManuallyEdited = OilChangeAdvanceAutofill.isManualOnHydration(agreedFils: agreedF, advanceFils: advF);
+    _oilCustomerProvided = ((row['oilCustomerProvided'] as num?)?.toInt() ?? 0) != 0;
     _oilStockProductId = (row['oilProductId'] as num?)?.toInt();
     _oilWarehouseId = (row['oilWarehouseId'] as num?)?.toInt();
     // null في البطاقات قبل الإصدار 51: الأجرة من الإعدادات.
     _oilLaborCardFils = (row['oilLaborFils'] as num?)?.toInt();
     final liters = (row['oilLitersUsed'] as num?)?.toDouble();
     if (liters != null && liters > 0) {
-      _oilLitersStock.text = liters % 1 == 0
-          ? liters.toInt().toString()
-          : liters.toString();
+      _oilLitersStock.text = liters % 1 == 0 ? liters.toInt().toString() : liters.toString();
     }
     _editStockVoucherId = (row['stockVoucherId'] as num?)?.toInt();
     _editOilLitersUsed = liters ?? 0;
@@ -3113,22 +2919,14 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     _editOilCustomerProvided = _oilCustomerProvided;
     _editInvoiceId = (row['invoiceId'] as num?)?.toInt() ?? 0;
     _editFilterLines = oilFilterLinesDataFromRow(row);
-    if (_stockFromWarehouseEnabled &&
-        _oilStockProductId != null &&
-        _oilWarehouseId != null) {
+    if (_stockFromWarehouseEnabled && _oilStockProductId != null && _oilWarehouseId != null) {
       unawaited(_refreshAvailableLiters());
     }
     if (_usesWarehouseOilPicker && _oilLitersStock.text.trim().isNotEmpty) {
       _syncOilSizeRecordFromStockLiters();
     }
-    _gearHydraulic.loadFromRow(
-      row,
-      stockEnabled: _gearHydraulicStockEnabled,
-    );
-    _powerHydraulic.loadFromRow(
-      row,
-      stockEnabled: _powerHydraulicStockEnabled,
-    );
+    _gearHydraulic.loadFromRow(row, stockEnabled: _gearHydraulicStockEnabled);
+    _powerHydraulic.loadFromRow(row, stockEnabled: _powerHydraulicStockEnabled);
     _reconcileHydraulicCatalogSelectionFor(_gearHydraulic);
     _reconcileHydraulicCatalogSelectionFor(_powerHydraulic);
     for (final slot in [_gearHydraulic, _powerHydraulic]) {
@@ -3150,11 +2948,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   Future<void> _loadEditSupportingData(Map<String, dynamic> row) async {
     try {
       await _loadFluidStockSettings(awaitStockLoads: false);
-      await Future.wait([
-        _loadOilCatalog(),
-        _loadOilProductCatalog(),
-        _loadFilterProductCatalog(),
-      ]);
+      await Future.wait([_loadOilCatalog(), _loadOilProductCatalog(), _loadFilterProductCatalog()]);
       if (!mounted) return;
       setState(() {
         _reconcileOilCatalogSelection();
@@ -3194,9 +2988,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       if (gid != null && gid.isNotEmpty) {
         r = await OilChangeOrdersRepository.instance.getOilChangeOrderByGlobalId(gid);
       } else if (widget.editOrderId != null && widget.editOrderId! > 0) {
-        r = await OilChangeOrdersRepository.instance.getOilChangeOrderById(
-          widget.editOrderId!,
-        );
+        r = await OilChangeOrdersRepository.instance.getOilChangeOrderById(widget.editOrderId!);
       }
       if (!mounted) return;
       if (r == null) throw StateError('not_found');
@@ -3239,6 +3031,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     await _handleOilProductBarcode(code);
     return true;
   }
+
   Future<void> _refreshCustomerOpenDebt() async {
     final name = _customerName.text.trim();
     // تُستدعى من ستة مواضع، وقد تتزامن ثلاث مرات لاختيار عميل واحد.
@@ -3247,10 +3040,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     _openDebtRequestKey = requestKey;
     if (mounted) setState(() => _customerOpenDebtLoading = true);
     try {
-      final fils = await loadCustomerOpenDebtFils(
-        customerId: _customerId,
-        customerName: name,
-      );
+      final fils = await loadCustomerOpenDebtFils(customerId: _customerId, customerName: name);
       if (_openDebtRequestKey != requestKey) return; // سبقه طلب أحدث
       if (!mounted) return;
       setState(() {
@@ -3266,7 +3056,6 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       }
     }
   }
-
 
   Future<void> _applyCustomerSelection(CustomerRecord c) async {
     _suspendCustomerIdClear = true;
@@ -3307,17 +3096,10 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       SnackBar(
         content: Text(
           message,
-          style: success
-              ? const TextStyle(
-                  color: SaleBrandColors.navy,
-                  fontWeight: FontWeight.w700,
-                )
-              : null,
+          style: success ? const TextStyle(color: SaleBrandColors.navy, fontWeight: FontWeight.w700) : null,
         ),
         behavior: SnackBarBehavior.floating,
-        backgroundColor: success
-            ? SaleBrandColors.gold.withValues(alpha: 0.95)
-            : Theme.of(context).colorScheme.error,
+        backgroundColor: success ? SaleBrandColors.gold.withValues(alpha: 0.95) : Theme.of(context).colorScheme.error,
         duration: Duration(seconds: success ? 2 : 3),
       ),
     );
@@ -3351,7 +3133,6 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     }
   }
 
-
   void _onOilProductQuantityChanged(int index, int quantity) {
     if (index < 0 || index >= _oilProductLines.length) return;
     setState(() {
@@ -3382,8 +3163,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     if (orderId <= 0) return;
     var gid = (_orderGlobalId ?? '').trim();
     if (gid.isEmpty) {
-      final row =
-          await OilChangeOrdersRepository.instance.getOilChangeOrderById(orderId);
+      final row = await OilChangeOrdersRepository.instance.getOilChangeOrderById(orderId);
       gid = (row?['global_id'] ?? '').toString().trim();
     }
     if (gid.isEmpty) return;
@@ -3392,12 +3172,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       orderGlobalId: gid,
       lines: _oilProductLines
           .map(
-            (l) => (
-              productId: l.productId,
-              productName: l.productName,
-              quantity: l.quantity,
-              priceFils: l.priceFils,
-            ),
+            (l) => (productId: l.productId, productName: l.productName, quantity: l.quantity, priceFils: l.priceFils),
           )
           .toList(),
     );
@@ -3417,8 +3192,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     if (raw.contains('تعذّر صرف الزيت')) {
       return 'تعذّر صرف الزيت من المخزون. تحقق من الرصيد والمستودع.';
     }
-    if (raw.contains('CHECK constraint failed') &&
-        raw.toLowerCase().contains('status')) {
+    if (raw.contains('CHECK constraint failed') && raw.toLowerCase().contains('status')) {
       return 'تعذّر حفظ حالة «معلّقة». أغلق التطبيق وافتحه من جديد لتحديث قاعدة البيانات.';
     }
     return 'حدث خطأ غير متوقع أثناء الحفظ.';
@@ -3431,15 +3205,10 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
         raw.contains('معرّف المستأجر النشط');
   }
 
-  ({String customerName, String deviceName}) _oilSuspendSaveLabels(
-    String plate,
-  ) {
+  ({String customerName, String deviceName}) _oilSuspendSaveLabels(String plate) {
     final customer = _customerName.text.trim();
     final car = _deviceName.text.trim();
-    return (
-      customerName: customer.isEmpty ? '—' : customer,
-      deviceName: car.isEmpty ? plate : car,
-    );
+    return (customerName: customer.isEmpty ? '—' : customer, deviceName: car.isEmpty ? plate : car);
   }
 
   int _parseFils(TextEditingController c) {
@@ -3453,14 +3222,11 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     return t > 0 ? t : null;
   }
 
-
   Future<void> _openNewCustomer() async {
     if (_hydratingEdit || _saving) return;
-    final rec = await Navigator.of(context).push<CustomerRecord>(
-      FastContentPageRoute(
-        builder: (_) => const CustomerFormScreen(),
-      ),
-    );
+    final rec = await Navigator.of(
+      context,
+    ).push<CustomerRecord>(FastContentPageRoute(builder: (_) => const CustomerFormScreen()));
     if (!mounted || rec == null) return;
     CustomerSearchIndex.instance.invalidate();
     await _applyCustomerSelection(rec);
@@ -3485,18 +3251,10 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
         textDirection: TextDirection.rtl,
         child: AlertDialog(
           title: const Text('مسح الحقول'),
-          content: const Text(
-            'هل تريد مسح كل حقول البطاقة؟ لا يمكن التراجع عن ذلك.',
-          ),
+          content: const Text('هل تريد مسح كل حقول البطاقة؟ لا يمكن التراجع عن ذلك.'),
           actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(false),
-              child: const Text('إلغاء'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(ctx).pop(true),
-              child: const Text('مسح الكل'),
-            ),
+            TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('إلغاء')),
+            FilledButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('مسح الكل')),
           ],
         ),
       ),
@@ -3508,6 +3266,8 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   void _clearAllOilFormFields() {
     _previousVisitOdometer = null;
     _previousOdometerAt = null;
+    _odometerUnit = OilOdometerUnit.km;
+    _previousOdometerUnit = OilOdometerUnit.km;
     _odometerLowerThanPrevious = false;
     _draftDone = false;
     unawaited(OilCardDraftStore.instance.clear());
@@ -3579,9 +3339,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       _hydraulicPowerUserEdited = false;
       _expandedOptional
         ..clear()
-        ..addAll([
-          if (_isFieldRequired(OilCardField.oil)) _OilFormOptionalSection.oil,
-        ]);
+        ..addAll([if (_isFieldRequired(OilCardField.oil)) _OilFormOptionalSection.oil]);
 
       _lastAutoSyncedPlate = null;
       _lastAutoSyncedCustomerKey = null;
@@ -3622,9 +3380,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
         .where((e) => e.value.hasSelection)
         .map((e) => '${e.key}:${e.value.catalogEntryId ?? e.value.name}')
         .join(',');
-    final productsSig = _oilProductLines
-        .map((l) => '${l.productId}:${l.quantity}')
-        .join(',');
+    final productsSig = _oilProductLines.map((l) => '${l.productId}:${l.quantity}').join(',');
     return [
       _customerName.text.trim(),
       _customerPhone.text.trim(),
@@ -3634,6 +3390,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       _engineSize.text.trim(),
       _odometerDigits(_odometerCurrent.text),
       _odometerDigits(_odometerNext.text),
+      _odometerUnit,
       _oilType.text.trim(),
       _issue.text.trim(),
       _technicianName.text.trim(),
@@ -3655,12 +3412,12 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   }
 
   String _hydraulicLeaveSig(OilChangeHydraulicCardSlot slot) => [
-        slot.type.text.trim(),
-        slot.selectedGrade ?? '',
-        slot.litersForPricing().toStringAsFixed(2),
-        (slot.stockProductId ?? 0).toString(),
-        slot.customerProvided ? '1' : '0',
-      ].join('|');
+    slot.type.text.trim(),
+    slot.selectedGrade ?? '',
+    slot.litersForPricing().toStringAsFixed(2),
+    (slot.stockProductId ?? 0).toString(),
+    slot.customerProvided ? '1' : '0',
+  ].join('|');
 
   /// المستلم يبدأ بصفر تلقائياً — مثل [_agreedForLeaveGate].
   String _advanceForLeaveGate() {
@@ -3700,17 +3457,11 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
             widget.isEdit
                 ? 'عدّلت البطاقة ولم تُحفظ بعد. هل تريد المغادرة وفقدان التعديل؟'
                 : 'البطاقة لم تُحفظ بعد. تبقى مسودة على هذا الجهاز وتُعرض عند '
-                    'فتح بطاقة جديدة.',
+                      'فتح بطاقة جديدة.',
           ),
           actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('البقاء'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('مغادرة'),
-            ),
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('البقاء')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('مغادرة')),
           ],
         ),
       ),
@@ -3750,19 +3501,14 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
 
   /// تحميل فلاتر/هيدروليك فقط عند الحاجة (توسيع أو بيانات موجودة).
   void _ensureDeferredCatalogsForExpanded() {
-    final needFilters =
-        _expandedOptional.contains(_OilFormOptionalSection.filters);
+    final needFilters = _expandedOptional.contains(_OilFormOptionalSection.filters);
     final needHydraulic =
         _expandedOptional.contains(_OilFormOptionalSection.hydraulicGear) ||
-            _expandedOptional.contains(_OilFormOptionalSection.hydraulicPower);
-    if (needFilters &&
-        _filterProductCatalog.isEmpty &&
-        !_filterProductCatalogLoading) {
+        _expandedOptional.contains(_OilFormOptionalSection.hydraulicPower);
+    if (needFilters && _filterProductCatalog.isEmpty && !_filterProductCatalogLoading) {
       unawaited(_loadFilterProductCatalog());
     }
-    if (needHydraulic &&
-        _hydraulicProductCatalog.isEmpty &&
-        !_hydraulicProductCatalogLoading) {
+    if (needHydraulic && _hydraulicProductCatalog.isEmpty && !_hydraulicProductCatalogLoading) {
       unawaited(_loadHydraulicProductCatalog());
     }
   }
@@ -3771,9 +3517,9 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     setState(_applyOptionalExpansionFromData);
   }
 
-
   @override
   void dispose() {
+    AssistantScreenContext.pop(AssistantContextItem(kind: 'oil_card', id: widget.editOrderId ?? 0, label: 'البطاقة التي تعدّلها'));
     _draftTimer?.cancel();
     _guideListenable?.removeListener(_onGuideControllerChanged);
     _guideListenable = null;
@@ -3829,18 +3575,14 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
-    final busy =
-        _hydratingEdit || _saving || _prefillBootstrapInProgress;
+    final busy = _hydratingEdit || _saving || _prefillBootstrapInProgress;
 
     final oilWidePanel = layout.isWideVariant;
     final oilCheckoutRailWidth = layout.isDesktopVariant ? 360.0 : 320.0;
 
     final formBody = !_formBodyReady
         ? const Center(
-            child: Padding(
-              padding: EdgeInsets.all(24),
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ),
+            child: Padding(padding: EdgeInsets.all(24), child: CircularProgressIndicator(strokeWidth: 2)),
           )
         : Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -3855,11 +3597,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
                   maxWidth: oilWidePanel ? 9999 : 720,
                 ),
               ),
-              if (oilWidePanel)
-                SizedBox(
-                  width: oilCheckoutRailWidth,
-                  child: _buildOilCheckoutPanel(context, busy),
-                ),
+              if (oilWidePanel) SizedBox(width: oilCheckoutRailWidth, child: _buildOilCheckoutPanel(context, busy)),
             ],
           );
 
@@ -3904,15 +3642,18 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
               if (widget.isNewCard)
                 IconButton(
                   tooltip: 'مسح الحقول',
-                  onPressed:
-                      busy ? null : () => unawaited(_confirmAndClearOilFormFields()),
+                  onPressed: busy ? null : () => unawaited(_confirmAndClearOilFormFields()),
                   icon: const Icon(Icons.clear_all_rounded),
                 ),
               // زر الحفظ العلوي أُزيل: كان يبيع البطاقة الجديدة مباشرة دون
               // تمييز عن «تعليق». أزرار الحفظ أسفل البطاقة هي المسار الوحيد.
             ],
           ),
-          body: formBody,
+          body: AssistantPrefillBanner.wrap(
+            widget.assistantPrefill,
+            only: const {'plate', 'customer', 'oil', 'liters', 'odometer', 'extras'},
+            child: formBody,
+          ),
         ),
       ),
     );

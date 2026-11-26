@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../models/customer_record.dart';
 import 'customer_financial_detail_panel.dart';
 import 'customer_form_screen.dart';
+import '../../assistant/ui/assistant_context_scope.dart';
 
 /// تفاصيل مشتريات العميل بالدين والتقسيط — صفحة كاملة (موبايل/تابلت ضيّق).
 ///
@@ -26,6 +27,8 @@ class _CustomerFinancialDetailScreenState
   @override
   void initState() {
     super.initState();
+    // ق67: «هذا/هنا» في المساعد تعني عنصر هذه الشاشة.
+    AssistantScreenContext.push(AssistantContextItem(kind: 'customer', id: widget.customer.id, label: widget.customer.name));
     _current = widget.customer;
   }
 
@@ -38,6 +41,12 @@ class _CustomerFinancialDetailScreenState
     if (updated != null && mounted) {
       setState(() => _current = updated);
     }
+  }
+
+  @override
+  void dispose() {
+    AssistantScreenContext.pop(AssistantContextItem(kind: 'customer', id: widget.customer.id, label: widget.customer.name));
+    super.dispose();
   }
 
   @override

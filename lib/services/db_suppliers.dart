@@ -964,17 +964,11 @@ extension DbSuppliers on DatabaseHelper {
       }
 
       if (affectsCash && (amount * 1000).round() > 0) {
-        int? openShiftId;
-        final ws = await txn.query(
-          'work_shifts',
-          columns: ['id'],
-          where: 'closedAt IS NULL AND tenantId = ? AND deleted_at IS NULL',
-          whereArgs: [tid],
-          limit: 1,
+        final openShiftId = await _resolveActorOpenShiftId(
+          txn,
+          tenantId: tenantInt,
+          actorName: reverser,
         );
-        if (ws.isNotEmpty) {
-          openShiftId = ws.first['id'] as int;
-        }
         final sup = await txn.query(
           'suppliers',
           columns: ['name'],

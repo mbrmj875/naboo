@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../assistant/exec/assistant_prefill.dart';
 import 'oil_change_order_form_screen.dart';
 
 /// مفتاح ثابت لحالة النموذج — لا يعتمد على [Map.hashCode] حتى لا تُعاد تهيئة الحقول.
@@ -21,6 +22,7 @@ class OilChangeFormScreen extends StatelessWidget {
     this.editOrderGlobalId,
     this.prefillFromOrder,
     this.amendInvoicedOrder = false,
+    this.assistantPrefill,
   }) : assert(
           !amendInvoicedOrder || editOrderId != null,
           'تصحيح الفاتورة يتطلب بطاقة موجودة',
@@ -34,6 +36,9 @@ class OilChangeFormScreen extends StatelessWidget {
 
   /// تعديل بطاقة مكتملة مربوطة بفاتورة — يحدّث نفس الفاتورة والصندوق.
   final bool amendInvoicedOrder;
+
+  /// بطاقة جديدة عبّأها المساعد (م4-1).
+  final AssistantPrefill? assistantPrefill;
 
   @override
   Widget build(BuildContext context) {
@@ -50,6 +55,7 @@ class OilChangeFormScreen extends StatelessWidget {
       editOrderGlobalId: editOrderGlobalId,
       prefillFromOrder: prefillFromOrder,
       amendInvoicedOrder: amendInvoicedOrder,
+      assistantPrefill: assistantPrefill,
     );
   }
 }

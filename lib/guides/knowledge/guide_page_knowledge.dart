@@ -134,7 +134,8 @@ abstract final class GuidePageKnowledge {
             '${HomeKnowledge.packSnippet}\n---\n${CarWashKnowledge.packSnippet}';
       case AppContentRoutes.oilServicesLog:
       case AppContentRoutes.oilChangeHub:
-        return 'الشاشة: سجل غيارات الزيت. منها بطاقة جديدة، المعلّقة، ربط واتساب، وإعدادات غيار الزيت. '
+        return 'الشاشة: سجل غيارات الزيت. منها بطاقة جديدة، المعلّقة، وربط واتساب. '
+            'إعدادات غيار الزيت صارت في شاشة الإعدادات تحت «محل الزيت». '
             'ومن القائمة الفرعية: «أنواع الغسيل وأسعارها».\n'
             '${OilSettingsKnowledge.packSnippet()}';
       case AppContentRoutes.oilChangeCreate:

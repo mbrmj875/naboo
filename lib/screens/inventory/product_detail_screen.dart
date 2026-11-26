@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../services/product_repository.dart';
 import '../../theme/app_corner_style.dart';
+import '../../assistant/ui/assistant_context_scope.dart';
 
 class ProductDetailScreen extends StatefulWidget {
   const ProductDetailScreen({super.key, required this.productId});
@@ -20,6 +21,8 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
   @override
   void initState() {
     super.initState();
+    // ق67: «هذا/هنا» في المساعد تعني عنصر هذه الشاشة.
+    AssistantScreenContext.push(AssistantContextItem(kind: 'product', id: widget.productId, label: 'المنتج المفتوح'));
     _future = _load();
     _future.then((vm) {
       if (!mounted || vm == null) return;
@@ -41,6 +44,12 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
       warehouses: wh,
       sales: sales,
     );
+  }
+
+  @override
+  void dispose() {
+    AssistantScreenContext.pop(AssistantContextItem(kind: 'product', id: widget.productId, label: 'المنتج المفتوح'));
+    super.dispose();
   }
 
   @override

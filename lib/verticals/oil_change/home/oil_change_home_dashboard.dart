@@ -80,8 +80,9 @@ class _OilChangeHomeDashboardState extends State<OilChangeHomeDashboard> {
     final snap = await HomeKpiRepository.instance.load(
       openShiftId: shiftId,
       force: force,
-      includeAllProductShortages:
-          widget.spec.profile == HomeDashboardProfile.oilChangeHybrid,
+      // بطاقة «المخزون» تعدّ كل النواقص: الفلاتر والزيت المسجّل كصنف عادي أيضاً،
+      // كما يعدّها المساعد وتنبيهات المخزون (الاختبار النهائي ت1).
+      includeAllProductShortages: true,
     );
     if (!mounted) return;
     setState(() {
