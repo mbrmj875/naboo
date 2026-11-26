@@ -83,7 +83,8 @@ select 11, 'الأدوات المستدعاة', null,
        coalesce((select string_agg(name || '×' || n || case when fails > 0 then ' (فشل ' || fails || ')' else '' end, '، '
                                    order by n desc)
                  from (select e->>'name' name, count(*) n, count(*) filter (where (e->>'ok')::boolean is false) fails
-                       from app, jsonb_array_elements(coalesce(tools, '[]'::jsonb)) e group by 1) x), 'لا أدوات')
+                       from app, jsonb_array_elements(coalesce(tools, '[]'::jsonb)) e
+                       where (e->>'prior') is distinct from 'true' group by 1) x), 'لا أدوات')
 union all
 select 12, 'إشارات الهاتف وصلت (إعادة صياغة، إغلاق سريع، إرشاد، تنفيذ، تصحيح)', null,
        (select format('صياغة %s، إغلاق %s، إرشاد بدأ %s تم %s ترك %s، تنفيذ %s حُفظ %s، تصحيح %s',

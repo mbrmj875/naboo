@@ -123,9 +123,7 @@ class _CardAction extends StatelessWidget {
                 Expanded(
                   child: Text(
                     label,
-                    style: Theme.of(
-                      context,
-                    ).textTheme.labelLarge?.copyWith(color: fg, fontWeight: FontWeight.w700),
+                    style: Theme.of(context).textTheme.labelLarge?.copyWith(color: fg, fontWeight: FontWeight.w700),
                   ),
                 ),
                 Icon(Icons.adaptive.arrow_forward, size: 18, color: fg),
@@ -599,7 +597,10 @@ class _MemoryChipState extends State<_MemoryChip> {
     final cs = t.colorScheme;
     return Container(
       padding: const EdgeInsetsDirectional.fromSTEB(12, 6, 4, 6),
-      decoration: BoxDecoration(border: Border.all(color: cs.outline), color: cs.surface),
+      decoration: BoxDecoration(
+        border: Border.all(color: cs.outline),
+        color: cs.surface,
+      ),
       child: Row(
         children: [
           Icon(_undone ? Icons.undo_rounded : Icons.bookmark_added_outlined, size: 18, color: cs.secondary),
@@ -629,7 +630,10 @@ class _NoticeLine extends StatelessWidget {
     final icon = data.kind == 'support' ? Icons.support_agent_rounded : Icons.inventory_2_outlined;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(border: Border.all(color: cs.outline), color: cs.surface),
+      decoration: BoxDecoration(
+        border: Border.all(color: cs.outline),
+        color: cs.surface,
+      ),
       child: Row(
         children: [
           Icon(icon, size: 18, color: cs.secondary),
@@ -688,7 +692,9 @@ class _CustomerCardState extends State<_CustomerCard> {
               padding: const EdgeInsets.symmetric(vertical: 3),
               child: Row(
                 children: [
-                  Expanded(child: Text(k, style: t.textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant))),
+                  Expanded(
+                    child: Text(k, style: t.textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant)),
+                  ),
                   Text(v, style: t.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600)),
                 ],
               ),
@@ -701,10 +707,7 @@ class _CustomerCardState extends State<_CustomerCard> {
               return Row(
                 children: [
                   Expanded(
-                    child: Text(
-                      '\u2066$p\u2069',
-                      style: t.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
-                    ),
+                    child: Text('\u2066$p\u2069', style: t.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600)),
                   ),
                   IconButton(
                     tooltip: 'انسخ الرقم',
@@ -722,8 +725,7 @@ class _CustomerCardState extends State<_CustomerCard> {
                   IconButton(
                     tooltip: 'واتساب',
                     icon: const Icon(Icons.chat_outlined, size: 20),
-                    onPressed: () =>
-                        unawaited(launchUrl(customerWhatsAppUri(p), mode: LaunchMode.externalApplication)),
+                    onPressed: () => unawaited(launchUrl(customerWhatsAppUri(p), mode: LaunchMode.externalApplication)),
                   ),
                 ],
               );
@@ -761,7 +763,8 @@ class _WarningLine extends StatelessWidget {
 
 /// نص حالة الاقتراح بعد الضغط.
 String? _stateText(AssistantPendingAction a, {required String doneText}) => switch (a.state.value) {
-  AssistantActionState.done => doneText,
+  AssistantActionState.done => a.message == null ? doneText : '$doneText ${a.message}',
+  AssistantActionState.undone => 'رجّعته مثل ما كان، وانسجلت العملية العكسية.',
   AssistantActionState.cancelled => 'ألغيته. ما تغيّر شي.',
   AssistantActionState.failed => a.message ?? 'ما گدرت أكمل.',
   AssistantActionState.expired => 'هذا الاقتراح من جلسة سابقة. اسألني مرة ثانية.',
@@ -781,6 +784,7 @@ class _StateLine extends StatelessWidget {
     final cs = t.colorScheme;
     final (icon, color) = switch (a.state.value) {
       AssistantActionState.done => (Icons.check_circle_outline, AppSemanticColors.success),
+      AssistantActionState.undone => (Icons.undo, cs.onSurfaceVariant),
       AssistantActionState.failed => (Icons.error_outline, cs.error),
       _ => (Icons.info_outline, cs.onSurfaceVariant),
     };
@@ -792,7 +796,9 @@ class _StateLine extends StatelessWidget {
           children: [
             Icon(icon, size: 16, color: color),
             const SizedBox(width: 6),
-            Expanded(child: Text(text, style: t.textTheme.bodySmall?.copyWith(color: color))),
+            Expanded(
+              child: Text(text, style: t.textTheme.bodySmall?.copyWith(color: color)),
+            ),
           ],
         ),
       ),
@@ -931,6 +937,22 @@ class _ConfirmCard extends StatelessWidget {
                 ),
               for (final w in d.warnings) _WarningLine(w),
               _StateLine(a, doneText: d.doneText),
+              // ع11: بعد التنفيذ، زر «تراجع» بعملية عكسية لما يقبلها.
+              if (a.undo != null && (state == AssistantActionState.done || state == AssistantActionState.undoing))
+                Padding(
+                  padding: const EdgeInsetsDirectional.fromSTEB(12, 0, 12, 12),
+                  child: Align(
+                    alignment: AlignmentDirectional.centerStart,
+                    child: OutlinedButton.icon(
+                      onPressed: state == AssistantActionState.undoing
+                          ? null
+                          : () => unawaited(AssistantActions.undo(d.actionId)),
+                      style: OutlinedButton.styleFrom(minimumSize: const Size(44, 44)),
+                      icon: const Icon(Icons.undo, size: 18),
+                      label: Text(state == AssistantActionState.undoing ? 'لحظة…' : 'تراجع'),
+                    ),
+                  ),
+                ),
               if (waiting)
                 Padding(
                   padding: const EdgeInsetsDirectional.fromSTEB(12, 8, 12, 12),

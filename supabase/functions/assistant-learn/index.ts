@@ -8,6 +8,9 @@
 //                      مرشح مجيب واتساب يُختبر على حالات المجيب الـ24 (م6-14).
 //   {"op":"eval_responder"}  تشغيل حالات المجيب الـ24 بالدروس الحالية، ونتيجتها في
 //                      assistant_eval_runs بهدف whatsapp-responder.
+//   {"op":"eval_dialog","part":0..5}  قياس الفهم يدوياً (دراسة الذكاء ذ4 وذ3): الأجزاء 0–4
+//                      الحالات الستون بصياغتها رقم part (0 الأصل)، والجزء 5 الحوارات ×4.
+//                      النتيجة في assistant_eval_runs بهدف eval-paraphrase أو eval-dialog.
 //
 // الحَكَم وكتابة الدروس يغطيان القناتين: كل قناة بمعاييرها ودروسها (audience).
 //
@@ -23,6 +26,7 @@ import { addUsage, chat, costMicroUsd, type Usage, ZERO_USAGE } from '../_shared
 import { type EvalCase, runCases } from '../assistant-chat/eval_core.ts';
 import { type Lesson, MAX_RULES, notesMessage, pickNotes } from '../assistant-chat/lessons.ts';
 import { PROMPT_VERSION } from '../assistant-chat/prompt.ts';
+import { DIALOGS, PARAPHRASE_STYLES, paraphraseCases, runDialogs, summarizeDialogs } from './dialog_eval.ts';
 import { type RespCase, type RespResult, runRespCases } from '../whatsapp-cloud-webhook/responder_eval.ts';
 import {
   checkLesson,
@@ -441,6 +445,57 @@ async function evalResponder(admin: SupabaseClient) {
   };
 }
 
+/** قياس الفهم (ذ4 وذ3) بالدروس الحالية. جزء واحد كل نداء حتى لا يتجاوز وقت الدالة. */
+async function evalDialog(admin: SupabaseClient, part: number) {
+  const active = await activeLessons(admin);
+  const runChat = (o: Parameters<typeof chat>[0]) => chat(o, 40_000);
+  const opts = { chat: runChat, ...optsFor(active) };
+  if (part === 5) {
+    const res = await runDialogs(DIALOGS, opts, 4, 12);
+    const sum = summarizeDialogs(res);
+    const usage = res.reduce((a, r) => addUsage(a, r.usage), ZERO_USAGE);
+    await admin.from('assistant_eval_runs').insert({
+      target: 'eval-dialog',
+      model: 'deepseek',
+      passed: sum.passAll,
+      total: sum.dialogs,
+      per_case: sum.per,
+      note: `${PROMPT_VERSION}: pass^4 ${sum.passAll}/${sum.dialogs}، المرات ${sum.runsPassed}/${sum.runs}`,
+    });
+    await addCost(admin, LEARN_TENANT, 'app', costMicroUsd(usage));
+    return { ...sum, cost_micro_usd: costMicroUsd(usage) };
+  }
+  if (!(part >= 0 && part <= 4)) throw new Error('bad part');
+  const { data: caseRows, error } = await admin
+    .from('assistant_eval_cases')
+    .select('case_key,category,profile,question,fixtures,expect')
+    .eq('audience', 'app')
+    .eq('active', true);
+  if (error || !caseRows?.length) throw new Error('no eval cases');
+  const cases = paraphraseCases(caseRows as EvalCase[], part);
+  const res = await runCases(cases, opts, 12);
+  const usage = res.reduce((a, r) => addUsage(a, r.usage), ZERO_USAGE);
+  const passed = res.filter((r) => r.pass).length;
+  const byQ = new Map(cases.map((c) => [c.case_key, c.question]));
+  await admin.from('assistant_eval_runs').insert({
+    target: 'eval-paraphrase',
+    model: 'deepseek',
+    passed,
+    total: res.length,
+    per_case: res.map((r) => ({ key: r.key, category: r.category, pass: r.pass, fails: r.fails, called: r.called, q: byQ.get(r.key) })),
+    note: `${PROMPT_VERSION}: الجزء ${part} (${PARAPHRASE_STYLES[part]})`,
+  });
+  await addCost(admin, LEARN_TENANT, 'app', costMicroUsd(usage));
+  return {
+    part,
+    style: PARAPHRASE_STYLES[part],
+    passed,
+    total: res.length,
+    failed: res.filter((r) => !r.pass).map((r) => ({ key: r.key, q: byQ.get(r.key), fails: r.fails, called: r.called })),
+    cost_micro_usd: costMicroUsd(usage),
+  };
+}
+
 /** اختبار الأمان لدرس مجيب مرشح: بدونه ومعه، وأي سقوط في الاستخراج يرفضه. */
 async function evaluateResponderLesson(admin: SupabaseClient) {
   const { data: cand } = await admin
@@ -510,13 +565,17 @@ Deno.serve(async (req) => {
   const admin = createClient(url, service);
 
   let op = 'nightly';
+  let part = 0;
   try {
-    op = String((await req.json())?.op ?? 'nightly');
+    const body = await req.json();
+    op = String(body?.op ?? 'nightly');
+    part = Number(body?.part ?? 0);
   } catch { /* جسم فارغ */ }
 
   try {
     if (op === 'evaluate') return json({ ok: true, ...(await evaluate(admin)) });
     if (op === 'eval_responder') return json({ ok: true, ...(await evalResponder(admin)) });
+    if (op === 'eval_dialog') return json({ ok: true, ...(await evalDialog(admin, part)) });
     if (op !== 'nightly') return json({ ok: false, error: 'bad_op' }, 400);
     const j = await judge(admin);
     const p = await propose(admin);

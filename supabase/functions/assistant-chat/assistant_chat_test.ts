@@ -1,6 +1,6 @@
 import { assert, assertEquals, assertStringIncludes } from 'https://deno.land/std@0.224.0/assert/mod.ts';
 import { policyFor, renewsOn } from '../_shared/assistant_meter.ts';
-import { cleanConversation } from './conversation.ts';
+import { cleanConversation, MAX_HISTORY } from './conversation.ts';
 import { buildContextMessage, GUIDE_ONLY_RULE, isGuideOnly, buildMessages, FollowupStreamFilter, splitFollowups, STATIC_SYSTEM } from './prompt.ts';
 import { knownToolNames, TOOL_DEFS, toolDefsFor } from './tools.ts';
 
@@ -95,7 +95,8 @@ Deno.test('every eval-case tool is defined', () => {
     'prepare_oil_card', 'prepare_car_wash', 'prepare_customer', 'prepare_product', 'prepare_expense',
     'propose_price_change', 'propose_stock_adjust', 'reorder_suggest', 'ui_describe', 'ui_navigate', 'ui_highlight',
     'ui_guide', 'ui_start_tour', 'my_performance', 'setup_status',
-    'propose_product_deactivate', 'propose_stock_transfer', 'propose_debt_payment']) {
+    'propose_product_deactivate', 'propose_stock_transfer', 'propose_debt_payment',
+    'propose_product_edit', 'propose_product_reactivate', 'undo_last_action']) {
     assert(n in TOOL_DEFS, n);
   }
 });
@@ -116,16 +117,32 @@ Deno.test('conversation: system messages from the phone are dropped, tool calls 
   assertEquals(c.stepTools, [{ name: 'stock_search', ok: true, rows: 2 }]);
 });
 
-Deno.test('conversation: history is cut to 24 and starts at a user message', () => {
+Deno.test('conversation: history is cut to MAX_HISTORY and starts at a user message', () => {
   const msgs: Record<string, unknown>[] = [];
-  for (let i = 0; i < 15; i++) {
+  for (let i = 0; i < 30; i++) {
     msgs.push({ role: 'user', content: `س${i}` });
     msgs.push({ role: 'assistant', content: `ج${i}` });
   }
   const c = cleanConversation(msgs, true);
   if (typeof c === 'string') throw new Error(c);
-  assert(c.messages.length <= 24);
+  assert(c.messages.length <= MAX_HISTORY);
   assertEquals(c.messages[0].role, 'user');
+});
+
+Deno.test('conversation: prior tool results are named for the judge, current step tools apart', () => {
+  const c = cleanConversation([
+    { role: 'user', content: 'دين أبو علي' },
+    { role: 'assistant', content: '', tool_calls: [{ id: 'ctx_1', name: 'customer_debt', arguments: {} }] },
+    { role: 'tool', tool_call_id: 'ctx_1', content: JSON.stringify({ ok: true, rows: [{ debt: 1 }] }) },
+    { role: 'assistant', content: '', tool_calls: [{ id: 'u1', name: 'ui_show_card', arguments: {} }] },
+    { role: 'tool', tool_call_id: 'u1', content: JSON.stringify({ ok: true }) },
+    { role: 'assistant', content: 'دين أبو علي ظاهر بالبطاقة.' },
+    { role: 'user', content: 'سدد نصه' },
+  ], true);
+  if (typeof c === 'string') throw new Error(c);
+  assertEquals(c.priorTools, ['customer_debt']);
+  assertEquals(c.stepTools, []);
+  assertEquals(c.question, 'سدد نصه');
 });
 
 Deno.test('conversation: big tool results are truncated, images refused in economy', () => {

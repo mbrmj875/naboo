@@ -113,7 +113,8 @@ export async function addCost(
   if (error) console.warn('assistant_budget_add failed', error.message);
 }
 
-export type TurnToolLog = { name: string; ok: boolean; rows?: number };
+/** prior: نتيجة أداة من رسالة سابقة في المحادثة نفسها (ذ9)، يراها الحَكَم سياقاً لا نداءً جديداً. */
+export type TurnToolLog = { name: string; ok: boolean; rows?: number; prior?: boolean };
 
 export type TurnStep = {
   turnId: string;

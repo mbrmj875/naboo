@@ -41,6 +41,9 @@ List<AssistantTool> buildExecTools(
   ProposeProductDeactivateTool(data, port, canOpen),
   ProposeStockTransferTool(data, port, canOpen),
   ProposeDebtPaymentTool(data, port, canOpen),
+  ProposeProductEditTool(data, port, canOpen),
+  ProposeProductReactivateTool(data, port, canOpen),
+  UndoLastActionTool(data, port, canOpen),
 ];
 
 /// أسماء أدوات التنفيذ، لفحص أن الممنوع غير موجود.
@@ -59,6 +62,9 @@ const assistantExecToolNames = {
   'propose_product_deactivate',
   'propose_stock_transfer',
   'propose_debt_payment',
+  'propose_product_edit',
+  'propose_product_reactivate',
+  'undo_last_action',
 };
 
 abstract class _ExecTool extends AssistantTool {
@@ -79,6 +85,96 @@ abstract class _ExecTool extends AssistantTool {
           : AssistantToolGuard.labelFor(key),
     );
   }
+
+  /// ع7 (المسار الموحّد): سؤال واحد بأزرار. كل زر يرسل اسمه كجواب، فيعيد
+  /// النموذج الاستدعاء بالاختيار. أكثر من ثمانية = سؤال بلا أزرار.
+  AssistantToolResult askPick(
+    String ask,
+    List<String> labels, {
+    Map<String, Object?> more = const {},
+  }) {
+    final row = {ask: true, 'choices': labels, ...more};
+    return AssistantToolResult.success(
+      name,
+      [row],
+      extra: {
+        'ambiguous': true,
+        'candidates': [
+          for (final l in labels.take(8)) {'label': l},
+        ],
+        'candidates_total': labels.length,
+      },
+    );
+  }
+
+  /// ع7: الصنف بمعرّفه، أو باسمه من المخزون نفسه. يرجع المعرّف، أو نتيجة
+  /// السؤال (أي واحد؟ / ما لقيته) لتُعاد كما هي.
+  Future<(int?, AssistantToolResult?)> resolveProduct(
+    Map<String, Object?> args, {
+    List<Map<String, Object?>>? pool,
+  }) async {
+    final pid = id(args['product_id']);
+    if (pid != null) return (pid, null);
+    final q = s(args['product']);
+    if (q == null) {
+      return (null, AssistantToolResult.failure(name, 'bad_args:product'));
+    }
+    final items = pool ?? await data.stockItems();
+    final m = AssistantNameMatch.match(q, items);
+    if (m.productId != null) return (m.productId, null);
+    if (m.candidates.length == 1) return (m.candidates.first.$1, null);
+    if (m.candidates.isEmpty) {
+      // الاسم المختصر («كاسترول»): كل كلماته داخل اسم الصنف.
+      final qt = AssistantNameMatch.tokens(q);
+      final hits = [
+        for (final it in items)
+          if (qt.isNotEmpty &&
+              it['id'] is num &&
+              AssistantNameMatch.tokens(
+                '${it['name'] ?? ''} ${it['brand'] ?? ''}',
+              ).containsAll(qt))
+            it,
+      ];
+      if (hits.length == 1) return ((hits.single['id'] as num).toInt(), null);
+      if (hits.isNotEmpty) {
+        return (
+          null,
+          askPick('ask_product', [for (final h in hits) '${h['name']}']),
+        );
+      }
+      return (
+        null,
+        AssistantToolResult.success(name, [
+          {'not_found': true, 'product': q},
+        ]),
+      );
+    }
+    return (null, askPick('ask_product', [for (final c in m.candidates) c.$2]));
+  }
+
+  /// ع11: يلف العملية العكسية بتسجيلها في سجل المالك «عبر المساعد»، أياً
+  /// كان مصدرها (زر «تراجع» أو «ارجع آخر عملية»).
+  AssistantActionUndo logged(
+    AssistantToolContext ctx,
+    String entityType,
+    Object entityId,
+    AssistantActionUndo fn,
+  ) => () async {
+    final err = await fn();
+    if (err == null) {
+      await AssistantPrefill.recordSaved(
+        AssistantPrefill(
+          tool: 'undo:$name',
+          values: const {},
+          turnId: ctx.turnId,
+        ),
+        entityType: entityType,
+        entityId: '$entityId',
+        username: ctx.userName,
+      );
+    }
+    return err;
+  };
 
   static String? s(Object? v) {
     final t = v == null ? '' : '$v'.trim();
@@ -530,24 +626,33 @@ class ProposePriceChangeTool extends _ExecTool {
     // المالي لمن يملكه فقط: البيع تحت سعر الشراء تحذير لا منع.
     final belowCost =
         ctx.has(PermissionKeys.ownerKpiFinancial) && buy > 0 && after < buy;
-    final actionId = AssistantActions.register((_) async {
-      final err = await port.applyPriceChange(
-        productId: pid,
-        newSellFils: after,
-      );
-      if (err != null) return err;
-      await AssistantPrefill.recordSaved(
-        AssistantPrefill(
-          tool: name,
-          values: {'product_id': pid},
-          turnId: ctx.turnId,
-        ),
-        entityType: 'product',
-        entityId: '$pid',
-        username: ctx.userName,
-      );
-      return null;
-    });
+    final actionId = AssistantActions.register(
+      label: 'تغيير سعر ${d['name']}',
+      undo: logged(
+        ctx,
+        'product',
+        pid,
+        () => port.applyPriceChange(productId: pid, newSellFils: before),
+      ),
+      (_) async {
+        final err = await port.applyPriceChange(
+          productId: pid,
+          newSellFils: after,
+        );
+        if (err != null) return err;
+        await AssistantPrefill.recordSaved(
+          AssistantPrefill(
+            tool: name,
+            values: {'product_id': pid},
+            turnId: ctx.turnId,
+          ),
+          entityType: 'product',
+          entityId: '$pid',
+          username: ctx.userName,
+        );
+        return null;
+      },
+    );
     final row = {
       'product': d['name'],
       'before_fils': before,
@@ -615,25 +720,39 @@ class ProposeStockAdjustTool extends _ExecTool {
     if (d == null) return AssistantToolResult.failure(name, 'not_found');
     final before = (d['qty'] as num?)?.toDouble() ?? 0;
     final buyIqd = ((d['buy_price_fils'] as num?)?.toDouble() ?? 0) / 1000;
-    final actionId = AssistantActions.register((_) async {
-      final err = await port.applyStockMoves(
-        moves: [(productId: pid, delta: delta, unitPriceIqd: buyIqd)],
-        reason: reason,
-        sourceType: 'assistant',
-      );
-      if (err != null) return err;
-      await AssistantPrefill.recordSaved(
-        AssistantPrefill(
-          tool: name,
-          values: {'product_id': pid, 'delta': delta},
-          turnId: ctx.turnId,
+    final actionId = AssistantActions.register(
+      label: 'تعديل كمية ${d['name']}',
+      // ع11: سند معاكس، لا حذف للسند الأول.
+      undo: logged(
+        ctx,
+        'stock_voucher',
+        pid,
+        () => port.applyStockMoves(
+          moves: [(productId: pid, delta: -delta, unitPriceIqd: buyIqd)],
+          reason: 'تراجع: $reason',
+          sourceType: 'assistant',
         ),
-        entityType: 'stock_voucher',
-        entityId: '$pid',
-        username: ctx.userName,
-      );
-      return null;
-    });
+      ),
+      (_) async {
+        final err = await port.applyStockMoves(
+          moves: [(productId: pid, delta: delta, unitPriceIqd: buyIqd)],
+          reason: reason,
+          sourceType: 'assistant',
+        );
+        if (err != null) return err;
+        await AssistantPrefill.recordSaved(
+          AssistantPrefill(
+            tool: name,
+            values: {'product_id': pid, 'delta': delta},
+            turnId: ctx.turnId,
+          ),
+          entityType: 'stock_voucher',
+          entityId: '$pid',
+          username: ctx.userName,
+        );
+        return null;
+      },
+    );
     final row = {
       'product': d['name'],
       'before_qty': before,
@@ -910,21 +1029,25 @@ class ProposeProductDeactivateTool extends _ExecTool {
     final d = await data.productDetail(pid);
     if (d == null) return AssistantToolResult.failure(name, 'not_found');
     final qty = (d['qty'] as num?)?.toDouble() ?? 0;
-    final actionId = AssistantActions.register((_) async {
-      final err = await port.deactivateProduct(pid);
-      if (err != null) return err;
-      await AssistantPrefill.recordSaved(
-        AssistantPrefill(
-          tool: name,
-          values: {'product_id': pid},
-          turnId: ctx.turnId,
-        ),
-        entityType: 'product',
-        entityId: '$pid',
-        username: ctx.userName,
-      );
-      return null;
-    });
+    final actionId = AssistantActions.register(
+      label: 'إيقاف ${d['name']}',
+      undo: logged(ctx, 'product', pid, () => port.activateProduct(pid)),
+      (_) async {
+        final err = await port.deactivateProduct(pid);
+        if (err != null) return err;
+        await AssistantPrefill.recordSaved(
+          AssistantPrefill(
+            tool: name,
+            values: {'product_id': pid},
+            turnId: ctx.turnId,
+          ),
+          entityType: 'product',
+          entityId: '$pid',
+          username: ctx.userName,
+        );
+        return null;
+      },
+    );
     final row = {
       'product': d['name'],
       'qty': qty,
@@ -999,9 +1122,11 @@ class ProposeStockTransferTool extends _ExecTool {
     final from = fromName == null ? wh.first : find(fromName);
     // ع7: سؤال واحد. إن لم يُعرف المخزن نرجع القائمة ليسأل المساعد عنه وحده.
     if (to == null || from == null) {
-      return AssistantToolResult.success(name, [
-        {'ask_warehouse': to == null ? 'to' : 'from', 'warehouses': names},
-      ]);
+      return askPick(
+        'ask_warehouse',
+        names,
+        more: {'which': to == null ? 'to' : 'from'},
+      );
     }
     if (to.id == from.id)
       return AssistantToolResult.failure(name, 'bad_args:same_warehouse');
@@ -1021,27 +1146,44 @@ class ProposeStockTransferTool extends _ExecTool {
         (from.id == wh.first.id ? (d['qty'] as num?)?.toDouble() : null);
     final toQty = qtyIn(to.name) ?? 0;
     final buyIqd = ((d['buy_price_fils'] as num?)?.toDouble() ?? 0) / 1000;
-    final actionId = AssistantActions.register((_) async {
-      final err = await port.transferStock(
-        productId: pid,
-        qty: qty,
-        fromWarehouseId: from.id,
-        toWarehouseId: to.id,
-        unitPriceIqd: buyIqd,
-      );
-      if (err != null) return err;
-      await AssistantPrefill.recordSaved(
-        AssistantPrefill(
-          tool: name,
-          values: {'product_id': pid, 'qty': qty},
-          turnId: ctx.turnId,
+    final actionId = AssistantActions.register(
+      label: 'نقل ${d['name']}',
+      // ع11: سند تحويل معاكس.
+      undo: logged(
+        ctx,
+        'stock_voucher',
+        pid,
+        () => port.transferStock(
+          productId: pid,
+          qty: qty,
+          fromWarehouseId: to.id,
+          toWarehouseId: from.id,
+          unitPriceIqd: buyIqd,
+          note: 'تراجع',
         ),
-        entityType: 'stock_voucher',
-        entityId: '$pid',
-        username: ctx.userName,
-      );
-      return null;
-    });
+      ),
+      (_) async {
+        final err = await port.transferStock(
+          productId: pid,
+          qty: qty,
+          fromWarehouseId: from.id,
+          toWarehouseId: to.id,
+          unitPriceIqd: buyIqd,
+        );
+        if (err != null) return err;
+        await AssistantPrefill.recordSaved(
+          AssistantPrefill(
+            tool: name,
+            values: {'product_id': pid, 'qty': qty},
+            turnId: ctx.turnId,
+          ),
+          entityType: 'stock_voucher',
+          entityId: '$pid',
+          username: ctx.userName,
+        );
+        return null;
+      },
+    );
     final row = {
       'product': d['name'],
       'qty': qty,
@@ -1075,6 +1217,8 @@ class ProposeDebtPaymentTool extends _ExecTool {
   Map<String, AssistantArgSpec> get args => const {
     'customer': AssistantArgSpec(AssistantArgType.string, required: true),
     'amount': AssistantArgSpec(AssistantArgType.integer),
+    // «نصها»، «ربعه»: النموذج يرى الدين علامة لا رقماً، فالكسر يُحسب هنا (قياس ذ3).
+    'fraction': AssistantArgSpec(AssistantArgType.number),
     'customer_id': AssistantArgSpec(AssistantArgType.string),
   };
 
@@ -1096,6 +1240,9 @@ class ProposeDebtPaymentTool extends _ExecTool {
     final amount = _ExecTool.n(args['amount']);
     if (amount != null && (amount <= 0 || amount > 1e10))
       return AssistantToolResult.failure(name, 'bad_args:amount');
+    final fraction = _ExecTool.n(args['fraction']);
+    if (fraction != null && (fraction <= 0 || fraction > 1))
+      return AssistantToolResult.failure(name, 'bad_args:fraction');
     final wantId = _ExecTool.id(args['customer_id']);
     // نفس قائمة شاشة الديون، حتى لا يختلف «عليه دين» بين المساعد والشاشة.
     final debtors = [
@@ -1124,16 +1271,14 @@ class ProposeDebtPaymentTool extends _ExecTool {
           {'no_debt': true, 'customer': q},
         ]);
       }
-      // ع7: سؤال واحد «أي واحد منهم؟».
-      return AssistantToolResult.success(name, [
-        {
-          'ask_customer': true,
-          'choices': [
-            for (final d in near)
-              {'customer_id': ?d['customer_id'], 'name': d['customer']},
-          ],
+      // ع7: سؤال واحد «أي واحد منهم؟» بأزرار الأسماء.
+      return askPick(
+        'ask_customer',
+        [for (final d in near) '${d['customer']}'],
+        more: {
+          'ids': [for (final d in near) d['customer_id']],
         },
-      ]);
+      );
     }
     final cname = '${pick['customer']}';
     final open = (pick['amount_fils'] as num?)?.toInt() ?? 0;
@@ -1145,13 +1290,16 @@ class ProposeDebtPaymentTool extends _ExecTool {
       ]);
     }
     final cid = cidNum.toInt();
-    if (amount == null) {
+    if (amount == null && fraction == null) {
       // ع7: المبلغ هو السؤال الوحيد الباقي.
       return AssistantToolResult.success(name, [
         {'ask_amount': true, 'customer': cname, 'open_debt_fils': open},
       ]);
     }
-    final want = (amount * 1000).round();
+    // الكسر يُقرَّب لأقرب دينار، والمبلغ الصريح يغلبه إن جاءا معاً.
+    final want = amount != null
+        ? (amount * 1000).round()
+        : ((open * fraction!) / 1000).round() * 1000;
     final pay = want > open ? open : want;
     final actionId = AssistantActions.register((_) async {
       final out = await port.recordDebtPayment(
@@ -1181,6 +1329,320 @@ class ProposeDebtPaymentTool extends _ExecTool {
       'capped': ?(want > open ? true : null),
       'awaiting_confirm': true,
     };
+    return AssistantToolResult.success(
+      name,
+      [row],
+      extra: {'action_id': actionId, ...row},
+    );
+  }
+}
+
+// ------------------------------------------------------------------ السيطرة الكاملة (5.ث-12 و)
+
+/// س2: تعديل الصنف بحقول شاشة التعديل نفسها (الاسم، الباركود، سعر الشراء،
+/// سعر البيع، أدنى سعر، حد التنبيه). الكمية لا تُعدَّل هنا: لها سند.
+/// التخفيض على الصنف ليس هنا عمداً: حقلاه في الجدول لا يطبّقهما البيع اليوم،
+/// فيأتي مع محرك العروض (س8).
+class ProposeProductEditTool extends _ExecTool {
+  const ProposeProductEditTool(super.data, super.port, super.canOpen);
+
+  @override
+  String get name => 'propose_product_edit';
+
+  @override
+  List<String> get requiredPermissions => const [
+    PermissionKeys.inventoryProductsManage,
+  ];
+
+  /// سعر الشراء القديم مالي: لا يراه من لا يملك المالي، حتى لو عدّله.
+  @override
+  Set<String> get financialFields => const {'buy_before_fils'};
+
+  @override
+  Map<String, AssistantArgSpec> get args => const {
+    'product_id': AssistantArgSpec(AssistantArgType.string),
+    'product': AssistantArgSpec(AssistantArgType.string),
+    'name': AssistantArgSpec(AssistantArgType.string),
+    'barcode': AssistantArgSpec(AssistantArgType.string),
+    'buy_price': AssistantArgSpec(AssistantArgType.integer),
+    'sell_price': AssistantArgSpec(AssistantArgType.integer),
+    'min_sell_price': AssistantArgSpec(AssistantArgType.integer),
+    'low_stock': AssistantArgSpec(AssistantArgType.number),
+  };
+
+  static int? _fils(Object? v) {
+    final x = _ExecTool.n(v);
+    if (x == null) return null;
+    if (x < 0 || x > 1e9) return -1;
+    return (x * 1000).round();
+  }
+
+  @override
+  Future<AssistantToolResult> run(
+    Map<String, Object?> args,
+    AssistantToolContext ctx,
+  ) async {
+    final (pid, ask) = await resolveProduct(args);
+    if (ask != null) return ask;
+    final d = await data.productDetail(pid!);
+    if (d == null) return AssistantToolResult.failure(name, 'not_found');
+
+    final newName0 = _ExecTool.s(args['name']);
+    final barcode0 = _ExecTool.s(
+      args['barcode'],
+    )?.replaceAll(RegExp(r'\s'), '');
+    final buy0 = _fils(args['buy_price']);
+    final sell0 = _fils(args['sell_price']);
+    final minSell0 = _fils(args['min_sell_price']);
+    final low0 = _ExecTool.n(args['low_stock'])?.toDouble();
+    for (final (k, v) in [
+      ('buy_price', buy0),
+      ('sell_price', sell0),
+      ('min_sell_price', minSell0),
+    ]) {
+      if (v == -1) return AssistantToolResult.failure(name, 'bad_args:$k');
+    }
+    if (sell0 == 0)
+      return AssistantToolResult.failure(name, 'bad_args:sell_price');
+    if (low0 != null && (low0 < 0 || low0 > 100000)) {
+      return AssistantToolResult.failure(name, 'bad_args:low_stock');
+    }
+
+    int f(String k) => (d[k] as num?)?.toInt() ?? 0;
+    final changes = <Map<String, Object?>>[];
+    void add(String field, Object? before, Object? after) {
+      if (after == null || '$after' == '$before') return;
+      changes.add({'field': field, 'before': before, 'after': after});
+    }
+
+    add('name', d['name'], newName0);
+    add('barcode', d['barcode'] ?? '', barcode0);
+    add('sell_fils', f('sell_price_fils'), sell0);
+    add('min_sell_fils', d['min_sell_price_fils'] ?? 0, minSell0);
+    add('buy_fils', f('buy_price_fils'), buy0);
+    add('low_stock', (d['threshold'] as num?)?.toDouble() ?? 0, low0);
+    if (changes.isEmpty) {
+      // ع7: ما ذُكر شيء يتغير؛ سؤال واحد عن الحقل.
+      return AssistantToolResult.success(name, [
+        {
+          'ask_field': true,
+          'product': d['name'],
+          'fields': [
+            'الاسم',
+            'الباركود',
+            'سعر البيع',
+            'أدنى سعر',
+            'سعر الشراء',
+            'حد التنبيه',
+          ],
+        },
+      ]);
+    }
+    final changed = {for (final c in changes) c['field']};
+    final newName = changed.contains('name') ? newName0 : null;
+    final barcode = changed.contains('barcode') ? barcode0 : null;
+    final buy = changed.contains('buy_fils') ? buy0 : null;
+    final sell = changed.contains('sell_fils') ? sell0 : null;
+    final minSell = changed.contains('min_sell_fils') ? minSell0 : null;
+    final low = changed.contains('low_stock') ? low0 : null;
+    final effSell = sell ?? f('sell_price_fils');
+    final effMin = minSell ?? (d['min_sell_price_fils'] as num?)?.toInt() ?? 0;
+    if (effMin > effSell) {
+      return AssistantToolResult.success(name, [
+        {
+          'min_above_sell': true,
+          'product': d['name'],
+          'sell_fils': effSell,
+          'min_sell_fils': effMin,
+        },
+      ]);
+    }
+    if (barcode != null && barcode != '${d['barcode'] ?? ''}') {
+      final owner = await data.productIdByBarcode(barcode);
+      if (owner != null && owner != pid) {
+        return AssistantToolResult.success(name, [
+          {'barcode_taken': true, 'barcode': barcode},
+        ]);
+      }
+    }
+    final effBuy = buy ?? f('buy_price_fils');
+    final belowCost =
+        ctx.has(PermissionKeys.ownerKpiFinancial) &&
+        effBuy > 0 &&
+        effSell < effBuy;
+
+    final oldName = '${d['name']}';
+    final oldBarcode = '${d['barcode'] ?? ''}';
+    final oldSell = f('sell_price_fils');
+    final oldMin = (d['min_sell_price_fils'] as num?)?.toInt();
+    final oldBuy = f('buy_price_fils');
+    final oldLow = (d['threshold'] as num?)?.toDouble();
+    final actionId = AssistantActions.register(
+      label: 'تعديل $oldName',
+      // ع11: يرجع الحقول التي تغيّرت لقيمها قبل التعديل، بنفس الدالة.
+      undo: logged(
+        ctx,
+        'product',
+        pid,
+        () => port.editProduct(
+          productId: pid,
+          name: newName == null ? null : oldName,
+          barcode: barcode == null ? null : oldBarcode,
+          sellFils: sell == null ? null : oldSell,
+          minSellFils: minSell == null ? null : oldMin,
+          buyFils: buy == null ? null : oldBuy,
+          lowStock: low == null ? null : oldLow,
+        ),
+      ),
+      (_) async {
+        final err = await port.editProduct(
+          productId: pid,
+          name: newName,
+          barcode: barcode,
+          buyFils: buy,
+          sellFils: sell,
+          minSellFils: minSell,
+          lowStock: low,
+        );
+        if (err != null) return err;
+        await AssistantPrefill.recordSaved(
+          AssistantPrefill(
+            tool: name,
+            values: {
+              'product_id': pid,
+              'fields': [for (final c in changes) c['field']],
+            },
+            turnId: ctx.turnId,
+          ),
+          entityType: 'product',
+          entityId: '$pid',
+          username: ctx.userName,
+        );
+        return null;
+      },
+    );
+    final row = {
+      'product': d['name'],
+      'changes': [
+        for (final c in changes)
+          if (c['field'] == 'buy_fils')
+            {'field': 'buy_fils', 'after': c['after']}
+          else
+            c,
+      ],
+      'buy_before_fils': ?(buy == null ? null : oldBuy),
+      'awaiting_confirm': true,
+    };
+    return AssistantToolResult.success(
+      name,
+      [row],
+      extra: {
+        'action_id': actionId,
+        ...row,
+        'unit': d['unit'],
+        'below_cost': ?(belowCost ? true : null),
+      },
+    );
+  }
+}
+
+/// س3: إرجاع صنف موقوف، بالاسم من قائمة الموقوفة نفسها.
+class ProposeProductReactivateTool extends _ExecTool {
+  const ProposeProductReactivateTool(super.data, super.port, super.canOpen);
+
+  @override
+  String get name => 'propose_product_reactivate';
+
+  @override
+  List<String> get requiredPermissions => const [
+    PermissionKeys.inventoryProductsManage,
+  ];
+
+  @override
+  Map<String, AssistantArgSpec> get args => const {
+    'product_id': AssistantArgSpec(AssistantArgType.string),
+    'product': AssistantArgSpec(AssistantArgType.string),
+  };
+
+  @override
+  Future<AssistantToolResult> run(
+    Map<String, Object?> args,
+    AssistantToolContext ctx,
+  ) async {
+    final pool = await port.inactiveProducts();
+    if (pool.isEmpty) {
+      return AssistantToolResult.success(name, [
+        {'none_inactive': true},
+      ]);
+    }
+    final (pid, ask) = await resolveProduct(args, pool: pool);
+    if (ask != null) return ask;
+    final p = pool.where((x) => x['id'] == pid).firstOrNull;
+    if (p == null) {
+      return AssistantToolResult.success(name, [
+        {'not_inactive': true},
+      ]);
+    }
+    final pname = '${p['name']}';
+    final actionId = AssistantActions.register(
+      label: 'إرجاع $pname',
+      undo: logged(ctx, 'product', pid!, () => port.deactivateProduct(pid)),
+      (_) async {
+        final err = await port.activateProduct(pid);
+        if (err != null) return err;
+        await AssistantPrefill.recordSaved(
+          AssistantPrefill(
+            tool: name,
+            values: {'product_id': pid},
+            turnId: ctx.turnId,
+          ),
+          entityType: 'product',
+          entityId: '$pid',
+          username: ctx.userName,
+        );
+        return null;
+      },
+    );
+    final row = {'product': pname, 'qty': p['qty'], 'awaiting_confirm': true};
+    return AssistantToolResult.success(
+      name,
+      [row],
+      extra: {'action_id': actionId, ...row},
+    );
+  }
+}
+
+/// ع11: «ارجع آخر عملية». يعرض ما سيُرجَع ببطاقة تأكيد، والإرجاع عملية
+/// عكسية مسجّلة لا محو. يعمل على ما نُفّذ في هذه الجلسة فقط.
+class UndoLastActionTool extends _ExecTool {
+  const UndoLastActionTool(super.data, super.port, super.canOpen);
+
+  @override
+  String get name => 'undo_last_action';
+
+  @override
+  List<String> get requiredPermissions => const [];
+
+  @override
+  Map<String, AssistantArgSpec> get args => const {};
+
+  @override
+  Future<AssistantToolResult> run(
+    Map<String, Object?> args,
+    AssistantToolContext ctx,
+  ) async {
+    final last = AssistantActions.lastUndoable();
+    if (last == null) {
+      return AssistantToolResult.success(name, [
+        {'nothing_to_undo': true},
+      ]);
+    }
+    final label = AssistantActions.of(last).label ?? 'آخر عملية';
+    final actionId = AssistantActions.register((_) async {
+      // العملية العكسية نفسها تُسجَّل في سجل المالك (logged).
+      return AssistantActions.undo(last);
+    });
+    final row = {'undo': label, 'awaiting_confirm': true};
     return AssistantToolResult.success(
       name,
       [row],

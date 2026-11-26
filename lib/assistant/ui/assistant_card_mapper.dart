@@ -11,7 +11,10 @@ import 'assistant_view_models.dart';
 abstract final class AssistantCardMapper {
   static AssistantCardData? fromResult(AssistantToolResult r) {
     if (!r.ok && r.tool == 'memory_save' && r.error == 'memory_full') {
-      return const AssistantNoticeCard(kind: 'memory_full', text: 'الذاكرة ممتلئة (40). احذف معلومة من «ما أعرفه عنك».');
+      return const AssistantNoticeCard(
+        kind: 'memory_full',
+        text: 'الذاكرة ممتلئة (40). احذف معلومة من «ما أعرفه عنك».',
+      );
     }
     if (!r.ok) return null;
     final rows = r.rows;
@@ -195,7 +198,10 @@ abstract final class AssistantCardMapper {
                   '${alts.isEmpty ? ' ما عندك بديل بنفس اللزوجة يكفي.' : ''}',
           ],
           openLabel: stock is Map && stock['short'] == true ? 'أكمل بالمطلوب' : 'افتح وراجع',
-          choices: [for (final a in alts) if (a is Map) _s(a['name'])],
+          choices: [
+            for (final a in alts)
+              if (a is Map) _s(a['name']),
+          ],
           choicesLabel: 'أو افتحها ببديل متوفر:',
         );
       case 'propose_price_change':
@@ -232,6 +238,60 @@ abstract final class AssistantCardMapper {
           warnings: [if (((r.extra['qty'] as num?) ?? 0) > 0) 'باقي منه كمية بالمخزون.'],
           confirmLabel: 'أوقفه',
           doneText: 'توقّف الصنف. ترجّعه من شاشة المخزون إذا احتجته.',
+        );
+      case 'propose_product_edit':
+        final id = r.extra['action_id']?.toString();
+        if (id == null) return null;
+        final unit = _s(r.extra['unit']);
+        String val(String field, Object? v) => switch (field) {
+          'sell_fils' || 'min_sell_fils' || 'buy_fils' => v == null ? '—' : money(v),
+          'low_stock' => '${_num(v)} $unit'.trim(),
+          _ => _s(v).isEmpty ? '—' : _s(v),
+        };
+        const labels = {
+          'name': 'الاسم',
+          'barcode': 'الباركود',
+          'sell_fils': 'سعر البيع',
+          'min_sell_fils': 'أدنى سعر',
+          'buy_fils': 'سعر الشراء',
+          'low_stock': 'حد التنبيه',
+        };
+        final list = (r.extra['changes'] as List?) ?? const [];
+        return AssistantConfirmCard(
+          title: 'تعديل ${_s(r.extra['product'])}',
+          actionId: id,
+          changes: [
+            for (final c in list)
+              if (c is Map)
+                (
+                  labels['${c['field']}'] ?? '${c['field']}',
+                  val('${c['field']}', c['field'] == 'buy_fils' ? r.extra['buy_before_fils'] : c['before']),
+                  val('${c['field']}', c['after']),
+                ),
+          ],
+          warnings: [if (r.extra['below_cost'] == true) 'سعر البيع أقل من سعر الشراء.'],
+          confirmLabel: 'عدّل',
+          doneText: 'تعدّل الصنف.',
+        );
+      case 'propose_product_reactivate':
+        final id = r.extra['action_id']?.toString();
+        if (id == null) return null;
+        return AssistantConfirmCard(
+          title: 'إرجاع ${_s(r.extra['product'])}',
+          actionId: id,
+          facts: [('الكمية', _num(r.extra['qty'])), ('بعد الإرجاع', 'يرجع للبيع والقوائم')],
+          confirmLabel: 'رجّعه',
+          doneText: 'رجع الصنف.',
+        );
+      case 'undo_last_action':
+        final id = r.extra['action_id']?.toString();
+        if (id == null) return null;
+        return AssistantConfirmCard(
+          title: 'تراجع',
+          actionId: id,
+          facts: [('العملية', _s(r.extra['undo'])), ('كيف', 'عملية عكسية تُسجَّل، ولا يُمحى شي')],
+          confirmLabel: 'ارجعها',
+          doneText: 'رجعت العملية.',
         );
       case 'propose_stock_transfer':
         final id = r.extra['action_id']?.toString();

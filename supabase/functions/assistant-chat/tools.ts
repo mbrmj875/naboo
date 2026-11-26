@@ -104,7 +104,7 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
     }),
   },
   car_history: {
-    description: 'سجل سيارة: آخر 5 زيارات، الزيت، العدّاد، والموعد القادم المتوقع.',
+    description: 'سجل سيارة باللوحة: آخر 5 زيارات، الزيت، العدّاد، والموعد القادم. استعملها لكل سؤال عن سيارة بلوحتها: «اجت قبل؟»، «شوكت آخر مرة»، «عدادها»، «شنو حطينا الها».',
     parameters: obj({ plate: str('رقم اللوحة'), customer_id: str('معرّف الزبون') }),
   },
   sales_summary: {
@@ -116,7 +116,7 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
     parameters: obj({ period: PERIOD, from: FROM, to: TO, limit: int('حتى 20') }, ['period']),
   },
   debts_summary: {
-    description: 'الديون المفتوحة: الإجمالي وعدد المدينين وأكبرهم، أو ديون زبون محدد.',
+    description: 'الديون المفتوحة: صف الإجمالي (open_total وdebtors)، ثم صف لكل مدين (customer وamount وinvoices) مرتبة من الأكبر ديناً إلى الأصغر (حتى 10)، أو ديون زبون محدد. «أكثر واحد عليه» هو أول صف فيه customer.',
     parameters: obj({ customer: str('اسم الزبون إن سُئل عن واحد') }),
   },
   cash_summary: {
@@ -259,7 +259,7 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
     parameters: obj({ product_id: str('المعرّف') }, ['product_id']),
   },
   propose_stock_transfer: {
-    description: 'اعرض بطاقة نقل كمية صنف بين مخزنين ليؤكدها المستخدم. إن رجع ask_warehouse فاسأل عن المخزن وحده من warehouses. إن رجع single_warehouse فقل إن عنده مخزن واحد.',
+    description: 'اعرض بطاقة نقل كمية صنف بين مخزنين ليؤكدها المستخدم. إن رجع ask_warehouse فاسأل عن المخزن وحده (which: to إليه، from منه) والأزرار تظهر له. إن رجع single_warehouse فقل إن عنده مخزن واحد.',
     parameters: obj({
       product_id: str('المعرّف'),
       qty: num('الكمية'),
@@ -268,12 +268,34 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
     }, ['product_id', 'qty', 'to_warehouse']),
   },
   propose_debt_payment: {
-    description: 'اعرض بطاقة تسديد دين زبون (استلام مبلغ منه) ليؤكدها المستخدم. إن رجع ask_amount فاسأل عن المبلغ وحده واذكر الدين. إن رجع ask_customer فاسأل «أي واحد؟» بالأسماء ثم أعد الاستدعاء بـcustomer_id. إن رجع no_debt فقل ما عليه دين. إن رجع not_linked فقل إن دينه مسجّل بالاسم بلا بطاقة زبون، يسدّده من شاشة الديون بعد ربطه. لا تقل «جهزت البطاقة» إلا إذا رجع awaiting_confirm. لا تخمّن المبلغ.',
+    description: 'اعرض بطاقة تسديد دين زبون (استلام مبلغ منه) ليؤكدها المستخدم. إن رجع ask_amount فاسأل عن المبلغ وحده واذكر الدين. إن رجع ask_customer فاسأل «أي واحد؟» بجملة والأزرار تظهر له، ثم أعد الاستدعاء بالاسم الذي اختاره. إن رجع no_debt فقل ما عليه دين. إن رجع not_linked فقل إن دينه مسجّل بالاسم بلا بطاقة زبون، يسدّده من شاشة الديون بعد ربطه. لا تقل «جهزت البطاقة» إلا إذا رجع awaiting_confirm. لا تخمّن المبلغ.',
     parameters: obj({
       customer: str('اسم الزبون كما قاله'),
       amount: int('المبلغ المستلم بالدينار كما قاله'),
+      fraction: num('جزء من الدين بدل المبلغ إذا قال «نصها» 0.5 أو «ربعه» 0.25 أو «كله» 1. لا تحسب المبلغ بنفسك'),
       customer_id: str('معرّف الزبون إن اختاره المستخدم من القائمة'),
     }, ['customer']),
+  },
+  propose_product_edit: {
+    description: 'اعرض بطاقة تعديل صنف ليؤكدها المستخدم: الاسم، الباركود، سعر البيع، أدنى سعر، سعر الشراء، حد التنبيه. أرسل الحقول التي ذكرها فقط بالدينار. product_id من stock_search، أو product باسمه كما قاله. إن رجع ask_product فاسأل «أي واحد؟» والأزرار تظهر له. إن رجع ask_field فاسأل شنو يغيّر. barcode_taken: الباركود لصنف ثاني. min_above_sell: أدنى سعر أكبر من البيع. الكمية لا تُعدَّل هنا (propose_stock_adjust). لا خصم على صنف بعد.',
+    parameters: obj({
+      product_id: str('المعرّف'),
+      product: str('اسم الصنف كما قاله إن لم يكن عندك المعرّف'),
+      name: str('الاسم الجديد'),
+      barcode: str('الباركود الجديد'),
+      sell_price: int('سعر البيع الجديد بالدينار'),
+      min_sell_price: int('أدنى سعر بيع بالدينار'),
+      buy_price: int('سعر الشراء الجديد بالدينار'),
+      low_stock: num('حد التنبيه الجديد'),
+    }, []),
+  },
+  propose_product_reactivate: {
+    description: 'اعرض بطاقة إرجاع صنف موقوف للبيع والقوائم. product باسمه كما قاله. ask_product: اسأل «أي واحد؟». none_inactive: ماكو أصناف موقوفة. not_found: ما لقيته بين الموقوفة.',
+    parameters: obj({ product_id: str('المعرّف'), product: str('اسم الصنف كما قاله') }, []),
+  },
+  undo_last_action: {
+    description: '«ارجع/تراجع عن آخر عملية»: بطاقة تأكيد تُرجع آخر عملية نفّذها المساعد في هذه الجلسة بعملية عكسية مسجّلة (لا محو). nothing_to_undo: ماكو عملية تُرجَع من المساعد؛ تسديد الدين يُلغى من شاشة الديون.',
+    parameters: obj({}, []),
   },
   propose_supplier_intake: {
     description: 'جدول مراجعة لأصناف فاتورة مورّد مقروءة من صورة.',

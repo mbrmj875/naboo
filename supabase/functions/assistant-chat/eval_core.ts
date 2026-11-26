@@ -140,6 +140,11 @@ export function hasRawAmount(text: string): boolean {
   return /\d[\d,٬.]*\s*(?:الف|ألف)?\s*(?:دينار|د\.?\s?ع)/.test(text);
 }
 
+/** المستخدم ذكر مبلغاً بنفسه («خمسين الف»، «30 الف»)، فإعادته ليست اختراعاً (التعليمات تجيزها). */
+export function questionHasAmount(question: string): boolean {
+  return /\d|الف|ألف|دينار|مليون/.test(question);
+}
+
 export type ChatFn = (o: ChatOptions) => Promise<ChatResult>;
 
 export type RunOpts = {
@@ -152,13 +157,33 @@ export type RunOpts = {
   maxSteps?: number;
 };
 
-/** يشغّل حالة واحدة كما يشغّلها الهاتف: خطوات حتى 5، ونتائج الأدوات من fixtures. */
-export async function runCase(c: EvalCase, o: RunOpts): Promise<CaseResult & { usage: Usage }> {
-  const refs = new MoneyRefs();
-  const tools = toolsFor(c.profile);
+export type TurnOut = {
+  reply: string;
+  called: string[];
+  /** وسائط كل نداء بالترتيب، لفحص «نفس الشي امس» في الحوارات. */
+  calls: { name: string; args: Record<string, unknown> }[];
+  nav: string | null;
+  rawAmount: boolean;
+  usage: Usage;
+};
+
+/**
+ * رسالة واحدة كما يشغّلها الهاتف: خطوات حتى 5، ونتائج الأدوات من fixtures.
+ * [conv] يُكمَّل بالسؤال ونداءات الأدوات ونتائجها والجواب، فتبني الحوارات عليه.
+ */
+export async function runTurn(
+  conv: Record<string, unknown>[],
+  question: string,
+  profile: string,
+  tools: string[],
+  fixtures: Record<string, unknown>,
+  refs: MoneyRefs,
+  o: RunOpts,
+): Promise<TurnOut> {
   const guideOnly = tools.length > 0 && tools.every((t) => t.startsWith('ui_'));
-  const conv: Record<string, unknown>[] = [{ role: 'user', content: c.question }];
+  conv.push({ role: 'user', content: question });
   const called: string[] = [];
+  const calls: TurnOut['calls'] = [];
   let reply = '';
   let nav: string | null = null;
   let usage = ZERO_USAGE;
@@ -168,15 +193,15 @@ export async function runCase(c: EvalCase, o: RunOpts): Promise<CaseResult & { u
     const r = await o.chat({
       messages: buildMessages(
         {
-          isOwner: c.profile === 'owner',
-          roleKey: c.profile === 'owner' ? 'owner' : 'staff',
+          isOwner: profile === 'owner',
+          roleKey: profile === 'owner' ? 'owner' : 'staff',
           guideOnly,
           routeId: 'app_oil_services_log',
           economy: false,
         },
         o.rules,
         conv,
-        o.notesFor?.(c.question) ?? '',
+        o.notesFor?.(question) ?? '',
       ),
       maxTokens: 900,
       temperature: o.temperature ?? 0.2,
@@ -184,37 +209,48 @@ export async function runCase(c: EvalCase, o: RunOpts): Promise<CaseResult & { u
       toolChoice: last ? 'none' : 'auto',
     });
     usage = addUsage(usage, r.usage);
-    reply += splitFollowups(r.text).text;
-    const calls = last ? [] : r.toolCalls.slice(0, 3);
-    if (calls.length === 0) break;
+    const text = splitFollowups(r.text).text;
+    reply += text;
+    const stepCalls = last ? [] : r.toolCalls.slice(0, 3);
+    if (stepCalls.length === 0) {
+      conv.push({ role: 'assistant', content: text });
+      break;
+    }
     conv.push({
       role: 'assistant',
       content: r.text,
-      tool_calls: calls.map((x) => ({
+      tool_calls: stepCalls.map((x) => ({
         id: x.id,
         type: 'function',
         function: { name: x.name, arguments: x.arguments },
       })),
     });
-    for (const call of calls) {
+    for (const call of stepCalls) {
       called.push(call.name);
       let args: Record<string, unknown> = {};
       try {
         args = JSON.parse(call.arguments || '{}');
       } catch { /* وسائط تالفة */ }
+      calls.push({ name: call.name, args });
       if (call.name === 'ui_navigate') nav = String(args.route_id ?? '');
       const result = !tools.includes(call.name)
         ? { ok: false, error: 'forbidden' }
-        : c.fixtures[call.name] ?? (call.name.startsWith('ui_') ? { ok: true } : { ok: false, error: 'no_fixture' });
+        : fixtures[call.name] ?? (call.name.startsWith('ui_') ? { ok: true } : { ok: false, error: 'no_fixture' });
       conv.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(refs.wrap(result)) });
     }
   }
-  const rawAmount = hasRawAmount(reply);
-  const shown = refs.render(reply);
-  const fails = judgeCase(c.expect, shown.text, called, nav);
+  return { reply, called, calls, nav, rawAmount: hasRawAmount(reply), usage };
+}
+
+/** يشغّل حالة واحدة كما يشغّلها الهاتف: خطوات حتى 5، ونتائج الأدوات من fixtures. */
+export async function runCase(c: EvalCase, o: RunOpts): Promise<CaseResult & { usage: Usage }> {
+  const refs = new MoneyRefs();
+  const t = await runTurn([], c.question, c.profile, toolsFor(c.profile), c.fixtures, refs, o);
+  const shown = refs.render(t.reply);
+  const fails = judgeCase(c.expect, shown.text, t.called, t.nav);
   if (shown.unknown.length) fails.push(`علامة مبلغ مجهولة ${shown.unknown.join(' ')}`);
-  if (rawAmount) fails.push('كتب مبلغاً بنفسه بدل العلامة');
-  return { key: c.case_key, category: c.category, pass: fails.length === 0, fails, called, nav, usage };
+  if (t.rawAmount && !questionHasAmount(c.question)) fails.push('كتب مبلغاً بنفسه بدل العلامة');
+  return { key: c.case_key, category: c.category, pass: fails.length === 0, fails, called: t.called, nav: t.nav, usage: t.usage };
 }
 
 /** يشغّل الحالات بتوازٍ محدود. الخطأ يُحسب فشلاً للحالة لا للتشغيل. */

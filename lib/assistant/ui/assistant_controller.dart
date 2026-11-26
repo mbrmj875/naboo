@@ -306,6 +306,7 @@ class AssistantController extends ChangeNotifier {
     _history.clear();
     moneyRefs.clear();
     threadId = id;
+    Set<String>? restoreAllowed;
     for (final sm in stored) {
       final p = sm.payload ?? const <String, Object?>{};
       final money = p['money'];
@@ -347,6 +348,8 @@ class AssistantController extends ChangeNotifier {
       }
       messages.add(m);
       if (m.text.trim().isNotEmpty && m.status == AssistantMessageStatus.done) {
+        // ذ1: المحادثة المستعادة ترجع ببيانات بطاقاتها، لا بنصها فقط.
+        if (!m.fromUser) _addResultsToHistory(m.results, restoreAllowed ??= registry.allowedNames(toolContext()).toSet());
         _history.add({'role': m.fromUser ? 'user' : 'assistant', 'content': m.text});
       } else if (m.fromUser) {
         _history.add({'role': 'user', 'content': m.text});
@@ -426,11 +429,31 @@ class AssistantController extends ChangeNotifier {
           m.text = '${intent.header}:';
         }
     }
-    // تبقى في السياق حتى يفهم النموذج «وهذا؟» لاحقاً.
+    // تبقى في السياق حتى يفهم النموذج «وهذا؟» لاحقاً، ومعها بيانات البطاقة
+    // نفسها (ذ1): بدونها يرى النموذج عنواناً فارغاً («دين أبو علي:») فيقلّده.
     _history.add({'role': 'user', 'content': q});
+    _addResultsToHistory(m.results, registry.allowedNames(ctx).toSet());
     _history.add({'role': 'assistant', 'content': m.text});
     m.status = AssistantMessageStatus.done;
     notifyListeners();
+  }
+
+  /// ذ1 (ذاكرة العمل): نتائج البطاقات تدخل السياق كنداء أداة ونتيجته، بنفس
+  /// ترميز النموذج (المبالغ علامات، والحقول الممنوعة محذوفة أصلاً من النتيجة).
+  /// أداة لم تعد مسموحة للمستخدم لا تُضاف، حتى لا يرى النموذج اسماً لا يملكه.
+  void _addResultsToHistory(List<AssistantToolResult> results, Set<String> allowed) {
+    for (final r in results) {
+      if (!r.ok || !allowed.contains(r.tool) || r.tool.startsWith('ui_')) continue;
+      final id = 'ctx_${_uuid.v4().substring(0, 8)}';
+      _history.add({
+        'role': 'assistant',
+        'content': '',
+        'tool_calls': [
+          {'id': id, 'name': r.tool, 'arguments': const <String, Object?>{}},
+        ],
+      });
+      _history.add({'role': 'tool', 'tool_call_id': id, 'content': AssistantToolGuard.encodeForModel(r, moneyRefs)});
+    }
   }
 
   /// بلا نموذج: المطابِق المحلي للجولات (ق26).

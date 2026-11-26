@@ -418,7 +418,10 @@ Deno.serve(async (req) => {
         appVersion: input.appVersion,
         questionClean: sanitizeForLog(conv.question, { names, staff }),
         answerClean: final ? sanitizeForLog(answer, { names, staff, maxLength: 4000 }) : null,
-        tools: conv.stepTools,
+        // ذ9: في أول خطوة تُذكر الأدوات التي نتائجها من رسائل سابقة، ليعرف الحَكَم مصدر الجواب.
+        tools: input.step === 0
+          ? [...conv.priorTools.slice(0, 8).map((name) => ({ name, ok: true, prior: true })), ...conv.stepTools]
+          : conv.stepTools,
         usage,
         costMicroUsd: cost,
         latencyMs: Date.now() - startedAt,

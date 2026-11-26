@@ -14,7 +14,7 @@ export type TurnForJudge = {
   route_id: string | null;
   question_clean: string;
   answer_clean: string | null;
-  tools: { name: string; ok: boolean; rows?: number }[] | null;
+  tools: { name: string; ok: boolean; rows?: number; prior?: boolean }[] | null;
   finish: string | null;
   s_user_corrected?: boolean | null;
   user_correction?: string | null;
@@ -98,12 +98,14 @@ export function judgeMessages(t: TurnForJudge): Record<string, unknown>[] {
       { role: 'user', content: user },
     ];
   }
-  const tools = (t.tools ?? []).map((x) => `${x.name}:${x.ok ? 'ok' : 'fail'}${x.rows != null ? `(${x.rows})` : ''}`);
+  const tools = (t.tools ?? []).filter((x) => !x.prior).map((x) => `${x.name}:${x.ok ? 'ok' : 'fail'}${x.rows != null ? `(${x.rows})` : ''}`);
+  const prior = (t.tools ?? []).filter((x) => x.prior).map((x) => x.name);
   const user = [
     `المستخدم: ${t.is_owner ? 'المالك' : `موظف (${t.role_key || 'staff'})`}`,
     `الشاشة: ${t.route_id ?? 'غير معروفة'}`,
     `السؤال: ${t.question_clean}`,
     `الأدوات: ${tools.length ? tools.join('، ') : 'لا شيء'}`,
+    prior.length ? `نتائج أدوات من رسائل سابقة في المحادثة نفسها (مصدر مشروع للجواب): ${prior.join('، ')}` : '',
     `الجواب: ${t.answer_clean ?? '(لا جواب)'}`,
     t.finish && t.finish !== 'stop' ? `انتهى بـ: ${t.finish}` : '',
     t.user_correction ? `تصحيح المستخدم: ${t.user_correction}` : '',

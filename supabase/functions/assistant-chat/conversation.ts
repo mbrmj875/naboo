@@ -3,7 +3,8 @@
  */
 import type { TurnToolLog } from '../_shared/assistant_meter.ts';
 
-export const MAX_HISTORY = 24;
+// ذ1: نتائج البطاقات صارت تُحفظ في السياق، فالحد يتسع لنحو 8 أسئلة معها.
+export const MAX_HISTORY = 40;
 export const MAX_TOOL_RESULT_CHARS = 6000;
 export const MAX_TOOLS_PER_STEP = 3;
 export const MAX_USER_CHARS = 2000;
@@ -18,6 +19,8 @@ export type CleanConversation = {
   hasImage: boolean;
   /** نتائج الأدوات التي أُرسلت في هذه الخطوة (رد على خطوة سابقة). */
   stepTools: TurnToolLog[];
+  /** ذ9: أسماء الأدوات التي نتائجها في رسائل سابقة من المحادثة (قبل السؤال الحالي). */
+  priorTools: string[];
   toolResults: unknown[];
 };
 
@@ -88,7 +91,7 @@ export function cleanConversation(raw: unknown, allowImages: boolean): CleanConv
     }
   }
 
-  // القص: آخر 24 رسالة، تبدأ برسالة مستخدم.
+  // القص: آخر MAX_HISTORY رسالة، تبدأ برسالة مستخدم.
   let start = Math.max(0, out.length - MAX_HISTORY);
   while (start < out.length && out[start].role !== 'user') start++;
   const kept = out.slice(start);
@@ -113,10 +116,15 @@ export function cleanConversation(raw: unknown, allowImages: boolean): CleanConv
     }
   }
   const stepTools: TurnToolLog[] = [];
+  const priorTools: string[] = [];
   const toolResults: unknown[] = [];
   for (let i = 0; i < kept.length; i++) {
     const m = kept[i];
     if (m.role !== 'tool') continue;
+    if (i < lastUser) {
+      const n = callNames.get(String(m.tool_call_id));
+      if (n && !n.startsWith('ui_') && !priorTools.includes(n)) priorTools.push(n);
+    }
     let parsed: InMsg | null = null;
     try {
       parsed = JSON.parse(String(m.content).replace(/…\{"truncated":true\}$/, ''));
@@ -132,7 +140,7 @@ export function cleanConversation(raw: unknown, allowImages: boolean): CleanConv
     }
   }
 
-  return { messages: kept, question, hasImage: hasImage && lastUser === kept.length - 1, stepTools, toolResults };
+  return { messages: kept, question, hasImage: hasImage && lastUser === kept.length - 1, stepTools, priorTools, toolResults };
 }
 
 export function parseArgs(s: string): Record<string, unknown> {

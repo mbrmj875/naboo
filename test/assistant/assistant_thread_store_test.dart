@@ -85,9 +85,13 @@ void main() {
     expect(d.display(reply), contains('15,000'));
     expect(reply.results.single.rows.single['sell_price_fils'], 15000000);
     expect(reply.followups, ['وغيره؟']);
-    expect(d.historyForTest.map((m) => m['role']), ['user', 'assistant']);
-    // علامة جديدة لا تصطدم بالمحفوظة.
-    expect(d.moneyRefs.ref(1), '⟦m2⟧');
+    // نتيجة البطاقة ترجع للسياق قبل نص الجواب، حتى يُفهم «هذا» و«الأول» بعد الفتح (ذ1).
+    expect(d.historyForTest.map((m) => m['role']), ['user', 'assistant', 'tool', 'assistant']);
+    expect('${d.historyForTest[2]['content']}', isNot(contains('15000000')), reason: 'المبلغ يبقى علامة');
+    // علامة جديدة لا تصطدم بالمحفوظة (⟦m1⟧ من الجواب، و⟦m2⟧ لنتيجة البطاقة المستعادة).
+    expect(d.moneyRefs.filsOf('⟦m1⟧'), 15000000);
+    expect(d.moneyRefs.filsOf('⟦m2⟧'), 15000000);
+    expect(d.moneyRefs.ref(1), '⟦m3⟧');
 
     d.newThread();
     expect(d.messages, isEmpty);

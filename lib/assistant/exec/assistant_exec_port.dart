@@ -109,6 +109,25 @@ abstract class AssistantExecPort {
   /// ع4: إيقاف منتج (إخفاؤه من البيع والقوائم) بدالة التطبيق نفسها. لا مسح.
   Future<String?> deactivateProduct(int productId);
 
+  /// س3: إرجاع صنف موقوف بدالة التطبيق نفسها.
+  Future<String?> activateProduct(int productId);
+
+  /// س3: الأصناف الموقوفة (للبحث عنها بالاسم قبل إرجاعها).
+  Future<List<Map<String, Object?>>> inactiveProducts();
+
+  /// س2: تعديل حقول الصنف الأساسية بدالة شاشة التعديل (`updateProductBasic`).
+  /// الحقل null يبقى كما هو. الكمية لا تتغير هنا: الكمية بسند فقط.
+  /// المبالغ بالفلس. يرجع null نجاحاً، أو رسالة (مثل الباركود المكرر).
+  Future<String?> editProduct({
+    required int productId,
+    String? name,
+    String? barcode,
+    int? buyFils,
+    int? sellFils,
+    int? minSellFils,
+    double? lowStock,
+  });
+
   /// المخازن الفعّالة بالترتيب، الأول هو الرئيسي.
   Future<List<({int id, String name})>> listWarehouses();
 

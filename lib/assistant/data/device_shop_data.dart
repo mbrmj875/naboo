@@ -54,7 +54,10 @@ class DeviceShopData implements AssistantShopData {
   static final _filterName = RegExp('فلتر|فلاتر|filter', caseSensitive: false);
 
   /// زيت أُدخل كصنف عادي (بلا نوع «لتر» ولا درجة لزوجة): اسمه يبدأ بـ«زيت» أو فيه لزوجة مثل 5W-30.
-  static final _oilName = RegExp(r'^\s*(زيت|دهن)(\s|$)|(^|[^0-9a-z])\d{1,2}\s*w\s*-?\s*\d{2}($|[^0-9])', caseSensitive: false);
+  static final _oilName = RegExp(
+    r'^\s*(زيت|دهن)(\s|$)|(^|[^0-9a-z])\d{1,2}\s*w\s*-?\s*\d{2}($|[^0-9])',
+    caseSensitive: false,
+  );
 
   /// oil | hydraulic | filter | general: من عائلة الصنف أولاً ثم اسمه.
   static String kindOf({required String name, Object? stockBaseKind, Object? familyKind}) {
@@ -145,8 +148,11 @@ class DeviceShopData implements AssistantShopData {
       ''',
       [id],
     );
+    // أدنى سعر بيع للتفاصيل فقط (س2: بطاقة التعديل تعرض قبله وبعده).
+    final ms = await db.query('products', columns: ['minSellPrice'], where: 'id = ?', whereArgs: [id], limit: 1);
     return {
       ...items.first,
+      if (ms.isNotEmpty) 'min_sell_price_fils': _fils(ms.first['minSellPrice']),
       'warehouses': [
         for (final w in wh) {'warehouse': w['warehouse'], 'qty': w['qty']},
       ],

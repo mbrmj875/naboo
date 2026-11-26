@@ -112,6 +112,23 @@ void main() {
     expect(c.messages.last.results.single.rows.single['name'], 'فلتر');
   });
 
+  test('الجواب المحلي يترك بياناته في سياق المحادثة للسؤال التالي (ذ1)', () async {
+    final api = FakeApi((step, req) => const [AssistantTextEvent('تمام'), AssistantDoneEvent(finish: 'stop')]);
+    final low = FakeTool('stock_low', rows: [{'name': 'فلتر'}]);
+    final c = make(api: api, tools: [low]);
+    await c.ask('النواقص');
+    final h = c.historyForTest;
+    final call = h.firstWhere((m) => m['tool_calls'] != null);
+    final id = ((call['tool_calls'] as List).single as Map)['id'];
+    final res = h.firstWhere((m) => m['role'] == 'tool' && m['tool_call_id'] == id);
+    expect('${res['content']}', contains('فلتر'));
+    expect(h.last['role'], 'assistant');
+    await c.ask('الأول منهم شكد سعره وشنو آخر مرة اشتريناه ومن ياهو المورد');
+    final sent = api.requests.single.messages;
+    expect(sent.any((m) => m['role'] == 'tool' && '${m['content']}'.contains('فلتر')), isTrue,
+        reason: 'النموذج يرى نتيجة الجواب المحلي');
+  });
+
   test('فتح شاشة محلياً عبر فعل الواجهة', () async {
     final actions = <AssistantUiAction>[];
     final c = make(api: FakeApi((_, __) => const []), onUi: actions.add);

@@ -428,6 +428,109 @@ class DeviceExecPort implements AssistantExecPort {
   }
 
   @override
+  Future<String?> activateProduct(int productId) async {
+    try {
+      final db = await _db.database;
+      final rows = await db.query(
+        'products',
+        columns: ['id'],
+        where: 'id = ? AND isActive = 0 AND tenantId = ?',
+        whereArgs: [productId, await _tenant()],
+        limit: 1,
+      );
+      if (rows.isEmpty) return 'الصنف ما موجود أو شغّال من قبل.';
+      // دالة «إرجاع» الصنف نفسها: تُزامن ولا تمس كميته أو سجلاته.
+      await ProductRepository().activateProduct(productId);
+      return null;
+    } catch (e) {
+      return 'ما گدرت أرجّع الصنف: $e';
+    }
+  }
+
+  @override
+  Future<List<Map<String, Object?>>> inactiveProducts() async {
+    final db = await _db.database;
+    final rows = await db.query(
+      'products',
+      columns: ['id', 'name', 'barcode', 'qty'],
+      where: 'isActive = 0 AND tenantId = ?',
+      whereArgs: [await _tenant()],
+      orderBy: 'updatedAt DESC',
+      limit: 300,
+    );
+    return [
+      for (final r in rows)
+        {
+          'id': (r['id'] as num).toInt(),
+          'name': '${r['name'] ?? ''}',
+          'barcode': r['barcode'],
+          'qty': (r['qty'] as num?)?.toDouble() ?? 0,
+        },
+    ];
+  }
+
+  @override
+  Future<String?> editProduct({
+    required int productId,
+    String? name,
+    String? barcode,
+    int? buyFils,
+    int? sellFils,
+    int? minSellFils,
+    double? lowStock,
+  }) async {
+    final db = await _db.database;
+    final rows = await db.query(
+      'products',
+      columns: [
+        'name',
+        'barcode',
+        'buyPrice',
+        'sellPrice',
+        'minSellPrice',
+        'qty',
+        'lowStockThreshold',
+        'trackInventory',
+        'stockBaseKind',
+      ],
+      where: 'id = ? AND isActive = 1 AND tenantId = ?',
+      whereArgs: [productId, await _tenant()],
+      limit: 1,
+    );
+    if (rows.isEmpty) return 'الصنف ما موجود أو موقوف.';
+    final r = rows.first;
+    double cur(String k) => (r[k] as num?)?.toDouble() ?? 0;
+    final sell = sellFils == null ? cur('sellPrice') : sellFils / 1000.0;
+    final minSell = minSellFils == null
+        ? cur('minSellPrice')
+        : minSellFils / 1000.0;
+    if (minSell > sell) return 'أدنى سعر بيع أكبر من سعر البيع.';
+    final newName = (name ?? '${r['name'] ?? ''}').trim();
+    if (newName.isEmpty) return 'الاسم ما يصير فارغ.';
+    try {
+      // دالة شاشة تعديل الصنف نفسها: تفحص الباركود المكرر، وتسجّل تغيير السعر
+      // للمالك، وتزامن. الكمية تُمرَّر كما هي.
+      await ProductRepository().updateProductBasic(
+        productId: productId,
+        name: newName,
+        barcode: barcode ?? r['barcode'] as String?,
+        buyPrice: buyFils == null ? cur('buyPrice') : buyFils / 1000.0,
+        sellPrice: sell,
+        minSellPrice: minSell,
+        qty: cur('qty'),
+        lowStockThreshold: lowStock ?? cur('lowStockThreshold'),
+        trackInventory: ((r['trackInventory'] as num?)?.toInt() ?? 1) == 1,
+        stockBaseKind: (r['stockBaseKind'] as num?)?.toInt(),
+      );
+      return null;
+    } catch (e) {
+      if ('$e'.contains('duplicate_barcode'))
+        return 'الباركود مستعمل لصنف ثاني.';
+      return 'ما گدرت أعدّل الصنف: $e';
+    }
+  }
+
+  @override
   Future<List<({int id, String name})>> listWarehouses() async {
     final wh = await _db.listWarehousesActive(tenantId: await _tenant());
     return [

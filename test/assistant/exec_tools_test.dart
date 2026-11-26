@@ -10,6 +10,7 @@ import 'package:naboo/assistant/exec/assistant_prefill.dart';
 import 'package:naboo/assistant/exec/assistant_reminders.dart';
 import 'package:naboo/assistant/tools/exec_tools.dart';
 import 'package:naboo/assistant/ui/assistant_card_mapper.dart';
+import 'package:naboo/assistant/ui/assistant_card_mapper_b4.dart';
 import 'package:naboo/assistant/ui/assistant_review_screen.dart';
 import 'package:naboo/assistant/ui/assistant_view_models.dart';
 import 'package:naboo/services/permission_service.dart';
@@ -78,6 +79,38 @@ class FakeExecPort implements AssistantExecPort {
 
   @override
   Future<List<({int id, String name})>> listWarehouses() async => warehouses;
+
+  List<Map<String, Object?>> inactive = [
+    {'id': 9, 'name': 'زيت كاسترول 20W-50', 'qty': 2.0},
+    {'id': 10, 'name': 'زيت كاسترول 10W-40', 'qty': 0.0},
+  ];
+
+  @override
+  Future<String?> activateProduct(int productId) async {
+    calls.add('activate:$productId');
+    return applyError;
+  }
+
+  @override
+  Future<List<Map<String, Object?>>> inactiveProducts() async => inactive;
+
+  @override
+  Future<String?> editProduct({
+    required int productId,
+    String? name,
+    String? barcode,
+    int? buyFils,
+    int? sellFils,
+    int? minSellFils,
+    double? lowStock,
+  }) async {
+    calls.add(
+      'edit:$productId${name == null ? '' : ':name=$name'}${barcode == null ? '' : ':bc=$barcode'}'
+      '${sellFils == null ? '' : ':sell=$sellFils'}${minSellFils == null ? '' : ':min=$minSellFils'}'
+      '${buyFils == null ? '' : ':buy=$buyFils'}${lowStock == null ? '' : ':low=$lowStock'}',
+    );
+    return applyError;
+  }
 
   @override
   Future<String?> transferStock({
@@ -363,10 +396,19 @@ void main() {
 
   test('ع4: النقل يفهم اسم المخزن، ويسأل عنه وحده إن لم يُعرف (ع7)', () async {
     final perms = staff({PermissionKeys.inventoryVoucherTransfer});
-    final ask = await reg.execute('propose_stock_transfer', {'product_id': '3', 'qty': 4, 'to_warehouse': 'السطح'}, perms);
-    expect(ask.rows.single['ask_warehouse'], 'to');
+    final ask = await reg.execute('propose_stock_transfer', {
+      'product_id': '3',
+      'qty': 4,
+      'to_warehouse': 'السطح',
+    }, perms);
+    expect(ask.rows.single['ask_warehouse'], isTrue);
+    expect(ask.rows.single['which'], 'to');
     expect(ask.extra.containsKey('action_id'), isFalse);
-    final r = await reg.execute('propose_stock_transfer', {'product_id': '3', 'qty': 4, 'to_warehouse': 'الخلفي'}, perms);
+    final r = await reg.execute('propose_stock_transfer', {
+      'product_id': '3',
+      'qty': 4,
+      'to_warehouse': 'الخلفي',
+    }, perms);
     expect(r.extra['from'], 'الرئيسي');
     expect(r.extra['to'], 'المخزن الخلفي');
     expect(r.extra['from_before'], 10);
@@ -398,5 +440,147 @@ void main() {
     expect(none.rows.single['no_debt'], isTrue);
     final denied = await reg.execute('propose_debt_payment', {'customer': 'ابو علي', 'amount': 1000}, staff({}));
     expect(denied.ok, isFalse);
+  });
+
+  test('ذ3: «سدد نصها» يُحسب على الهاتف من الدين بكسر، والنموذج لا يرى الرقم', () async {
+    final perms = staff({PermissionKeys.debtsPanel});
+    final half = await reg.execute('propose_debt_payment', {'customer': 'ابو علي', 'fraction': 0.5}, perms);
+    expect(half.extra['pay_fils'], 25000000);
+    expect(half.extra['debt_after_fils'], 25000000);
+    final third = await reg.execute('propose_debt_payment', {'customer': 'ابو علي', 'fraction': 1 / 3}, perms);
+    expect((third.extra['pay_fils'] as int) % 1000, 0, reason: 'يُقرَّب لأقرب دينار');
+    final both = await reg.execute('propose_debt_payment', {'customer': 'ابو علي', 'amount': 1000, 'fraction': 0.5}, perms);
+    expect(both.extra['pay_fils'], 1000000, reason: 'المبلغ الصريح يغلب');
+    final bad = await reg.execute('propose_debt_payment', {'customer': 'ابو علي', 'fraction': 2}, perms);
+    expect(bad.ok, isFalse);
+  });
+
+  group('المسار الموحّد والسيطرة الكاملة (5.ث-12 و)', () {
+    final manage = {PermissionKeys.inventoryProductsManage};
+
+    test('س2: التعديل يرسل ما تغيّر فقط، بقبل وبعد، ولا شيء قبل التأكيد', () async {
+      final r = await reg.execute('propose_product_edit', {
+        'product_id': '1',
+        'sell_price': 15000,
+        'low_stock': 8,
+        'name': 'زيت توتال 5W-30 تخليقي',
+      }, owner);
+      expect(r.ok, isTrue);
+      final changes = (r.extra['changes'] as List).cast<Map>();
+      expect([for (final c in changes) c['field']], ['sell_fils', 'low_stock'], reason: 'الاسم نفسه لا يُعدّ تغييراً');
+      expect(changes.first['before'], 14000000);
+      expect(changes.first['after'], 15000000);
+      expect(port.calls, isEmpty);
+      final card = AssistantCardMapper.fromResult(r) as AssistantConfirmCard;
+      expect(card.changes.length, 2);
+      await AssistantActions.run(actionOf(r));
+      expect(port.calls, ['edit:1:sell=15000000:low=8.0']);
+    });
+
+    test('س2: الصنف بالاسم، والتشابه سؤال واحد بأزرار (ع7)', () async {
+      final byName = await reg.execute('propose_product_edit', {'product': 'شل 10W-40', 'sell_price': 9500}, owner);
+      expect(byName.extra['action_id'], isNotNull);
+      final ask = await reg.execute('propose_product_edit', {'product': 'فلتر زيت', 'sell_price': 5500}, owner);
+      expect(ask.rows.single['ask_product'], isTrue);
+      expect(ask.extra['ambiguous'], isTrue);
+      expect(AssistantCardMapperB4.choicesFrom([ask]), containsAll(['فلتر زيت كورولا', 'فلتر زيت النترا']));
+      expect(port.calls, isEmpty);
+    });
+
+    test('س2: الباركود المكرر وأدنى سعر فوق البيع يرجعان سبباً بلا بطاقة', () async {
+      final bc = await reg.execute('propose_product_edit', {'product_id': '1', 'barcode': '6281000000017'}, owner);
+      expect(bc.rows.single['barcode_taken'], isTrue);
+      expect(bc.extra.containsKey('action_id'), isFalse);
+      final min = await reg.execute('propose_product_edit', {'product_id': '1', 'min_sell_price': 20000}, owner);
+      expect(min.rows.single['min_above_sell'], isTrue);
+      final none = await reg.execute('propose_product_edit', {'product_id': '1'}, owner);
+      expect(none.rows.single['ask_field'], isTrue);
+    });
+
+    test('س2: سعر الشراء القديم لا يصل من لا يملك المالي، والتعديل يحتاج إدارة الأصناف', () async {
+      final r = await reg.execute('propose_product_edit', {'product_id': '1', 'buy_price': 10500}, staff(manage));
+      expect(r.extra.containsKey('buy_before_fils'), isFalse);
+      expect(r.rows.single.containsKey('buy_before_fils'), isFalse);
+      final denied = await reg.execute('propose_product_edit', {'product_id': '1', 'sell_price': 1}, staff({}));
+      expect(denied.ok, isFalse);
+    });
+
+    test('س3: الإرجاع من الموقوفة فقط، بالاسم، وتراجعه إيقاف', () async {
+      final r = await reg.execute('propose_product_reactivate', {'product': 'كاسترول 20W-50'}, staff(manage));
+      expect(r.extra['product'], 'زيت كاسترول 20W-50');
+      await AssistantActions.run(actionOf(r));
+      expect(port.calls, ['activate:9']);
+      await AssistantActions.undo(actionOf(r));
+      expect(port.calls.last, 'deactivate:9');
+      final ask = await reg.execute('propose_product_reactivate', {'product': 'كاسترول'}, staff(manage));
+      expect(ask.rows.single['ask_product'], isTrue);
+      port.inactive = [];
+      final none = await reg.execute('propose_product_reactivate', {'product': 'x'}, staff(manage));
+      expect(none.rows.single['none_inactive'], isTrue);
+    });
+
+    test('ع11: التراجع عملية عكسية بدالة التطبيق، مرة واحدة، ويُسجَّل', () async {
+      final price = await reg.execute('propose_price_change', {'product_id': '1', 'new_sell_price': 16000}, owner);
+      expect(AssistantActions.of(actionOf(price)).canUndo, isFalse, reason: 'لا تراجع قبل التنفيذ');
+      await AssistantActions.run(actionOf(price));
+      expect(await AssistantActions.undo(actionOf(price)), isNull);
+      expect(port.calls, ['price:1:16000000', 'price:1:14000000']);
+      expect(AssistantActions.of(actionOf(price)).state.value, AssistantActionState.undone);
+      expect(saved, ['propose_price_change:t1', 'undo:propose_price_change:t1']);
+      expect(await AssistantActions.undo(actionOf(price)), isNotNull, reason: 'لا تراجع مرتين');
+      await AssistantActions.run(actionOf(price));
+      expect(port.calls.length, 2, reason: 'المُرجَع لا يُنفَّذ ثانية');
+    });
+
+    test('ع11: سند الكمية والنقل يُرجعان بسند معاكس، والتسديد بلا تراجع', () async {
+      final perms = staff({
+        PermissionKeys.inventoryVoucherIn,
+        PermissionKeys.inventoryVoucherOut,
+        PermissionKeys.inventoryVoucherTransfer,
+        PermissionKeys.debtsPanel,
+      });
+      final adj = await reg.execute('propose_stock_adjust', {'product_id': '3', 'delta': 5, 'reason': 'وصل'}, perms);
+      await AssistantActions.run(actionOf(adj));
+      await AssistantActions.undo(actionOf(adj));
+      expect(port.lastMoves!.single.delta, -5);
+      final tr = await reg.execute('propose_stock_transfer', {
+        'product_id': '3',
+        'qty': 2,
+        'to_warehouse': 'الخلفي',
+      }, perms);
+      await AssistantActions.run(actionOf(tr));
+      await AssistantActions.undo(actionOf(tr));
+      expect(port.calls.sublist(port.calls.length - 2), ['transfer:3:2.0:1>2', 'transfer:3:2.0:2>1']);
+      final debt = await reg.execute('propose_debt_payment', {'customer': 'ابو علي', 'amount': 1000}, perms);
+      await AssistantActions.run(actionOf(debt));
+      expect(AssistantActions.of(actionOf(debt)).canUndo, isFalse);
+    });
+
+    test('ع11: «ارجع آخر عملية» يختار آخر ما نُفّذ ويقبل التأكيد فقط', () async {
+      final nothing = await reg.execute('undo_last_action', {}, owner);
+      expect(nothing.rows.single['nothing_to_undo'], isTrue);
+      final a = await reg.execute('propose_product_deactivate', {'product_id': '3'}, owner);
+      await AssistantActions.run(actionOf(a));
+      final p = await reg.execute('propose_price_change', {'product_id': '2', 'new_sell_price': 15500}, owner);
+      await AssistantActions.run(actionOf(p));
+      final u = await reg.execute('undo_last_action', {}, owner);
+      expect(u.extra['undo'], contains('تغيير سعر'));
+      expect(port.calls.last, 'price:2:15500000', reason: 'لا شيء قبل التأكيد');
+      await AssistantActions.run(actionOf(u));
+      expect(port.calls.last, 'price:2:15000000');
+      final u2 = await reg.execute('undo_last_action', {}, owner);
+      expect(u2.extra['undo'], contains('إيقاف'));
+    });
+
+    test('ع7: النقل والدين يسألان بأزرار', () async {
+      final perms = staff({PermissionKeys.inventoryVoucherTransfer});
+      final ask = await reg.execute('propose_stock_transfer', {
+        'product_id': '3',
+        'qty': 1,
+        'to_warehouse': 'zz',
+      }, perms);
+      expect(ask.rows.single['ask_warehouse'], isTrue);
+      expect(AssistantCardMapperB4.choicesFrom([ask]), ['الرئيسي', 'المخزن الخلفي']);
+    });
   });
 }
