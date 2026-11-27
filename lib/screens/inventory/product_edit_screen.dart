@@ -628,7 +628,6 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
       final buy = _parseMoney(_buy);
       final sell = _parseMoney(_sell);
       final minSell = _parseMoney(_minSell);
-      final qty = _multiVariantEnabled ? 0.0 : _parseMoney(_qty);
       final low = _multiVariantEnabled ? 0.0 : _parseMoney(_low);
       await _repo.updateProductBasic(
         productId: widget.productId,

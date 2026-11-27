@@ -364,7 +364,6 @@ class _QuickProductUpdateScreenState extends State<QuickProductUpdateScreen> {
     final buy = NumericFormat.parseNumber(d.buy.text);
     final sell = NumericFormat.parseNumber(d.sell.text);
     final minSell = NumericFormat.parseNumber(d.minSell.text);
-    final qty = NumericFormat.parseNumber(d.qty.text);
     final low = NumericFormat.parseNumber(d.low.text);
     final bcUpper = d.barcode.text.trim().toUpperCase();
     if (d.duplicateBarcodeProductId != null) {
