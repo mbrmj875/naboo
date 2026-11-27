@@ -45,11 +45,13 @@ final class OilChangeFluidInventoryEditor extends VerticalFluidInventoryEditor {
     required bool isOilFamily,
     required List<Object> grades,
     required VoidCallback onChanged,
+    String? qtyLabel,
   }) {
     return OilViscosityEditor(
       mode: _mode(isOilFamily: isOilFamily),
       grades: _castGrades(grades),
       onChanged: onChanged,
+      qtyLabel: qtyLabel,
     );
   }
 

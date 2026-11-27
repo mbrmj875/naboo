@@ -10,6 +10,8 @@ import '../../../providers/auth_provider.dart';
 import '../../../services/database_helper.dart';
 import '../../../services/oil_product_grades_repository.dart';
 import '../../../services/stock/purchase_list_repository.dart';
+import '../../../services/stock/purchase_product_draft.dart';
+import '../add_product_screen.dart';
 import '../../../services/stock/stock_engine.dart';
 import '../../../theme/app_spacing.dart';
 import '../../../theme/design_tokens.dart';
@@ -564,6 +566,29 @@ class _PurchaseListScreenState extends State<PurchaseListScreen> {
   Future<void> _addItem({PurchaseLine? edit}) async {
     final l = _list;
     if (l == null || !l.isDraft) return;
+    final d = edit?.productDraft;
+    if (edit != null && d != null) {
+      // سطر صنف جديد كُتب في «إضافة منتج»: يُعاد فتحها بما فيه.
+      final replace = d.isFluid
+          ? [
+              for (final x in _lines)
+                if (x.productId == null &&
+                    x.isFluid &&
+                    x.familyKey == edit.familyKey)
+                  x.globalId,
+            ]
+          : [edit.globalId];
+      final another = await openPurchaseProductScreen(
+        context,
+        list: l,
+        existing: _lines,
+        draft: d,
+        replace: replace,
+      );
+      await _load();
+      if (another == true && mounted) await _addItem();
+      return;
+    }
     // «حفظ وإضافة صنف آخر» يرجع true: نحدّث الجدول ونفتح صفحة فارغة،
     // فيرى صاحب المحل كل سطر حفظه حين يرجع للقائمة.
     var another = await Navigator.of(context).push<bool>(
@@ -1068,6 +1093,75 @@ class _GradeRow {
   }
 }
 
+/// يفتح شاشة «إضافة منتج» الكاملة لصنف جديد في القائمة. الشاشة لا تنشئ
+/// المنتج: ترجع مسودة تُحفظ أسطراً بشارة «جديد»، ويُنشأ المنتج عند الاستلام.
+/// [replace] أسطر المسودة نفسها عند تعديلها. يعيد null إن أُلغيت الشاشة، وإلا
+/// true إن طلب صاحب المحل «حفظ وإضافة صنف آخر».
+Future<bool?> openPurchaseProductScreen(
+  BuildContext context, {
+  required PurchaseList list,
+  required List<PurchaseLine> existing,
+  int stockType = 0,
+  String? name,
+  PurchaseProductDraft? draft,
+  List<String> replace = const [],
+}) async {
+  final res = await Navigator.of(context)
+      .push<({PurchaseProductDraft draft, bool another})>(
+    MaterialPageRoute(
+      builder: (_) => AddProductScreen(
+        forPurchase: true,
+        purchaseDraft: draft,
+        purchaseStockType: stockType,
+        purchaseName: name,
+      ),
+    ),
+  );
+  if (res == null || !context.mounted) return null;
+  final lines = res.draft.toLines();
+  if (lines.isEmpty) return null;
+  var toRemove = [...replace];
+  // عائلة جديدة بالاسم نفسه سبق أن كُتبت في القائمة: يُسأل قبل استبدالها.
+  final others = existing.where(
+    (l) =>
+        l.productId == null &&
+        !replace.contains(l.globalId) &&
+        (res.draft.isFluid
+            ? l.isFluid && l.familyKey == lines.first.familyKey
+            : !l.isFluid &&
+                  l.name.trim().toLowerCase() ==
+                      lines.first.name.trim().toLowerCase()),
+  );
+  if (others.isNotEmpty) {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('موجود في القائمة'),
+        content: Text(
+          '«${res.draft.isFluid ? res.draft.familyName : lines.first.name}» '
+          'جديد في القائمة من قبل. تستبدل سطره القديم بما كتبته الآن؟',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('استبدال'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return null;
+    toRemove = [...toRemove, ...others.map((l) => l.globalId)];
+  }
+  final repo = PurchaseListRepository.instance;
+  if (toRemove.isNotEmpty) await repo.deleteLines(list.globalId, toRemove);
+  await repo.saveLines(list.globalId, lines);
+  return res.another;
+}
+
 class PurchaseLineEditorScreen extends StatefulWidget {
   const PurchaseLineEditorScreen({
     super.key,
@@ -1351,10 +1445,22 @@ class _PurchaseLineEditorScreenState extends State<PurchaseLineEditorScreen> {
     if (mounted) setState(() => _mode = _Mode.family);
   }
 
-  void _newProduct() => _fillProduct(name: _search.text.trim());
+  // صنف جديد أو عائلة جديدة: شاشة «إضافة منتج» الكاملة (طلب صاحب المحل).
+  Future<void> _newProduct() => _openFull(0);
 
-  void _newFamily(int kind) {
-    _openFamily(name: _search.text.trim(), kind: kind);
+  Future<void> _newFamily(int kind) =>
+      _openFull(kind == ProductVariantKind.oilFamily ? 5 : 4);
+
+  Future<void> _openFull(int stockType) async {
+    final another = await openPurchaseProductScreen(
+      context,
+      list: widget.list,
+      existing: widget.existing,
+      stockType: stockType,
+      name: _search.text.trim(),
+    );
+    if (another == null || !mounted) return;
+    Navigator.of(context).pop(another);
   }
 
   Future<bool> _save() async {

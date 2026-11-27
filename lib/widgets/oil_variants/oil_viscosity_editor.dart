@@ -13,11 +13,15 @@ class OilViscosityEditor extends StatelessWidget {
     required this.mode,
     required this.grades,
     required this.onChanged,
+    this.qtyLabel,
   });
 
   final FluidFamilyEditorMode mode;
   final List<OilGradeDraft> grades;
   final VoidCallback onChanged;
+
+  /// عنوان خانة الكمية بدل «رصيد افتتاحي (لتر)».
+  final String? qtyLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -68,6 +72,7 @@ class OilViscosityEditor extends StatelessWidget {
                     onChanged();
                   },
             onChanged: onChanged,
+            qtyLabel: qtyLabel,
           ),
       ],
     );
@@ -81,6 +86,7 @@ class _GradeCard extends StatelessWidget {
     required this.grade,
     required this.onChanged,
     this.onRemove,
+    this.qtyLabel,
   });
 
   final FluidFamilyEditorMode mode;
@@ -88,6 +94,7 @@ class _GradeCard extends StatelessWidget {
   final OilGradeDraft grade;
   final VoidCallback onChanged;
   final VoidCallback? onRemove;
+  final String? qtyLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -168,8 +175,8 @@ class _GradeCard extends StatelessWidget {
                     keyboardType: const TextInputType.numberWithOptions(
                       decimal: true,
                     ),
-                    decoration: const InputDecoration(
-                      labelText: 'رصيد افتتاحي (لتر)',
+                    decoration: InputDecoration(
+                      labelText: qtyLabel ?? 'رصيد افتتاحي (لتر)',
                       border: OutlineInputBorder(),
                     ),
                     onChanged: (_) => onChanged(),

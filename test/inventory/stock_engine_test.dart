@@ -5,6 +5,7 @@ import 'package:naboo/models/invoice.dart';
 import 'package:naboo/models/product_variant_kind.dart';
 import 'package:naboo/services/database_helper.dart';
 import 'package:naboo/services/stock/purchase_list_repository.dart';
+import 'package:naboo/services/stock/purchase_product_draft.dart';
 import 'package:naboo/services/stock/stock_actions_repository.dart';
 import 'package:naboo/services/stock/stock_engine.dart';
 import 'package:naboo/services/stock_ledger.dart';
@@ -332,6 +333,98 @@ void main() {
         final b = await bal(g['linkedProductId'] as int);
         expect(b.shop, g['viscosity'] == '0W20' ? 4 : 10);
       }
+    });
+
+    test('صنف من شاشة «إضافة منتج» يُنشأ عند الاستلام بكل حقوله', () async {
+      final sid = await supplier();
+      final l = await lists.createDraft(
+        supplierId: sid,
+        supplierName: 'مورد الاختبار',
+        listDate: DateTime.now(),
+        place: StockPlace.store,
+      );
+      final product = PurchaseProductDraft(
+        kind: PurchaseProductDraft.kindProduct,
+        form: const {'name': 'شمعة NGK'},
+        qty: 12,
+        unitCost: 2500,
+        create: {
+          'name': 'شمعة NGK',
+          'barcode': 'NGK-1',
+          'category_name': 'شمعات',
+          'sell_price': 5000,
+          'low_stock': 4,
+          'stock_base_kind': 0,
+          'track_inventory': true,
+          'extra_units': [
+            {'unit_name': 'كرتونة', 'factor': 10, 'sell': 45000},
+          ],
+        },
+      );
+      final oil = PurchaseProductDraft(
+        kind: PurchaseProductDraft.kindFluid,
+        form: const {'name': 'كاسترول'},
+        isOil: true,
+        familyName: 'كاسترول',
+        brandName: 'Castrol',
+        lowStockThreshold: 8,
+        grades: [
+          {
+            'viscosity': '5W30',
+            'qty': 40,
+            'buy': 7000,
+            'sell': 10000,
+            'packs': [
+              {'unit_name': 'علبة 4 لتر', 'factor': 4, 'sell': 38000},
+            ],
+          },
+          {'viscosity': '10W40', 'qty': 0, 'buy': 6000, 'sell': 9000},
+        ],
+      );
+      await lists.saveLines(l.globalId, [
+        ...product.toLines(),
+        ...oil.toLines(),
+      ]);
+      final saved = await lists.lines(l.globalId);
+      expect(saved, hasLength(2), reason: 'لزوجة بلا كمية لا تدخل القائمة');
+      expect(saved.every((x) => x.productDraft != null), isTrue);
+      final db = await h.database;
+      expect(
+        await db.query('products', where: "name = 'شمعة NGK'"),
+        isEmpty,
+        reason: 'لا يُنشأ شيء قبل الاستلام',
+      );
+
+      final res = await lists.receive(l.globalId, actor: 'المالك');
+      expect(res.ok, isTrue, reason: res.message);
+
+      final p = (await db.query('products', where: "name = 'شمعة NGK'")).single;
+      expect(p['barcode'], 'NGK-1');
+      expect((p['sellPrice'] as num).toDouble(), 5000);
+      expect((p['lowStockThreshold'] as num).toDouble(), 4);
+      final cat = await db.query('categories',
+          where: 'id = ?', whereArgs: [p['categoryId']]);
+      expect(cat.single['name'], 'شمعات');
+      final units = await db.query('product_unit_variants',
+          where: 'productId = ? AND unitName = ?',
+          whereArgs: [p['id'], 'كرتونة']);
+      expect(units, hasLength(1));
+      final b = await bal(p['id'] as int);
+      expect(b.store, 12);
+      expect(b.avgCost, closeTo(2500, 0.01));
+
+      final parent = await lists.findFamilyByName(
+          'كاسترول', ProductVariantKind.oilFamily);
+      expect(parent, isNotNull);
+      final g = await db.query('product_oil_grades',
+          where: 'parentProductId = ?', whereArgs: [parent]);
+      expect(g.map((x) => x['viscosity']), ['5W30']);
+      final gid = g.single['linkedProductId'] as int;
+      expect((await bal(gid)).store, 40);
+      final packs = await db.query('product_unit_variants',
+          where: 'productId = ? AND unitName = ?',
+          whereArgs: [gid, 'علبة 4 لتر']);
+      expect(packs, hasLength(1));
     });
 
     test('حذف المسودة لا يترك شيئاً', () async {

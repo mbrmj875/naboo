@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 
@@ -7,6 +9,7 @@ import '../database_helper.dart';
 import '../oil_product_grades_repository.dart';
 import '../product_repository.dart';
 import '../tenant_context_service.dart';
+import 'purchase_product_draft.dart';
 import 'stock_actions_repository.dart';
 import 'stock_engine.dart';
 
@@ -114,6 +117,7 @@ class PurchaseLine {
     this.catalogId,
     this.stockBaseKind = 0,
     this.sortOrder = 0,
+    this.draft,
   }) : globalId = globalId ?? const Uuid().v4();
 
   final String globalId;
@@ -136,6 +140,20 @@ class PurchaseLine {
   /// 0 قطعة | 1 كغم | 3 لتر
   int stockBaseKind;
   int sortOrder;
+
+  /// صنف جديد كُتب في شاشة «إضافة منتج» (JSON من [PurchaseProductDraft]).
+  /// يُنشأ المنتج منه عند الاستلام، لا قبل.
+  String? draft;
+
+  PurchaseProductDraft? get productDraft {
+    final raw = draft;
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      return PurchaseProductDraft.fromJson(jsonDecode(raw));
+    } catch (_) {
+      return null;
+    }
+  }
 
   bool get isFluid => familyKind != ProductVariantKind.none;
   double get lineTotal => double.parse((qty * unitCost).toStringAsFixed(2));
@@ -166,6 +184,7 @@ class PurchaseLine {
     'family_kind': familyKind,
     'catalog_id': catalogId,
     'stock_base_kind': stockBaseKind,
+    'product_draft': draft,
     'updatedAt': DateTime.now().toUtc().toIso8601String(),
   };
 
@@ -185,6 +204,7 @@ class PurchaseLine {
     catalogId: (r['catalog_id'] as num?)?.toInt(),
     stockBaseKind: (r['stock_base_kind'] as num?)?.toInt() ?? 0,
     sortOrder: (r['sort_order'] as num?)?.toInt() ?? 0,
+    draft: r['product_draft']?.toString(),
   );
 }
 
@@ -273,6 +293,7 @@ class PurchaseListRepository {
         family_kind INTEGER NOT NULL DEFAULT 0,
         catalog_id INTEGER,
         stock_base_kind INTEGER NOT NULL DEFAULT 0,
+        product_draft TEXT,
         updatedAt TEXT NOT NULL
       )
     ''');
@@ -280,6 +301,12 @@ class PurchaseListRepository {
       'CREATE INDEX IF NOT EXISTS idx_purchase_list_lines_list '
       'ON $linesTable(list_global_id, sort_order)',
     );
+    final cols = (await db.rawQuery('PRAGMA table_info($linesTable)'))
+        .map((r) => r['name'].toString())
+        .toSet();
+    if (!cols.contains('product_draft')) {
+      await db.execute('ALTER TABLE $linesTable ADD COLUMN product_draft TEXT');
+    }
   }
 
   Future<Database> _open() async {
@@ -683,6 +710,12 @@ class PurchaseListRepository {
 
     // أصناف عادية جديدة.
     for (final l in items.where((x) => !x.isFluid && x.productId == null)) {
+      // صنف كُتب في شاشة «إضافة منتج»: يُنشأ بكل حقولها.
+      final d = l.productDraft;
+      if (d != null && !d.isFluid) {
+        await setProduct(l, await d.createProduct(unitCost: l.unitCost));
+        continue;
+      }
       final id = await products.insertProductComplete(
         name: l.name.trim(),
         barcode: (l.barcode ?? '').trim().isEmpty ? null : l.barcode!.trim(),
@@ -706,6 +739,21 @@ class PurchaseListRepository {
       var parentId =
           first.familyParentId ??
           await findFamilyByName(first.familyName ?? '', first.familyKind);
+      // عائلة كُتبت في شاشة «إضافة منتج»: عبوات كل لزوجة وفئتها وماركتها.
+      final fd = group
+          .map((l) => l.productDraft)
+          .whereType<PurchaseProductDraft>()
+          .where((d) => d.isFluid)
+          .firstOrNull;
+      Map<String, dynamic>? gradeOf(PurchaseLine l) {
+        final v = (l.viscosity ?? '').trim().toLowerCase();
+        return fd?.grades
+            .where(
+              (g) => (g['viscosity'] ?? '').toString().trim().toLowerCase() == v,
+            )
+            .firstOrNull;
+      }
+
       final inputs = [
         for (final l in group)
           OilGradeInput(
@@ -713,14 +761,29 @@ class PurchaseListRepository {
             openingQtyLiters: 0,
             buyPrice: l.unitCost,
             sellPrice: l.sellPrice ?? 0,
+            minSellPrice: (gradeOf(l)?['min_sell'] as num?)?.toDouble(),
             barcode: (l.barcode ?? '').trim().isEmpty ? null : l.barcode,
+            packs: gradeOf(l) == null
+                ? const []
+                : PurchaseProductDraft.packsOf(gradeOf(l)!),
           ),
       ];
       if (parentId == null) {
+        int? categoryId;
+        int? brandId;
+        if ((fd?.categoryName ?? '').trim().isNotEmpty) {
+          categoryId = await products.getOrCreateCategoryId(fd!.categoryName!);
+        }
+        if ((fd?.brandName ?? '').trim().isNotEmpty) {
+          brandId = await products.getOrCreateBrandId(fd!.brandName!);
+        }
         parentId = await grades.createFluidFamily(
           variantKind: first.familyKind,
           familyName: (first.familyName ?? first.name).trim(),
           grades: inputs,
+          categoryId: categoryId,
+          brandId: brandId,
+          lowStockThreshold: fd?.lowStockThreshold ?? 0,
         );
         final snaps = await grades.loadGradeSnapshotsForParent(parentId);
         await setFamily(group, parentId);
