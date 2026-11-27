@@ -364,7 +364,12 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
     _sell.text = dnum(p['sellPrice']).toStringAsFixed(0);
     _minSell.text = dnum(p['minSellPrice']).toStringAsFixed(0);
     // الكمية كما هي بكسورها وسالبها (ع-4)، والحقل للعرض فقط (ق-8).
-    _qty.text = StockQtyFormat.format(dnum(p['qty']));
+    // مع المخزن يظهر المكانان، فلا يبدو الصنف «صفراً» وهو في المخزن.
+    final shopQty = dnum(p['qty']);
+    final storeQty = dnum(p['store_qty']);
+    _qty.text = storeQty.abs() > 1e-9
+        ? 'المحل ${StockQtyFormat.format(shopQty)} · المخزن ${StockQtyFormat.format(storeQty)}'
+        : StockQtyFormat.format(shopQty);
     _low.text = dnum(p['lowStockThreshold']).toStringAsFixed(0);
     _track = ((p['trackInventory'] as num?)?.toInt() ?? 1) == 1;
     _stockBaseKind = (p['stockBaseKind'] as num?)?.toInt() ?? 0;
@@ -1762,7 +1767,7 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
                               children: [
                                 Expanded(
                                   child: _field(
-                                    label: 'الكمية (للعرض)',
+                                    label: 'الرصيد (للعرض)',
                                     controller: _qty,
                                     hint: '0',
                                     keyboard: TextInputType.number,

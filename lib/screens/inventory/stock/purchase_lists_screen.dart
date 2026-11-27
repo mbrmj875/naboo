@@ -564,8 +564,10 @@ class _PurchaseListScreenState extends State<PurchaseListScreen> {
   Future<void> _addItem({PurchaseLine? edit}) async {
     final l = _list;
     if (l == null || !l.isDraft) return;
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(
+    // «حفظ وإضافة صنف آخر» يرجع true: نحدّث الجدول ونفتح صفحة فارغة،
+    // فيرى صاحب المحل كل سطر حفظه حين يرجع للقائمة.
+    var another = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
         builder: (_) => PurchaseLineEditorScreen(
           list: l,
           existing: _lines,
@@ -575,6 +577,14 @@ class _PurchaseListScreenState extends State<PurchaseListScreen> {
       ),
     );
     await _load();
+    while (another == true && mounted) {
+      another = await Navigator.of(context).push<bool>(
+        MaterialPageRoute<bool>(
+          builder: (_) => PurchaseLineEditorScreen(list: l, existing: _lines),
+        ),
+      );
+      await _load();
+    }
   }
 
   Future<void> _lineMenu(PurchaseLine line) async {
@@ -698,7 +708,7 @@ class _PurchaseListScreenState extends State<PurchaseListScreen> {
           context: context,
           title: l == null
               ? 'قائمة مشتريات'
-              : '${l.supplierName} · ${_date(l.listDate)}',
+              : (l.supplierName.trim().isEmpty ? 'قائمة مشتريات' : l.supplierName),
           actions: [
             if (l != null) Center(child: _StatusChip(l)),
             if (l?.isDraft ?? false)
@@ -993,7 +1003,7 @@ class _TotalsBox extends StatelessWidget {
         children: [
           Expanded(
             child: Text(
-              '${lines.length} سطر',
+              '${_date(list.listDate)} · ${lines.length} سطر',
               style: TextStyle(
                 color: OilChangeFormTheme.secondaryText(context),
               ),
@@ -1442,17 +1452,7 @@ class _PurchaseLineEditorScreenState extends State<PurchaseLineEditorScreen> {
   }
 
   Future<void> _saveAndAnother() async {
-    if (!await _save()) return;
-    final lines = await _repo.lines(widget.list.globalId);
-    if (!mounted) return;
-    unawaited(
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute<void>(
-          builder: (_) =>
-              PurchaseLineEditorScreen(list: widget.list, existing: lines),
-        ),
-      ),
-    );
+    if (await _save() && mounted) Navigator.of(context).pop(true);
   }
 
   @override
@@ -1661,7 +1661,7 @@ class _PurchaseLineEditorScreenState extends State<PurchaseLineEditorScreen> {
               inputFormatters: [IraqiCurrencyFormat.moneyInputFormatter()],
               decoration: OilChangeFormTheme.field(
                 context: context,
-                labelText: 'سعر الشراء / $unit',
+                labelText: 'الشراء / $unit',
               ),
             ),
           ),
@@ -1673,7 +1673,7 @@ class _PurchaseLineEditorScreenState extends State<PurchaseLineEditorScreen> {
               inputFormatters: [IraqiCurrencyFormat.moneyInputFormatter()],
               decoration: OilChangeFormTheme.field(
                 context: context,
-                labelText: 'سعر البيع / $unit',
+                labelText: 'البيع / $unit',
               ),
             ),
           ),
@@ -1755,7 +1755,7 @@ class _PurchaseLineEditorScreenState extends State<PurchaseLineEditorScreen> {
                       ),
                       decoration: OilChangeFormTheme.field(
                         context: context,
-                        labelText: 'الكمية المشتراة (لتر)',
+                        labelText: 'لترات',
                         isDense: true,
                       ),
                     ),
@@ -1770,7 +1770,7 @@ class _PurchaseLineEditorScreenState extends State<PurchaseLineEditorScreen> {
                       ],
                       decoration: OilChangeFormTheme.field(
                         context: context,
-                        labelText: 'سعر الشراء / لتر',
+                        labelText: 'شراء/لتر',
                         helperText: g.avgCost == null || g.avgCost! <= 0
                             ? null
                             : 'المتوسط ${IraqiCurrencyFormat.formatInt(g.avgCost!)}',
@@ -1788,7 +1788,7 @@ class _PurchaseLineEditorScreenState extends State<PurchaseLineEditorScreen> {
                       ],
                       decoration: OilChangeFormTheme.field(
                         context: context,
-                        labelText: 'البيع / لتر',
+                        labelText: 'بيع/لتر',
                         isDense: true,
                       ),
                     ),

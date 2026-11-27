@@ -434,42 +434,54 @@ class _Kpis extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final gold = OilChangeFormTheme.goldOf(context);
-    return Wrap(
-      spacing: AppSpacing.sm,
-      runSpacing: AppSpacing.sm,
-      children: [
-        for (final (label, value, color) in items)
-          ConstrainedBox(
-            constraints: const BoxConstraints(minWidth: 150),
-            child: Container(
-              padding: const EdgeInsets.all(AppSpacing.md),
-              decoration: OilChangeFormTheme.fieldContainerDecoration(context),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    label,
-                    style: TextStyle(
-                      color: gold,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                    ),
+    // عمودان متساويان (ثلاثة على الشاشة العريضة)، فلا تتفاوت البطاقات.
+    return LayoutBuilder(
+      builder: (context, c) {
+        final cols = c.maxWidth >= 640 ? 3 : 2;
+        final w = (c.maxWidth - AppSpacing.sm * (cols - 1)) / cols;
+        return Wrap(
+          spacing: AppSpacing.sm,
+          runSpacing: AppSpacing.sm,
+          children: [
+            for (final (label, value, color) in items)
+              SizedBox(
+                width: w,
+                child: Container(
+                  padding: const EdgeInsets.all(AppSpacing.md),
+                  decoration: OilChangeFormTheme.fieldContainerDecoration(
+                    context,
                   ),
-                  const SizedBox(height: AppSpacing.xs),
-                  Text(
-                    value,
-                    style: TextStyle(
-                      fontSize: 17,
-                      fontWeight: FontWeight.w900,
-                      color: color ?? OilChangeFormTheme.emphasisText(context),
-                    ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        label,
+                        style: TextStyle(
+                          color: gold,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: AppSpacing.xs),
+                      Text(
+                        value,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w900,
+                          color:
+                              color ?? OilChangeFormTheme.emphasisText(context),
+                        ),
+                      ),
+                    ],
                   ),
-                ],
+                ),
               ),
-            ),
-          ),
-      ],
+          ],
+        );
+      },
     );
   }
 }
@@ -557,7 +569,13 @@ class _Section extends StatelessWidget {
                       for (var i = 0; i < headers.length; i++)
                         Expanded(
                           flex: i == 0 ? 3 : 2,
-                          child: Text(headers[i], style: head),
+                          child: Text(
+                            headers[i],
+                            style: head,
+                            textAlign: i == 0
+                                ? TextAlign.start
+                                : TextAlign.center,
+                          ),
                         ),
                     ],
                   ),
@@ -588,16 +606,24 @@ class _Section extends StatelessWidget {
                           for (var i = 0; i < rows[r].cells.length; i++)
                             Expanded(
                               flex: i == 0 ? 3 : 2,
-                              child: Text(
-                                rows[r].cells[i],
-                                style: TextStyle(
-                                  fontSize: 12.5,
-                                  fontWeight: i == 0
-                                      ? FontWeight.w600
-                                      : FontWeight.w500,
-                                  color: i == 0
-                                      ? text
-                                      : (rows[r].color ?? text),
+                              child: Padding(
+                                padding: EdgeInsetsDirectional.only(
+                                  end: i == 0 ? AppSpacing.sm : 0,
+                                ),
+                                child: Text(
+                                  rows[r].cells[i],
+                                  textAlign: i == 0
+                                      ? TextAlign.start
+                                      : TextAlign.center,
+                                  style: TextStyle(
+                                    fontSize: 12.5,
+                                    fontWeight: i == 0
+                                        ? FontWeight.w600
+                                        : FontWeight.w500,
+                                    color: i == 0
+                                        ? text
+                                        : (rows[r].color ?? text),
+                                  ),
                                 ),
                               ),
                             ),

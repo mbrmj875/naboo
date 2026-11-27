@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import '../../providers/global_barcode_route_bridge.dart';
 import '../../widgets/product_media_image.dart';
 import '../../providers/inventory_products_provider.dart';
+import '../../utils/stock_qty_format.dart';
 import '../../services/product_repository.dart';
 import '../../services/product_variants_repository.dart';
 import '../../theme/design_tokens.dart';
@@ -2097,6 +2098,7 @@ class _ProductCardState extends State<_ProductCard> {
     final isService = ((p['isService'] as num?)?.toInt() ?? 0) == 1;
     final track = ((p['trackInventory'] as num?)?.toInt() ?? 1) != 0;
     final rawQty = ((p['qty'] as num?)?.toDouble() ?? 0);
+    final storeQty = ((p['storeQty'] as num?)?.toDouble() ?? 0);
     final needsVariantFix = track && id != null && rawQty <= 0;
     final variantSum = (id == null) ? null : _variantSumQty;
     final effectiveQty = needsVariantFix && variantSum != null
@@ -2340,7 +2342,9 @@ class _ProductCardState extends State<_ProductCard> {
                                               ),
                                             )
                                           : Text(
-                                              'الكمية المتاحة: $stock',
+                                              storeQty > 1e-9
+                                                  ? 'الكمية المتاحة: $stock\n(منها في المخزن ${StockQtyFormat.format(storeQty)})'
+                                                  : 'الكمية المتاحة: $stock',
                                               maxLines: 2,
                                               overflow: TextOverflow.ellipsis,
                                               textAlign: TextAlign.center,

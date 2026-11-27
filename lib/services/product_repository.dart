@@ -543,7 +543,8 @@ class ProductRepository {
     final where = <String>['p.tenantId = ?'];
     final args = <Object?>[tid];
 
-    const effQtyExpr = 'COALESCE(v.sumQty, p.qty)';
+    // الرصيد = المحل + المخزن (خطة المخزون، ع-13): صنف في المخزن ليس «نفد».
+    const effQtyExpr = '(COALESCE(v.sumQty, p.qty) + IFNULL(p.store_qty, 0))';
 
     void addStatusAndActive() {
       switch (statusArabic) {
@@ -646,6 +647,7 @@ class ProductRepository {
         p.sellPrice AS sell,
         p.buyPrice AS buy,
         $effQtyExpr AS qty,
+        IFNULL(p.store_qty, 0) AS storeQty,
         p.status,
         p.isActive AS isActive,
         p.lowStockThreshold AS lowStockThreshold,
@@ -685,7 +687,8 @@ class ProductRepository {
     final where = <String>['p.tenantId = ?'];
     final args = <Object?>[tid];
 
-    const effQtyExpr = 'COALESCE(v.sumQty, p.qty)';
+    // الرصيد = المحل + المخزن (خطة المخزون، ع-13): صنف في المخزن ليس «نفد».
+    const effQtyExpr = '(COALESCE(v.sumQty, p.qty) + IFNULL(p.store_qty, 0))';
 
     void addStatusAndActive() {
       switch (statusArabic) {
