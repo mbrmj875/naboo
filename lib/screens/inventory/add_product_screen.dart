@@ -203,6 +203,10 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
 
   bool get _isDark => Theme.of(context).brightness == Brightness.dark;
 
+  /// الوزن والتواريخ وتنبيه الصلاحية: مع «الحقول الإضافية» وإعدادها الخاص.
+  bool get _showDatesWeight =>
+      _uiSettings.addShowExtraFields && _uiSettings.addShowDatesWeight;
+
   VerticalFluidInventoryEditor? get _fluidInventoryEditor =>
       VerticalRegistry.instance
           .manifestFor(BusinessVertical.oilChange)
@@ -800,6 +804,7 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
                 'buy': g.buyCtrl.text,
                 'sell': g.sellCtrl.text,
                 'barcode': g.barcodeCtrl.text,
+                'low': g.lowCtrl.text,
                 'packs': [
                   for (final pk in g.packs)
                     {
@@ -842,6 +847,7 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
           qtyLiters: t(raw['qty']),
           buy: t(raw['buy']),
           sell: t(raw['sell']),
+          low: t(raw['low']).isEmpty ? '0' : t(raw['low']),
         );
         gd.barcodeCtrl.text = t(raw['barcode']);
         for (final pk in (raw['packs'] as List? ?? const [])) {
@@ -945,6 +951,7 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
               'sell': g.sellPrice,
               'min_sell': g.minSellPrice,
               'barcode': g.barcode,
+              'low_stock': g.lowStockThreshold,
               'packs': [
                 for (final pk in g.packs) PurchaseProductDraft.packToJson(pk),
               ],
@@ -964,6 +971,7 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
       if (!mounted) return;
       final adv = _uiSettings.addShowAdvancedPricing;
       final extra = _uiSettings.addShowExtraFields;
+      final dates = _showDatesWeight;
       draft = PurchaseProductDraft(
         kind: PurchaseProductDraft.kindProduct,
         form: _purchaseFormSnapshot(),
@@ -998,10 +1006,10 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
               : _supplierCodeCtrl.text.trim(),
           'stock_base_kind': _stockBaseKind,
           'supplier_name': supplier.isEmpty ? null : supplier,
-          'net_weight_grams': extra ? netWeightGrams : null,
+          'net_weight_grams': dates ? netWeightGrams : null,
           'manufacturing_date':
-              extra ? _isoFromDateField(_mfgDateCtrl.text) : null,
-          'expiry_date': extra ? _isoFromDateField(_expDateCtrl.text) : null,
+              dates ? _isoFromDateField(_mfgDateCtrl.text) : null,
+          'expiry_date': dates ? _isoFromDateField(_expDateCtrl.text) : null,
           'grade': _policy.enableProductGrade ? _grade : null,
           'expiry_alert_days': expiryAlertDaysBefore,
           'extra_units': [
@@ -1548,7 +1556,7 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
 
     final mfgD = _parseDateField(_mfgDateCtrl.text);
     final expD = _parseDateField(_expDateCtrl.text);
-    if (_uiSettings.addShowExtraFields) {
+    if (_showDatesWeight) {
       if (_mfgDateCtrl.text.trim().isNotEmpty && mfgD == null) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -1593,7 +1601,7 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
         : double.tryParse(nwText.replaceAll(',', '.'));
 
     int? expiryAlertDaysBefore;
-    if (_uiSettings.addShowExtraFields && expD != null) {
+    if (_showDatesWeight && expD != null) {
       final parsed = int.tryParse(_expiryAlertDaysCtrl.text.trim());
       if (parsed != null && parsed >= 1 && parsed <= 365) {
         expiryAlertDaysBefore = parsed;
@@ -1885,11 +1893,11 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
               : _supplierCodeCtrl.text.trim(),
           stockBaseKind: _stockBaseKind,
           supplierName: supplier.isEmpty ? null : supplier,
-          netWeightGrams: _uiSettings.addShowExtraFields ? netWeightGrams : null,
-          manufacturingDate: _uiSettings.addShowExtraFields
+          netWeightGrams: _showDatesWeight ? netWeightGrams : null,
+          manufacturingDate: _showDatesWeight
               ? _isoFromDateField(_mfgDateCtrl.text)
               : null,
-          expiryDate: _uiSettings.addShowExtraFields
+          expiryDate: _showDatesWeight
               ? _isoFromDateField(_expDateCtrl.text)
               : null,
           grade: _policy.enableProductGrade ? _grade : null,
@@ -1975,12 +1983,12 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
               : _supplierCodeCtrl.text.trim(),
           stockBaseKind: _stockBaseKind,
           supplierName: supplier.isEmpty ? null : supplier,
-          netWeightGrams: _uiSettings.addShowExtraFields ? netWeightGrams : null,
-          manufacturingDate: _uiSettings.addShowExtraFields
+          netWeightGrams: _showDatesWeight ? netWeightGrams : null,
+          manufacturingDate: _showDatesWeight
               ? _isoFromDateField(_mfgDateCtrl.text)
               : null,
           expiryDate: _pharmacySession!.suggestedExpiryIso() ??
-              (_uiSettings.addShowExtraFields
+              (_showDatesWeight
                   ? _isoFromDateField(_expDateCtrl.text)
                   : null),
           grade: _policy.enableProductGrade ? _grade : null,
@@ -2027,11 +2035,11 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
               : _supplierCodeCtrl.text.trim(),
           stockBaseKind: _stockBaseKind,
           supplierName: supplier.isEmpty ? null : supplier,
-          netWeightGrams: _uiSettings.addShowExtraFields ? netWeightGrams : null,
-          manufacturingDate: _uiSettings.addShowExtraFields
+          netWeightGrams: _showDatesWeight ? netWeightGrams : null,
+          manufacturingDate: _showDatesWeight
               ? _isoFromDateField(_mfgDateCtrl.text)
               : null,
-          expiryDate: _uiSettings.addShowExtraFields
+          expiryDate: _showDatesWeight
               ? _isoFromDateField(_expDateCtrl.text)
               : null,
           grade: _policy.enableProductGrade ? _grade : null,
@@ -4765,32 +4773,63 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
     final showQtyLow =
         _trackInventory && !_multiVariantEnabled && !_isFluidFamilyUi;
     final showExtra = _uiSettings.addShowExtraFields;
-    final handsetSixGrid = isHandset && showQtyLow && showExtra;
+    final showDates = _showDatesWeight;
+    final handsetSixGrid = isHandset && showQtyLow && showDates;
     return _sectionCard(
       context,
       title: 'إدارة المخزون',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          GuideAnchor(
-            id: OilGuideAnchors.productFormTrackInventory,
-            child: SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text(
-                'تتبع المخزون',
-                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+          if (_isFluidFamilyUi)
+            // الزيوت والهيدروليك تُباع باللتر من الرصيد: التتبع دائماً مشغّل،
+            // وحدّ التنبيه في بطاقة كل لزوجة.
+            Row(
+              children: [
+                const Icon(
+                  Icons.inventory_2_outlined,
+                  size: 18,
+                  color: AppColors.accentGold,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'التتبع مشغّل دائماً لكل لزوجة. حدّ تنبيه النقص تكتبه في بطاقة كل لزوجة.',
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      height: 1.35,
+                      color: cs.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ],
+            )
+          else
+            GuideAnchor(
+              id: OilGuideAnchors.productFormTrackInventory,
+              child: SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text(
+                  'تتبع المخزون',
+                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                ),
+                subtitle: Text(
+                  _trackInventory
+                      ? 'مشغّل: تُسجَّل كميات هذا المنتج وتنبيه نقصه'
+                      : 'مطفأ: لا تُسجَّل كميات لهذا المنتج',
+                  style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+                ),
+                value: _trackInventory,
+                // مشغّل: دائرة بيضاء على مسار ذهبي؛ مطفأ: مسار فاتح بحدّ.
+                activeThumbColor: Colors.white,
+                activeTrackColor: AppColors.accentGold,
+                inactiveThumbColor: cs.outline,
+                inactiveTrackColor: cs.surfaceContainerHighest,
+                onChanged: _multiVariantEnabled
+                    ? null
+                    : (v) => setState(() => _trackInventory = v),
               ),
-              subtitle: Text(
-                'عند الإيقاف لا تُسجَّل كميات لهذا المنتج',
-                style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
-              ),
-              value: _trackInventory,
-              activeThumbColor: cs.primary,
-              onChanged: _multiVariantEnabled
-                  ? null
-                  : (v) => setState(() => _trackInventory = v),
             ),
-          ),
           if (showQtyLow && !handsetSixGrid) ...[
             const SizedBox(height: 8),
             LayoutBuilder(
@@ -4875,7 +4914,7 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
             ),
           ],
           if (showExtra) ...[
-            if (!handsetSixGrid) ...[
+            if (!handsetSixGrid && showDates) ...[
               const SizedBox(height: 12),
               _labeledField(
                 context,

@@ -504,6 +504,7 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
         qtyLiters: g.openingQtyLiters.toString(),
         buy: IraqiCurrencyFormat.formatInt(g.buyPrice),
         sell: IraqiCurrencyFormat.formatInt(g.sellPrice),
+        low: _fmtLow(g.lowStockThreshold),
         gradeRowId: s.gradeRowId,
         linkedProductId: s.linkedProductId,
       );
@@ -1874,3 +1875,8 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
   }
 }
 
+/// حدّ تنبيه لزوجة للعرض: 20 لا 20.0.
+String _fmtLow(double? v) {
+  final x = v ?? 0;
+  return x == x.roundToDouble() ? x.toInt().toString() : x.toString();
+}

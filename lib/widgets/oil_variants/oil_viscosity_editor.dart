@@ -227,6 +227,20 @@ class _GradeCard extends StatelessWidget {
                 ),
               ],
             ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: grade.lowCtrl,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
+              decoration: const InputDecoration(
+                labelText: 'نبّهني تحت (لتر)',
+                helperText: 'تنبيه نقص لهذه اللزوجة فقط. صفر = بلا تنبيه.',
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.notifications_active_outlined),
+              ),
+              onChanged: (_) => onChanged(),
+            ),
             const SizedBox(height: 12),
             Text(
               labels.packsForGradeTitle,
@@ -424,6 +438,10 @@ List<OilGradeInput> oilGradesFromDrafts(List<OilGradeDraft> drafts) {
             ? null
             : g.barcodeCtrl.text.trim(),
         packs: packs,
+        lowStockThreshold:
+            (double.tryParse(g.lowCtrl.text.trim().replaceAll(',', '.')) ?? 0)
+                .clamp(0, double.infinity)
+                .toDouble(),
       ),
     );
   }

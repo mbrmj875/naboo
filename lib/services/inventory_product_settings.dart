@@ -1,4 +1,7 @@
 import 'app_settings_repository.dart';
+import 'business_setup_settings.dart';
+import 'store_tax_settings.dart';
+import '../verticals/_contract/vertical_registry.dart';
 import 'tenant_context_service.dart';
 
 /// مفاتيح إعدادات المنتجات والمخزون (جدول [app_settings]).
@@ -55,6 +58,10 @@ abstract class InventoryProductSettingsKeys {
   static const addRequireImage = 'inv.add_product.require_image';
   static const addDefaultTrackInventory =
       'inv.add_product.default_track_inventory';
+
+  /// الوزن وتاريخ الإنتاج والانتهاء وتنبيه الصلاحية في «إضافة منتج».
+  /// بلا قيمة محفوظة: مخفية في محل الزيت، ظاهرة في غيره.
+  static const addShowDatesWeight = 'inv.add_product.show_dates_weight';
 }
 
 /// قيم محمّلة من التخزين مع افتراضات آمنة.
@@ -98,6 +105,7 @@ class InventoryProductSettingsData {
     required this.addRequireWarehouse,
     required this.addRequireImage,
     required this.addDefaultTrackInventory,
+    this.addShowDatesWeight = true,
   });
 
   final String nextSkuText;
@@ -160,7 +168,17 @@ class InventoryProductSettingsData {
   final bool addRequireImage;
   final bool addDefaultTrackInventory;
 
-  static InventoryProductSettingsData fromRaw(Map<String, String?> raw) {
+  /// الوزن والتواريخ وتنبيه الصلاحية (مع [addShowExtraFields]).
+  final bool addShowDatesWeight;
+
+  /// افتراض [addShowDatesWeight] للتخصص: مخفية في محل الزيت.
+  static bool datesWeightDefaultFor(String verticalId) =>
+      verticalId != BusinessVertical.oilChange;
+
+  static InventoryProductSettingsData fromRaw(
+    Map<String, String?> raw, {
+    bool datesWeightDefault = true,
+  }) {
     String g(String k, String d) => raw[k] ?? d;
     bool b(String k, bool d) => (raw[k] ?? (d ? '1' : '0')) == '1';
 
@@ -279,6 +297,10 @@ class InventoryProductSettingsData {
         InventoryProductSettingsKeys.addDefaultTrackInventory,
         true,
       ),
+      addShowDatesWeight: b(
+        InventoryProductSettingsKeys.addShowDatesWeight,
+        datesWeightDefault,
+      ),
     );
   }
 
@@ -324,13 +346,19 @@ class InventoryProductSettingsData {
       InventoryProductSettingsKeys.addRequireWarehouse,
       InventoryProductSettingsKeys.addRequireImage,
       InventoryProductSettingsKeys.addDefaultTrackInventory,
+      InventoryProductSettingsKeys.addShowDatesWeight,
     ];
     final raw = <String, String?>{};
     final tenantId = TenantContextService.instance.activeTenantId;
     for (final k in keys) {
       raw[k] = await repo.getForTenant(k, tenantId: tenantId);
     }
-    return fromRaw(raw);
+    // حقل الضريبة يتبع مفتاح «تفعيل الضريبة» للمحل كله.
+    final datesDefault = datesWeightDefaultFor(
+      VerticalRegistry.instance.activeVerticalId,
+    );
+    return fromRaw(raw, datesWeightDefault: datesDefault)
+        .copyWith(addShowTaxField: await StoreTaxSettings.load());
   }
 
   Future<void> save(AppSettingsRepository repo) async {
@@ -414,10 +442,9 @@ class InventoryProductSettingsData {
       InventoryProductSettingsKeys.addShowAdvancedPricing,
       addShowAdvancedPricing ? '1' : '0',
     );
-    await s(
-      InventoryProductSettingsKeys.addShowTaxField,
-      addShowTaxField ? '1' : '0',
-    );
+    if (addShowTaxField != StoreTaxSettings.enabled.value) {
+      await StoreTaxSettings.set(addShowTaxField);
+    }
     await s(
       InventoryProductSettingsKeys.addShowDiscountFields,
       addShowDiscountFields ? '1' : '0',
@@ -453,6 +480,10 @@ class InventoryProductSettingsData {
     await s(
       InventoryProductSettingsKeys.addDefaultTrackInventory,
       addDefaultTrackInventory ? '1' : '0',
+    );
+    await s(
+      InventoryProductSettingsKeys.addShowDatesWeight,
+      addShowDatesWeight ? '1' : '0',
     );
   }
 
@@ -497,6 +528,7 @@ class InventoryProductSettingsData {
     bool? addRequireWarehouse,
     bool? addRequireImage,
     bool? addDefaultTrackInventory,
+    bool? addShowDatesWeight,
   }) {
     return InventoryProductSettingsData(
       nextSkuText: nextSkuText ?? this.nextSkuText,
@@ -549,6 +581,7 @@ class InventoryProductSettingsData {
       addRequireImage: addRequireImage ?? this.addRequireImage,
       addDefaultTrackInventory:
           addDefaultTrackInventory ?? this.addDefaultTrackInventory,
+      addShowDatesWeight: addShowDatesWeight ?? this.addShowDatesWeight,
     );
   }
 }

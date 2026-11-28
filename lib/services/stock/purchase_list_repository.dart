@@ -766,6 +766,7 @@ class PurchaseListRepository {
             packs: gradeOf(l) == null
                 ? const []
                 : PurchaseProductDraft.packsOf(gradeOf(l)!),
+            lowStockThreshold: (gradeOf(l)?['low_stock'] as num?)?.toDouble(),
           ),
       ];
       if (parentId == null) {

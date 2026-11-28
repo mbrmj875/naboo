@@ -417,7 +417,7 @@ class OilProductGradesRepository {
         sellPrice: g.sellPrice,
         minSellPrice: g.minSellPrice,
         qty: g.openingQtyLiters < 0 ? 0 : g.openingQtyLiters,
-        lowStockThreshold: lowStockThreshold,
+        lowStockThreshold: g.lowStockThreshold ?? lowStockThreshold,
         trackInventory: 1,
         stockBaseKind: 3,
         variantKind: ProductVariantKind.none,
@@ -460,7 +460,14 @@ class OilProductGradesRepository {
       final db = await _dbHelper.database;
       final prodRows = await db.query(
         'products',
-        columns: ['buyPrice', 'sellPrice', 'minSellPrice', 'qty', 'barcode'],
+        columns: [
+          'buyPrice',
+          'sellPrice',
+          'minSellPrice',
+          'qty',
+          'barcode',
+          'lowStockThreshold',
+        ],
         where: _aliveProductWhere,
         whereArgs: [linkedId, tid],
         limit: 1,
@@ -508,6 +515,8 @@ class OilProductGradesRepository {
                 ? null
                 : (pr['barcode'] ?? '').toString(),
             packs: packs,
+            lowStockThreshold:
+                (pr['lowStockThreshold'] as num?)?.toDouble() ?? 0,
           ),
         ),
       );
@@ -601,7 +610,7 @@ class OilProductGradesRepository {
           minSellPrice: g.minSellPrice ?? g.buyPrice,
           // تعديل العائلة لا يغيّر رصيد لزوجة موجودة (ع-4، ق-8).
           qty: null,
-          lowStockThreshold: lowStockThreshold,
+          lowStockThreshold: g.lowStockThreshold ?? lowStockThreshold,
           trackInventory: true,
           stockBaseKind: 3,
         );
@@ -632,7 +641,7 @@ class OilProductGradesRepository {
           sellPrice: g.sellPrice,
           minSellPrice: g.minSellPrice,
           qty: g.openingQtyLiters < 0 ? 0 : g.openingQtyLiters,
-          lowStockThreshold: lowStockThreshold,
+          lowStockThreshold: g.lowStockThreshold ?? lowStockThreshold,
           trackInventory: 1,
           stockBaseKind: 3,
           variantKind: ProductVariantKind.none,
@@ -679,7 +688,6 @@ class OilProductGradesRepository {
     required List<NewProductExtraUnit> extraUnits,
   }) async {
     final db = await _dbHelper.database;
-    final now = DateTime.now().toIso8601String();
     final rows = await db.query(
       'product_unit_variants',
       where: 'productId = ? AND isActive = 1',
@@ -699,9 +707,10 @@ class OilProductGradesRepository {
           minSellPrice: minSellPerLiter,
         );
       } else {
+        // جدول الوحدات بلا عمود updatedAt: كتابته كانت توقف تعديل العائلة.
         await db.update(
           'product_unit_variants',
-          {'isActive': 0, 'updatedAt': now},
+          {'isActive': 0},
           where: 'id = ?',
           whereArgs: [id],
         );

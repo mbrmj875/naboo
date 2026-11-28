@@ -34,9 +34,11 @@ class OilGradeDraft {
     String qtyLiters = '0',
     String buy = '0',
     String sell = '0',
+    String low = '0',
     this.gradeRowId,
     this.linkedProductId,
   })  : viscosityCtrl = TextEditingController(text: viscosity),
+        lowCtrl = TextEditingController(text: low),
         qtyCtrl = TextEditingController(text: qtyLiters),
         buyCtrl = TextEditingController(text: buy),
         sellCtrl = TextEditingController(text: sell),
@@ -54,6 +56,9 @@ class OilGradeDraft {
   final TextEditingController buyCtrl;
   final TextEditingController sellCtrl;
   final TextEditingController barcodeCtrl;
+
+  /// حدّ تنبيه النقص لهذه اللزوجة باللتر (0 = بلا تنبيه).
+  final TextEditingController lowCtrl;
   final List<OilGradePackDraft> packs;
 
   void dispose() {
@@ -62,6 +67,7 @@ class OilGradeDraft {
     buyCtrl.dispose();
     sellCtrl.dispose();
     barcodeCtrl.dispose();
+    lowCtrl.dispose();
     for (final p in packs) {
       p.dispose();
     }

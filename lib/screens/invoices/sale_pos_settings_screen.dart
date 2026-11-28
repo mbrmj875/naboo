@@ -249,8 +249,9 @@ class SalePosSettingsScreen extends StatelessWidget {
                 ),
                 const Divider(height: 1),
                 _PolicySwitch(
-                  title: 'حقل الضريبة',
-                  subtitle: 'عند الإيقاف يُثبَّت الضريبة على 0 ويُخفى الحقل.',
+                  title: 'تفعيل الضريبة',
+                  subtitle:
+                      'للمحل كله: عند الإيقاف تختفي حقول الضريبة من كل الشاشات وتُثبَّت على 0.',
                   value: d.enableTaxOnSale,
                   onChanged: (v) {
                     if (v == null) return;

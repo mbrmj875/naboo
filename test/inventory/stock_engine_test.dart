@@ -374,6 +374,7 @@ void main() {
             'qty': 40,
             'buy': 7000,
             'sell': 10000,
+            'low_stock': 20,
             'packs': [
               {'unit_name': 'علبة 4 لتر', 'factor': 4, 'sell': 38000},
             ],
@@ -421,6 +422,10 @@ void main() {
       expect(g.map((x) => x['viscosity']), ['5W30']);
       final gid = g.single['linkedProductId'] as int;
       expect((await bal(gid)).store, 40);
+      final gp = (await db.query('products', where: 'id = ?', whereArgs: [gid]))
+          .single;
+      expect((gp['lowStockThreshold'] as num).toDouble(), 20,
+          reason: 'حدّ اللزوجة يغلب حدّ العائلة');
       final packs = await db.query('product_unit_variants',
           where: 'productId = ? AND unitName = ?',
           whereArgs: [gid, 'علبة 4 لتر']);

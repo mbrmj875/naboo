@@ -67,6 +67,7 @@ import '../installments/add_installment_plan_screen.dart';
 import '../inventory/add_product_screen.dart';
 import '../customers/customer_form_screen.dart';
 import 'process_return_screen.dart';
+import '../../services/store_tax_settings.dart';
 
 class _CartUndoOp {
   const _CartUndoOp({
@@ -1642,6 +1643,8 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
   @override
   void initState() {
     super.initState();
+    // قيمة «تفعيل الضريبة» قد تكون وصلت من جهاز آخر.
+    unawaited(StoreTaxSettings.load());
     _loadClothingSetting();
     _loadDefaultPriceList();
     _loyaltyRedeemController.addListener(() {

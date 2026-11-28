@@ -28,6 +28,7 @@ class OilGradeInput {
     this.minSellPrice,
     this.barcode,
     this.packs = const [],
+    this.lowStockThreshold,
   });
 
   final String viscosity;
@@ -37,4 +38,7 @@ class OilGradeInput {
   final double? minSellPrice;
   final String? barcode;
   final List<OilGradePackInput> packs;
+
+  /// حدّ تنبيه النقص لهذه اللزوجة باللتر؛ null = حدّ العائلة.
+  final double? lowStockThreshold;
 }
