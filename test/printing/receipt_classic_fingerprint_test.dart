@@ -63,7 +63,7 @@ void main() {
     final got = <String, String>{};
     // تاريخ ثابت: النموذج يستعمل «الآن».
     for (final kind in _kinds) {
-      final base = ReceiptBuilders.sample(kind);
+      final base = ReceiptBuilders.sample(kind, now: DateTime(2026, 11, 27, 10, 30));
       final doc = ReceiptDocument(
         kind: base.kind,
         date: DateTime(2026, 11, 27, 10, 30),

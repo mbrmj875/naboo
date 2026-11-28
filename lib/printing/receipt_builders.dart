@@ -657,8 +657,8 @@ abstract final class ReceiptBuilders {
   }
 
   /// إيصال تجريبي لكل نوع، للمعاينة في شاشة الطباعة دون بيانات حقيقية.
-  static ReceiptDocument sample(ReceiptKind kind) {
-    final now = DateTime.now();
+  static ReceiptDocument sample(ReceiptKind kind, {DateTime? now}) {
+    now ??= DateTime.now();
     switch (kind) {
       case ReceiptKind.oilChange:
         return fromInvoice(
