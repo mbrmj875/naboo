@@ -1914,7 +1914,7 @@ class _PurchaseLineEditorScreenState extends State<PurchaseLineEditorScreen> {
       ),
       const SizedBox(height: AppSpacing.sm),
       Text(
-        'عبوات البيع (علبة 4 لتر…) للزوجة الجديدة تُضاف من شاشة الصنف بعد الاستلام.',
+        'عبوات البيع (4 لترات…) للزوجة الجديدة تُضاف من شاشة الصنف بعد الاستلام.',
         style: TextStyle(
           color: OilChangeFormTheme.secondaryText(context),
           fontSize: 12,

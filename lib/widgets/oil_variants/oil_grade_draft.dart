@@ -99,12 +99,12 @@ const kCommonHydraulicGrades = [
   'ATF DEXRON',
 ];
 
-/// قوالب عبوات شائعة (الاسم + معامل لتر).
+/// قوالب عبوات شائعة (الاسم + معامل لتر). اللتر نفسه مضمّن تلقائياً.
 const kOilPackPresets = <({String name, String symbol, String factor})>[
-  (name: 'علبة واحدة', symbol: 'L', factor: '1'),
-  (name: 'علبتين', symbol: '', factor: '2'),
-  (name: 'ثلاث علب', symbol: '', factor: '3'),
-  (name: 'علبة 4 لتر', symbol: 'L', factor: '4'),
-  (name: 'علبة 5 لتر', symbol: 'L', factor: '5'),
+  (name: 'لتران', symbol: 'L', factor: '2'),
+  (name: '3 لترات', symbol: 'L', factor: '3'),
+  (name: '4 لترات', symbol: 'L', factor: '4'),
+  (name: '5 لترات', symbol: 'L', factor: '5'),
   (name: 'كوارت', symbol: 'qt', factor: '0.946'),
 ];
+

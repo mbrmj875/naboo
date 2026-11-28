@@ -1,3 +1,4 @@
+import 'oil_pack_names.dart';
 import '../verticals/oil_change/utils/oil_change_lookup_normalize.dart';
 import '../verticals/oil_change/services/vehicle_registry.dart';
 import 'shared_db_transaction.dart';
@@ -140,6 +141,7 @@ class DatabaseHelper {
     await ensureBusinessAuditEventsTable(db);
     await ensureServiceOrdersReadRepair();
     await ensureOwnerDashboardQueryIndexes(db);
+    await renameLegacyOilPackNames(db);
     await _flushMigrationIssues(db);
   }
 

@@ -6,6 +6,7 @@ import 'package:naboo/services/app_settings_repository.dart';
 import 'package:naboo/services/business_setup_settings.dart';
 import 'package:naboo/services/database_helper.dart';
 import 'package:naboo/services/inventory_product_settings.dart';
+import 'package:naboo/services/oil_pack_names.dart';
 import 'package:naboo/services/oil_product_grades_repository.dart';
 import 'package:naboo/services/store_tax_settings.dart';
 import 'package:naboo/services/tenant_context.dart';
@@ -173,5 +174,43 @@ void main() {
       );
       expect(await lows(), {'5W30': 25, '0W20': 10});
     });
+  });
+
+  test('أسماء العبوات القديمة تصير بصيغة عربية سليمة، والمكتوب باليد لا يُمس',
+      () async {
+    final db = await h.database;
+    final pid = await db.insert('products', {
+      'tenantId': await h.tenantId(),
+      'name': 'زيت تجربة',
+      'qty': 0,
+      'isActive': 1,
+      'stockBaseKind': 3,
+      'createdAt': DateTime.now().toUtc().toIso8601String(),
+    });
+    Future<int> unit(String name, double factor) => db.insert(
+          'product_unit_variants',
+          {
+            'productId': pid,
+            'unitName': name,
+            'factorToBase': factor,
+            'isDefault': 0,
+            'isActive': 1,
+            'createdAt': DateTime.now().toUtc().toIso8601String(),
+          },
+        );
+    final a = await unit('علبتين', 2);
+    final b = await unit('علبة 4 لتر', 4);
+    final c = await unit('علبتين', 3); // اسم كتبه صاحب المحل بمعامل آخر
+    await renameLegacyOilPackNames(db);
+    await renameLegacyOilPackNames(db); // التكرار لا يضر
+    Future<String> name(int id) async => (await db.query(
+          'product_unit_variants',
+          where: 'id = ?',
+          whereArgs: [id],
+        ))
+            .single['unitName'] as String;
+    expect(await name(a), 'لتران');
+    expect(await name(b), '4 لترات');
+    expect(await name(c), 'علبتين');
   });
 }

@@ -1275,18 +1275,33 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
                             ),
                           ],
                           const SizedBox(height: 10),
-                          SwitchListTile.adaptive(
-                            value: _track,
-                            onChanged: _multiVariantEnabled || _isFluidFamilyUi
-                                ? null
-                                : (v) => setState(() => _track = v),
-                            contentPadding: EdgeInsets.zero,
-                            title: const Text('تتبع المخزون', style: TextStyle(fontWeight: FontWeight.w800)),
-                            subtitle: Text(
-                              _track ? 'يحسب الكمية والتنبيه منخفض' : 'الكمية تُصبح 0 ولا تظهر تنبيهات مخزون',
-                              style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
+                          if (_isFluidFamilyUi)
+                            // الزيوت تُباع باللتر من الرصيد: التتبع دائماً مشغّل لكل لزوجة.
+                            Row(
+                              children: [
+                                Icon(Icons.inventory_2_outlined, size: 18, color: cs.primary),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    'التتبع مشغّل دائماً لكل لزوجة. حدّ تنبيه النقص تكتبه في بطاقة كل لزوجة.',
+                                    style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12.5, height: 1.35),
+                                  ),
+                                ),
+                              ],
+                            )
+                          else
+                            SwitchListTile.adaptive(
+                              value: _track,
+                              onChanged: _multiVariantEnabled || _isFluidFamilyUi
+                                  ? null
+                                  : (v) => setState(() => _track = v),
+                              contentPadding: EdgeInsets.zero,
+                              title: const Text('تتبع المخزون', style: TextStyle(fontWeight: FontWeight.w800)),
+                              subtitle: Text(
+                                _track ? 'يحسب الكمية والتنبيه منخفض' : 'الكمية تُصبح 0 ولا تظهر تنبيهات مخزون',
+                                style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
+                              ),
                             ),
-                          ),
                         ],
                       ),
                     ),

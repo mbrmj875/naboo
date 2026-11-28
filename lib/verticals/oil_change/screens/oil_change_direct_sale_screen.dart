@@ -186,13 +186,36 @@ class _OilChangeDirectSaleScreenState extends State<OilChangeDirectSaleScreen> {
     _saleUnits[productId] = const [];
     try {
       final rows = await _repo.listActiveUnitVariantsForProduct(productId);
+      // اللتر وكسوره للزيت والهيدروليك فقط (أساسه لتر). الصنف بالقطعة يُباع
+      // بوحدته الأساسية ووحداته المسجّلة (كرتون…) لا غير.
+      final product = await _repo.getProductById(productId);
+      final isLiter =
+          ((product?['stockBaseKind'] as num?)?.toInt() ?? 0) == 3;
+      String baseLabel = 'لتر';
+      if (!isLiter) {
+        baseLabel = 'قطعة';
+        for (final row in rows) {
+          if (((row['isDefault'] as num?)?.toInt() ?? 0) == 1) {
+            final n = (row['unitName'] ?? '').toString().trim();
+            if (n.isNotEmpty) baseLabel = n;
+            break;
+          }
+        }
+      }
       final units = <_SaleUnit>[
-        _SaleUnit(label: 'لتر', factor: 1, priceFils: literPriceFils),
+        _SaleUnit(
+          label: baseLabel,
+          factor: 1,
+          priceFils: literPriceFils,
+          liter: isLiter,
+        ),
       ];
       for (final row in rows) {
         final name = (row['unitName'] ?? '').toString().trim();
         final factor = (row['factorToBase'] as num?)?.toDouble() ?? 0;
-        if (name.isEmpty || name == 'لتر' || factor <= 0) continue;
+        final isDefault = ((row['isDefault'] as num?)?.toInt() ?? 0) == 1;
+        if (name.isEmpty || factor <= 0) continue;
+        if (isDefault || name == baseLabel || name == 'لتر') continue;
         final sell = (row['sellPrice'] as num?)?.toDouble();
         units.add(
           _SaleUnit(
@@ -1061,6 +1084,7 @@ class _CartPanel extends StatelessWidget {
                                       materialTapTargetSize:
                                           MaterialTapTargetSize.shrinkWrap,
                                     ),
+                                  if (units.first.liter)
                                   ActionChip(
                                     label: Text(
                                       line.unitVariantId == null &&
@@ -1213,12 +1237,16 @@ class _SaleUnit {
     required this.label,
     required this.factor,
     this.priceFils,
+    this.liter = false,
   });
 
   final int? variantId;
   final String label;
   final double factor;
   final int? priceFils;
+
+  /// الوحدة الأساسية لتر: تظهر «كسور لتر».
+  final bool liter;
 }
 
 /// دفع الهاتف: يظهر بعد «إتمام الدفع». النقدي بلا اسم عميل.

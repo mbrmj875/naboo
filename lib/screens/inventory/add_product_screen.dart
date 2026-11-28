@@ -4784,7 +4784,9 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
           if (_isFluidFamilyUi)
             // الزيوت والهيدروليك تُباع باللتر من الرصيد: التتبع دائماً مشغّل،
             // وحدّ التنبيه في بطاقة كل لزوجة.
-            Row(
+            Padding(
+              padding: const EdgeInsetsDirectional.only(bottom: 12),
+              child: Row(
               children: [
                 const Icon(
                   Icons.inventory_2_outlined,
@@ -4803,6 +4805,7 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
                   ),
                 ),
               ],
+              ),
             )
           else
             GuideAnchor(
