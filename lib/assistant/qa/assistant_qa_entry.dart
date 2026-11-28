@@ -12,6 +12,7 @@ import '../../providers/auth_provider.dart';
 import '../../providers/permissions_provider.dart';
 import '../../services/database_helper.dart';
 import '../../services/permission_service.dart';
+import '../../utils/app_logger.dart';
 import '../assistant_rollout.dart';
 import '../assistant_tool_result.dart';
 import '../ui/assistant_controller.dart';
@@ -152,6 +153,11 @@ class AssistantQaEntry {
       return;
     }
     if (package != kQaPackage) return;
+    // نسخة الاختبار وحدها: سجلات التطبيق تصل logcat لتشخيص المزامنة.
+    // ignore: invalid_use_of_visible_for_testing_member
+    AppLogger.debugOverride = true;
+    // ignore: invalid_use_of_visible_for_testing_member, avoid_print
+    AppLogger.sink = (m) => print('NABOO_LOG $m');
     final links = AppLinks();
     _sub = links.uriLinkStream.listen((u) => unawaited(_handle(u, navigatorKey)));
     final initial = await links.getInitialLink();

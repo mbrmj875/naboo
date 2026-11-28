@@ -107,6 +107,7 @@ class WebDeviceRateLimitException implements Exception {
 
 /// يحوّل أخطاء الشبكة/DNS/SQLite الخام إلى رسالة عربية مفهومة للمستخدم.
 String humanizeCloudSyncError(Object error) {
+  AppLogger.warn('CloudSync', 'sync error raw: $error');
   final msg = error.toString().toLowerCase();
   if (msg.contains('socketexception') ||
       msg.contains('failed host lookup') ||
@@ -1699,7 +1700,8 @@ class CloudSyncService {
         pushSucceeded: pushSucceeded,
         errorMessage: lastError.value,
       );
-    } catch (e) {
+    } catch (e, st) {
+      AppLogger.error('CloudSync', 'sync run failed', e, st);
       lastError.value = humanizeCloudSyncError(e);
       return CloudSyncRunResult(
         pullStatus: CloudSyncPullStatus.failed,
@@ -3100,7 +3102,12 @@ class CloudSyncService {
     String table,
   ) async {
     final colsInfo = await db.rawQuery('PRAGMA table_info($table)');
-    final hasId = colsInfo.any((c) => (c['name'] ?? '').toString() == 'id');
+    // التقسيم بالصفحات يحتاج معرّفاً رقمياً؛ جدول معرّفه نص يُقرأ مرة واحدة.
+    final hasId = colsInfo.any(
+      (c) =>
+          (c['name'] ?? '').toString() == 'id' &&
+          (c['type'] ?? '').toString().toUpperCase().contains('INT'),
+    );
     if (!hasId) {
       final rows = await db.query(table);
       return rows
@@ -3121,7 +3128,8 @@ class CloudSyncService {
       if (rows.isEmpty) break;
       for (final r in rows) {
         out.add(r.map((k, v) => MapEntry(k, _normalizeValue(v))));
-        final id = (r['id'] as num?)?.toInt() ?? 0;
+        final raw = r['id'];
+        final id = raw is num ? raw.toInt() : int.tryParse('$raw') ?? 0;
         if (id > afterId) afterId = id;
       }
       if (rows.length < pageSize) break;

@@ -18,6 +18,9 @@ class SyncTables {
     'sync_outbox',
     'sync_outbox_ctl',
     'sync_cursor',
+    // محادثات المساعد خاصة بالجهاز ومستخدمه، ومعرّفها نص لا رقم.
+    'assistant_threads',
+    'assistant_messages',
   };
 
   /// تبقى في النسخة الكاملة، ولا تُلتقط تعديلاتها: سجل أخطاء الترقية خاص
