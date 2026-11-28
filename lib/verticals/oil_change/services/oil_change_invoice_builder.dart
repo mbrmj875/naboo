@@ -1,4 +1,5 @@
 import '../../../models/invoice.dart';
+import '../models/oil_card_wash.dart';
 import '../models/oil_change_filter_kind.dart';
 import '../models/oil_change_service_item.dart';
 import '../../../services/product_repository.dart';
@@ -69,6 +70,8 @@ class OilChangeInvoiceBuilder {
           (i) => IqdMoney.toFils(i.total) > 0 || IqdMoney.toFils(i.price) > 0,
         )
         .toList();
+    // سطر الغسيل يبقى ولو كان مجانياً حتى يظهر في الإيصال.
+    lines.addAll(washItems(order));
 
     if (targetF <= 0) return lines;
 
@@ -98,6 +101,26 @@ class OilChangeInvoiceBuilder {
       _filsLine(
         name: _consolidatedLineName(order),
         fils: targetF,
+      ),
+    ];
+  }
+
+  /// سطور الغسيل داخل البطاقة بمبلغها بعد العرض: سطر لكل نوع إن لم يكن خصم،
+  /// وإلا سطر واحد بالمبلغ وسبب العرض.
+  static List<InvoiceItem> washItems(Map<String, dynamic> order) {
+    final w = OilCardWash.fromOrder(order);
+    if (w == null) return const [];
+    if (w.discountFils <= 0) {
+      return [
+        for (final l in w.lines)
+          _filsLine(name: 'غسيل: ${l.name}', fils: l.priceFils > 0 ? l.priceFils : 0),
+      ];
+    }
+    final note = (w.offerNote ?? '').trim();
+    return [
+      _filsLine(
+        name: note.isEmpty ? w.invoiceLineName : '${w.invoiceLineName} ($note)',
+        fils: w.netFils,
       ),
     ];
   }
@@ -428,6 +451,8 @@ class OilChangeInvoiceBuilder {
       ...await _hydraulicItems(order, prefix: 'powerHydraulic'),
       ..._filterItems(order),
       ...await _retailProductItems(order),
+      // الغسلة سطر مستقل؛ لا تدخل في أجرة الخدمات.
+      ...washItems(order),
     ]);
     final targetF = orderTotalFils(order);
     // الأجرة = المتفق عليه ناقص المواد والمنتجات. إن زادت المواد على المتفق

@@ -10,6 +10,9 @@ enum OilOptionalExtraKind {
   hydraulicGear,
   hydraulicPower,
   services,
+
+  /// الغسيل داخل البطاقة — يظهر فقط إن كان في المحل أنواع غسيل فعّالة.
+  carWash,
 }
 
 extension OilOptionalExtraKindUi on OilOptionalExtraKind {
@@ -24,6 +27,8 @@ extension OilOptionalExtraKindUi on OilOptionalExtraKind {
           OilChangeSettingsKeys.optionalExtrasHydraulicPower,
         OilOptionalExtraKind.services =>
           OilChangeSettingsKeys.optionalExtrasServices,
+        OilOptionalExtraKind.carWash =>
+          OilChangeSettingsKeys.optionalExtrasCarWash,
       };
 
   String get titleAr => switch (this) {
@@ -32,6 +37,7 @@ extension OilOptionalExtraKindUi on OilOptionalExtraKind {
         OilOptionalExtraKind.hydraulicGear => 'هيدروليك الكير في البطاقة',
         OilOptionalExtraKind.hydraulicPower => 'هيدروليك الباور في البطاقة',
         OilOptionalExtraKind.services => 'الخدمات الإضافية في البطاقة',
+        OilOptionalExtraKind.carWash => 'الغسيل في البطاقة',
       };
 
   String get subtitleOn => switch (this) {
@@ -45,6 +51,8 @@ extension OilOptionalExtraKindUi on OilOptionalExtraKind {
           'زر هيدروليك الباور يظهر ضمن إضافات بطاقة الغيار',
         OilOptionalExtraKind.services =>
           'زر الخدمات الإضافية يظهر ضمن إضافات بطاقة الغيار',
+        OilOptionalExtraKind.carWash =>
+          'زر الغسيل يظهر ضمن إضافات بطاقة الغيار، مع عرض «غسلة مع الغيار»',
       };
 
   String get subtitleOff => switch (this) {
@@ -56,6 +64,7 @@ extension OilOptionalExtraKindUi on OilOptionalExtraKind {
           'إخفاء قسم هيدروليك الباور من البطاقة',
         OilOptionalExtraKind.services =>
           'إخفاء قسم الخدمات الإضافية من البطاقة',
+        OilOptionalExtraKind.carWash => 'إخفاء قسم الغسيل من البطاقة',
       };
 
   IconData get icon => switch (this) {
@@ -64,6 +73,7 @@ extension OilOptionalExtraKindUi on OilOptionalExtraKind {
         OilOptionalExtraKind.hydraulicGear => Icons.water_drop_outlined,
         OilOptionalExtraKind.hydraulicPower => Icons.water_drop_outlined,
         OilOptionalExtraKind.services => Icons.checklist_rounded,
+        OilOptionalExtraKind.carWash => Icons.local_car_wash_outlined,
       };
 }
 
@@ -103,6 +113,7 @@ abstract class OilChangeSettingsKeys {
   static const optionalExtrasHydraulicPower =
       'biz.oil.optional_extras.hydraulic_power';
   static const optionalExtrasServices = 'biz.oil.optional_extras.services';
+  static const optionalExtrasCarWash = 'biz.oil.optional_extras.car_wash';
 
   /// أجرة اليد حين يُحضر العميل الصنف (فلس). الزيت: فارغ = السعر الأساسي.
   static const customerLaborOil = 'biz.oil.customer_labor.oil';

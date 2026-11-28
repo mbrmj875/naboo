@@ -1,3 +1,4 @@
+import '../../car_wash/services/car_wash_services_repository.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -1903,6 +1904,8 @@ class _OilChangeHubSettingsSheetState extends State<_OilChangeHubSettingsSheet> 
   bool _whatsappAskRating = true;
   bool _whatsappAiAutoReply = true;
   bool _waGatewayConnected = false;
+  /// مفتاح «الغسيل في البطاقة» لا يظهر إن لم تكن في المحل أنواع غسيل فعّالة.
+  bool _hasWashServices = false;
   String? _busyKey;
 
   @override
@@ -1912,6 +1915,15 @@ class _OilChangeHubSettingsSheetState extends State<_OilChangeHubSettingsSheet> 
   }
 
   Future<void> _load() async {
+    unawaited(() async {
+      var has = false;
+      try {
+        has = (await CarWashServicesRepository.instance.listActive()).isNotEmpty;
+      } catch (_) {}
+      if (mounted && has != _hasWashServices) {
+        setState(() => _hasWashServices = has);
+      }
+    }());
     // إعدادات محلية فقط — لا نعلّق الورقة على شبكة واتساب.
     final results = await Future.wait<Object?>([
       OilChangeSettings.stockFromWarehouseEnabled(),
@@ -2226,7 +2238,10 @@ class _OilChangeHubSettingsSheetState extends State<_OilChangeHubSettingsSheet> 
                             ...[
                               for (var i = 0;
                                   i < OilOptionalExtraKind.values.length;
-                                  i++) ...[
+                                  i++)
+                                if (_hasWashServices ||
+                                    OilOptionalExtraKind.values[i] !=
+                                        OilOptionalExtraKind.carWash) ...[
                                 if (i > 0)
                                   Divider(
                                     height: 1,

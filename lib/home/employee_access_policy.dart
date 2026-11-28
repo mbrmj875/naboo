@@ -59,6 +59,38 @@ class EmployeeAccessPolicy {
         return PermissionKeys.printingAccess;
       case AppContentRoutes.settingsRestore:
         return PermissionKeys.inventoryProductsManage;
+      // ── ك2-ب: شاشات داخلية صار لها معرّف يفتحه المساعد؛ كل واحدة بصلاحية
+      // الشاشة التي كانت تُفتح منها، فلا يصل الموظف بالمساعد إلى ما لا يصله بيده.
+      case AppContentRoutes.addInvoice:
+      case AppContentRoutes.onlineOrders:
+        return PermissionKeys.salesPos;
+      case AppContentRoutes.parkedSales:
+        return PermissionKeys.salesParked;
+      case AppContentRoutes.invoiceReturn:
+        return PermissionKeys.salesReturns;
+      case AppContentRoutes.inventoryPriceLists:
+      case AppContentRoutes.inventoryStockVoucher:
+      case AppContentRoutes.supplierDetail:
+        return PermissionKeys.inventoryView;
+      case AppContentRoutes.inventoryCategories:
+      case AppContentRoutes.inventoryBrands:
+      case AppContentRoutes.inventoryBarcodeSettings:
+      case AppContentRoutes.inventoryUnitTemplates:
+      case AppContentRoutes.inventoryProductSettings:
+      case AppContentRoutes.inventoryPurchaseOrderNew:
+      case AppContentRoutes.productEdit:
+        return PermissionKeys.inventoryProductsManage;
+      case AppContentRoutes.inventoryPolicyCenter:
+        return PermissionKeys.inventoryPoliciesManage;
+      case AppContentRoutes.workShiftsCalendar:
+        return PermissionKeys.shiftsAccess;
+      case AppContentRoutes.debtLinking:
+        return PermissionKeys.debtsPanel;
+      // فحص قيود الصندوق يظهر للمالك وحده في الإعدادات.
+      case AppContentRoutes.cashLedgerAudit:
+        return PermissionKeys.ownerKpiFinancial;
+      case AppContentRoutes.pushSettings:
+      case AppContentRoutes.pushRecipients:
       case AppContentRoutes.salePosSettings:
       case AppContentRoutes.settingsBusinessFeatures:
       case AppContentRoutes.settingsSubscriptionAccount:

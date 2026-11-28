@@ -1624,6 +1624,8 @@ IconData invoiceWorkKindIcon(ReceiptKind kind) => switch (kind) {
   ReceiptKind.saleReturn => Icons.assignment_return_rounded,
   ReceiptKind.debtPayment => Icons.account_balance_wallet_rounded,
   ReceiptKind.expense => Icons.money_off_rounded,
+  ReceiptKind.customerStatement => Icons.person_search_rounded,
+  ReceiptKind.supplierStatement => Icons.local_shipping_rounded,
   ReceiptKind.sale => Icons.point_of_sale_rounded,
 };
 

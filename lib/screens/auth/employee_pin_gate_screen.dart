@@ -320,6 +320,19 @@ class _EmployeePinGateScreenState extends State<EmployeePinGateScreen> {
         return;
       }
 
+      // السيرفر أقفل الدخول بعد محاولات كثيرة: لا طريق آخر بالرمز نفسه.
+      final lockMsg = auth.lastOwnerPinLockMessage;
+      if (lockMsg != null) {
+        setState(() {
+          _verifying = false;
+          _pin = '';
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(lockMsg), backgroundColor: Colors.red),
+        );
+        return;
+      }
+
       if (await auth.cloudHasSecretButLocalEmpty(userId)) {
         if (!mounted) return;
         setState(() => _verifying = false);

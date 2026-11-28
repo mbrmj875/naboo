@@ -37,6 +37,13 @@ class _Port implements AssistantUiPort {
 
   @override
   bool tourExists(String tourId) => GuideController().tourById(tourId) != null;
+
+  final settingsEntries = <String>[];
+  @override
+  Future<bool> openSettingsEntry(String entryId) async {
+    settingsEntries.add(entryId);
+    return true;
+  }
 }
 
 void main() {
@@ -81,11 +88,12 @@ void main() {
     await reg.execute('ui_navigate', {'route_id': AppContentRoutes.inventoryStocktaking}, guideCtx);
     expect(port.navigated, [AppContentRoutes.inventoryStocktaking]);
 
-    await reg.execute('ui_navigate', {'route_id': AppContentRoutes.settingsStoreInfo}, guideCtx);
-    final s = port.steps!.single;
-    expect(s.ensureRouteId, AppContentRoutes.settings);
-    expect(s.anchorId, OilGuideAnchors.settingsEntryFor('store_info'));
-    expect(s.awaitTap, isTrue);
+    // بند إعدادات يُفتح مباشرة بلا «اضغط هنا» ينتظر فوق المحادثة.
+    final r = await reg.execute('ui_navigate', {'route_id': AppContentRoutes.settingsPrintingInline}, guideCtx);
+    expect(port.settingsEntries, ['printing']);
+    expect(port.steps, isNull);
+    expect(r.ok, isTrue);
+    expect(r.rows.single['opened_directly'], isTrue);
   });
 
   test('ui_highlight: مرساة مخترعة تُرفض، والحقيقية تفتح شاشتها أولاً', () async {

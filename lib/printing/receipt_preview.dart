@@ -3,6 +3,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 
 import '../models/print_settings_data.dart';
+import 'receipt_design.dart';
 import 'receipt_model.dart';
 import 'receipt_renderer.dart';
 
@@ -15,6 +16,7 @@ class ReceiptPreview extends StatefulWidget {
     required this.template,
     required this.paper,
     this.style = const ReceiptStyle(),
+    this.design,
     this.monochrome = true,
     this.maxWidth = 340,
   });
@@ -24,6 +26,9 @@ class ReceiptPreview extends StatefulWidget {
   final ReceiptTemplate template;
   final ReceiptPaper paper;
   final ReceiptStyle style;
+
+  /// التصميم؛ إن غاب يُبنى من [style].
+  final ReceiptDesign? design;
 
   /// طابعة حرارية: المعاينة بالأسود مثل الورق.
   final bool monochrome;
@@ -52,6 +57,7 @@ class _ReceiptPreviewState extends State<ReceiptPreview> {
         old.template != widget.template ||
         old.paper != widget.paper ||
         old.style != widget.style ||
+        old.design != widget.design ||
         old.monochrome != widget.monochrome) {
       _render();
     }
@@ -66,6 +72,7 @@ class _ReceiptPreviewState extends State<ReceiptPreview> {
         template: widget.template,
         paper: widget.paper,
         style: widget.style,
+        design: widget.design,
         monochrome: widget.monochrome,
       );
       if (!mounted || gen != _generation) {

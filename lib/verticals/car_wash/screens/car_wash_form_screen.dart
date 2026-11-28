@@ -535,7 +535,10 @@ class _CarWashFormScreenState extends State<CarWashFormScreen> {
   }
 
   Future<void> _quickAddService() async {
-    final draft = await showCarWashServiceDialog(context);
+    final draft = await showCarWashServiceDialog(
+      context,
+      takenNames: _catalog.map((e) => e.name),
+    );
     if (draft == null) return;
     try {
       final id = await _repo.insert(
@@ -891,7 +894,9 @@ class _CarWashFormScreenState extends State<CarWashFormScreen> {
                   onSelected: _saving ? null : (v) => _toggleService(item, v),
                   label: Text(
                     item.priceFils > 0
-                        ? '${item.name} · ${IraqiCurrencyFormat.formatIqd(IqdMoney.fromFils(item.priceFils))}'
+                        // عزل الاسم والسعر: اسم إنجليزي كان يقلب السطر فيظهر
+                        // «5,000 · Full د.ع».
+                        ? '\u2068${item.name}\u2069 · \u2068${IraqiCurrencyFormat.formatIqd(IqdMoney.fromFils(item.priceFils))}\u2069'
                         : item.name,
                   ),
                   selectedColor: OilChangeFormTheme.gold.withValues(
@@ -1145,20 +1150,27 @@ class _CarWashKeyboardLiftState extends State<_CarWashKeyboardLift>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // على أندرويد يصل ارتفاع الكيبورد من القناة الأصلية فقط، ولا يُطلق
+    // didChangeMetrics؛ بدون هذا المستمع يبقى فراغ بارتفاع الكيبورد بعد إغلاقه.
+    AndroidImeInset.ensureStarted();
+    AndroidImeInset.bottomLogical.addListener(_onInsetChanged);
   }
 
   @override
   void dispose() {
+    AndroidImeInset.bottomLogical.removeListener(_onInsetChanged);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
   @override
-  void didChangeMetrics() {
+  void didChangeMetrics() => _onInsetChanged();
+
+  void _onInsetChanged() {
+    if (!mounted) return;
     final next = rawKeyboardBottomInset(context);
     if ((next - _lastInset).abs() < 0.5) return;
     _lastInset = next;
-    if (!mounted) return;
     setState(() {});
     widget.onKeyboardInsetChanged();
   }

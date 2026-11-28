@@ -9,6 +9,7 @@ import '../services/effective_store_branding.dart';
 import '../services/print_settings_repository.dart';
 import '../utils/app_logger.dart';
 import 'printer_connection.dart';
+import 'receipt_design.dart';
 import 'receipt_model.dart';
 import 'receipt_preview.dart';
 import 'receipt_printer.dart';
@@ -84,17 +85,24 @@ class _InvoiceReceiptScreenState extends State<InvoiceReceiptScreen> {
   bool get _hasDevicePrinter =>
       _connection!.isConfigured && _connection!.type != PrinterType.system;
 
-  Future<Uint8List> _pdf() async {
-    final rendered = await ReceiptRenderer.render(
+  /// [copies]: للطباعة بعدد نسخ القالب، والمشاركة نسخة واحدة.
+  Future<Uint8List> _pdf({int copies = 1}) async {
+    final doc = await ReceiptPrinter.publicLink(
       _doc,
       settings: _settings!,
       template: _templates.of(_doc.kind),
+      design: _templates.designFor(_doc.kind),
+    );
+    final rendered = await ReceiptRenderer.render(
+      doc,
+      settings: _settings!,
+      template: _templates.of(_doc.kind),
       paper: _paper,
-      style: _templates.style,
+      design: _templates.designFor(_doc.kind),
       monochrome: _connection!.isThermal,
     );
     try {
-      return await ReceiptPrinter.pdfBytes(rendered, _paper);
+      return await ReceiptPrinter.pdfBytes(rendered, _paper, copies: copies);
     } finally {
       rendered.dispose();
     }
@@ -117,7 +125,7 @@ class _InvoiceReceiptScreenState extends State<InvoiceReceiptScreen> {
       return;
     }
     try {
-      final bytes = await _pdf();
+      final bytes = await _pdf(copies: _templates.of(_doc.kind).copies);
       final paper = _paper;
       await printing.Printing.layoutPdf(
         name: 'receipt-${_doc.number ?? 'invoice'}',
@@ -135,13 +143,23 @@ class _InvoiceReceiptScreenState extends State<InvoiceReceiptScreen> {
     }
   });
 
+  /// صورة (تُفتح في واتساب) أو PDF، بنفس تصميم الإيصال.
   Future<void> _share() => _run(() async {
+    final format = await ReceiptPrinter.pickShareFormat(context);
+    if (format == null) return;
+    final name = 'receipt-${_doc.number ?? 'invoice'}';
     try {
+      if (format == ReceiptShareFormat.image) {
+        final png = await ReceiptPrinter.shareImageBytes(
+          _doc,
+          settings: _settings!,
+          paper: _paper,
+        );
+        await ReceiptPrinter.shareImageFile(png, '$name.png');
+        return;
+      }
       final bytes = await _pdf();
-      await printing.Printing.sharePdf(
-        bytes: bytes,
-        filename: 'receipt-${_doc.number ?? 'invoice'}.pdf',
-      );
+      await printing.Printing.sharePdf(bytes: bytes, filename: '$name.pdf');
     } catch (e, st) {
       AppLogger.error('InvoiceReceipt', 'share', e, st);
       _snack('تعذّرت مشاركة الإيصال.');
@@ -184,7 +202,7 @@ class _InvoiceReceiptScreenState extends State<InvoiceReceiptScreen> {
             settings: settings,
             template: _templates.of(_doc.kind),
             paper: _paper,
-            style: _templates.style,
+            design: _templates.designFor(_doc.kind),
             monochrome: _connection!.isThermal,
             maxWidth: _paper.isRoll ? 340 : 380,
           ),

@@ -254,32 +254,95 @@ class OilCustomerWashDiscount {
   }
 }
 
+/// عرض «غسلة مع الغيار»: غسلة ضمن بطاقة غيار الزيت مجانية أو بخصم.
+class WithOilWashOffer {
+  const WithOilWashOffer({
+    this.enabled = false,
+    this.rewardType = WashRewardType.free,
+    this.rewardValue = 0,
+    this.coveredServiceNames = const [],
+  });
+
+  final bool enabled;
+  final WashRewardType rewardType;
+
+  /// نسبة (1-100)، أو سعر الغسلة الثابت بالدينار حسب [rewardType].
+  final double rewardValue;
+
+  /// فارغ = كل أنواع الغسيل.
+  final List<String> coveredServiceNames;
+
+  WithOilWashOffer copyWith({
+    bool? enabled,
+    WashRewardType? rewardType,
+    double? rewardValue,
+    List<String>? coveredServiceNames,
+  }) => WithOilWashOffer(
+    enabled: enabled ?? this.enabled,
+    rewardType: rewardType ?? this.rewardType,
+    rewardValue: rewardValue ?? this.rewardValue,
+    coveredServiceNames: coveredServiceNames ?? this.coveredServiceNames,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'enabled': enabled,
+    'rewardType': rewardType.name,
+    'rewardValue': rewardValue,
+    'coveredServiceNames': coveredServiceNames,
+  };
+
+  factory WithOilWashOffer.fromJson(Object? raw) {
+    const d = WithOilWashOffer();
+    if (raw is! Map) return d;
+    final v = raw['rewardValue'];
+    return WithOilWashOffer(
+      enabled: raw['enabled'] == true,
+      rewardType: WashRewardType.values.firstWhere(
+        (t) => t.name == raw['rewardType'],
+        orElse: () => d.rewardType,
+      ),
+      rewardValue: (v is num ? v.toDouble() : 0.0).clamp(0, double.maxFinite),
+      coveredServiceNames: raw['coveredServiceNames'] is List
+          ? (raw['coveredServiceNames'] as List)
+                .map((e) => e.toString().trim())
+                .where((e) => e.isNotEmpty)
+                .toList()
+          : const [],
+    );
+  }
+}
+
 /// كل سياسات المحل في صف واحد.
 class StorePolicy {
   const StorePolicy({
     this.returns = const ReturnPolicy(),
     this.washRepeat = const WashRepeatOffer(),
     this.oilWash = const OilCustomerWashDiscount(),
+    this.withOilWash = const WithOilWashOffer(),
   });
 
   final ReturnPolicy returns;
   final WashRepeatOffer washRepeat;
   final OilCustomerWashDiscount oilWash;
+  final WithOilWashOffer withOilWash;
 
   StorePolicy copyWith({
     ReturnPolicy? returns,
     WashRepeatOffer? washRepeat,
     OilCustomerWashDiscount? oilWash,
+    WithOilWashOffer? withOilWash,
   }) => StorePolicy(
     returns: returns ?? this.returns,
     washRepeat: washRepeat ?? this.washRepeat,
     oilWash: oilWash ?? this.oilWash,
+    withOilWash: withOilWash ?? this.withOilWash,
   );
 
   Map<String, dynamic> toJson() => {
     'returns': returns.toJson(),
     'washRepeat': washRepeat.toJson(),
     'oilWash': oilWash.toJson(),
+    'withOilWash': withOilWash.toJson(),
   };
 
   String toJsonString() => jsonEncode(toJson());
@@ -293,6 +356,7 @@ class StorePolicy {
         returns: ReturnPolicy.fromJson(m['returns']),
         washRepeat: WashRepeatOffer.fromJson(m['washRepeat']),
         oilWash: OilCustomerWashDiscount.fromJson(m['oilWash']),
+        withOilWash: WithOilWashOffer.fromJson(m['withOilWash']),
       );
     } catch (_) {
       return const StorePolicy();

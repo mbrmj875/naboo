@@ -9,6 +9,7 @@ enum _OilFormOptionalSection {
   hydraulicGear,
   hydraulicPower,
   services,
+  carWash,
 }
 
 enum _OilSubmitIntent { complete, suspend }

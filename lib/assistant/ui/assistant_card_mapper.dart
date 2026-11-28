@@ -166,8 +166,10 @@ abstract final class AssistantCardMapper {
         return AssistantMemoryCard(id: id is num ? id.toInt() : 0, text: _s(rows.first['text']));
       case 'support_handoff':
         return const AssistantNoticeCard(kind: 'support', text: 'وصلت مشكلتك لفريق نابو، وراح يتواصلون وياك.');
-      case 'prepare_oil_card' || 'prepare_car_wash' || 'prepare_customer' || 'prepare_expense' || 'prepare_product':
+      case 'prepare_oil_card' || 'prepare_car_wash' || 'prepare_customer' || 'prepare_expense' || 'prepare_product' || 'prepare_direct_sale':
         if (rows.isNotEmpty && rows.first['exists'] == true) return null;
+        // سؤال «أي واحد؟» أو «ما لقيته» ليس مسودة: الأزرار تكفي، بلا بطاقة فارغة.
+        if (r.extra['action_id'] == null) return null;
         final fields = r.extra['fields'];
         final stock = r.extra['stock'];
         final alts = stock is Map && stock['alternatives'] is List ? stock['alternatives'] as List : const [];
@@ -177,6 +179,7 @@ abstract final class AssistantCardMapper {
             'prepare_car_wash' => 'غسيل جديد',
             'prepare_customer' => 'زبون جديد',
             'prepare_product' => 'صنف جديد',
+            'prepare_direct_sale' => 'بيع مباشر',
             _ => 'مصروف جديد',
           },
           route: r.extra['route']?.toString(),
@@ -192,6 +195,9 @@ abstract final class AssistantCardMapper {
                   ),
           ],
           warnings: [
+            if (r.extra['stock_short'] case final List ss)
+              for (final x in ss)
+                if (x is Map) 'المتوفر من ${_s(x['product'])}: ${_num(x['available'])}، والمطلوب ${_num(x['needed'])}.',
             if (stock is Map && stock['short'] == true)
               'المتوفر من ${_s(stock['requested'])}: ${_num(stock['available'])} ${_s(stock['unit'])}'
                   '${stock['needed'] == null ? '' : '، والمطلوب ${_num(stock['needed'])}'}.'
@@ -272,6 +278,16 @@ abstract final class AssistantCardMapper {
           warnings: [if (r.extra['below_cost'] == true) 'سعر البيع أقل من سعر الشراء.'],
           confirmLabel: 'عدّل',
           doneText: 'تعدّل الصنف.',
+        );
+      case 'propose_setting_change':
+        final id = r.extra['action_id']?.toString();
+        if (id == null) return null;
+        return AssistantConfirmCard(
+          title: 'تغيير ${_s(r.extra['setting'])}',
+          actionId: id,
+          changes: [(_s(r.extra['setting']), _s(r.extra['before']), _s(r.extra['after']))],
+          confirmLabel: 'غيّره',
+          doneText: 'تغيّر الإعداد.',
         );
       case 'propose_product_reactivate':
         final id = r.extra['action_id']?.toString();
@@ -358,8 +374,22 @@ abstract final class AssistantCardMapper {
 
   /// كل بطاقات الرد. سؤال السيارة: «المتوفر عندك» من stock_search يُدمج في
   /// بطاقة السيارة نفسها بدل بطاقة مخزون منفصلة (4.9).
+  /// أدوات تجهّز شيئاً للمراجعة أو التأكيد.
+  static bool isActionTool(String tool) =>
+      tool.startsWith('prepare_') || tool.startsWith('propose_') || tool == 'reminder_set';
+
+  /// أدوات بحث يستعملها المساعد في طريقه إلى التجهيز.
+  static const _lookupTools = {
+    'stock_search', 'stock_low', 'product_detail', 'car_history', 'customer_find',
+    'oil_card_find', 'debts_summary', 'car_spec', 'calc',
+  };
+
   static List<AssistantCardData> fromResults(List<AssistantToolResult> results) {
-    final cards = [for (final r in results) ?fromResult(r)];
+    // جواب فيه بطاقة تجهيز أو تأكيد: تظهر هي فقط، لا نتائج البحث التي سبقتها.
+    final shown = results.any((r) => isActionTool(r.tool))
+        ? [for (final r in results) if (!_lookupTools.contains(r.tool)) r]
+        : results;
+    final cards = [for (final r in shown) ?fromResult(r)];
     final car = cards.whereType<AssistantCarSpecCard>().firstOrNull;
     final stock = cards.whereType<AssistantStockCard>().where((c) => c.title == 'المخزون').firstOrNull;
     if (car == null || stock == null) return cards;

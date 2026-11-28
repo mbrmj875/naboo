@@ -37,6 +37,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
     final productsFils = _oilProductLinesTotalFils();
     final servicesFils = _oilServicesTotalFils();
     final notesFils = _notesExtrasFils;
+    final wash = _cardWash;
 
     final laborFils = _oilLaborFils();
     if (laborFils <= 0 &&
@@ -46,6 +47,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
         powerFils <= 0 &&
         filtersFils <= 0 &&
         productsFils <= 0 &&
+        wash == null &&
         notesFils <= 0) {
       return const SizedBox.shrink();
     }
@@ -107,6 +109,13 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
             if (productsFils > 0) ...[
               const SizedBox(height: 4),
               Text('منتجات إضافية: ${_formatFilsLabel(productsFils)}', textAlign: TextAlign.start),
+            ],
+            if (wash != null) ...[
+              const SizedBox(height: 4),
+              Text(
+                wash.isFree ? 'الغسيل: مجاني' : 'الغسيل: ${_formatFilsLabel(wash.netFils)}',
+                textAlign: TextAlign.start,
+              ),
             ],
             if (notesFils > 0) ...[
               const SizedBox(height: 4),
@@ -1448,6 +1457,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
       _OilFormOptionalSection.hydraulicGear => 'هيدروليك الكير',
       _OilFormOptionalSection.hydraulicPower => 'هيدروليك الباور',
       _OilFormOptionalSection.services => 'الخدمات الإضافية',
+      _OilFormOptionalSection.carWash => 'الغسيل',
     };
   }
 
@@ -1459,6 +1469,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
       _OilFormOptionalSection.hydraulicGear => Icons.water_drop_outlined,
       _OilFormOptionalSection.hydraulicPower => Icons.water_drop_outlined,
       _OilFormOptionalSection.services => Icons.checklist_rounded,
+      _OilFormOptionalSection.carWash => Icons.local_car_wash_outlined,
     };
   }
 
@@ -1475,6 +1486,7 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
       _OilFormOptionalSection.hydraulicPower => _hydraulicCollapsedHint(_powerHydraulic),
       _OilFormOptionalSection.services =>
         _selectedOilServiceIds.isEmpty ? null : '${_selectedOilServiceIds.length} خدمة',
+      _OilFormOptionalSection.carWash => _cardWashCollapsedHint(),
     };
   }
 
@@ -1509,8 +1521,11 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
         .toList(growable: false);
     if (sections.isEmpty) return const SizedBox.shrink();
 
-    final firstRow = sections.length <= 3 ? sections : sections.sublist(0, 3);
-    final secondRow = sections.length > 3 ? sections.sublist(3) : const <_OilFormOptionalSection>[];
+    // صفوف من ثلاثة أزرار حتى لا يضيق الزر حين تكثر الأقسام.
+    final rows = <List<_OilFormOptionalSection>>[
+      for (var i = 0; i < sections.length; i += 3)
+        sections.sublist(i, i + 3 > sections.length ? sections.length : i + 3),
+    ];
 
     return GuideAnchor(
       id: OilGuideAnchors.formExtras,
@@ -1537,21 +1552,13 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
               textAlign: TextAlign.start,
             ),
             const SizedBox(height: 6),
-            Row(
-              children: [
-                for (var i = 0; i < firstRow.length; i++) ...[
-                  if (i > 0) const SizedBox(width: 6),
-                  Expanded(child: _buildOptionalSectionChip(cs, busy, firstRow[i])),
-                ],
-              ],
-            ),
-            if (secondRow.isNotEmpty) ...[
-              const SizedBox(height: 6),
+            for (var r = 0; r < rows.length; r++) ...[
+              if (r > 0) const SizedBox(height: 6),
               Row(
                 children: [
-                  for (var i = 0; i < secondRow.length; i++) ...[
+                  for (var i = 0; i < rows[r].length; i++) ...[
                     if (i > 0) const SizedBox(width: 6),
-                    Expanded(child: _buildOptionalSectionChip(cs, busy, secondRow[i])),
+                    Expanded(child: _buildOptionalSectionChip(cs, busy, rows[r][i])),
                   ],
                 ],
               ),
@@ -2293,7 +2300,8 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
             const SizedBox(width: 6),
             Flexible(
               child: Text(
-                '${s.name} · $priceLbl',
+                // عزل الاسم والسعر حتى لا يقلب الاسمُ الإنجليزي السطر.
+                '\u2068${s.name}\u2069 · \u2068$priceLbl\u2069',
                 style: TextStyle(
                   fontWeight: checked ? FontWeight.w800 : FontWeight.w500,
                   color: checked ? cs.primary : cs.onSurface,
@@ -2835,6 +2843,12 @@ extension _OilFormSections on _OilChangeOrderFormScreenState {
                                 children: _oilCatalog.map((s) => _buildOilServiceCheckbox(s, cs, busy)).toList(),
                               ),
                           ],
+                        ),
+                      if (_shouldRenderOptionalSection(_OilFormOptionalSection.carWash))
+                        _buildOilOptionalSection(
+                          context,
+                          section: _OilFormOptionalSection.carWash,
+                          childrenBuilder: () => _buildCardWashSectionChildren(cs, busy),
                         ),
                     ],
                     if (!layout.isWideVariant) ...[

@@ -16,6 +16,7 @@ import '../../../utils/invoice_validation.dart';
 import '../../../utils/iqd_money.dart';
 import '../../../utils/iraqi_currency_format.dart';
 import '../utils/oil_change_filter_format.dart';
+import 'card_wash_order_sync.dart';
 import 'oil_change_invoice_builder.dart';
 import 'oil_change_orders_repository.dart';
 import 'oil_change_stock_service.dart';
@@ -409,6 +410,8 @@ class OilChangePostSaleService {
       }),
     );
 
+    // الغسلة المرتبطة بالبطاقة تخرج من سجل الغسيل وتقريره معها.
+    await CardWashOrderSync.instance.syncForCardId(orderId);
     CloudSyncService.instance.scheduleSyncSoon();
   }
 

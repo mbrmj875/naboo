@@ -34,22 +34,28 @@ class PrintSettingsData {
     this.storeLongitude,
     this.storeLogoBase64 = '',
     this.receiptTemplates = const {},
+    this.storeSlogan = '',
+    this.storeTaxNumber = '',
+    this.storeHours = '',
+    this.storeInstagram = '',
+    this.storeFacebook = '',
+    this.storeTiktok = '',
   });
 
   factory PrintSettingsData.defaults() => const PrintSettingsData(
-        paperFormat: PrintPaperFormat.thermal80,
-        thermalEscPosEnabled: false,
-        thermalLanHost: '',
-        thermalLanPort: 9100,
-        thermalLanTimeoutMs: 4000,
-        receiptShowBarcode: true,
-        receiptShowQr: true,
-        receiptShowBuyerAddressQr: false,
-        storeTitleLine: '',
-        storeAddress: '',
-        storePhones: [],
-        footerExtra: '',
-      );
+    paperFormat: PrintPaperFormat.thermal80,
+    thermalEscPosEnabled: false,
+    thermalLanHost: '',
+    thermalLanPort: 9100,
+    thermalLanTimeoutMs: 4000,
+    receiptShowBarcode: true,
+    receiptShowQr: true,
+    receiptShowBuyerAddressQr: false,
+    storeTitleLine: '',
+    storeAddress: '',
+    storePhones: [],
+    footerExtra: '',
+  );
 
   final PrintPaperFormat paperFormat;
   final bool thermalEscPosEnabled;
@@ -87,6 +93,43 @@ class PrintSettingsData {
   /// شعار المتجر مُرمَّزاً base64 (PNG أو JPEG) — فارغ يعني بلا شعار.
   final String storeLogoBase64;
 
+  /// سطر شعار المحل النصي (slogan) تحت الاسم في الإيصال.
+  final String storeSlogan;
+
+  /// رقم التسجيل أو الرقم الضريبي.
+  final String storeTaxNumber;
+
+  /// أوقات الدوام، نصاً حراً: «يومياً 8 ص – 10 م، الجمعة عطلة».
+  final String storeHours;
+
+  /// حسابات التواصل كما يكتبها المالك (اسم الحساب أو الرابط).
+  final String storeInstagram;
+  final String storeFacebook;
+  final String storeTiktok;
+
+  /// أسطر إضافية في رأس الإيصال تحت الاسم: الشعار النصي ثم الرقم الضريبي.
+  List<String> get receiptStoreHeaderExtras => [
+    if (storeSlogan.trim().isNotEmpty) storeSlogan.trim(),
+    if (storeTaxNumber.trim().isNotEmpty)
+      'الرقم الضريبي: \u2066${storeTaxNumber.trim()}\u2069',
+  ];
+
+  /// أسطر إضافية في تذييل الإيصال: أوقات الدوام وحسابات التواصل.
+  List<String> get receiptStoreFooterExtras {
+    final social = [
+      if (storeInstagram.trim().isNotEmpty)
+        'إنستغرام \u2066${storeInstagram.trim()}\u2069',
+      if (storeFacebook.trim().isNotEmpty)
+        'فيسبوك \u2066${storeFacebook.trim()}\u2069',
+      if (storeTiktok.trim().isNotEmpty)
+        'تيك توك \u2066${storeTiktok.trim()}\u2069',
+    ];
+    return [
+      if (storeHours.trim().isNotEmpty) 'أوقات الدوام: ${storeHours.trim()}',
+      if (social.isNotEmpty) social.join(' · '),
+    ];
+  }
+
   bool get hasStoreLogo => storeLogoBase64.trim().isNotEmpty;
 
   /// بايتات الشعار جاهزة للعرض أو الطباعة — `null` إذا كان النص تالفاً.
@@ -100,8 +143,7 @@ class PrintSettingsData {
     }
   }
 
-  bool get hasStoreLocation =>
-      storeLatitude != null && storeLongitude != null;
+  bool get hasStoreLocation => storeLatitude != null && storeLongitude != null;
 
   /// رابط خرائط Google لموقع المتجر — للفتح من التطبيق أو وضعه في QR.
   String? get storeMapsUrl {
@@ -136,23 +178,32 @@ class PrintSettingsData {
   }
 
   Map<String, dynamic> toJson() => {
-        'paperFormat': paperFormat.name,
-        'thermalEscPosEnabled': thermalEscPosEnabled,
-        'thermalLanHost': thermalLanHost,
-        'thermalLanPort': thermalLanPort,
-        'thermalLanTimeoutMs': thermalLanTimeoutMs,
-        'receiptShowBarcode': receiptShowBarcode,
-        'receiptShowQr': receiptShowQr,
-        'receiptShowBuyerAddressQr': receiptShowBuyerAddressQr,
-        'storeTitleLine': storeTitleLine,
-        'storeAddress': storeAddress,
-        'storePhones': storePhones,
-        'footerExtra': footerExtra,
-        'storeLatitude': storeLatitude,
-        'storeLongitude': storeLongitude,
-        'storeLogoBase64': storeLogoBase64,
-        'receiptTemplates': receiptTemplates,
-      };
+    'paperFormat': paperFormat.name,
+    'thermalEscPosEnabled': thermalEscPosEnabled,
+    'thermalLanHost': thermalLanHost,
+    'thermalLanPort': thermalLanPort,
+    'thermalLanTimeoutMs': thermalLanTimeoutMs,
+    'receiptShowBarcode': receiptShowBarcode,
+    'receiptShowQr': receiptShowQr,
+    'receiptShowBuyerAddressQr': receiptShowBuyerAddressQr,
+    'storeTitleLine': storeTitleLine,
+    'storeAddress': storeAddress,
+    'storePhones': storePhones,
+    'footerExtra': footerExtra,
+    'storeLatitude': storeLatitude,
+    'storeLongitude': storeLongitude,
+    'storeLogoBase64': storeLogoBase64,
+    'receiptTemplates': receiptTemplates,
+    for (final (k, v) in [
+      ('storeSlogan', storeSlogan),
+      ('storeTaxNumber', storeTaxNumber),
+      ('storeHours', storeHours),
+      ('storeInstagram', storeInstagram),
+      ('storeFacebook', storeFacebook),
+      ('storeTiktok', storeTiktok),
+    ])
+      if (v.trim().isNotEmpty) k: v.trim(),
+  };
 
   factory PrintSettingsData.fromJson(Map<String, dynamic> m) {
     final d = PrintSettingsData.defaults();
@@ -168,7 +219,8 @@ class PrintSettingsData {
       paperFormat: fmt,
       thermalEscPosEnabled:
           m['thermalEscPosEnabled'] as bool? ?? d.thermalEscPosEnabled,
-      thermalLanHost: (m['thermalLanHost'] as String? ?? d.thermalLanHost).trim(),
+      thermalLanHost: (m['thermalLanHost'] as String? ?? d.thermalLanHost)
+          .trim(),
       thermalLanPort: _readInt(m['thermalLanPort'], d.thermalLanPort),
       thermalLanTimeoutMs: _readInt(
         m['thermalLanTimeoutMs'],
@@ -178,7 +230,8 @@ class PrintSettingsData {
           m['receiptShowBarcode'] as bool? ?? d.receiptShowBarcode,
       receiptShowQr: m['receiptShowQr'] as bool? ?? d.receiptShowQr,
       receiptShowBuyerAddressQr:
-          m['receiptShowBuyerAddressQr'] as bool? ?? d.receiptShowBuyerAddressQr,
+          m['receiptShowBuyerAddressQr'] as bool? ??
+          d.receiptShowBuyerAddressQr,
       storeTitleLine: m['storeTitleLine'] as String? ?? d.storeTitleLine,
       storeAddress: m['storeAddress'] as String? ?? d.storeAddress,
       storePhones: _phonesFromJson(m['storePhones']),
@@ -189,11 +242,18 @@ class PrintSettingsData {
       receiptTemplates: m['receiptTemplates'] is Map
           ? Map<String, dynamic>.from(m['receiptTemplates'] as Map)
           : const {},
+      storeSlogan: _str(m['storeSlogan']),
+      storeTaxNumber: _str(m['storeTaxNumber']),
+      storeHours: _str(m['storeHours']),
+      storeInstagram: _str(m['storeInstagram']),
+      storeFacebook: _str(m['storeFacebook']),
+      storeTiktok: _str(m['storeTiktok']),
     );
   }
 
-  static double? _readLatitude(Object? raw) =>
-      _readCoordinate(raw, limit: 90);
+  static String _str(Object? raw) => raw is String ? raw.trim() : '';
+
+  static double? _readLatitude(Object? raw) => _readCoordinate(raw, limit: 90);
 
   static double? _readLongitude(Object? raw) =>
       _readCoordinate(raw, limit: 180);
@@ -284,6 +344,12 @@ class PrintSettingsData {
     bool clearStoreLocation = false,
     String? storeLogoBase64,
     Map<String, dynamic>? receiptTemplates,
+    String? storeSlogan,
+    String? storeTaxNumber,
+    String? storeHours,
+    String? storeInstagram,
+    String? storeFacebook,
+    String? storeTiktok,
   }) {
     return PrintSettingsData(
       paperFormat: paperFormat ?? this.paperFormat,
@@ -299,12 +365,20 @@ class PrintSettingsData {
       storeAddress: storeAddress ?? this.storeAddress,
       storePhones: storePhones ?? this.storePhones,
       footerExtra: footerExtra ?? this.footerExtra,
-      storeLatitude:
-          clearStoreLocation ? null : storeLatitude ?? this.storeLatitude,
-      storeLongitude:
-          clearStoreLocation ? null : storeLongitude ?? this.storeLongitude,
+      storeLatitude: clearStoreLocation
+          ? null
+          : storeLatitude ?? this.storeLatitude,
+      storeLongitude: clearStoreLocation
+          ? null
+          : storeLongitude ?? this.storeLongitude,
       storeLogoBase64: storeLogoBase64 ?? this.storeLogoBase64,
       receiptTemplates: receiptTemplates ?? this.receiptTemplates,
+      storeSlogan: storeSlogan ?? this.storeSlogan,
+      storeTaxNumber: storeTaxNumber ?? this.storeTaxNumber,
+      storeHours: storeHours ?? this.storeHours,
+      storeInstagram: storeInstagram ?? this.storeInstagram,
+      storeFacebook: storeFacebook ?? this.storeFacebook,
+      storeTiktok: storeTiktok ?? this.storeTiktok,
     );
   }
 }

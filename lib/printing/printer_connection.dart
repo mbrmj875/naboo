@@ -55,9 +55,13 @@ class PrinterConnection {
   String get summary => switch (type) {
     PrinterType.none => 'لم تُربط طابعة بعد',
     PrinterType.bluetooth =>
-      btAddress.isEmpty ? 'بلوتوث — اختر الطابعة' : 'بلوتوث: ${btName.isEmpty ? btAddress : btName} · ${effectivePaper.label}',
+      btAddress.isEmpty
+          ? 'بلوتوث — اختر الطابعة'
+          : 'بلوتوث: ${btName.isEmpty ? btAddress : btName} · ${effectivePaper.label}',
     PrinterType.lan =>
-      lanHost.isEmpty ? 'شبكة — أدخل العنوان' : 'شبكة: $lanHost:$lanPort · ${effectivePaper.label}',
+      lanHost.isEmpty
+          ? 'شبكة — أدخل العنوان'
+          : 'شبكة: $lanHost:$lanPort · ${effectivePaper.label}',
     PrinterType.system => 'طابعة النظام · ${paper.label}',
   };
 

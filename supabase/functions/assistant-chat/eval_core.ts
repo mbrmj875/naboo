@@ -6,7 +6,7 @@
 
 import { addUsage, type ChatOptions, type ChatResult, type Usage, ZERO_USAGE } from '../_shared/llm.ts';
 import { buildMessages, splitFollowups } from './prompt.ts';
-import { toolDefsFor } from './tools.ts';
+import { TOOL_DEFS, toolDefsFor } from './tools.ts';
 
 export type Expect = {
   must_call?: string[];
@@ -67,6 +67,34 @@ export function toolsFor(profile: string): string[] {
       return [...UI_TOOLS, ...READ_TOOLS, 'prepare_oil_card', 'prepare_car_wash', 'prepare_customer'];
     case 'staff_limited':
       return [...UI_TOOLS, 'stock_search', 'stock_low', 'oil_card_find', 'car_history'];
+    // مجموعة القياس الكبرى: الأدوات كما يرسلها هاتف المالك فعلاً (كلها)، وموظف كاشير.
+    case 'owner_all':
+      return Object.keys(TOOL_DEFS);
+    case 'staff_cashier':
+      return [
+        ...UI_TOOLS,
+        'setup_status',
+        'stock_search',
+        'stock_low',
+        'oil_card_find',
+        'car_history',
+        'customer_find',
+        'car_spec',
+        'prepare_oil_card',
+        'prepare_car_wash',
+        'prepare_customer',
+        'prepare_direct_sale',
+        'open_entity',
+        'settings_get',
+        'propose_setting_change',
+        'open_print_preview',
+        'reminder_set',
+        'my_performance',
+        'calc',
+        'memory_save',
+        'support_handoff',
+        'undo_last_action',
+      ];
     case 'guide_only':
       return [...UI_TOOLS];
     default:
@@ -193,8 +221,8 @@ export async function runTurn(
     const r = await o.chat({
       messages: buildMessages(
         {
-          isOwner: profile === 'owner',
-          roleKey: profile === 'owner' ? 'owner' : 'staff',
+          isOwner: profile.startsWith('owner'),
+          roleKey: profile.startsWith('owner') ? 'owner' : 'staff',
           guideOnly,
           routeId: 'app_oil_services_log',
           economy: false,

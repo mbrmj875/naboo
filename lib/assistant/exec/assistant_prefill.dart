@@ -14,7 +14,7 @@ import '../ui/assistant_view_models.dart' show isolateLtr;
 class AssistantPrefill {
   const AssistantPrefill({required this.tool, required this.values, this.turnId});
 
-  /// prepare_oil_card | prepare_car_wash | prepare_customer | prepare_product | prepare_expense
+  /// prepare_oil_card | prepare_car_wash | prepare_customer | prepare_product | prepare_expense | prepare_direct_sale
   final String tool;
   final Map<String, Object?> values;
 
@@ -62,6 +62,8 @@ class AssistantPrefill {
     'amount': 'المبلغ',
     'category': 'الفئة',
     'note': 'ملاحظة',
+    'items': 'الأصناف',
+    'payment': 'الدفع',
   };
 
   /// الحقول التي امتلأت فعلاً، كما تظهر في شريط النموذج.

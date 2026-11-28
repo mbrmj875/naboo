@@ -21,7 +21,7 @@ GROUPS = {
 def screens():
     src = (ROOT / 'lib/assistant/screen_map/oil_screen_map.dart').read_text()
     nav = (ROOT / 'lib/navigation/content_navigation.dart').read_text()
-    consts = dict(re.findall(r"static const (\w+) = '([^']+)';", nav))
+    consts = dict(re.findall(r"static const (\w+) =\s*'([^']+)';", nav))
     out = []
     for m in re.finditer(r"AppScreenSpec\(\s*routeId: ([\w.]+),\s*title: '([^']+)',\s*group: ScreenGroup\.(\w+)", src):
         ref = m.group(1)

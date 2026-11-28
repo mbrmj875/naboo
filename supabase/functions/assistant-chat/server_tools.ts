@@ -6,13 +6,14 @@
  * ينفّذ شيئاً، وتكمل الخطوة التالية عادياً.
  */
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
-import { type Usage, ZERO_USAGE } from '../_shared/llm.ts';
+import { chat, type Usage, ZERO_USAGE } from '../_shared/llm.ts';
 import { sendOpsMail } from '../_shared/ops_mail.ts';
 import { sanitizeForLog } from '../_shared/sanitize.ts';
 import { carSpec, type LookupDeps } from './car_spec.ts';
 import { checkMemoryText, MEMORY_LIMIT } from './knowledge.ts';
+import { buildInvoiceRead, invoiceReadMessages, invoiceToolResult } from './invoice_read.ts';
 
-export const SERVER_TOOLS = new Set(['car_spec', 'support_handoff', 'memory_save']);
+export const SERVER_TOOLS = new Set(['car_spec', 'support_handoff', 'memory_save', 'read_supplier_invoice']);
 
 export type ServerToolCtx = {
   admin: SupabaseClient;
@@ -25,12 +26,22 @@ export type ServerToolCtx = {
   createdBy?: string | null;
   search?: LookupDeps['search'];
   searchTimeoutMs?: number;
+  /** آخر صورة في المحادثة (لقراءة فاتورة المورّد). */
+  image?: string | null;
 };
 
 export type ServerToolOut = { result: Record<string, unknown>; usage: Usage; usedWeb: boolean };
 
 export async function runServerTool(name: string, args: Record<string, unknown>, ctx: ServerToolCtx): Promise<ServerToolOut> {
   try {
+    if (name === 'read_supplier_invoice') {
+      if (!ctx.image) return fail(name, 'no_image');
+      // ح3: قراءة مستقلة بدرجة حرارة 0، ثم التطبيع والتصنيف والتحقق بقواعد ثابتة.
+      const r = await chat({ messages: invoiceReadMessages(ctx.image), maxTokens: 3000, temperature: 0, json: true }, 60_000);
+      const read = buildInvoiceRead(r.text);
+      if (read.lines.length === 0) return { result: { ok: false, tool: name, error: 'no_lines' }, usage: r.usage, usedWeb: false };
+      return { result: invoiceToolResult(read), usage: r.usage, usedWeb: false };
+    }
     if (name === 'car_spec') {
       const year = Number(args.year);
       return await carSpec({

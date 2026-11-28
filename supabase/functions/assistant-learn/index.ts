@@ -27,6 +27,8 @@ import { type EvalCase, runCases } from '../assistant-chat/eval_core.ts';
 import { type Lesson, MAX_RULES, notesMessage, pickNotes } from '../assistant-chat/lessons.ts';
 import { PROMPT_VERSION } from '../assistant-chat/prompt.ts';
 import { DIALOGS, PARAPHRASE_STYLES, paraphraseCases, runDialogs, summarizeDialogs } from './dialog_eval.ts';
+import { BENCH, BENCH_PARTS, benchPart } from './bench_tasks.ts';
+import { INVOICE_PARTS, runInvoicePart } from './invoice_eval.ts';
 import { type RespCase, type RespResult, runRespCases } from '../whatsapp-cloud-webhook/responder_eval.ts';
 import {
   checkLesson,
@@ -446,6 +448,49 @@ async function evalResponder(admin: SupabaseClient) {
 }
 
 /** قياس الفهم (ذ4 وذ3) بالدروس الحالية. جزء واحد كل نداء حتى لا يتجاوز وقت الدالة. */
+/** ح8: مجموعة القياس الكبرى، جزء من 30 مهمة ×2 (pass^2). */
+async function evalBench(admin: SupabaseClient, part: number) {
+  if (!(part >= 0 && part < BENCH_PARTS)) throw new Error('bad part');
+  const active = await activeLessons(admin);
+  const runChat = (o: Parameters<typeof chat>[0]) => chat(o, 40_000);
+  const opts = { chat: runChat, ...optsFor(active) };
+  const tasks = benchPart(part);
+  const res = await runDialogs(tasks, opts, 2, 12);
+  const sum = summarizeDialogs(res);
+  const catOf = new Map(BENCH.map((b) => [b.key, b.cat]));
+  const qOf = new Map(BENCH.map((b) => [b.key, b.turns[0].q]));
+  const per = sum.per.map((p) => ({ ...p, cat: catOf.get(p.key), q: qOf.get(p.key) }));
+  const usage = res.reduce((a, r) => addUsage(a, r.usage), ZERO_USAGE);
+  await admin.from('assistant_eval_runs').insert({
+    target: 'eval-bench',
+    model: 'deepseek',
+    passed: sum.passAll,
+    total: sum.dialogs,
+    per_case: per,
+    note: `${PROMPT_VERSION}: الجزء ${part}، pass^2 ${sum.passAll}/${sum.dialogs}، المرات ${sum.runsPassed}/${sum.runs}`,
+  });
+  await addCost(admin, LEARN_TENANT, 'app', costMicroUsd(usage));
+  return { passAll: sum.passAll, dialogs: sum.dialogs, runsPassed: sum.runsPassed, runs: sum.runs, cost_micro_usd: costMicroUsd(usage) };
+}
+
+/** ح3: قياس قراءة فواتير الموردين، خمس صور في كل جزء. */
+async function evalInvoices(admin: SupabaseClient, part: number) {
+  if (!(part >= 0 && part < INVOICE_PARTS)) throw new Error('bad part');
+  const { INVOICE_IMAGES } = await import('./invoice_fixtures.ts');
+  const { scores, usage } = await runInvoicePart(part, INVOICE_IMAGES, (o) => chat(o, 90_000));
+  const passed = scores.filter((s) => s.pass).length;
+  await admin.from('assistant_eval_runs').insert({
+    target: 'eval-invoice',
+    model: 'deepseek',
+    passed,
+    total: scores.length,
+    per_case: scores,
+    note: `${PROMPT_VERSION}: فواتير الموردين، الجزء ${part}، ${passed}/${scores.length}`,
+  });
+  await addCost(admin, LEARN_TENANT, 'app', costMicroUsd(usage));
+  return { passed, total: scores.length, cost_micro_usd: costMicroUsd(usage) };
+}
+
 async function evalDialog(admin: SupabaseClient, part: number) {
   const active = await activeLessons(admin);
   const runChat = (o: Parameters<typeof chat>[0]) => chat(o, 40_000);
@@ -576,6 +621,8 @@ Deno.serve(async (req) => {
     if (op === 'evaluate') return json({ ok: true, ...(await evaluate(admin)) });
     if (op === 'eval_responder') return json({ ok: true, ...(await evalResponder(admin)) });
     if (op === 'eval_dialog') return json({ ok: true, ...(await evalDialog(admin, part)) });
+    if (op === 'eval_bench') return json({ ok: true, ...(await evalBench(admin, part)) });
+    if (op === 'eval_invoice') return json({ ok: true, ...(await evalInvoices(admin, part)) });
     if (op !== 'nightly') return json({ ok: false, error: 'bad_op' }, 400);
     const j = await judge(admin);
     const p = await propose(admin);

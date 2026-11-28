@@ -5,6 +5,7 @@ import '../../../../services/reports_repository.dart';
 import '../../../../services/returns/returns_offers_db_schema.dart';
 import '../../../../services/service_order_kinds.dart';
 import '../../../../services/tenant_context_service.dart';
+import '../../services/card_wash_order_sync.dart';
 import '../kit/oil_shop_report_sql.dart';
 import '../kit/report_math.dart';
 
@@ -27,6 +28,7 @@ class CarWashVisitRow {
     required this.washer,
     required this.amountFils,
     required this.isCredit,
+    this.withOil = false,
   });
 
   final DateTime? date;
@@ -35,6 +37,9 @@ class CarWashVisitRow {
   final String washer;
   final int amountFils;
   final bool isCredit;
+
+  /// غسلة داخل بطاقة غيار الزيت.
+  final bool withOil;
 }
 
 /// الغسلات المجانية والخصومات في الفترة، حسب نوع العرض.
@@ -47,6 +52,8 @@ class CarWashOfferStats {
     this.oilDiscountFils = 0,
     this.manualCount = 0,
     this.manualDiscountFils = 0,
+    this.withOilCount = 0,
+    this.withOilDiscountFils = 0,
   });
 
   final int freeWashes;
@@ -56,9 +63,14 @@ class CarWashOfferStats {
   final int oilDiscountFils;
   final int manualCount;
   final int manualDiscountFils;
+  final int withOilCount;
+  final int withOilDiscountFils;
 
   int get totalDiscountFils =>
-      repeatDiscountFils + oilDiscountFils + manualDiscountFils;
+      repeatDiscountFils +
+      oilDiscountFils +
+      manualDiscountFils +
+      withOilDiscountFils;
   bool get isEmpty => totalDiscountFils == 0 && freeWashes == 0;
 }
 
@@ -117,7 +129,17 @@ class CarWashReportRepository {
 
   /// نفس قاعدة بطاقة الزيت: فاتورة حية ← مبلغها، فاتورة ميتة ← صفر،
   /// بلا فاتورة ← السعر المتفق.
+  /// غسلة داخل بطاقة غيار: بلا فاتورة خاصة، فاتورتها فاتورة البطاقة.
+  static bool _linked(Map<String, Object?> r) =>
+      (r['parentOrderGlobalId'] ?? '').toString().trim().isNotEmpty;
+
   static int _revenue(Map<String, Object?> r) {
+    if (_linked(r)) {
+      // مبلغ الغسلة من طلبها نفسه؛ فاتورة البطاقة تحمل الغيار أيضاً.
+      return ((r['invoiceAlive'] as num?)?.toInt() ?? 0) == 1
+          ? (r['agreedPriceFils'] as num?)?.toInt() ?? 0
+          : 0;
+    }
     final invoiceId = (r['invoiceId'] as num?)?.toInt() ?? 0;
     if (invoiceId > 0) {
       return ((r['invoiceAlive'] as num?)?.toInt() ?? 0) == 1
@@ -137,6 +159,8 @@ class CarWashReportRepository {
     final db = await _dbHelper.database;
     await _dbHelper.ensureServiceOrdersReadRepair();
     await ensureReturnsAndOffersSchema(db);
+    // غسلات بطاقات الغيار: تخرج إن أُرجعت فاتورة البطاقة أو أُلغيت من أي شاشة.
+    await CardWashOrderSync.instance.reconcileLinked();
 
     final rows = await _orders(db, tid, range);
     final prevRows = await _orders(db, tid, ReportMath.previousRange(range));
@@ -154,14 +178,24 @@ class CarWashReportRepository {
     final visits = <CarWashVisitRow>[];
     var revenue = 0;
     var free = 0, repN = 0, repF = 0, oilN = 0, oilF = 0, manN = 0, manF = 0;
+    var withN = 0, withF = 0;
 
     for (final r in rows) {
       final amount = _revenue(r);
       final alive = ((r['invoiceAlive'] as num?)?.toInt() ?? 0) == 1;
-      final disc = alive ? (r['invoiceDiscountFils'] as num?)?.toInt() ?? 0 : 0;
+      final linked = _linked(r);
+      final disc = !alive
+          ? 0
+          : linked
+          ? (((r['estimatedPriceFils'] as num?)?.toInt() ?? 0) - amount)
+                .clamp(0, 1 << 52)
+          : (r['invoiceDiscountFils'] as num?)?.toInt() ?? 0;
       if (disc > 0) {
         if (amount == 0) free++;
         switch ((r['washOfferCode'] ?? '').toString()) {
+          case 'with_oil':
+            withN++;
+            withF += disc;
           case 'repeat':
             repN++;
             repF += disc;
@@ -220,6 +254,7 @@ class CarWashReportRepository {
           washer: w,
           amountFils: amount,
           isCredit: ((r['invoiceType'] as num?)?.toInt() ?? 0) == 1,
+          withOil: linked,
         ),
       );
     }
@@ -281,6 +316,8 @@ class CarWashReportRepository {
         oilDiscountFils: oilF,
         manualCount: manN,
         manualDiscountFils: manF,
+        withOilCount: withN,
+        withOilDiscountFils: withF,
       ),
     );
   }
@@ -311,7 +348,8 @@ class CarWashReportRepository {
   ) async {
     final ids = [
       for (final r in rows)
-        if (((r['invoiceAlive'] as num?)?.toInt() ?? 0) == 1)
+        if (((r['invoiceAlive'] as num?)?.toInt() ?? 0) == 1 &&
+            ((r['invoiceId'] as num?)?.toInt() ?? 0) > 0)
           (r['invoiceId'] as num).toInt(),
     ];
     final out = <int, Map<String, int>>{};
@@ -369,13 +407,18 @@ class CarWashReportRepository {
       SELECT so.id, so.createdAt, so.deviceSerial, so.requestedServices,
              so.technicianName, so.agreedPriceFils, so.estimatedPriceFils,
              so.invoiceId, i.type AS invoiceType, so.washOfferCode,
+             so.parentOrderGlobalId,
              CAST(ROUND(CASE WHEN IFNULL(i.discountFils, 0) > 0 THEN i.discountFils
                ELSE IFNULL(i.discount, 0) * 1000 END) AS INTEGER) AS invoiceDiscountFils,
              ${OilShopReportSql.totalFils('i')} AS invoiceTotalFils,
              CASE WHEN i.id IS NOT NULL AND i.deleted_at IS NULL
                AND IFNULL(i.isReturned, 0) = 0 THEN 1 ELSE 0 END AS invoiceAlive
       FROM service_orders so
-      LEFT JOIN invoices i ON i.id = so.invoiceId AND i.tenantId = so.tenantId
+      LEFT JOIN service_orders p ON p.tenantId = so.tenantId
+        AND IFNULL(so.parentOrderGlobalId, '') != ''
+        AND p.global_id = so.parentOrderGlobalId
+      LEFT JOIN invoices i ON i.tenantId = so.tenantId AND i.id =
+        CASE WHEN IFNULL(so.invoiceId, 0) > 0 THEN so.invoiceId ELSE p.invoiceId END
       WHERE so.tenantId = ? AND so.orderKind = ?
         AND ${OilShopReportSql.aliveOrder('so')}
         AND so.createdAt >= ? AND so.createdAt < ?

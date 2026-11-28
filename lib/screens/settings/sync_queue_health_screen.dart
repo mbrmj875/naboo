@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../services/cloud_sync_service.dart';
 import '../../services/sync_queue_service.dart';
+import '../../guides/guide_anchor.dart';
 
 class SyncQueueHealthScreen extends StatefulWidget {
   const SyncQueueHealthScreen({super.key});
@@ -281,10 +282,13 @@ class _SyncQueueHealthScreenState extends State<SyncQueueHealthScreen> {
               ),
               const SizedBox(height: 10),
             ],
-            FilledButton.icon(
-              onPressed: _busy ? null : _syncNow,
-              icon: const Icon(Icons.sync),
-              label: const Text('مزامنة الآن'),
+            GuideAnchor(
+              id: OilGuideAnchors.syncNow,
+              child: FilledButton.icon(
+                onPressed: _busy ? null : _syncNow,
+                icon: const Icon(Icons.sync),
+                label: const Text('مزامنة الآن'),
+              ),
             ),
             const SizedBox(height: 8),
             OutlinedButton.icon(

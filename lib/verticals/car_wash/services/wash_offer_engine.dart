@@ -4,6 +4,9 @@ import '../../../models/store_policy.dart';
 abstract final class WashOfferCodes {
   static const repeat = 'repeat';
   static const oilTier = 'oil_tier';
+
+  /// غسلة داخل بطاقة غيار الزيت.
+  static const withOil = 'with_oil';
 }
 
 /// غسلة سابقة لنفس السيارة (مستبعد منها الملغى والمحذوف والمرتجع).
@@ -54,6 +57,42 @@ class WashOfferResult {
 
 /// يحسب خصم الغسلة من العرضين؛ الأكبر يفوز. دالة صافية.
 abstract final class WashOfferEngine {
+  /// خصم «غسلة مع الغيار» على الأنواع المشمولة فقط. لا يجتمع مع عرض آخر.
+  static WashOfferResult withOil({
+    required WithOilWashOffer offer,
+    required Map<String, int> currentServicePrices,
+  }) {
+    if (!offer.enabled) return WashOfferResult.none;
+    final set = offer.coveredServiceNames.map((e) => e.trim()).toSet();
+    var base = 0;
+    for (final e in currentServicePrices.entries) {
+      if (e.value <= 0) continue;
+      if (set.isEmpty || set.contains(e.key.trim())) base += e.value;
+    }
+    if (base <= 0) return WashOfferResult.none;
+    final d = switch (offer.rewardType) {
+      WashRewardType.free => base,
+      WashRewardType.percent =>
+        (base * offer.rewardValue.clamp(0, 100) / 100).round(),
+      // سعر ثابت للغسلة: الخصم هو الفرق إن كان السعر الثابت أقل.
+      WashRewardType.fixed => (base - (offer.rewardValue * 1000).round()).clamp(
+        0,
+        base,
+      ),
+    };
+    if (d <= 0) return WashOfferResult.none;
+    return WashOfferResult(
+      discountFils: d,
+      code: WashOfferCodes.withOil,
+      reasonAr: switch (offer.rewardType) {
+        WashRewardType.free => 'غسلة مجانية مع الغيار',
+        WashRewardType.percent =>
+          'غسلة مع الغيار — خصم ${_num(offer.rewardValue)}%',
+        WashRewardType.fixed => 'غسلة مع الغيار — سعر خاص',
+      },
+    );
+  }
+
   static WashOfferResult evaluate({
     required StorePolicy policy,
     required WashOfferHistory history,
@@ -206,6 +245,28 @@ abstract final class WashOfferEngine {
 
   static String _num(double v) =>
       v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(1);
+
+  /// يقرأ التقدّم من سطر العرض الذي يكتبه هذا المحرّك (يُحفظ نصاً في
+  /// `washOfferNote`): «غسلتان من 3 …» أو «الغسلة 2 من 5 …» → (2، 3).
+  static ({int done, int total})? progressOf(String line) {
+    final t = line.trim();
+    final a = RegExp(r'^الغسلة (\d+) من (\d+)').firstMatch(t);
+    if (a != null) {
+      return (done: int.parse(a.group(1)!), total: int.parse(a.group(2)!));
+    }
+    final b = RegExp(
+      r'^(غسلة واحدة|غسلتان|(\d+) غسلات) من (\d+)',
+    ).firstMatch(t);
+    if (b != null) {
+      final done = switch (b.group(1)) {
+        'غسلة واحدة' => 1,
+        'غسلتان' => 2,
+        _ => int.parse(b.group(2)!),
+      };
+      return (done: done, total: int.parse(b.group(3)!));
+    }
+    return null;
+  }
 
   static String _countAr(int n) => switch (n) {
     1 => 'غسلة واحدة',

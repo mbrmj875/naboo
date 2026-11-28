@@ -1,0 +1,48 @@
+/* صفحة الفاتورة naboo.fun/r — فاتح وداكن، للهاتف أولاً. */
+@font-face { font-family: 'Tajawal'; font-weight: 400; font-display: swap; src: url('/m/fonts/tajawal/400.ttf') format('truetype'); }
+@font-face { font-family: 'Tajawal'; font-weight: 700; font-display: swap; src: url('/m/fonts/tajawal/700.ttf') format('truetype'); }
+:root { --bg: #f3f4f6; --card: #ffffff; --ink: #111827; --muted: #6b7280; --line: #e5e7eb; --soft: #f9fafb; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0b0f14; --card: #151b23; --ink: #f3f4f6; --muted: #9ca3af; --line: #263040; --soft: #1b2430; }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); }
+.rcp-page { min-height: 100vh; padding: 16px 16px 112px; font-family: 'Tajawal', system-ui, sans-serif; color: var(--ink); line-height: 1.6; }
+.rcp-card { max-width: 480px; margin: 0 auto; background: var(--card); border-radius: 18px; overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,.06), 0 8px 24px rgba(0,0,0,.06); }
+.rcp-head { background: var(--accent); color: var(--on-accent); padding: 20px 20px 16px; text-align: center; }
+.rcp-head h1 { margin: 0; font-size: 22px; font-weight: 700; }
+.rcp-head p { margin: 2px 0 0; opacity: .85; font-size: 14px; }
+.rcp-phone { display: inline-block; margin-top: 4px; color: inherit; font-size: 15px; direction: ltr; text-decoration: none; opacity: .95; }
+.rcp-title { display: flex; flex-direction: column; align-items: center; padding: 14px 20px; border-bottom: 1px dashed var(--line); }
+.rcp-title strong { font-size: 18px; }
+.rcp-title span { color: var(--muted); font-size: 14px; }
+.rcp-banner { margin: 12px 20px 0; padding: 10px 12px; border-radius: 10px; background: #fef3c7; color: #92400e; font-weight: 700; text-align: center; }
+.rcp-fields { margin: 0; padding: 12px 20px; display: grid; gap: 4px; }
+.rcp-fields div { display: flex; justify-content: space-between; gap: 12px; font-size: 15px; }
+.rcp-fields dt { color: var(--muted); }
+.rcp-fields dd { margin: 0; font-weight: 700; text-align: end; }
+.rcp-highlight { margin: 4px 20px 8px; padding: 10px 14px; border: 2px solid var(--accent); border-radius: 12px; display: flex; justify-content: space-between; align-items: center; }
+.rcp-highlight strong { font-size: 20px; }
+.rcp-loyalty { margin: 8px 20px; padding: 10px 14px; border-radius: 12px; background: var(--soft); text-align: center; font-weight: 700; }
+.rcp-loyalty p { margin: 0; }
+.rcp-dots { display: inline-flex; gap: 6px; margin: 6px 0; direction: rtl; }
+.rcp-dots span { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--accent); }
+.rcp-dots span.on { background: var(--accent); }
+.rcp-lines { list-style: none; margin: 0; padding: 4px 20px; border-top: 1px dashed var(--line); }
+.rcp-lines li { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.rcp-lines li:last-child { border-bottom: 0; }
+.rcp-lines li div { display: flex; flex-direction: column; }
+.rcp-lines small { color: var(--muted); font-size: 13px; }
+.rcp-lines b { white-space: nowrap; }
+.rcp-totals { padding: 8px 20px 4px; border-top: 1px dashed var(--line); }
+.rcp-totals div { display: flex; justify-content: space-between; padding: 3px 0; font-size: 15px; }
+.rcp-totals .rcp-main { margin: 8px -8px; padding: 12px 14px; border-radius: 12px; background: var(--accent); color: var(--on-accent); font-size: 18px; }
+.rcp-totals .rcp-main strong { font-size: 22px; }
+.rcp-notes { padding: 4px 20px; color: var(--muted); font-size: 14px; }
+.rcp-notes p { margin: 4px 0; }
+.rcp-thanks { margin: 0; padding: 14px 20px 20px; text-align: center; font-weight: 700; }
+.rcp-message { padding: 32px 24px; text-align: center; }
+.rcp-message h1 { margin: 0 0 8px; font-size: 20px; }
+.rcp-message p { margin: 0; color: var(--muted); }
+.rcp-wa { position: fixed; inset-inline: 16px; bottom: 16px; max-width: 480px; margin: 0 auto; display: flex; align-items: center; justify-content: center; gap: 10px; min-height: 52px; padding: 12px 16px; border-radius: 14px; background: #1f8f4e; color: #fff; font-weight: 700; font-size: 17px; text-decoration: none; box-shadow: 0 8px 24px rgba(0,0,0,.18); }
+.rcp-wa svg { width: 24px; height: 24px; }

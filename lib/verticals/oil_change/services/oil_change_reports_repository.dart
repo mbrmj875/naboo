@@ -216,13 +216,17 @@ class OilChangeReportsRepository {
   /// - مربوطة بفاتورة محذوفة أو مرتجعة ← صفر (المال أُعيد).
   /// - غير مفوترة ← سعرها المتفق/التقديري، وهو يشمل الزيت والفلاتر أصلاً،
   ///   فلا يُضاف ثمن الزيت مرة ثانية.
+  ///
+  /// الغسلة داخل البطاقة (`cardWashNetFils`) تُطرح: تُعدّ في تقرير الغسيل.
   static int _revenueFils(Map<String, Object?> r) {
+    final wash = (r['cardWashNetFils'] as num?)?.toInt() ?? 0;
+    int less(int v) => wash <= 0 ? v : (v - wash < 0 ? 0 : v - wash);
     final invFils = (r['invoiceTotalFils'] as num?)?.toInt() ?? 0;
-    if (_isInvoiced(r)) return invFils;
+    if (_isInvoiced(r)) return less(invFils);
     if (((r['invoiceId'] as num?)?.toInt() ?? 0) > 0) return 0;
     final agreed = (r['agreedPriceFils'] as num?)?.toInt();
     final est = (r['estimatedPriceFils'] as num?)?.toInt() ?? 0;
-    return agreed ?? est;
+    return less(agreed ?? est);
   }
 
   static bool _isInvoiced(Map<String, Object?> r) =>

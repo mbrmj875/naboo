@@ -146,8 +146,7 @@ class CustomerDebtStatement {
 
   /// الكشف كإيصال قابل للطباعة بقالب «تسديد دين».
   ReceiptDocument toReceipt() => ReceiptDocument(
-    kind: ReceiptKind.debtPayment,
-    titleOverride: 'كشف حساب عميل',
+    kind: ReceiptKind.customerStatement,
     date: date,
     fields: [ReceiptField('العميل', customerName.trim(), bold: true)],
     lines: [

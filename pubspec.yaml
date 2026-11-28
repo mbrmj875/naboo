@@ -48,6 +48,7 @@ dependencies:
   printing: ^5.11.1
   barcode: ^2.2.4
   barcode_widget: ^2.0.4
+  qr: ^3.0.2
   mobile_scanner: ^7.2.0
   google_fonts: ^8.0.2
   pdf: ^3.12.0
@@ -80,6 +81,7 @@ dependencies:
   # يجب أن يكون dependency عادي (ليس فقط dev) حتى يدخل في APK الإصدار.
   flutter_native_splash: ^2.4.6
   print_bluetooth_thermal: ">=1.1.0 <1.2.2"
+  share_plus: ^13.3.1
 
 dev_dependencies:
   flutter_test:
@@ -153,6 +155,17 @@ flutter:
       fonts:
         - asset: assets/fonts/restaurant/IBMPlexSansArabic-Regular.ttf
         - asset: assets/fonts/restaurant/IBMPlexSansArabic-Bold.ttf
+          weight: 700
+    # خطوط قوالب الإيصالات (رخصة OFL، من google/fonts).
+    - family: ReemKufi
+      fonts:
+        - asset: assets/fonts/restaurant/ReemKufi-Regular.ttf
+        - asset: assets/fonts/restaurant/ReemKufi-Bold.ttf
+          weight: 700
+    - family: Changa
+      fonts:
+        - asset: assets/fonts/restaurant/Changa-Regular.ttf
+        - asset: assets/fonts/restaurant/Changa-Bold.ttf
           weight: 700
 
 flutter_launcher_icons:

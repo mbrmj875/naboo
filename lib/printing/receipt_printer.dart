@@ -1,4 +1,3 @@
-
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
@@ -7,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart' as printing;
+import 'package:share_plus/share_plus.dart';
 
 import '../models/print_settings_data.dart';
 import '../services/effective_store_branding.dart';
@@ -15,10 +15,15 @@ import '../services/thermal_network_printer_service.dart';
 import '../utils/app_logger.dart';
 import 'escpos_raster.dart';
 import 'printer_connection.dart';
+import 'public_receipt.dart';
 import 'receipt_builders.dart';
+import 'receipt_design.dart';
 import 'receipt_model.dart';
 import 'receipt_renderer.dart';
 import 'transports/bluetooth_transport.dart';
+
+/// صيغة المشاركة.
+enum ReceiptShareFormat { image, pdf }
 
 enum PrintOutcome {
   /// أُرسل للطابعة.
@@ -51,6 +56,15 @@ abstract final class ReceiptPrinter {
   @visibleForTesting
   static Future<PrinterConnection> Function(PrintSettingsData) loadConnection =
       (s) => PrinterConnection.load(legacy: s);
+
+  /// رابط صفحة الفاتورة على naboo.fun في QR (قابل للاستبدال في الاختبارات).
+  static Future<ReceiptDocument> Function(
+    ReceiptDocument doc, {
+    required PrintSettingsData settings,
+    required ReceiptTemplate template,
+    ReceiptDesign? design,
+  })
+  publicLink = PublicReceiptLinks.attach;
 
   /// يطبع إيصال الفاتورة بالقالب المناسب لنوع العمل.
   static Future<PrintResult> printInvoice(
@@ -90,12 +104,21 @@ abstract final class ReceiptPrinter {
           'لم تُربط طابعة بهذا الجهاز. اربطها من «الطباعة».',
         );
       }
+      final design = ReceiptTemplates(
+        settings.receiptTemplates,
+      ).designFor(doc.kind);
+      doc = await publicLink(
+        doc,
+        settings: settings,
+        template: template,
+        design: design,
+      );
       final rendered = await ReceiptRenderer.render(
         doc,
         settings: settings,
         template: template,
         paper: conn.effectivePaper,
-        style: ReceiptTemplates(settings.receiptTemplates).style,
+        design: design,
         monochrome: conn.isThermal,
       );
       try {
@@ -105,7 +128,12 @@ abstract final class ReceiptPrinter {
       }
       return const PrintResult(PrintOutcome.printed);
     } catch (e, st) {
-      AppLogger.error('ReceiptPrinter', 'printDocument ${doc.kind.name}', e, st);
+      AppLogger.error(
+        'ReceiptPrinter',
+        'printDocument ${doc.kind.name}',
+        e,
+        st,
+      );
       return PrintResult(PrintOutcome.failed, _friendly(e));
     }
   }
@@ -141,52 +169,64 @@ abstract final class ReceiptPrinter {
           timeoutMs: 6000,
         );
       case PrinterType.system:
-        await _systemPrint(conn, rendered, auto: auto);
+        await _systemPrint(conn, rendered, copies: copies, auto: auto);
     }
   }
 
   /// PDF بمقاس الورق وفيه صورة الإيصال نفسها. اللفافة صفحة واحدة بطول
   /// الإيصال، والورق الكبير (A5/A4) يُقسَّم على صفحات بارتفاع الورقة.
+  ///
+  /// [copies]: تتكرر صفحات الإيصال كلها بعدد النسخ (طابعة النظام لا تعرف
+  /// نسخ القالب). المشاركة تبقى نسخة واحدة.
   static Future<Uint8List> pdfBytes(
     RenderedReceipt rendered,
-    ReceiptPaper paper,
-  ) async {
+    ReceiptPaper paper, {
+    int copies = 1,
+  }) async {
     const mm = PdfPageFormat.mm;
     final widthMm = paper.widthMm;
     final pdf = pw.Document();
     final sheetMm = paper.sheetHeightMm;
+    final n = copies.clamp(1, 3);
     if (sheetMm == null) {
-      final png = await rendered.pngBytes();
-      pdf.addPage(
-        pw.Page(
-          pageFormat: PdfPageFormat(
-            widthMm * mm,
-            widthMm * rendered.height / rendered.width * mm,
+      final image = pw.MemoryImage(await rendered.pngBytes());
+      for (var i = 0; i < n; i++) {
+        pdf.addPage(
+          pw.Page(
+            pageFormat: PdfPageFormat(
+              widthMm * mm,
+              widthMm * rendered.height / rendered.width * mm,
+            ),
+            margin: pw.EdgeInsets.zero,
+            build: (_) => pw.Image(image, fit: pw.BoxFit.fill),
           ),
-          margin: pw.EdgeInsets.zero,
-          build: (_) => pw.Image(pw.MemoryImage(png), fit: pw.BoxFit.fill),
-        ),
-      );
+        );
+      }
       return pdf.save();
     }
     final pagePx = (rendered.width * sheetMm / widthMm).floor();
+    final slices = <(pw.MemoryImage, int)>[];
     for (var top = 0; top < rendered.height; top += pagePx) {
       final h = math.min(pagePx, rendered.height - top);
-      final png = await _slicePng(rendered.image, top, h);
-      pdf.addPage(
-        pw.Page(
-          pageFormat: PdfPageFormat(widthMm * mm, sheetMm * mm),
-          margin: pw.EdgeInsets.zero,
-          build: (_) => pw.Align(
-            alignment: pw.Alignment.topCenter,
-            child: pw.Image(
-              pw.MemoryImage(png),
-              width: widthMm * mm,
-              height: widthMm * h / rendered.width * mm,
+      slices.add((pw.MemoryImage(await _slicePng(rendered.image, top, h)), h));
+    }
+    for (var i = 0; i < n; i++) {
+      for (final (image, h) in slices) {
+        pdf.addPage(
+          pw.Page(
+            pageFormat: PdfPageFormat(widthMm * mm, sheetMm * mm),
+            margin: pw.EdgeInsets.zero,
+            build: (_) => pw.Align(
+              alignment: pw.Alignment.topCenter,
+              child: pw.Image(
+                image,
+                width: widthMm * mm,
+                height: widthMm * h / rendered.width * mm,
+              ),
             ),
           ),
-        ),
-      );
+        );
+      }
     }
     return pdf.save();
   }
@@ -210,10 +250,11 @@ abstract final class ReceiptPrinter {
   static Future<void> _systemPrint(
     PrinterConnection conn,
     RenderedReceipt rendered, {
+    required int copies,
     required bool auto,
   }) async {
     final paper = conn.effectivePaper;
-    final bytes = await pdfBytes(rendered, paper);
+    final bytes = await pdfBytes(rendered, paper, copies: copies);
     final format = PdfPageFormat(
       paper.widthMm * PdfPageFormat.mm,
       paper.sheetHeightMm == null
@@ -221,7 +262,8 @@ abstract final class ReceiptPrinter {
           : paper.sheetHeightMm! * PdfPageFormat.mm,
     );
     // على الحاسوب: طباعة صامتة على الطابعة الافتراضية عند الطباعة التلقائية.
-    final desktop = !kIsWeb &&
+    final desktop =
+        !kIsWeb &&
         (defaultTargetPlatform == TargetPlatform.windows ||
             defaultTargetPlatform == TargetPlatform.macOS ||
             defaultTargetPlatform == TargetPlatform.linux);
@@ -293,6 +335,182 @@ abstract final class ReceiptPrinter {
         ),
       );
     }
+  }
+
+  /// يرسم الإيصال PDF بطابعة هذا الجهاز ومقاسها وقالب نوعه ومظهر المحل.
+  static Future<(Uint8List, ReceiptPaper, int)> _documentPdf(
+    BuildContext context,
+    ReceiptDocument doc, {
+    required bool forPrint,
+  }) async {
+    final settings = await _branding(context) ?? await loadSettings();
+    final conn = await loadConnection(settings);
+    final templates = ReceiptTemplates(settings.receiptTemplates);
+    final template = templates.of(doc.kind);
+    final paper = conn.effectivePaper;
+    doc = await publicLink(
+      doc,
+      settings: settings,
+      template: template,
+      design: templates.designFor(doc.kind),
+    );
+    final rendered = await ReceiptRenderer.render(
+      doc,
+      settings: settings,
+      template: template,
+      paper: paper,
+      design: templates.designFor(doc.kind),
+      monochrome: conn.isThermal,
+    );
+    try {
+      final copies = forPrint ? template.copies : 1;
+      return (await pdfBytes(rendered, paper, copies: copies), paper, copies);
+    } finally {
+      rendered.dispose();
+    }
+  }
+
+  /// زر «طباعة» خارج شاشة الإيصال: طابعة الجهاز (بلوتوث/شبكة) مباشرة، وإلا
+  /// نافذة طباعة النظام بنفس صورة الإيصال وعدد نسخ قالبه.
+  static Future<void> printOrSystemDialog(
+    BuildContext context,
+    ReceiptDocument doc,
+  ) async {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    try {
+      final conn = await loadConnection(await loadSettings());
+      if (conn.isConfigured && conn.type != PrinterType.system) {
+        if (!context.mounted) return;
+        await printWithFeedback(context, () async => doc);
+        return;
+      }
+      if (!context.mounted) return;
+      final (bytes, paper, _) = await _documentPdf(
+        context,
+        doc,
+        forPrint: true,
+      );
+      await printing.Printing.layoutPdf(
+        name: 'receipt-${doc.number ?? doc.kind.name}',
+        format: PdfPageFormat(
+          paper.widthMm * PdfPageFormat.mm,
+          paper.sheetHeightMm == null
+              ? double.infinity
+              : paper.sheetHeightMm! * PdfPageFormat.mm,
+        ),
+        onLayout: (_) async => bytes,
+      );
+    } catch (e, st) {
+      AppLogger.error('ReceiptPrinter', 'printOrSystemDialog', e, st);
+      messenger?.showSnackBar(
+        const SnackBar(content: Text('تعذّرت الطباعة. راجع اتصال الطابعة.')),
+      );
+    }
+  }
+
+  /// مشاركة الإيصال: يسأل صورةً أم PDF، ثم يرسل بنفس تصميم الإيصال.
+  static Future<void> shareDocument(
+    BuildContext context,
+    ReceiptDocument doc, {
+    String? filename,
+  }) async {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final format = await pickShareFormat(context);
+    if (format == null || !context.mounted) return;
+    final base = (filename ?? 'receipt-${doc.number ?? doc.kind.name}')
+        .replaceAll(RegExp(r'\.pdf$'), '');
+    try {
+      final settings = await _branding(context) ?? await loadSettings();
+      final conn = await loadConnection(settings);
+      if (format == ReceiptShareFormat.image) {
+        final png = await shareImageBytes(
+          doc,
+          settings: settings,
+          paper: conn.effectivePaper,
+        );
+        await shareImageFile(png, '$base.png');
+      } else {
+        if (!context.mounted) return;
+        final (bytes, _, _) = await _documentPdf(context, doc, forPrint: false);
+        await printing.Printing.sharePdf(bytes: bytes, filename: '$base.pdf');
+      }
+    } catch (e, st) {
+      AppLogger.error('ReceiptPrinter', 'shareDocument', e, st);
+      messenger?.showSnackBar(
+        const SnackBar(content: Text('تعذّرت مشاركة الإيصال.')),
+      );
+    }
+  }
+
+  /// يسأل: صورة (تُفتح مباشرة في واتساب) أم ملف PDF. `null` = أُلغي.
+  static Future<ReceiptShareFormat?> pickShareFormat(BuildContext context) =>
+      showModalBottomSheet<ReceiptShareFormat>(
+        context: context,
+        showDragHandle: true,
+        builder: (context) => Directionality(
+          textDirection: TextDirection.rtl,
+          child: SafeArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  key: const ValueKey('share-image'),
+                  leading: const Icon(Icons.image_outlined),
+                  title: const Text('صورة'),
+                  subtitle: const Text('تُفتح مباشرة في واتساب بألوان الإيصال'),
+                  onTap: () => Navigator.pop(context, ReceiptShareFormat.image),
+                ),
+                ListTile(
+                  key: const ValueKey('share-pdf'),
+                  leading: const Icon(Icons.picture_as_pdf_outlined),
+                  title: const Text('ملف PDF'),
+                  subtitle: const Text('للطباعة أو الأرشيف'),
+                  onTap: () => Navigator.pop(context, ReceiptShareFormat.pdf),
+                ),
+                const SizedBox(height: 8),
+              ],
+            ),
+          ),
+        ),
+      );
+
+  /// صورة الإيصال للمشاركة: دائماً بالألوان (الشاشة ليست طابعة حرارية)،
+  /// وبعرض 80 مم للفافة حتى تُقرأ على الهاتف، أو بمقاس الصفحة الكبيرة.
+  static Future<Uint8List> shareImageBytes(
+    ReceiptDocument doc, {
+    required PrintSettingsData settings,
+    required ReceiptPaper paper,
+  }) async {
+    final templates = ReceiptTemplates(settings.receiptTemplates);
+    doc = await publicLink(
+      doc,
+      settings: settings,
+      template: templates.of(doc.kind),
+      design: templates.designFor(doc.kind),
+    );
+    final rendered = await ReceiptRenderer.render(
+      doc,
+      settings: settings,
+      template: templates.of(doc.kind),
+      paper: paper.isRoll ? ReceiptPaper.mm80 : paper,
+      design: templates.designFor(doc.kind),
+      monochrome: false,
+    );
+    try {
+      return await rendered.pngBytes();
+    } finally {
+      rendered.dispose();
+    }
+  }
+
+  /// يفتح نافذة المشاركة بصورة PNG.
+  static Future<void> shareImageFile(Uint8List png, String name) async {
+    await SharePlus.instance.share(
+      ShareParams(
+        files: [XFile.fromData(png, name: name, mimeType: 'image/png')],
+        fileNameOverrides: [name],
+      ),
+    );
   }
 
   /// طباعة يدوية بزر: يُظهر النتيجة دائماً.

@@ -92,11 +92,11 @@ Deno.test('only known tools are declared, in a fixed order', () => {
 Deno.test('every eval-case tool is defined', () => {
   for (const n of ['stock_search', 'stock_low', 'product_detail', 'oil_card_find', 'car_history', 'customer_find', 'car_spec',
     'sales_summary', 'top_products', 'ratings_summary', 'staff_status', 'wa_status', 'debts_summary', 'cash_summary',
-    'prepare_oil_card', 'prepare_car_wash', 'prepare_customer', 'prepare_product', 'prepare_expense',
+    'prepare_oil_card', 'prepare_car_wash', 'prepare_customer', 'prepare_product', 'prepare_expense', 'prepare_direct_sale',
     'propose_price_change', 'propose_stock_adjust', 'reorder_suggest', 'ui_describe', 'ui_navigate', 'ui_highlight',
     'ui_guide', 'ui_start_tour', 'my_performance', 'setup_status',
     'propose_product_deactivate', 'propose_stock_transfer', 'propose_debt_payment',
-    'propose_product_edit', 'propose_product_reactivate', 'undo_last_action']) {
+    'propose_product_edit', 'propose_product_reactivate', 'undo_last_action', 'settings_get', 'propose_setting_change', 'open_entity']) {
     assert(n in TOOL_DEFS, n);
   }
 });

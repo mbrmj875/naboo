@@ -1,6 +1,8 @@
+import '../../guides/guide_anchor.dart';
 import '../../guides/guide_tour.dart';
 import '../../guides/knowledge/guide_page_knowledge.dart';
 import '../../home/employee_access_policy.dart';
+import '../../navigation/content_navigation.dart';
 import '../assistant_tool.dart';
 import '../assistant_tool_guard.dart';
 import '../assistant_tool_result.dart';
@@ -16,6 +18,9 @@ abstract class AssistantUiPort {
   Future<bool> startAdHoc(List<GuideStep> steps, {required String title});
   Future<bool> startTour(String tourId);
   bool tourExists(String tourId);
+
+  /// يفتح بنداً من الإعدادات (الطابعة، الإشعارات…) مباشرة بلا انتظار ضغطة.
+  Future<bool> openSettingsEntry(String entryId);
 }
 
 /// أدوات الإرشاد الخمس (م3-7). كلها مسموحة لمستوى «إرشاد فقط».
@@ -59,6 +64,11 @@ abstract class _UiTool extends AssistantTool {
       return null;
     }
     final entry = spec.entryAnchor;
+    // بند إعدادات: يُفتح مباشرة. كان «اضغط هنا» ينتظر ضغطة فوق المحادثة حتى تنتهي المهلة.
+    const prefix = OilGuideAnchors.settingsEntryPrefix;
+    if (entry != null && target == AppContentRoutes.settings && entry.startsWith(prefix)) {
+      if (await port.openSettingsEntry(entry.substring(prefix.length))) return null;
+    }
     if (entry == null) {
       // شاشة تحتاج سجلاً (بطاقة، موظف): نفتح الأب ونترك الاختيار للمستخدم.
       await port.navigate(target);
@@ -115,6 +125,11 @@ class UiDescribeTool extends _UiTool {
   }
 }
 
+bool _settingsEntry(AppScreenSpec spec) =>
+    !spec.direct &&
+    spec.parentRouteId == AppContentRoutes.settings &&
+    (spec.entryAnchor?.startsWith(OilGuideAnchors.settingsEntryPrefix) ?? false);
+
 class UiNavigateTool extends _UiTool {
   const UiNavigateTool(super.port);
 
@@ -133,7 +148,7 @@ class UiNavigateTool extends _UiTool {
     final denied = await reach(spec);
     if (denied != null) return denied;
     return AssistantToolResult.success(name, [
-      {'route_id': spec.routeId, 'title': spec.title, 'opened_directly': spec.direct},
+      {'route_id': spec.routeId, 'title': spec.title, 'opened_directly': spec.direct || _settingsEntry(spec)},
     ]);
   }
 }

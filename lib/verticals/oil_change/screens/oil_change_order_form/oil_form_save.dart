@@ -25,6 +25,7 @@ extension _OilFormSave on _OilChangeOrderFormScreenState {
           : null,
       'hydraulicSellPerLiterFils': catalogSell(_gearHydraulic),
       'powerHydraulicSellPerLiterFils': catalogSell(_powerHydraulic),
+      ...OilCardWash.columnsFor(_cardWash),
     };
   }
 
@@ -1865,6 +1866,12 @@ extension _OilFormSave on _OilChangeOrderFormScreenState {
             : await persist();
         if (persisted.aborted) return;
         final postSaveJob = persisted.job;
+        // الغسلة داخل البطاقة: طلب غسيل مرتبط يُنشأ أو يُحدَّث أو يُلغى بعد
+        // نجاح معاملة الحفظ (خارجها، حتى لا يتداخل مع معاملتها).
+        final washCardId = savedId ?? widget.editOrderId;
+        if (washCardId != null && washCardId > 0) {
+          await CardWashOrderSync.instance.syncForCardId(washCardId);
+        }
         if (!mounted) return;
 
         if (suspending) {

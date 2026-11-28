@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -1954,15 +1955,18 @@ class AuthProvider extends ChangeNotifier {
       return false;
     }
 
-    final secret = await OwnerAuthCloudService.instance.fetch();
-    if (secret == null || !secret.isComplete) {
-      _lastLoginErrorMessage =
-          'تعذر التحقق من بيانات الحساب على السحابة. حاول مرة أخرى.';
+    final check = await _verifyOwnerPinOnCloud(pin);
+    if (check.verdict == OwnerPinVerdict.noSecret ||
+        check.verdict == OwnerPinVerdict.unavailable ||
+        check.verdict == OwnerPinVerdict.network) {
+      _lastLoginErrorMessage = check.verdict == OwnerPinVerdict.network
+          ? kAuthServerUnreachableMessage
+          : 'تعذر التحقق من بيانات الحساب على السحابة. حاول مرة أخرى.';
       await _signOutSupabaseAfterFailedGoogleLink();
       return false;
     }
-    if (!await PasswordHashing.verifyPin(pin, secret.pinSalt, secret.pinHash)) {
-      _lastLoginErrorMessage = AuthUserMessages.wrongPin;
+    if (!check.isOk) {
+      _lastLoginErrorMessage = _ownerPinFailureMessage(check);
       try {
         await Supabase.instance.client.auth.signOut();
       } catch (e) {
@@ -3061,6 +3065,59 @@ class AuthProvider extends ChangeNotifier {
     return ownerPinRestoreRequiresOtp(localUserId);
   }
 
+  String? _lastOwnerPinLockMessage;
+
+  /// رسالة القفل المؤقت إن رفض السيرفر رمز PIN المالك بسبب كثرة المحاولات.
+  String? get lastOwnerPinLockMessage => _lastOwnerPinLockMessage;
+
+  /// آخر حكم من السيرفر على رمز معيّن، حتى لا يُحسب الرمز الخاطئ نفسه مرتين
+  /// حين تجرّب الشاشة طريقين متتاليين به.
+  ({String uid, String pinDigest, OwnerPinVerifyResult result, DateTime at})?
+      _lastOwnerPinVerdict;
+
+  /// يتحقق من PIN المالك على السيرفر (owner-pin-verify). إن لم تكن الدالة
+  /// منشورة بعد، يرجع إلى المقارنة بالـ hash إن أرسله السيرفر (للتوافق).
+  Future<OwnerPinVerifyResult> _verifyOwnerPinOnCloud(String pin) async {
+    final uid = Supabase.instance.client.auth.currentUser?.id ?? '';
+    final digest = sha256.convert(utf8.encode('$uid:${pin.trim()}')).toString();
+    final cached = _lastOwnerPinVerdict;
+    if (cached != null &&
+        cached.uid == uid &&
+        cached.pinDigest == digest &&
+        DateTime.now().difference(cached.at) < const Duration(seconds: 30)) {
+      return cached.result;
+    }
+
+    var result = await OwnerAuthCloudService.instance.verifyPin(pin);
+    if (result.verdict == OwnerPinVerdict.unavailable) {
+      final secret = await OwnerAuthCloudService.instance.fetch();
+      if (secret == null || !secret.isComplete) {
+        result = const OwnerPinVerifyResult(OwnerPinVerdict.noSecret);
+      } else if (secret.hasHashMaterial) {
+        final ok = await PasswordHashing.verifyPin(
+          pin,
+          secret.pinSalt,
+          secret.pinHash,
+        );
+        result = ok
+            ? OwnerPinVerifyResult(OwnerPinVerdict.ok, phone: secret.phone)
+            : const OwnerPinVerifyResult(OwnerPinVerdict.wrong);
+      }
+    }
+    if (result.isDefinitive) {
+      _lastOwnerPinVerdict =
+          (uid: uid, pinDigest: digest, result: result, at: DateTime.now());
+    }
+    return result;
+  }
+
+  String _ownerPinFailureMessage(OwnerPinVerifyResult r) {
+    if (r.verdict == OwnerPinVerdict.locked) {
+      return AuthUserMessages.pinLocked(r.lockedUntil);
+    }
+    return AuthUserMessages.wrongPinRemaining(r.remaining);
+  }
+
   /// على الويب/جهاز جديد: تحقق PIN مقابل السحابة مباشرة (جلسة Google موجودة)
   /// وثبّت hash محلياً — بدون OTP إضافي لأن معرفة الـ PIN إثبات كافٍ.
   Future<bool> unlockOwnerWithVerifiedCloudPin({
@@ -3070,27 +3127,29 @@ class AuthProvider extends ChangeNotifier {
     if (Supabase.instance.client.auth.currentUser == null) return false;
     final trimmed = pin.trim();
     if (!AuthValidators.isValidPin(trimmed)) return false;
+    _lastOwnerPinLockMessage = null;
     try {
-      final secret = await OwnerAuthCloudService.instance.fetch();
-      if (secret == null || !secret.isComplete) {
+      final check = await _verifyOwnerPinOnCloud(trimmed);
+      if (check.verdict == OwnerPinVerdict.locked) {
+        _lastOwnerPinLockMessage = _ownerPinFailureMessage(check);
+      }
+      if (!check.isOk) {
         AppLogger.warn(
           'AuthProvider',
-          'unlockOwnerWithVerifiedCloudPin: no complete cloud secret',
+          'unlockOwnerWithVerifiedCloudPin: ${check.verdict.name}',
         );
         return false;
       }
-      final ok = await PasswordHashing.verifyPin(
-        trimmed,
-        secret.pinSalt,
-        secret.pinHash,
-      );
-      if (!ok) return false;
 
+      // الـ hash لا يأتي من السحابة: نصنع hash محلياً بملح جديد للرمز الذي
+      // أكّده السيرفر للتو.
+      final salt = PasswordHashing.generateSalt();
+      final hash = await PasswordHashing.hashPin(trimmed, salt);
       await _db.applyOwnerAuthFromCloud(
         id: localUserId,
-        phone: secret.phone,
-        pinHash: secret.pinHash,
-        pinSalt: secret.pinSalt,
+        phone: check.phone,
+        pinHash: hash,
+        pinSalt: salt,
       );
       AppLogger.info(
         'AuthProvider',

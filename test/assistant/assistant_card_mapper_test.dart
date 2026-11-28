@@ -68,7 +68,10 @@ void main() {
   });
 
   test('بطاقة التجهيز: الحقول الناقصة يكملها المستخدم، والزر يفتح شاشة الحفظ', () {
+    // بلا action_id (سؤال أو لم يُعثر) لا تُرسم مسودة فارغة.
+    expect(map('prepare_oil_card', const [], extra: {'route': 'app_oil_new_card'}), isNull);
     final c = map('prepare_oil_card', const [], extra: {
+      'action_id': 'a1',
       'route': 'app_oil_new_card',
       'fields': [
         {'label': 'السيارة', 'value': 'كامري'},
@@ -77,7 +80,8 @@ void main() {
     })! as AssistantDraftCard;
     expect(c.title, 'بطاقة غيار جديدة');
     expect(c.fields.last.missing, isTrue);
-    expect(c.routeId, 'app_oil_new_card');
+    expect(c.route, 'app_oil_new_card');
+    expect(c.actionId, 'a1');
   });
 
   test('نتيجة فاشلة أو أداة بلا بطاقة: لا بطاقة', () {

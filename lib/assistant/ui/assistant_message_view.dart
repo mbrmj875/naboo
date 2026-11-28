@@ -318,6 +318,9 @@ class _RevealAfterText extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final id = m.id;
+    // أثناء العمل لا بطاقات: كانت تظهر مع الأداة ثم تختفي مع بدء النص ثم تعود،
+    // فتومض الشاشة وتقفز. تظهر مرة واحدة بعد اكتمال الجواب.
+    if (!m.complete) return const SizedBox(width: double.infinity);
     if (!m.animateText || id == null || m.text.isEmpty) return child;
     return ValueListenableBuilder<bool>(
       valueListenable: AssistantReveal.doneOf(id),

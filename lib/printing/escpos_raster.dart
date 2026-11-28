@@ -32,8 +32,7 @@ class MonoBitmap {
     for (var i = 0, p = 0; i < lum.length; i++, p += 4) {
       final a = rgba[p + 3] / 255.0;
       // الشفاف يُعامل كأبيض.
-      final l =
-          0.299 * rgba[p] + 0.587 * rgba[p + 1] + 0.114 * rgba[p + 2];
+      final l = 0.299 * rgba[p] + 0.587 * rgba[p + 1] + 0.114 * rgba[p + 2];
       lum[i] = l * a + 255 * (1 - a);
     }
     final dx0 = ditherRect?.left.floor().clamp(0, width) ?? 0;
@@ -95,16 +94,17 @@ abstract final class EscPosRaster {
         final xBytes = bmp.bytesPerRow;
         // GS v 0 m xL xH yL yH d1...dk
         b.add([
-          0x1D, 0x76, 0x30, 0x00,
-          xBytes & 0xFF, (xBytes >> 8) & 0xFF,
-          h & 0xFF, (h >> 8) & 0xFF,
+          0x1D,
+          0x76,
+          0x30,
+          0x00,
+          xBytes & 0xFF,
+          (xBytes >> 8) & 0xFF,
+          h & 0xFF,
+          (h >> 8) & 0xFF,
         ]);
         b.add(
-          Uint8List.sublistView(
-            bmp.bits,
-            top * xBytes,
-            (top + h) * xBytes,
-          ),
+          Uint8List.sublistView(bmp.bits, top * xBytes, (top + h) * xBytes),
         );
       }
       b.add([0x1B, 0x64, feedLines]); // ESC d n — تغذية.
@@ -131,7 +131,10 @@ abstract final class EscPosRaster {
 
     while (i < data.length) {
       final x = data[i];
-      if (x == 0x1D && i + 2 < data.length && data[i + 1] == 0x76 && data[i + 2] == 0x30) {
+      if (x == 0x1D &&
+          i + 2 < data.length &&
+          data[i + 1] == 0x76 &&
+          data[i + 2] == 0x30) {
         final xBytes = data[i + 4] | (data[i + 5] << 8);
         final h = data[i + 6] | (data[i + 7] << 8);
         final w = xBytes * 8;

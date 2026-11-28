@@ -22,6 +22,8 @@ import '../../widgets/inputs/app_price_input.dart';
 import '../../widgets/product_media_image.dart';
 import '../../verticals/oil_change/widgets/oil_change_form_theme.dart';
 import '../../verticals/oil_change/widgets/oil_change_royal_card.dart';
+import '../../printing/receipt_builders.dart';
+import '../../printing/receipt_printer.dart';
 import 'expense_receipt_printer.dart';
 import 'expense_report_printer.dart';
 import 'widgets/expenses_stitch_mobile.dart';
@@ -339,11 +341,26 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     );
     if (!mounted || result == null || !result.ok) return;
     setState(() => _highlightExpenseId = result.newId);
+    final newId = result.newId;
+    if (existing == null && newId != null) unawaited(_autoPrintNew(newId));
     await _reload();
     if (mounted && _highlightExpenseId != null) {
       await Future<void>.delayed(const Duration(seconds: 3));
       if (mounted) setState(() => _highlightExpenseId = null);
     }
+  }
+
+  /// سند صرف تلقائي بعد تسجيل مصروف جديد، إن فعّله المالك في قالب «سند صرف»
+  /// وكانت طابعة مربوطة. لا يرمي: الحفظ تمّ ولا يفشل بسبب الطابعة.
+  Future<void> _autoPrintNew(int id) async {
+    try {
+      final row = await DatabaseHelper().getExpenseJoinedById(id);
+      if (row == null || !mounted) return;
+      await ReceiptPrinter.autoPrintAfterSave(
+        context,
+        document: ReceiptBuilders.expense(ExpenseEntry.fromJoinedRow(row)),
+      );
+    } catch (_) {}
   }
 
   Future<void> _openReportDialog() async {

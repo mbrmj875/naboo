@@ -1,14 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' hide TextDirection;
-import 'package:printing/printing.dart' as printing;
 
-import '../../printing/printer_connection.dart';
 import '../../printing/receipt_builders.dart';
 import '../../printing/receipt_model.dart';
 import '../../printing/receipt_printer.dart';
 import '../../theme/design_tokens.dart';
 import '../../utils/iraqi_currency_format.dart';
-import '../../utils/sale_receipt_pdf.dart';
 
 /// صفحة إيصال تسديد دين — عرض منسّق داخل التطبيق (ليست شاشة PDF كاملة ولا منبثقة).
 class CustomerDebtPaymentReceiptScreen extends StatelessWidget {
@@ -48,64 +45,15 @@ class CustomerDebtPaymentReceiptScreen extends StatelessWidget {
     recordedBy: recordedByUserName,
   );
 
-  Future<void> _print(BuildContext context) async {
-    // طابعة حرارية مربوطة بالجهاز: إيصال التسديد عليها مباشرة.
-    final conn = await PrinterConnection.load();
-    if (conn.isConfigured && conn.type != PrinterType.system) {
-      if (!context.mounted) return;
-      await ReceiptPrinter.printWithFeedback(
-        context,
-        () async => receiptDocument,
-      );
-      return;
-    }
-    try {
-      await printing.Printing.layoutPdf(
-        name: 'debt-receipt-$paymentRowId',
-        onLayout: (format) =>
-            SaleReceiptPdf.buildCustomerDebtPaymentReceiptBytes(
-              customerDisplayName: customerDisplayName,
-              customerId: customerId,
-              amountApplied: amountApplied,
-              debtBefore: debtBefore,
-              debtAfter: debtAfter,
-              paymentRowId: paymentRowId,
-              receiptInvoiceId: receiptInvoiceId,
-              recordedByUserName: recordedByUserName,
-              pageFormat: format,
-            ),
-      );
-    } catch (_) {
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('تعذّرت الطباعة. راجع اتصال الطابعة.')),
-      );
-    }
-  }
+  /// الطباعة والمشاركة بقالب «تسديد دين» نفسه: الورقة والملف صورة واحدة.
+  Future<void> _print(BuildContext context) =>
+      ReceiptPrinter.printOrSystemDialog(context, receiptDocument);
 
-  Future<void> _share(BuildContext context) async {
-    try {
-      final bytes = await SaleReceiptPdf.buildCustomerDebtPaymentReceiptBytes(
-        customerDisplayName: customerDisplayName,
-        customerId: customerId,
-        amountApplied: amountApplied,
-        debtBefore: debtBefore,
-        debtAfter: debtAfter,
-        paymentRowId: paymentRowId,
-        receiptInvoiceId: receiptInvoiceId,
-        recordedByUserName: recordedByUserName,
-      );
-      await printing.Printing.sharePdf(
-        bytes: bytes,
-        filename: 'debt-receipt-$paymentRowId.pdf',
-      );
-    } catch (_) {
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('تعذّرت مشاركة الإيصال')));
-    }
-  }
+  Future<void> _share(BuildContext context) => ReceiptPrinter.shareDocument(
+    context,
+    receiptDocument,
+    filename: 'debt-receipt-$paymentRowId.pdf',
+  );
 
   @override
   Widget build(BuildContext context) {

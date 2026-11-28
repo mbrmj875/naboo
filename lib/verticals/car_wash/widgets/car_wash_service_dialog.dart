@@ -15,20 +15,33 @@ class CarWashServiceDraft {
 }
 
 /// نافذة سريعة لإضافة أو تعديل نوع غسيل بلا مغادرة البطاقة.
+///
+/// [takenNames]: أسماء الأنواع الموجودة. الاسم المكرر يُرفض برسالة واضحة،
+/// بدل أن يُحدَّث سعر النوع القديم بصمت.
 Future<CarWashServiceDraft?> showCarWashServiceDialog(
   BuildContext context, {
   CarWashServiceItem? existing,
+  Iterable<String> takenNames = const [],
 }) {
+  final taken = {
+    for (final n in takenNames)
+      CarWashServicesRepository.normalizeName(n).toLowerCase(),
+  };
+  final own = existing == null
+      ? null
+      : CarWashServicesRepository.normalizeName(existing.name).toLowerCase();
+  if (own != null) taken.remove(own);
   return showDialog<CarWashServiceDraft>(
     context: context,
-    builder: (_) => _CarWashServiceDialog(existing: existing),
+    builder: (_) => _CarWashServiceDialog(existing: existing, taken: taken),
   );
 }
 
 class _CarWashServiceDialog extends StatefulWidget {
-  const _CarWashServiceDialog({this.existing});
+  const _CarWashServiceDialog({this.existing, this.taken = const {}});
 
   final CarWashServiceItem? existing;
+  final Set<String> taken;
 
   @override
   State<_CarWashServiceDialog> createState() => _CarWashServiceDialogState();
@@ -47,6 +60,8 @@ class _CarWashServiceDialogState extends State<_CarWashServiceDialog>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    AndroidImeInset.ensureStarted();
+    AndroidImeInset.bottomLogical.addListener(_onInsetChanged);
     final e = widget.existing;
     _name = TextEditingController(text: e?.name ?? '');
     _price = TextEditingController(
@@ -58,6 +73,7 @@ class _CarWashServiceDialogState extends State<_CarWashServiceDialog>
 
   @override
   void dispose() {
+    AndroidImeInset.bottomLogical.removeListener(_onInsetChanged);
     WidgetsBinding.instance.removeObserver(this);
     _name.dispose();
     _price.dispose();
@@ -65,10 +81,14 @@ class _CarWashServiceDialogState extends State<_CarWashServiceDialog>
   }
 
   @override
-  void didChangeMetrics() {
+  void didChangeMetrics() => _onInsetChanged();
+
+  /// على أندرويد يصل ارتفاع الكيبورد من القناة الأصلية فقط؛ بدون هذا تبقى
+  /// النافذة مرفوعة بعد إغلاق الكيبورد، فيقع الضغط على غير الزر المقصود.
+  void _onInsetChanged() {
+    if (!mounted) return;
     final next = rawKeyboardBottomInset(context);
     if ((next - _keyboardInset).abs() < 0.5) return;
-    if (!mounted) return;
     setState(() => _keyboardInset = next);
   }
 
@@ -109,12 +129,16 @@ class _CarWashServiceDialogState extends State<_CarWashServiceDialog>
                     labelText: 'اسم النوع',
                     hintText: 'مثال: غسيل كامل',
                     border: OutlineInputBorder(),
+                    errorMaxLines: 2,
                   ),
                   textAlign: TextAlign.start,
                   validator: (v) {
                     final clean =
                         CarWashServicesRepository.normalizeName(v ?? '');
                     if (clean.isEmpty) return 'اسم النوع مطلوب';
+                    if (widget.taken.contains(clean.toLowerCase())) {
+                      return 'هذا النوع موجود. غيّر سعره من قائمة الأنواع';
+                    }
                     return null;
                   },
                 ),

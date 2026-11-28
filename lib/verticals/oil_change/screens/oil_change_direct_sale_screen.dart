@@ -26,10 +26,15 @@ import '../widgets/oil_change_form_theme.dart';
 import '../widgets/oil_change_log_stitch.dart';
 import '../widgets/product_picker_dialog.dart';
 import '../../../guides/guide_anchor.dart';
+import '../../../assistant/exec/assistant_prefill.dart';
 
 /// بيع مباشر لمنتجات المخزون — بدون بطاقة غيار.
 class OilChangeDirectSaleScreen extends StatefulWidget {
-  const OilChangeDirectSaleScreen({super.key});
+  const OilChangeDirectSaleScreen({super.key, this.assistantPrefill});
+
+  /// سلة عبّأها المساعد (ح2): الأصناف بكمياتها والزبون وطريقة الدفع.
+  /// البيع نفسه بزر الشاشة فقط.
+  final AssistantPrefill? assistantPrefill;
 
   @override
   State<OilChangeDirectSaleScreen> createState() =>
@@ -81,6 +86,40 @@ class _OilChangeDirectSaleScreenState extends State<OilChangeDirectSaleScreen> {
     });
     unawaited(_loadProducts());
     unawaited(CustomerSearchIndex.instance.ensureFresh());
+    final ap = widget.assistantPrefill;
+    if (ap != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_applyAssistantPrefill(ap));
+      });
+    }
+  }
+
+  /// الأصناف من المخزون بسعر بيعها المسجّل، فلا يدخل سعر من المساعد.
+  Future<void> _applyAssistantPrefill(AssistantPrefill p) async {
+    final raw = p.values['lines'];
+    for (final l in raw is List ? raw : const []) {
+      if (l is! Map) continue;
+      final pid = (l['product_id'] as num?)?.toInt();
+      final qty = ((l['qty'] as num?) ?? 1).round();
+      if (pid == null || pid <= 0 || qty <= 0) continue;
+      final product = await _repo.getProductById(pid);
+      if (!mounted) return;
+      if (product == null) continue;
+      OilChangeProductScan.addFromProductMap(lines: _cart, product: product);
+      final line = _cart.lastWhere((x) => x.productId == pid);
+      line.quantity = qty;
+    }
+    final cid = p.number('customer_id')?.toInt();
+    final name = p.str('customer');
+    setState(() {
+      if (name != null) _customerName.text = name;
+      if (cid != null && cid > 0) {
+        _customerId = cid;
+        _customerLinked = true;
+      }
+    });
+    if (p.values['credit'] == true) _onCreditModeChanged(true);
+    _warmSaleUnits();
   }
 
   @override
@@ -431,6 +470,14 @@ class _OilChangeDirectSaleScreenState extends State<OilChangeDirectSaleScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    if (widget.assistantPrefill case final ap?) ...[
+                      AssistantPrefillBanner(
+                        prefill: ap,
+                        only: const {'items', 'customer', 'payment'},
+                        what: 'هذا البيع',
+                      ),
+                      const SizedBox(height: OilChangeLogStitchMetrics.gapSm),
+                    ],
                     if (_banner != null) ...[
                       _BannerChip(text: _banner!),
                       const SizedBox(height: OilChangeLogStitchMetrics.gapSm),

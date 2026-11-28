@@ -222,7 +222,7 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
   prepare_oil_card: {
     description: 'افتح شاشة بطاقة غيار معبّأة. لا تحفظ: المستخدم يراجع ويضغط حفظ.',
     parameters: obj({
-      plate: str('اللوحة'),
+      plate: str('اللوحة: أرقام مع حرف، ملتصقة أو منفصلة، مثل 777ج أو 12345 ب'),
       customer: str('الزبون'),
       oil: str('الزيت كما في المخزون'),
       liters: num('اللترات'),
@@ -231,8 +231,12 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
     }),
   },
   prepare_car_wash: {
-    description: 'افتح شاشة غسيل معبّأة.',
-    parameters: obj({ plate: str('اللوحة'), customer: str('الزبون'), services: { type: 'array', items: { type: 'string' } } }),
+    description: 'افتح شاشة غسيل معبّأة. «غسيل 777ج» = plate «777ج» بلا خدمات.',
+    parameters: obj({
+      plate: str('اللوحة: أرقام مع حرف، ملتصقة أو منفصلة، مثل 777ج أو 12345 ب'),
+      customer: str('الزبون'),
+      services: { type: 'array', items: { type: 'string' }, description: 'خدمات الغسيل إن ذكرها (داخلي، خارجي، كامل). لا تضع اللوحة ولا كلمة «غسيل» هنا' },
+    }),
   },
   prepare_customer: {
     description: 'افتح شاشة زبون جديد معبّأة.',
@@ -241,6 +245,18 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
   prepare_product: {
     description: 'افتح شاشة صنف جديد معبّأة.',
     parameters: obj({ name: str('الاسم'), kind: KIND, brand: str('الماركة'), sell_price: int('سعر البيع بالدينار كما كتبه المستخدم'), qty: num('الكمية') }, ['name', 'kind']),
+  },
+  prepare_direct_sale: {
+    description: 'افتح شاشة البيع المباشر وسلتها معبّأة: أصناف من المخزون بكمياتها، والزبون، ونقد أو آجل. السعر سعر الصنف المسجّل. البيع والطباعة بضغطة المستخدم. للبيع بلا سيارة ولا خدمة؛ إن ذُكرت لوحة أو غيار فهي prepare_oil_card. ask_product/ask_customer: اسأل أي واحد.',
+    parameters: obj({
+      items: {
+        type: 'array',
+        maxItems: 20,
+        items: obj({ product: str('الصنف كما قاله'), product_id: str('المعرّف إن ظهر في المحادثة'), qty: num('العدد') }, ['qty']),
+      },
+      customer: str('الزبون إن ذكره'),
+      payment: str('cash نقد أو credit آجل', { enum: ['cash', 'credit'] }),
+    }, ['items']),
   },
   prepare_expense: {
     description: 'افتح شاشة مصروف معبّأة.',
@@ -252,7 +268,7 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
   },
   propose_stock_adjust: {
     description: 'اعرض بطاقة تعديل كمية «قبل ← بعد» ليؤكدها المستخدم.',
-    parameters: obj({ product_id: str('المعرّف'), delta: num('الفرق، موجب أو سالب'), reason: str('السبب') }, ['product_id', 'delta', 'reason']),
+    parameters: obj({ product_id: str('المعرّف'), delta: num('الفرق المضاف، موجب أو سالب. «أضف 100» = 100 دائماً، و«خليها 100» = 100 ناقص الكمية الحالية'), reason: str('السبب') }, ['product_id', 'delta', 'reason']),
   },
   propose_product_deactivate: {
     description: 'اعرض بطاقة إيقاف صنف (يختفي من البيع والقوائم ويبقى بسجلاته، ويُرجَع من شاشة المخزون) ليؤكدها المستخدم. هذا ليس مسحاً. اطلب product_id من stock_search أولاً.',
@@ -297,14 +313,44 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
     description: '«ارجع/تراجع عن آخر عملية»: بطاقة تأكيد تُرجع آخر عملية نفّذها المساعد في هذه الجلسة بعملية عكسية مسجّلة (لا محو). nothing_to_undo: ماكو عملية تُرجَع من المساعد؛ تسديد الدين يُلغى من شاشة الديون.',
     parameters: obj({}, []),
   },
+  open_entity: {
+    description: 'افتح شاشة شيء محدد: customer حساب الزبون، debt دينه وتسديداته، product تفاصيل الصنف، product_edit شاشة تعديل الصنف، oil_card آخر بطاقة غيار لسيارة، oil_card_edit تعديل بطاقة لم تُفوتر بعد، supplier حساب المورد، installment خطة تقسيط باسم الزبون، invoice_return إرجاع فاتورة (بالمعرّف فقط). id من نتيجة سابقة، أو name (اسم الزبون أو الصنف أو المورد، أو لوحة السيارة). ask_customer/ask_product/ask_supplier/ask_plan: اسأل أي واحد. not_found: ما لقيته. failed مع سبب: قل السبب كما هو. لا يغيّر شيئاً.',
+    parameters: obj({
+      kind: { type: 'string', enum: ['customer', 'debt', 'product', 'product_edit', 'oil_card', 'oil_card_edit', 'supplier', 'installment', 'invoice_return'], description: 'نوع الشاشة' },
+      id: str('المعرّف إن ظهر في المحادثة'),
+      name: str('الاسم أو اللوحة كما قالها'),
+    }, ['kind']),
+  },
+  settings_get: {
+    description: 'إعدادات التطبيق التي تقدر تغيّرها، بقيمها الحالية: الوضع الداكن (dark_mode)، التنبيهات المختصرة (compact_snack)، الديون/البيع الآجل (debts_enabled، للمالك)، ألوان التطبيق (color_palette ومخططاتها). استدعها قبل التغيير إن لم تعرف القيمة الحالية.',
+    parameters: obj({}, []),
+  },
+  propose_setting_change: {
+    description: 'بطاقة تغيير إعداد «قبل ← بعد» ليؤكدها المستخدم، والتراجع متاح بعدها. «خلي الوضع داكن/ليلي» = dark_mode true، و«فاتح/نهاري» = false. color_palette بقيمة اسم المخطط (كحلي ملكي، منتصف الليل، محيط، غابة، نبيذي، فحمي، أردوازي، نحاسي). unchanged: الإعداد أصلاً هكذا. ask_value: اسأل أي مخطط والأزرار تظهر. أي إعداد غير هذه الأربعة: افتح شاشته بـ ui_navigate وقل إن التغيير بيده.',
+    parameters: obj({
+      setting: { type: 'string', enum: ['dark_mode', 'compact_snack', 'debts_enabled', 'color_palette'], description: 'الإعداد' },
+      value: str('القيمة: true أو false للمفاتيح، أو اسم المخطط للألوان'),
+    }, ['setting', 'value']),
+  },
+  read_supplier_invoice: {
+    description:
+      'اقرأ صورة فاتورة المورّد المرسلة بدقة: كل سطر بالاسم الحرفي والاسم القياسي والنوع (زيت محرك، هيدروليك، فلتر هواء… أو خدمة) ' +
+      'والعدد والمفرد والمجموع، مع التحقق الحسابي وتعليم كل سطر مشكوك فيه. استدعها قبل propose_supplier_intake.',
+    parameters: obj({}),
+  },
   propose_supplier_intake: {
-    description: 'جدول مراجعة لأصناف فاتورة مورّد مقروءة من صورة.',
+    description: 'جدول مراجعة لأصناف فاتورة مورّد، من نتيجة read_supplier_invoice: البضاعة فقط بلا الخدمات.',
     parameters: obj({
       supplier: str('المورّد'),
       items: {
         type: 'array',
         maxItems: 40,
-        items: obj({ name: str('الاسم كما في الفاتورة'), qty: num('العدد'), unit_price: int('سعر المفرد بالدينار') }, ['name', 'qty']),
+        items: obj({
+          name: str('الاسم القياسي name من القراءة'),
+          qty: num('العدد (stock_qty إن وُجد)'),
+          unit_price: int('سعر المفرد بالدينار (stock_unit_price إن وُجد)'),
+          kind: KIND,
+        }, ['name', 'qty']),
       },
     }, ['items']),
   },
@@ -329,7 +375,7 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
 };
 
 /** أقصى عدد أدوات تُعلن في طلب واحد. */
-export const MAX_TOOLS = 48;
+export const MAX_TOOLS = 64;
 
 /** يعيد تعريفات الأدوات المطلوبة المعروفة فقط، بترتيب ثابت حتى يبقى الجزء المخزَّن ثابتاً. */
 export function toolDefsFor(names: unknown): unknown[] {
@@ -337,7 +383,18 @@ export function toolDefsFor(names: unknown): unknown[] {
   return Object.entries(TOOL_DEFS)
     .filter(([n]) => wanted.has(n))
     .slice(0, MAX_TOOLS)
-    .map(([name, d]) => ({ type: 'function', function: { name, description: d.description, parameters: d.parameters } }));
+    .map(([name, d]) => ({ type: 'function', function: { name, description: d.description, parameters: withReplaces(name, d.parameters) } }));
+}
+
+/** أدوات البطاقات تقبل «replaces_previous»: تصحيح يلغي بطاقة الأداة نفسها السابقة
+ * التي لم تُؤكَّد («لا قصدي التوتال» كان يترك بطاقة الشل وزر تأكيدها حياً). */
+export const isCardTool = (name: string) => name.startsWith('propose_') || name.startsWith('prepare_');
+
+const REPLACES = bool('true فقط إذا هذا تصحيح لطلب سابق بنفس الأداة لم يُؤكَّد (لا قصدي، مو هذا، غلط): تُلغى البطاقة السابقة');
+
+function withReplaces(name: string, p: Schema): Schema {
+  if (!isCardTool(name) || p.type !== 'object') return p;
+  return { ...p, properties: { ...(p.properties as Record<string, Schema>), replaces_previous: REPLACES } };
 }
 
 export function knownToolNames(names: unknown): string[] {

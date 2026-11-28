@@ -1,4 +1,5 @@
 import 'assistant_access.dart';
+import 'exec/assistant_actions.dart';
 import 'assistant_tool.dart';
 import 'assistant_tool_guard.dart';
 import 'assistant_tool_result.dart';
@@ -43,6 +44,12 @@ class AssistantToolRegistry {
     if (tool == null) {
       return AssistantToolResult.failure(name, 'not_available');
     }
-    return guard.run(tool, args, ctx);
+    final card = name.startsWith('propose_') || name.startsWith('prepare_');
+    // تصحيح: البطاقة السابقة لنفس الأداة تُلغى قبل ظهور الجديدة.
+    if (card && args['replaces_previous'] == true) AssistantActions.replacePrevious(name);
+    final r = await guard.run(tool, args, ctx);
+    final id = r.extra['action_id'];
+    if (card && id is String) AssistantActions.track(name, id);
+    return r;
   }
 }

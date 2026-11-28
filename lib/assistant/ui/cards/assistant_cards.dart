@@ -766,6 +766,7 @@ String? _stateText(AssistantPendingAction a, {required String doneText}) => swit
   AssistantActionState.done => a.message == null ? doneText : '$doneText ${a.message}',
   AssistantActionState.undone => 'رجّعته مثل ما كان، وانسجلت العملية العكسية.',
   AssistantActionState.cancelled => 'ألغيته. ما تغيّر شي.',
+  AssistantActionState.replaced => 'أُلغي بعد التصحيح. البطاقة الجديدة تحت.',
   AssistantActionState.failed => a.message ?? 'ما گدرت أكمل.',
   AssistantActionState.expired => 'هذا الاقتراح من جلسة سابقة. اسألني مرة ثانية.',
   _ => null,

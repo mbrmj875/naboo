@@ -58,7 +58,11 @@ class _CarWashServicesScreenState extends State<CarWashServicesScreen> {
   }
 
   Future<void> _addOrEdit({CarWashServiceItem? existing}) async {
-    final result = await showCarWashServiceDialog(context, existing: existing);
+    final result = await showCarWashServiceDialog(
+      context,
+      existing: existing,
+      takenNames: _items.map((e) => e.name),
+    );
     if (result == null) return;
     try {
       if (existing == null) {

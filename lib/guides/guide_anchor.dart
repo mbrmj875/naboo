@@ -261,6 +261,8 @@ abstract final class OilGuideAnchors {
   static const expensesAdd = 'expenses.add';
   static const inventoryMovementAdd = 'inventory.movements.add';
   static const warehousesAdd = 'inventory.warehouses.add';
+  static const priceListsNew = 'inventory.price_lists.new';
+  static const syncNow = 'settings.sync.now';
   static const stocktakingNew = 'inventory.stocktaking.new';
   static const purchaseOrderNew = 'inventory.po.new';
   static const barcodeLabelsPrint = 'inventory.barcode.print';

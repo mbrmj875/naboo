@@ -1,3 +1,4 @@
+import '../verticals/oil_change/models/oil_card_wash.dart';
 import 'dart:math' as math;
 
 import 'package:intl/intl.dart';
@@ -16,6 +17,9 @@ import '../verticals/oil_change/utils/oil_change_filter_format.dart';
 import 'receipt_model.dart';
 import '../verticals/oil_change/utils/oil_order_has_oil.dart';
 import '../verticals/oil_change/utils/oil_odometer_unit.dart';
+import '../verticals/oil_change/utils/oil_change_lookup_normalize.dart';
+import '../verticals/oil_change/utils/oil_change_order_status.dart';
+import '../verticals/car_wash/services/wash_offer_engine.dart';
 
 /// يبني [ReceiptDocument] من بيانات المنظومة لكل نوع عمل.
 abstract final class ReceiptBuilders {
@@ -30,7 +34,64 @@ abstract final class ReceiptBuilders {
       order: order,
       accountBalanceFils: await accountBalanceFilsFor(invoice),
       cardDebtPayment: await cardDebtPaymentFor(order),
+      visitNumber: await oilVisitNumberFor(order),
     );
+  }
+
+  /// رقم زيارة السيارة لتبديل الزيت حتى هذه البطاقة (بنفس رقم اللوحة،
+  /// وإلا بنفس العميل). يُستبعد المحذوف والملغى والمعلّق والمرتجع.
+  static Future<int?> oilVisitNumberFor(Map<String, dynamic>? order) async {
+    final o = order;
+    if (o == null || o['orderKind'] != ServiceOrderKinds.oilChange) return null;
+    final at = (o['createdAt'] ?? '').toString();
+    if (at.isEmpty) return null;
+    final key = OilChangeLookupNormalize.normalizePlateKey(
+      (o['deviceSerial'] ?? '').toString(),
+    );
+    final cid = (o['customerId'] as num?)?.toInt() ?? 0;
+    if (key.isEmpty && cid <= 0) return null;
+    try {
+      final helper = DatabaseHelper();
+      final db = await helper.database;
+      final byCustomer = key.isEmpty;
+      final rows = await db.rawQuery(
+        '''
+        SELECT so.deviceSerial
+        FROM service_orders so
+        LEFT JOIN invoices i ON i.id = so.invoiceId AND i.tenantId = so.tenantId
+        WHERE so.tenantId = ?
+          AND so.deletedAt IS NULL
+          AND so.orderKind = ?
+          AND so.status NOT IN (?, ?)
+          AND so.createdAt <= ?
+          ${byCustomer ? 'AND so.customerId = ?' : ''}
+          AND IFNULL(i.isReturned, 0) = 0
+        ''',
+        [
+          await helper.resolveLocalBusinessTenantId(),
+          ServiceOrderKinds.oilChange,
+          OilChangeOrderStatus.cancelled,
+          OilChangeOrderStatus.suspended,
+          at,
+          if (byCustomer) cid,
+        ],
+      );
+      final n = byCustomer
+          ? rows.length
+          : rows
+                .where(
+                  (r) =>
+                      OilChangeLookupNormalize.normalizePlateKey(
+                        (r['deviceSerial'] ?? '').toString(),
+                      ) ==
+                      key,
+                )
+                .length;
+      return n > 0 ? n : null;
+    } catch (e, st) {
+      AppLogger.error('ReceiptBuilders', 'تعذّر عدّ زيارات السيارة', e, st);
+      return null;
+    }
   }
 
   /// ما سُدِّد من الدين السابق في بطاقة الغيار نفسها (الزائد عن الزيارة):
@@ -57,7 +118,9 @@ abstract final class ReceiptBuilders {
         limit: 1,
       );
       if (rows.isEmpty) return null;
-      final paid = IqdMoney.toFils((rows.first['amount'] as num?)?.toDouble() ?? 0);
+      final paid = IqdMoney.toFils(
+        (rows.first['amount'] as num?)?.toDouble() ?? 0,
+      );
       if (paid <= 0) return null;
       return (
         paidFils: paid,
@@ -165,6 +228,7 @@ abstract final class ReceiptBuilders {
     Map<String, dynamic>? order,
     int? accountBalanceFils,
     ({int paidFils, int beforeFils})? cardDebtPayment,
+    int? visitNumber,
   }) {
     final kind = kindOf(invoice, order: order);
     if (kind == ReceiptKind.saleReturn) return saleReturn(invoice);
@@ -256,6 +320,29 @@ abstract final class ReceiptBuilders {
           ReceiptField('الفني', tech, section: ReceiptSection.technician),
         );
       }
+      // الغسلة داخل البطاقة: سطرها في البنود، وهنا نوعها وعاملها وسبب العرض.
+      final wash = OilCardWash.fromOrder(Map<String, dynamic>.from(o));
+      if (wash != null) {
+        final note = (wash.offerNote ?? '').trim();
+        fields.add(
+          ReceiptField(
+            'الغسيل',
+            note.isEmpty
+                ? wash.serviceNames.join('، ')
+                : '${wash.serviceNames.join('، ')} — $note',
+            section: ReceiptSection.wash,
+          ),
+        );
+        if (wash.washerName.isNotEmpty) {
+          fields.add(
+            ReceiptField(
+              'عامل الغسيل',
+              wash.washerName,
+              section: ReceiptSection.wash,
+            ),
+          );
+        }
+      }
       final next = s('odometerNext');
       if (next.isNotEmpty) {
         highlights.add(
@@ -269,10 +356,22 @@ abstract final class ReceiptBuilders {
     }
 
     final notes = <String>[];
+    ReceiptLoyalty? loyalty;
+    if (kind == ReceiptKind.oilChange && visitNumber != null) {
+      loyalty = ReceiptLoyalty(visit: visitNumber);
+    }
     if (kind == ReceiptKind.carWash) {
-      // سبب الخصم والسطر التشجيعي («غسلتان من 3 — الغسلة القادمة مجانية»).
-      for (final line in s('washOfferNote').split('\n')) {
-        if (line.trim().isNotEmpty) notes.add(line.trim());
+      // سبب الخصم والسطر التشجيعي («غسلتان من 3 — الغسلة القادمة مجانية»):
+      // سطر التقدّم يصير صندوق العرض بنقاطه، والباقي ملاحظات.
+      for (final raw in s('washOfferNote').split('\n')) {
+        final line = raw.trim();
+        if (line.isEmpty) continue;
+        final p = loyalty == null ? WashOfferEngine.progressOf(line) : null;
+        if (p != null) {
+          loyalty = ReceiptLoyalty(line: line, done: p.done, total: p.total);
+        } else {
+          notes.add(line);
+        }
       }
       final washer = s('technicianName');
       if (washer.isNotEmpty) {
@@ -319,8 +418,10 @@ abstract final class ReceiptBuilders {
       if (discount > 0) ReceiptTotal('الخصم', discount),
       if (tax > 0) ReceiptTotal('الضريبة', tax),
       ReceiptTotal('الإجمالي', total, emphasis: true),
-      if (isCredit) ReceiptTotal('المدفوع', paid),
-      if (isCredit && total - paid > 0) ReceiptTotal('المتبقي', total - paid),
+      if (isCredit)
+        ReceiptTotal('المدفوع', paid, section: ReceiptSection.payment),
+      if (isCredit && total - paid > 0)
+        ReceiptTotal('المتبقي', total - paid, section: ReceiptSection.payment),
     ];
     final settled = isAnonymous ? null : cardDebtPayment;
     if (settled != null) {
@@ -330,18 +431,10 @@ abstract final class ReceiptBuilders {
       totals
         ..add(ReceiptTotal('دين سابق', settled.beforeFils, section: sec))
         ..add(
-          ReceiptTotal(
-            'تسديد من الدين السابق',
-            settled.paidFils,
-            section: sec,
-          ),
+          ReceiptTotal('تسديد من الدين السابق', settled.paidFils, section: sec),
         )
         ..add(
-          ReceiptTotal(
-            'المستلم',
-            visitPaid + settled.paidFils,
-            section: sec,
-          ),
+          ReceiptTotal('المستلم', visitPaid + settled.paidFils, section: sec),
         )
         ..add(
           ReceiptTotal(
@@ -408,6 +501,7 @@ abstract final class ReceiptBuilders {
       totals: totals,
       highlights: highlights,
       notes: notes,
+      loyalty: loyalty,
       qrData: invoice.id == null
           ? null
           : InvoiceDeepLink.uriForInvoiceId(
@@ -607,6 +701,7 @@ abstract final class ReceiptBuilders {
             'oilFiltersJson':
                 '[{"code":"engine","name":"تويوتا أصلي","priceFils":7000000}]',
           },
+          visitNumber: 7,
         );
       case ReceiptKind.carWash:
         return fromInvoice(
@@ -633,6 +728,7 @@ abstract final class ReceiptBuilders {
             'deviceSerial': 'بصرة 54321',
             'deviceName': 'غسيل',
             'technicianName': 'كرار',
+            'washOfferNote': 'غسلتان من 3 — الغسلة القادمة مجانية',
           },
         );
       case ReceiptKind.directSale:
@@ -717,6 +813,35 @@ abstract final class ReceiptBuilders {
           ],
           totals: const [ReceiptTotal('المبلغ', 60000 * 1000, emphasis: true)],
           notes: const ['التوقيع: ....................'],
+        );
+      case ReceiptKind.customerStatement:
+        return ReceiptDocument(
+          kind: ReceiptKind.customerStatement,
+          date: now,
+          fields: const [ReceiptField('العميل', 'محمد', bold: true)],
+          lines: const [
+            ReceiptLine(name: 'فاتورة #1026', totalFils: 23000 * 1000),
+          ],
+          totals: const [
+            ReceiptTotal('الرصيد المطلوب الآن', 23000 * 1000, emphasis: true),
+          ],
+          notes: const ['المبالغ أمام الفواتير هي الباقي منها.'],
+        );
+      case ReceiptKind.supplierStatement:
+        return ReceiptDocument(
+          kind: ReceiptKind.supplierStatement,
+          date: now,
+          fields: const [
+            ReceiptField('المورد', 'شركة الرافدين للزيوت', bold: true),
+          ],
+          lines: const [
+            ReceiptLine(name: 'وصل #88', totalFils: 450000 * 1000),
+            ReceiptLine(name: 'دفعة', totalFils: -200000 * 1000),
+          ],
+          totals: const [
+            ReceiptTotal('الرصيد الآن', 250000 * 1000, emphasis: true),
+          ],
+          notes: const ['الموجب وصل علينا، والسالب دفعة أو مرتجع.'],
         );
     }
   }

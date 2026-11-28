@@ -15,11 +15,19 @@ class OilChangeTechnicianField extends StatefulWidget {
     required this.controller,
     this.enabled = true,
     this.isDense = false,
+    this.label = 'اسم الفني المسؤول',
+    this.pickerTitle = 'اختر الفني المسؤول',
   });
 
   final TextEditingController controller;
   final bool enabled;
   final bool isDense;
+
+  /// عنوان الحقل (مثلاً «عامل الغسيل» في قسم الغسيل).
+  final String label;
+
+  /// عنوان نافذة الاختيار (مثلاً «اختر عامل الغسيل»).
+  final String pickerTitle;
 
   @override
   State<OilChangeTechnicianField> createState() =>
@@ -92,6 +100,7 @@ class _OilChangeTechnicianFieldState extends State<OilChangeTechnicianField> {
       showDragHandle: true,
       builder: (sheetContext) => _TechnicianPickerSheet(
         names: _names,
+        title: widget.pickerTitle,
         selected: widget.controller.text.trim(),
         summaryFor: _summaryFor,
         onDelete: _confirmDelete,
@@ -188,7 +197,7 @@ class _OilChangeTechnicianFieldState extends State<OilChangeTechnicianField> {
             readOnly: true,
             onTap: _openPicker,
             decoration: InputDecoration(
-              labelText: 'اسم الفني المسؤول',
+              labelText: widget.label,
               border: const OutlineInputBorder(),
               isDense: widget.isDense,
               prefixIcon: const Icon(Icons.handyman_rounded, size: 20),
@@ -235,12 +244,14 @@ class _PickerResult {
 class _TechnicianPickerSheet extends StatelessWidget {
   const _TechnicianPickerSheet({
     required this.names,
+    required this.title,
     required this.selected,
     required this.summaryFor,
     required this.onDelete,
   });
 
   final List<String> names;
+  final String title;
   final String selected;
   final OilChangeEmployeeRatingSummary? Function(String name) summaryFor;
   final Future<bool> Function(BuildContext context, String name) onDelete;
@@ -260,7 +271,7 @@ class _TechnicianPickerSheet extends StatelessWidget {
             Padding(
               padding: const EdgeInsetsDirectional.fromSTEB(20, 0, 20, 8),
               child: Text(
-                'اختر الفني المسؤول',
+                title,
                 style: theme.textTheme.titleMedium,
                 textAlign: TextAlign.start,
               ),

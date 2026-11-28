@@ -180,6 +180,12 @@ class CarWashReportPanel extends StatelessWidget {
                     data.offers.oilDiscountFils.toDouble(),
                     '${data.offers.oilCount} غسلة · ${reportMoneyCompact(data.offers.oilDiscountFils)}',
                   ),
+                if (data.offers.withOilCount > 0)
+                  (
+                    'غسلة مع الغيار',
+                    data.offers.withOilDiscountFils.toDouble(),
+                    '${data.offers.withOilCount} غسلة · ${reportMoneyCompact(data.offers.withOilDiscountFils)}',
+                  ),
                 if (data.offers.manualCount > 0)
                   (
                     'خصم يدوي',
@@ -216,7 +222,7 @@ class CarWashReportPanel extends StatelessWidget {
                       ? '—'
                       : '${v.date!.day}/${v.date!.month} ${v.date!.hour.toString().padLeft(2, '0')}:${v.date!.minute.toString().padLeft(2, '0')}',
                   v.plate.isEmpty ? '—' : v.plate,
-                  v.types,
+                  v.withOil ? '${v.types} (مع الغيار)' : v.types,
                   v.washer,
                   reportMoney(v.amountFils),
                   v.isCredit ? 'آجل' : 'نقدي',

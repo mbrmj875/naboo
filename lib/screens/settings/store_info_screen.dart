@@ -36,10 +36,7 @@ enum StoreInfoScope {
 
 /// بيانات المتجر أو فرع الموظف — تظهر على إيصال البيع وواتساب.
 class StoreInfoScreen extends StatefulWidget {
-  const StoreInfoScreen({
-    super.key,
-    this.scope = StoreInfoScope.workspace,
-  });
+  const StoreInfoScreen({super.key, this.scope = StoreInfoScope.workspace});
 
   final StoreInfoScope scope;
 
@@ -51,6 +48,23 @@ class _StoreInfoScreenState extends State<StoreInfoScreen> {
   final _name = TextEditingController();
   final _address = TextEditingController();
   final List<TextEditingController> _phones = [TextEditingController()];
+
+  // معلومات إضافية تُطبع في الإيصال (للمتجر كله، لا للفرع).
+  final _slogan = TextEditingController();
+  final _taxNumber = TextEditingController();
+  final _hours = TextEditingController();
+  final _instagram = TextEditingController();
+  final _facebook = TextEditingController();
+  final _tiktok = TextEditingController();
+
+  List<TextEditingController> get _extras => [
+    _slogan,
+    _taxNumber,
+    _hours,
+    _instagram,
+    _facebook,
+    _tiktok,
+  ];
 
   bool _loading = true;
   bool _saving = false;
@@ -66,12 +80,11 @@ class _StoreInfoScreenState extends State<StoreInfoScreen> {
 
   bool get _isMyBranch => widget.scope == StoreInfoScope.myBranch;
 
-  String get _screenTitle =>
-      _isMyBranch ? 'بيانات فرعي' : 'بيانات المتجر';
+  String get _screenTitle => _isMyBranch ? 'بيانات فرعي' : 'بيانات المتجر';
 
   String get _hintText => _isMyBranch
       ? 'هذه بياناتك أنت: اسم فرعك وشعارك وهاتفك. تظهر على واتساب '
-          'وإيصال البيع عندما تعمل بهذا الحساب.'
+            'وإيصال البيع عندما تعمل بهذا الحساب.'
       : 'تُستخدم هذه البيانات على إيصال البيع بعد كل عملية طباعة.';
 
   String get _nameLabel => _isMyBranch ? 'اسم الفرع / المحل' : 'اسم المتجر';
@@ -104,6 +117,9 @@ class _StoreInfoScreenState extends State<StoreInfoScreen> {
   void dispose() {
     _name.dispose();
     _address.dispose();
+    for (final c in _extras) {
+      c.dispose();
+    }
     for (final c in _phones) {
       c.dispose();
     }
@@ -134,6 +150,12 @@ class _StoreInfoScreenState extends State<StoreInfoScreen> {
       } else {
         final p = await PrintSettingsRepository.instance.load();
         if (!mounted) return;
+        _slogan.text = p.storeSlogan;
+        _taxNumber.text = p.storeTaxNumber;
+        _hours.text = p.storeHours;
+        _instagram.text = p.storeInstagram;
+        _facebook.text = p.storeFacebook;
+        _tiktok.text = p.storeTiktok;
         _applyIdentity(
           name: p.storeTitleLine,
           address: p.storeAddress,
@@ -294,10 +316,10 @@ class _StoreInfoScreenState extends State<StoreInfoScreen> {
       case DeviceLocationError(:final failure):
         AppMessenger.error(context, message: failure.messageAr);
       case DeviceLocationSuccess(
-          :final latitude,
-          :final longitude,
-          :final accuracyMeters,
-        ):
+        :final latitude,
+        :final longitude,
+        :final accuracyMeters,
+      ):
         setState(() {
           _latitude = latitude;
           _longitude = longitude;
@@ -312,8 +334,10 @@ class _StoreInfoScreenState extends State<StoreInfoScreen> {
 
   /// يعرض العنوان المشتق من الإحداثيات: يملأ الحقل الفارغ، ويستأذن قبل الاستبدال.
   Future<void> _suggestAddressFor(double latitude, double longitude) async {
-    final suggestion = await DeviceLocationService.instance
-        .describeCoordinates(latitude, longitude);
+    final suggestion = await DeviceLocationService.instance.describeCoordinates(
+      latitude,
+      longitude,
+    );
     if (!mounted || suggestion == null) return;
 
     final existing = _address.text.trim();
@@ -398,9 +422,9 @@ class _StoreInfoScreenState extends State<StoreInfoScreen> {
   Future<void> _save() async {
     final name = _name.text.trim();
     if (name.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(_emptyNameError)),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(_emptyNameError)));
       return;
     }
 
@@ -438,6 +462,12 @@ class _StoreInfoScreenState extends State<StoreInfoScreen> {
           storeLongitude: _longitude,
           clearStoreLocation: !_hasLocation,
           storeLogoBase64: logoB64,
+          storeSlogan: _slogan.text.trim(),
+          storeTaxNumber: _taxNumber.text.trim(),
+          storeHours: _hours.text.trim(),
+          storeInstagram: _instagram.text.trim(),
+          storeFacebook: _facebook.text.trim(),
+          storeTiktok: _tiktok.text.trim(),
         );
         if (mounted) {
           await context.read<PrintSettingsProvider>().save(next);
@@ -446,9 +476,9 @@ class _StoreInfoScreenState extends State<StoreInfoScreen> {
         }
       }
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(_savedMessage)),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(_savedMessage)));
       Navigator.pop(context, true);
     } catch (e) {
       if (!mounted) return;
@@ -581,8 +611,9 @@ class _StoreInfoScreenState extends State<StoreInfoScreen> {
                               const SizedBox(width: 6),
                               IconButton(
                                 tooltip: 'حذف الرقم',
-                                onPressed:
-                                    _saving ? null : () => _removePhoneField(i),
+                                onPressed: _saving
+                                    ? null
+                                    : () => _removePhoneField(i),
                                 icon: Icon(
                                   Icons.remove_circle_outline_rounded,
                                   color: cs.error.withValues(alpha: 0.85),
@@ -592,6 +623,7 @@ class _StoreInfoScreenState extends State<StoreInfoScreen> {
                           ],
                         ),
                       ],
+                      if (!_isMyBranch) ..._buildReceiptExtras(),
                     ],
                   ),
                 ),
@@ -599,6 +631,86 @@ class _StoreInfoScreenState extends State<StoreInfoScreen> {
       ),
     );
   }
+
+  /// معلومات اختيارية تظهر في الإيصال؛ الفارغ منها لا يُطبع، ولكل قالب
+  /// مفتاح «معلومات المحل الإضافية» في قسم الطباعة.
+  List<Widget> _buildReceiptExtras() => [
+    const SizedBox(height: 24),
+    Row(
+      children: [
+        const Icon(
+          Icons.receipt_long_rounded,
+          size: 20,
+          color: OilChangeFormTheme.gold,
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            'معلومات إضافية في الإيصال',
+            style: TextStyle(
+              fontWeight: FontWeight.w800,
+              color: OilChangeFormTheme.emphasisText(context),
+            ),
+          ),
+        ),
+      ],
+    ),
+    const SizedBox(height: 4),
+    Text(
+      'اختيارية. ما تكتبه هنا يُطبع في الإيصال: الشعار النصي والرقم الضريبي '
+      'تحت اسم المحل، وأوقات الدوام وحساباتك في الأسفل.',
+      style: TextStyle(
+        color: OilChangeFormTheme.secondaryText(context),
+        height: 1.4,
+      ),
+    ),
+    const SizedBox(height: 12),
+    _StoreField(
+      key: const ValueKey('store-slogan'),
+      controller: _slogan,
+      label: 'شعار المحل النصي (مثال: زيتك علينا)',
+      icon: Icons.format_quote_rounded,
+    ),
+    const SizedBox(height: 12),
+    _StoreField(
+      key: const ValueKey('store-tax'),
+      controller: _taxNumber,
+      label: 'رقم التسجيل أو الرقم الضريبي',
+      icon: Icons.badge_outlined,
+      textDirection: TextDirection.ltr,
+    ),
+    const SizedBox(height: 12),
+    _StoreField(
+      key: const ValueKey('store-hours'),
+      controller: _hours,
+      label: 'أوقات الدوام (مثال: يومياً 8 ص – 10 م)',
+      icon: Icons.schedule_rounded,
+    ),
+    const SizedBox(height: 12),
+    _StoreField(
+      key: const ValueKey('store-instagram'),
+      controller: _instagram,
+      label: 'إنستغرام',
+      icon: Icons.camera_alt_outlined,
+      textDirection: TextDirection.ltr,
+    ),
+    const SizedBox(height: 12),
+    _StoreField(
+      key: const ValueKey('store-facebook'),
+      controller: _facebook,
+      label: 'فيسبوك',
+      icon: Icons.facebook_rounded,
+      textDirection: TextDirection.ltr,
+    ),
+    const SizedBox(height: 12),
+    _StoreField(
+      key: const ValueKey('store-tiktok'),
+      controller: _tiktok,
+      label: 'تيك توك',
+      icon: Icons.music_note_rounded,
+      textDirection: TextDirection.ltr,
+    ),
+  ];
 
   /// شعار المتجر — الضغط عليه يفتح خيارات المصدر، ويظهر عليه شارة تعديل.
   Widget _buildLogoPicker() {
@@ -636,18 +748,18 @@ class _StoreInfoScreenState extends State<StoreInfoScreen> {
                           ),
                         )
                       : logo == null
-                          ? const Icon(
-                              Icons.add_photo_alternate_outlined,
-                              size: 40,
-                              color: OilChangeFormTheme.gold,
-                            )
-                          : Image.memory(
-                              logo,
-                              fit: BoxFit.cover,
-                              width: 96,
-                              height: 96,
-                              gaplessPlayback: true,
-                            ),
+                      ? const Icon(
+                          Icons.add_photo_alternate_outlined,
+                          size: 40,
+                          color: OilChangeFormTheme.gold,
+                        )
+                      : Image.memory(
+                          logo,
+                          fit: BoxFit.cover,
+                          width: 96,
+                          height: 96,
+                          gaplessPlayback: true,
+                        ),
                 ),
                 Container(
                   padding: const EdgeInsets.all(5),
@@ -753,7 +865,9 @@ class _StoreInfoScreenState extends State<StoreInfoScreen> {
               children: [
                 Expanded(
                   child: OutlinedButton.icon(
-                    onPressed: _saving || _locating ? null : _captureGpsLocation,
+                    onPressed: _saving || _locating
+                        ? null
+                        : _captureGpsLocation,
                     icon: _locating
                         ? const SizedBox(
                             width: 16,
@@ -860,6 +974,7 @@ class _StoreInfoScreenState extends State<StoreInfoScreen> {
 
 class _StoreField extends StatelessWidget {
   const _StoreField({
+    super.key,
     required this.controller,
     required this.label,
     required this.icon,

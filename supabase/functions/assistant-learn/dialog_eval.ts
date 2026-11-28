@@ -579,6 +579,154 @@ export const DIALOGS: Dialog[] = [
     ],
   },
   {
+    // من تجربة الجهاز 2026-11-26: «أضف 100» على كمية -1 صارت 100 بدل 99.
+    key: 'dlg14_add_to_negative',
+    profile: 'owner',
+    turns: [
+      {
+        q: 'كم عدنا فلتر TEST؟',
+        fixtures: { stock_search: { ok: true, tool: 'stock_search', total: 1, rows: [{ id: '77', qty: -1, name: 'فلتر TEST', unit: 'قطعة', alert: 'low', sell_price_fils: 5000000 }] } },
+        expect: { must_call: ['stock_search'] },
+      },
+      {
+        q: 'زيد عليه 100 قطعة',
+        fixtures: { propose_stock_adjust: { ok: true, tool: 'propose_stock_adjust', rows: [{ product_id: '77', before: -1, after: 99 }] } },
+        expect: { must_call_with: [{ name: 'propose_stock_adjust', args: { product_id: '77', delta: '100' } }] },
+      },
+    ],
+  },
+  {
+    // من تجربة الجهاز 2026-11-26: قال «العروض غير متوفرة» ثم ذكر شاشتها.
+    key: 'dlg15_wash_offer_screen',
+    profile: 'owner',
+    turns: [
+      {
+        q: 'اريد اسوي عرض الغسلة الثالثة بالشهر ببلاش',
+        fixtures: { ui_navigate: { ok: true, tool: 'ui_navigate', rows: [] } },
+        expect: { must_call_with: [{ name: 'ui_navigate', args: { route_id: 'app_settings_wash_offers' } }] },
+      },
+    ],
+  },
+  {
+    // ك2: فتح شيء محدد باسمه.
+    key: 'dlg18_open_customer_debt',
+    profile: 'owner',
+    extraTools: ['open_entity'],
+    turns: [
+      {
+        q: 'افتحلي دين ابو علي',
+        fixtures: { open_entity: { ok: true, tool: 'open_entity', rows: [{ opened: true, kind: 'debt', name: 'ابو علي' }] } },
+        expect: { must_call_with: [{ name: 'open_entity', args: { kind: 'debt', name: 'علي' } }] },
+      },
+    ],
+  },
+  {
+    key: 'dlg19_open_last_card_plate',
+    profile: 'staff_full',
+    extraTools: ['open_entity'],
+    turns: [
+      {
+        q: 'افتح اخر بطاقة للسيارة 12345',
+        fixtures: { open_entity: { ok: true, tool: 'open_entity', rows: [{ opened: true, kind: 'oil_card', name: 'بطاقة 12345 (2026-11-20)' }] } },
+        expect: { must_call_with: [{ name: 'open_entity', args: { kind: 'oil_card', name: '12345' } }] },
+      },
+    ],
+  },
+  {
+    // ك2-ب: الشاشات الداخلية تُفتح مباشرة بمعرّفها.
+    key: 'dlg21_open_inner_categories',
+    profile: 'owner',
+    turns: [
+      {
+        q: 'وين اضيف تصنيف جديد للمنتجات',
+        fixtures: { ui_navigate: { ok: true, tool: 'ui_navigate', rows: [] } },
+        expect: { must_call_with: [{ name: 'ui_navigate', args: { route_id: 'app_inventory_categories' } }] },
+      },
+    ],
+  },
+  {
+    key: 'dlg22_open_supplier',
+    profile: 'owner',
+    extraTools: ['open_entity'],
+    turns: [
+      {
+        q: 'افتح حساب المورد شركة الرافدين',
+        fixtures: { open_entity: { ok: true, tool: 'open_entity', rows: [{ opened: true, kind: 'supplier', name: 'شركة الرافدين' }] } },
+        expect: { must_call_with: [{ name: 'open_entity', args: { kind: 'supplier', name: 'الرافدين' } }] },
+      },
+    ],
+  },
+  {
+    key: 'dlg23_push_settings',
+    profile: 'owner',
+    turns: [
+      {
+        q: 'الاشعارات ما توصلني على التلفون',
+        fixtures: { ui_navigate: { ok: true, tool: 'ui_navigate', rows: [] } },
+        expect: { must_call_with_any: [{ name: 'ui_navigate', args: { route_id: 'app_push_settings' } }, { name: 'ui_navigate', args: { route_id: 'app_settings_notifications' } }] },
+      },
+    ],
+  },
+  {
+    // ك2: ما لا أداة له يُفتح ويُدلّ عليه بدل «ما أكدر».
+    key: 'dlg20_no_tool_opens_screen',
+    profile: 'owner',
+    turns: [
+      {
+        q: 'اريد افصل جهاز من الحساب',
+        fixtures: { ui_navigate: { ok: true, tool: 'ui_navigate', rows: [] } },
+        expect: { must_call_with: [{ name: 'ui_navigate', args: { route_id: 'app_settings_subscription_account' } }] },
+      },
+    ],
+  },
+  {
+    // ك1: الإعدادات من المساعد.
+    key: 'dlg16_dark_mode',
+    profile: 'staff_full',
+    extraTools: ['settings_get', 'propose_setting_change'],
+    turns: [
+      {
+        q: 'خلي التطبيق ليلي',
+        fixtures: { propose_setting_change: { ok: true, tool: 'propose_setting_change', rows: [{ setting: 'الوضع الداكن', before: 'فاتح (نهاري)', after: 'داكن', awaiting_confirm: true }] } },
+        expect: { must_call_with: [{ name: 'propose_setting_change', args: { setting: 'dark_mode', value: 'true' } }] },
+      },
+      {
+        q: 'لا رجعه نهاري',
+        fixtures: { propose_setting_change: { ok: true, tool: 'propose_setting_change', rows: [{ setting: 'الوضع الداكن', value: 'فاتح (نهاري)', unchanged: true }] } },
+        expect: { must_call_with: [{ name: 'propose_setting_change', args: { setting: 'dark_mode', value: 'false' } }] },
+      },
+    ],
+  },
+  {
+    key: 'dlg17_colors',
+    profile: 'owner',
+    extraTools: ['settings_get', 'propose_setting_change'],
+    turns: [
+      {
+        q: 'اريد اغير الوان التطبيق للنحاسي',
+        fixtures: { propose_setting_change: { ok: true, tool: 'propose_setting_change', rows: [{ setting: 'ألوان التطبيق', before: 'كحلي ملكي', after: 'نحاسي', awaiting_confirm: true }] } },
+        expect: {
+          must_call_with_any: [
+            { name: 'propose_setting_change', args: { setting: 'color_palette', value: 'نحاسي' } },
+            { name: 'propose_setting_change', args: { setting: 'color_palette', value: 'copper' } },
+          ],
+        },
+      },
+    ],
+  },
+  {
+    // من تجربة الجهاز 2026-11-26: «غسيل 777ج» وضع اللوحة في الخدمات.
+    key: 'dlg13_wash_plate_short',
+    profile: 'staff_full',
+    turns: [
+      {
+        q: 'غسيل 777ج',
+        fixtures: { prepare_car_wash: { ok: true, tool: 'prepare_car_wash', opened: true } },
+        expect: { must_call_with: [{ name: 'prepare_car_wash', args: { plate: '777' } }] },
+      },
+    ],
+  },
+  {
     key: 'dlg09_spec_then_card',
     profile: 'staff_full',
     turns: [

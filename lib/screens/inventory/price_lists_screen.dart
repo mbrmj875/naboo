@@ -5,6 +5,7 @@ import 'package:naboo/theme/design_tokens.dart';
 import 'package:naboo/widgets/inputs/app_price_input.dart';
 import 'package:naboo/utils/iraqi_currency_format.dart';
 import 'package:naboo/utils/app_logger.dart';
+import 'package:naboo/guides/guide_anchor.dart';
 
 class PriceListsScreen extends StatefulWidget {
   const PriceListsScreen({super.key});
@@ -166,14 +167,17 @@ class _PriceListsScreenState extends State<PriceListsScreen>
             ],
           ),
         ),
-        floatingActionButton: FloatingActionButton.extended(
-          backgroundColor: AppColors.accentGold,
-          foregroundColor: AppColors.primaryDark,
-          onPressed: () => _openForm(),
-          icon: const Icon(Icons.add_rounded),
-          label: const Text(
-            'قائمة جديدة',
-            style: TextStyle(fontWeight: FontWeight.bold),
+        floatingActionButton: GuideAnchor(
+          id: OilGuideAnchors.priceListsNew,
+          child: FloatingActionButton.extended(
+            backgroundColor: AppColors.accentGold,
+            foregroundColor: AppColors.primaryDark,
+            onPressed: () => _openForm(),
+            icon: const Icon(Icons.add_rounded),
+            label: const Text(
+              'قائمة جديدة',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
           ),
         ),
         body: TabBarView(

@@ -11,6 +11,7 @@ import '../exec/assistant_exec_port.dart';
 import '../exec/assistant_name_match.dart';
 import '../exec/assistant_prefill.dart';
 import '../exec/assistant_reminders.dart';
+import '../exec/assistant_settings_catalog.dart';
 
 /// أدوات التنفيذ بتأكيد (4.5، م4).
 ///
@@ -32,6 +33,7 @@ List<AssistantTool> buildExecTools(
   PrepareCustomerTool(data, port, canOpen),
   PrepareProductTool(data, port, canOpen),
   PrepareExpenseTool(data, port, canOpen),
+  PrepareDirectSaleTool(data, port, canOpen),
   ProposePriceChangeTool(data, port, canOpen),
   ProposeStockAdjustTool(data, port, canOpen),
   ProposeSupplierIntakeTool(data, port, canOpen),
@@ -44,6 +46,9 @@ List<AssistantTool> buildExecTools(
   ProposeProductEditTool(data, port, canOpen),
   ProposeProductReactivateTool(data, port, canOpen),
   UndoLastActionTool(data, port, canOpen),
+  SettingsGetTool(data, port, canOpen),
+  ProposeSettingChangeTool(data, port, canOpen),
+  OpenEntityTool(data, port, canOpen),
 ];
 
 /// أسماء أدوات التنفيذ، لفحص أن الممنوع غير موجود.
@@ -53,6 +58,7 @@ const assistantExecToolNames = {
   'prepare_customer',
   'prepare_product',
   'prepare_expense',
+  'prepare_direct_sale',
   'propose_price_change',
   'propose_stock_adjust',
   'propose_supplier_intake',
@@ -65,6 +71,9 @@ const assistantExecToolNames = {
   'propose_product_edit',
   'propose_product_reactivate',
   'undo_last_action',
+  'settings_get',
+  'propose_setting_change',
+  'open_entity',
 };
 
 abstract class _ExecTool extends AssistantTool {
@@ -105,6 +114,49 @@ abstract class _ExecTool extends AssistantTool {
         'candidates_total': labels.length,
       },
     );
+  }
+
+  /// أسماء الزبائن للأزرار: الاسم المكرر يُميَّز بآخر زيارة (أو بالرقم إن
+  /// تشابهت)، فيصير لكل زر زبون واحد. كان «ابو علي» مرتين يظهر زراً واحداً.
+  static List<String> customerLabels(
+    List<Map<String, Object?>> hits, {
+    String nameKey = 'name',
+    String idKey = 'id',
+  }) {
+    final names = [for (final c in hits) '${c[nameKey]}'.trim()];
+    String hint(Map<String, Object?> c) {
+      final v = c['last_visit'];
+      return v != null ? 'آخر زيارة $v' : 'زبون رقم ${c[idKey]}';
+    }
+
+    final out = [
+      for (var i = 0; i < hits.length; i++)
+        names.where((n) => n == names[i]).length > 1
+            ? '${names[i]} · ${hint(hits[i])}'
+            : names[i],
+    ];
+    // تشابه حتى بعد التمييز: الرقم يحسم.
+    return [
+      for (var i = 0; i < out.length; i++)
+        out.where((l) => l == out[i]).length > 1
+            ? '${names[i]} · زبون رقم ${hits[i][idKey]}'
+            : out[i],
+    ];
+  }
+
+  /// الاسم الأصلي من جواب الزر («ابو علي · آخر زيارة …» ← «ابو علي»).
+  static String baseName(String q) => q.split(' · ').first.trim();
+
+  /// الزبون الذي يطابق نص زر بعينه، أو null.
+  static Map<String, Object?>? pickByLabel(
+    String q,
+    List<Map<String, Object?>> hits, {
+    String nameKey = 'name',
+    String idKey = 'id',
+  }) {
+    final labels = customerLabels(hits, nameKey: nameKey, idKey: idKey);
+    final i = labels.indexOf(q.trim());
+    return i < 0 ? null : hits[i];
   }
 
   /// ع7: الصنف بمعرّفه، أو باسمه من المخزون نفسه. يرجع المعرّف، أو نتيجة
@@ -203,6 +255,8 @@ abstract class _ExecTool extends AssistantTool {
         {'key': k, 'label': AssistantPrefill.labels[k] ?? k, 'missing': true},
   ];
 
+  static const _receiptTools = {'prepare_direct_sale', 'prepare_oil_card', 'prepare_car_wash'};
+
   /// يسجّل فتح النموذج كاقتراح قابل للتكرار: يُفتح، وإن أُغلق بلا حفظ يبقى جاهزاً.
   AssistantToolResult prepared(
     AssistantPrefill p, {
@@ -213,12 +267,14 @@ abstract class _ExecTool extends AssistantTool {
     Map<String, Object?> more = const {},
     AssistantPrefill Function(AssistantPrefill p, String choice)? withChoice,
   }) {
+    if (_receiptTools.contains(name)) AssistantActions.pendingUnsaved = name;
     final actionId = AssistantActions.register((choice) async {
       final use = choice == null || withChoice == null
           ? p
           : withChoice(p, choice);
       final out = await port.openForm(use);
       if (!out.saved) return AssistantActions.reopen;
+      if (AssistantActions.pendingUnsaved == name) AssistantActions.pendingUnsaved = null;
       await AssistantPrefill.recordSaved(
         use,
         entityType: entityType,
@@ -406,6 +462,103 @@ class PrepareCarWashTool extends _ExecTool {
         const ['plate', 'customer', 'services'],
         required: const {'plate'},
       ),
+    );
+  }
+}
+
+/// ح2: سلة البيع المباشر معبّأة: الأصناف من المخزون بكمياتها، والزبون،
+/// ونقد أو آجل. السعر سعر الصنف المسجّل، والبيع بزر الشاشة فقط.
+class PrepareDirectSaleTool extends _ExecTool {
+  const PrepareDirectSaleTool(super.data, super.port, super.canOpen);
+
+  @override
+  String get name => 'prepare_direct_sale';
+
+  @override
+  List<String> get requiredPermissions => const [];
+
+  @override
+  Map<String, AssistantArgSpec> get args => const {
+    'items': AssistantArgSpec(AssistantArgType.list, required: true),
+    'customer': AssistantArgSpec(AssistantArgType.string),
+    'payment': AssistantArgSpec(AssistantArgType.string),
+  };
+
+  @override
+  Future<AssistantToolResult> run(
+    Map<String, Object?> args,
+    AssistantToolContext ctx,
+  ) async {
+    if (!canOpen(AppContentRoutes.oilDirectSale))
+      return routeDenied(AppContentRoutes.oilDirectSale, 'البيع المباشر');
+    final raw = (args['items'] as List?) ?? const [];
+    if (raw.isEmpty || raw.length > 20)
+      return AssistantToolResult.failure(name, 'bad_args:items');
+    final stock = await data.stockItems();
+    final lines = <Map<String, Object?>>[];
+    final labels = <String>[];
+    final short = <Map<String, Object?>>[];
+    for (final it in raw) {
+      if (it is! Map) continue;
+      final qty = _ExecTool.n(it['qty'])?.round() ?? 1;
+      if (qty <= 0 || qty > 1000) continue;
+      final (pid, ask) = await resolveProduct({
+        'product_id': it['product_id'],
+        'product': it['product'] ?? it['name'],
+      }, pool: stock);
+      if (ask != null) return ask;
+      if (pid == null) continue;
+      final item = stock.where((x) => x['id'] == pid).firstOrNull;
+      final label = '${item?['name'] ?? pid}';
+      lines.add({'product_id': pid, 'qty': qty});
+      labels.add('$label ×$qty');
+      final have = (item?['qty'] as num?)?.toDouble();
+      if (have != null && have < qty) {
+        short.add({'product': label, 'available': have, 'needed': qty});
+      }
+    }
+    if (lines.isEmpty) return AssistantToolResult.failure(name, 'bad_args:items');
+    // الزبون: يُربط إن طابق اسماً واحداً، وإلا يبقى الاسم كما قاله.
+    var cname = _ExecTool.s(args['customer']);
+    int? cid;
+    if (cname != null) {
+      final base = _ExecTool.baseName(cname);
+      final hits = await data.customers(base, limit: 8);
+      final exact = hits.where((c) => '${c['name']}'.trim() == base).toList();
+      final one =
+          _ExecTool.pickByLabel(cname, hits) ??
+          (hits.length == 1 ? hits.single : (exact.length == 1 ? exact.single : null));
+      if (one == null && hits.length > 1) {
+        return askPick('ask_customer', _ExecTool.customerLabels(hits));
+      }
+      cid = _ExecTool.id(one?['id']);
+      if (one != null) cname = '${one['name']}';
+    }
+    final pay = '${args['payment'] ?? ''}'.trim().toLowerCase();
+    final credit = const {'credit', 'debt', 'آجل', 'اجل', 'دين', 'بالدين'}.contains(pay);
+    final p = AssistantPrefill(
+      tool: name,
+      turnId: ctx.turnId,
+      values: {
+        'lines': lines,
+        'items': labels,
+        'customer': cname,
+        'customer_id': cid,
+        'credit': credit,
+        'payment': credit ? 'آجل' : 'نقد',
+      },
+    );
+    return prepared(
+      p,
+      route: AppContentRoutes.oilDirectSale,
+      entityType: 'invoice',
+      ctx: ctx,
+      fieldRows: _ExecTool.fields(
+        p,
+        const ['items', 'customer', 'payment'],
+        required: credit ? const {'customer'} : const {},
+      ),
+      more: {if (short.isNotEmpty) 'stock_short': short},
     );
   }
 }
@@ -946,11 +1099,16 @@ class OpenPrintPreviewTool extends _ExecTool {
     AssistantToolContext ctx,
   ) async {
     final kind = '${args['kind']}';
+    final ref = _ExecTool.s(args['ref']);
+    // وصل بلا رقم وهناك بيع أو بطاقة لم تُحفظ: لا نفتح وصلاً قديماً.
+    final pending = AssistantActions.pendingUnsaved;
+    if (kind == 'receipt' && ref == null && pending != null) {
+      return AssistantToolResult.success(name, [
+        {'unsaved_draft': pending, 'printed': false, 'opened': false},
+      ]);
+    }
     // فتح المعاينة ليس كتابة: الطباعة نفسها بضغطة المستخدم من المعاينة.
-    final err = await port.openPrintPreview(
-      kind: kind,
-      ref: _ExecTool.s(args['ref']),
-    );
+    final err = await port.openPrintPreview(kind: kind, ref: ref);
     if (err != null) return AssistantToolResult.failure(name, err);
     return AssistantToolResult.success(name, [
       {'opened': kind, 'printed': false},
@@ -1249,7 +1407,7 @@ class ProposeDebtPaymentTool extends _ExecTool {
       for (final d in await data.debtors())
         if (((d['amount_fils'] as num?) ?? 0) > 0) d,
     ];
-    final nq = _norm(q);
+    final nq = _norm(_ExecTool.baseName(q));
     final exact = [
       for (final d in debtors)
         if (_norm('${d['customer']}') == nq) d,
@@ -1264,7 +1422,8 @@ class ProposeDebtPaymentTool extends _ExecTool {
           ];
     final pick = wantId != null
         ? debtors.where((d) => d['customer_id'] == wantId).firstOrNull
-        : (near.length == 1 ? near.first : null);
+        : (_ExecTool.pickByLabel(q, near, nameKey: 'customer', idKey: 'customer_id') ??
+              (near.length == 1 ? near.first : null));
     if (pick == null) {
       if (near.isEmpty) {
         return AssistantToolResult.success(name, [
@@ -1274,7 +1433,7 @@ class ProposeDebtPaymentTool extends _ExecTool {
       // ع7: سؤال واحد «أي واحد منهم؟» بأزرار الأسماء.
       return askPick(
         'ask_customer',
-        [for (final d in near) '${d['customer']}'],
+        _ExecTool.customerLabels(near, nameKey: 'customer', idKey: 'customer_id'),
         more: {
           'ids': [for (final d in near) d['customer_id']],
         },
@@ -1648,5 +1807,252 @@ class UndoLastActionTool extends _ExecTool {
       [row],
       extra: {'action_id': actionId, ...row},
     );
+  }
+}
+
+/// ك1: الإعدادات التي يقدر المساعد يقرؤها ويغيّرها، بقيمها الحالية.
+/// ما يخص المالك وحده لا يظهر لغيره، كما في شاشة الإعدادات.
+class SettingsGetTool extends _ExecTool {
+  const SettingsGetTool(super.data, super.port, super.canOpen);
+
+  @override
+  String get name => 'settings_get';
+
+  // بلا صلاحية خاصة: شرط المالك داخل الفهرس نفسه، كما في شاشة الإعدادات.
+  @override
+  List<String> get requiredPermissions => const [];
+
+  @override
+  Map<String, AssistantArgSpec> get args => const {};
+
+  @override
+  Future<AssistantToolResult> run(
+    Map<String, Object?> args,
+    AssistantToolContext ctx,
+  ) async {
+    final rows = <Map<String, Object?>>[];
+    for (final spec in AssistantSettingsCatalog.all) {
+      if (spec.ownerOnly && !ctx.isOwner) continue;
+      final v = await port.readSetting(spec.key);
+      rows.add({
+        'setting': spec.key,
+        'name': spec.label,
+        'value': v == null ? null : spec.display(v),
+        if (spec.kind == AssistantSettingKind.choice)
+          'choices': spec.choices.values.toList(),
+      });
+    }
+    return AssistantToolResult.success(name, rows);
+  }
+}
+
+/// ك1: بطاقة تغيير إعداد «قبل ← بعد». الحفظ بدالة شاشة الإعداد نفسها،
+/// والتراجع يرجع القيمة السابقة.
+class ProposeSettingChangeTool extends _ExecTool {
+  const ProposeSettingChangeTool(super.data, super.port, super.canOpen);
+
+  @override
+  String get name => 'propose_setting_change';
+
+  // بلا صلاحية خاصة: شرط المالك داخل الفهرس نفسه، كما في شاشة الإعدادات.
+  @override
+  List<String> get requiredPermissions => const [];
+
+  @override
+  Map<String, AssistantArgSpec> get args => const {
+    'setting': AssistantArgSpec(AssistantArgType.string, required: true),
+    'value': AssistantArgSpec(AssistantArgType.string, required: true),
+  };
+
+  @override
+  Future<AssistantToolResult> run(
+    Map<String, Object?> args,
+    AssistantToolContext ctx,
+  ) async {
+    final spec = AssistantSettingsCatalog.byKey(_ExecTool.s(args['setting']));
+    if (spec == null) {
+      return AssistantToolResult.failure(name, 'bad_args:setting');
+    }
+    if (spec.ownerOnly && !ctx.isOwner) {
+      return AssistantToolResult.failure(
+        name,
+        'forbidden',
+        needsLabel: 'صاحب المحل',
+      );
+    }
+    final value = spec.parse(args['value']);
+    if (value == null) {
+      if (spec.kind == AssistantSettingKind.choice) {
+        return askPick('ask_value', spec.choices.values.toList());
+      }
+      return AssistantToolResult.failure(name, 'bad_args:value');
+    }
+    final before = await port.readSetting(spec.key);
+    if (before == null) return AssistantToolResult.failure(name, 'failed');
+    if (before == value) {
+      return AssistantToolResult.success(name, [
+        {
+          'setting': spec.label,
+          'value': spec.display(value),
+          'unchanged': true,
+        },
+      ]);
+    }
+    final actionId = AssistantActions.register(
+      label: 'تغيير ${spec.label}',
+      undo: logged(
+        ctx,
+        'setting',
+        spec.key,
+        () => port.writeSetting(spec.key, before),
+      ),
+      (_) async {
+        final err = await port.writeSetting(spec.key, value);
+        if (err != null) return err;
+        await AssistantPrefill.recordSaved(
+          AssistantPrefill(
+            tool: name,
+            values: {'setting': spec.key},
+            turnId: ctx.turnId,
+          ),
+          entityType: 'setting',
+          entityId: spec.key,
+          username: ctx.userName,
+        );
+        return null;
+      },
+    );
+    final row = {
+      'setting': spec.label,
+      'before': spec.display(before),
+      'after': spec.display(value),
+      'awaiting_confirm': true,
+    };
+    return AssistantToolResult.success(
+      name,
+      [row],
+      extra: {'action_id': actionId, ...row},
+    );
+  }
+}
+
+/// ك2: يفتح شاشة شيء محدد باسمه أو معرّفه: حساب زبون، دينه، صنف، آخر بطاقة
+/// غيار لسيارة. لا يكتب شيئاً. الشاشة نفسها تُفحص كما يفحصها التطبيق: من لا
+/// يرى قائمتها لا يفتحها.
+class OpenEntityTool extends _ExecTool {
+  const OpenEntityTool(super.data, super.port, super.canOpen);
+
+  @override
+  String get name => 'open_entity';
+
+  @override
+  List<String> get requiredPermissions => const [];
+
+  @override
+  Map<String, AssistantArgSpec> get args => const {
+    'kind': AssistantArgSpec(AssistantArgType.string, required: true),
+    'id': AssistantArgSpec(AssistantArgType.string),
+    'name': AssistantArgSpec(AssistantArgType.string),
+  };
+
+  static const _routes = {
+    'customer': (AppContentRoutes.customers, 'العملاء'),
+    'debt': (AppContentRoutes.debts, 'الديون'),
+    'product': (AppContentRoutes.inventoryProducts, 'المخزون'),
+    'oil_card': (AppContentRoutes.oilServicesLog, 'سجل غيارات الزيت'),
+    // ك2-ب: شاشات شيء محدد كانت تُفتح من داخل شاشة أخرى فقط.
+    'product_edit': (AppContentRoutes.productEdit, 'تعديل المنتج'),
+    'oil_card_edit': (AppContentRoutes.oilCardEdit, 'تعديل البطاقة'),
+    'supplier': (AppContentRoutes.supplierDetail, 'حساب المورد'),
+    'installment': (AppContentRoutes.installments, 'الأقساط'),
+    'invoice_return': (AppContentRoutes.invoiceReturn, 'مرتجع الفاتورة'),
+  };
+
+  @override
+  Future<AssistantToolResult> run(
+    Map<String, Object?> args,
+    AssistantToolContext ctx,
+  ) async {
+    final kind = _ExecTool.s(args['kind']);
+    final route = _routes[kind];
+    if (kind == null || route == null) {
+      return AssistantToolResult.failure(name, 'bad_args:kind');
+    }
+    if (!canOpen(route.$1)) return routeDenied(route.$1, route.$2);
+    final q = _ExecTool.s(args['name']);
+    var id = _ExecTool.id(args['id']);
+    String? label = q;
+    if (id == null) {
+      if (q == null) return AssistantToolResult.failure(name, 'bad_args:name');
+      switch (kind) {
+        case 'product' || 'product_edit':
+          final (pid, ask) = await resolveProduct({'product': q});
+          if (ask != null) return ask;
+          id = pid;
+        case 'invoice_return':
+          // الفاتورة تُحدَّد برقمها فقط، فلا يُرجَع على فاتورة خاطئة.
+          return AssistantToolResult.failure(name, 'bad_args:id');
+        case 'supplier' || 'installment':
+          final hits = await port.findEntities(kind, q);
+          if (hits.isEmpty) {
+            return AssistantToolResult.success(name, [
+              {'not_found': true, 'name': q},
+            ]);
+          }
+          final exact = hits.where((h) => '${h['name']}'.trim() == q).toList();
+          final pick = hits.length == 1
+              ? hits.single
+              : exact.length == 1
+              ? exact.single
+              : null;
+          if (pick == null) {
+            return askPick(kind == 'supplier' ? 'ask_supplier' : 'ask_plan', [
+              for (final h in hits) '${h['name']}',
+            ]);
+          }
+          id = _ExecTool.id(pick['id']);
+          label = '${pick['name']}';
+        case 'oil_card' || 'oil_card_edit':
+          final cards = await data.oilCards(plate: q, limit: 1);
+          if (cards.isEmpty) {
+            return AssistantToolResult.success(name, [
+              {'not_found': true, 'plate': q},
+            ]);
+          }
+          id = _ExecTool.id(cards.first['id']);
+          label = 'بطاقة ${cards.first['plate']} (${cards.first['date']})';
+        default:
+          final base = _ExecTool.baseName(q);
+          final hits = await data.customers(base, limit: 8);
+          if (kind == 'debt')
+            hits.retainWhere((c) => ((c['open_debt_fils'] as num?) ?? 0) > 0);
+          if (hits.isEmpty) {
+            return AssistantToolResult.success(name, [
+              {'not_found': true, 'customer': q},
+            ]);
+          }
+          if (hits.length > 1) {
+            final exact = hits
+                .where((c) => '${c['name']}'.trim() == base)
+                .toList();
+            final chosen = _ExecTool.pickByLabel(q, hits) ??
+                (exact.length == 1 ? exact.single : null);
+            if (chosen == null) {
+              return askPick('ask_customer', _ExecTool.customerLabels(hits));
+            }
+            hits
+              ..clear()
+              ..add(chosen);
+          }
+          id = _ExecTool.id(hits.single['id']);
+          label = '${hits.single['name']}';
+      }
+    }
+    if (id == null) return AssistantToolResult.failure(name, 'not_found');
+    final err = await port.openEntity(kind, id);
+    if (err != null) return AssistantToolResult.failure(name, 'failed:$err');
+    return AssistantToolResult.success(name, [
+      {'opened': true, 'kind': kind, 'name': ?label},
+    ]);
   }
 }

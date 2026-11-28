@@ -150,6 +150,21 @@ abstract class AssistantExecPort {
     required String userName,
     String? note,
   });
+
+  /// ك2: يفتح شاشة شيء محدد كما تفتحها شاشات التطبيق: customer (حساب الزبون)،
+  /// debt (دين الزبون)، product (تفاصيل الصنف)، oil_card (تفاصيل بطاقة الغيار).
+  /// null نجاح، وإلا الرسالة.
+  Future<String?> openEntity(String kind, int id);
+
+  /// ك2-ب: بحث بالاسم عن مورد (`supplier`) أو خطة تقسيط باسم زبونها
+  /// (`installment`)؛ يعيد [{id, name}] بحد أقصى 8.
+  Future<List<Map<String, Object?>>> findEntities(String kind, String q);
+
+  /// ك1: قيمة إعداد من [AssistantSettingsCatalog] كما تقرؤها شاشته، أو null.
+  Future<Object?> readSetting(String key);
+
+  /// ك1: يحفظ الإعداد بدالة شاشته نفسها. null نجاح، وإلا الرسالة.
+  Future<String?> writeSetting(String key, Object value);
 }
 
 /// نتيجة تسديد الدين: [error] رسالة للمستخدم، أو المبالغ بعد التسديد.

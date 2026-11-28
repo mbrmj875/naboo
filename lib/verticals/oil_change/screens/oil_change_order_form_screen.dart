@@ -10,6 +10,12 @@ import '../../../guides/guide_controller.dart';
 import '../../../theme/design_tokens.dart';
 import '../../../models/customer_record.dart';
 import '../models/oil_card_required_fields.dart';
+import '../models/oil_card_wash.dart';
+import '../../car_wash/models/car_wash_service_item.dart';
+import '../../car_wash/services/car_wash_services_repository.dart';
+import '../../car_wash/services/wash_offer_engine.dart';
+import '../../../models/store_policy.dart';
+import '../../../services/store_policy_settings_repository.dart';
 import '../models/oil_change_hydraulic_card_slot.dart';
 import '../models/oil_change_filter_catalog_entry.dart';
 import '../models/oil_change_filter_kind.dart';
@@ -32,6 +38,7 @@ import '../../../services/database_helper.dart';
 import '../../../services/shared_db_transaction.dart';
 import '../../../services/tenant_context_service.dart';
 import '../../../services/product_repository.dart';
+import '../services/card_wash_order_sync.dart';
 import '../services/oil_change_orders_repository.dart';
 import '../services/oil_change_settings.dart';
 import '../services/oil_change_services_repository.dart';
@@ -107,6 +114,7 @@ import '../../../assistant/ui/assistant_context_scope.dart';
 part 'oil_change_order_form/oil_form_types.dart';
 part 'oil_change_order_form/oil_form_sections.dart';
 part 'oil_change_order_form/oil_form_save.dart';
+part 'oil_change_order_form/oil_form_wash.dart';
 
 class OilChangeOrderFormScreen extends StatefulWidget {
   const OilChangeOrderFormScreen({
@@ -192,6 +200,14 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
 
   final Set<int> _selectedOilServiceIds = {};
   List<OilChangeServiceItem> _oilCatalog = [];
+
+  /// الغسيل في البطاقة: كتالوج الغسيل، والأنواع المختارة بأسمائها، وعاملها،
+  /// والغسلة كما حُفظت (تعديل بطاقة)، وعرض «غسلة مع الغيار».
+  List<CarWashServiceItem> _washCatalog = const [];
+  final Set<String> _cardWashSelected = {};
+  final _cardWashWasher = TextEditingController();
+  OilCardWash? _cardWashSaved;
+  WithOilWashOffer _withOilOffer = const WithOilWashOffer();
   int _basePriceFils = 0;
   bool _agreedTotalManual = false;
   bool _advanceManuallyEdited = false;
@@ -758,12 +774,17 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       _OilFormOptionalSection.hydraulicGear => OilOptionalExtraKind.hydraulicGear,
       _OilFormOptionalSection.hydraulicPower => OilOptionalExtraKind.hydraulicPower,
       _OilFormOptionalSection.services => OilOptionalExtraKind.services,
+      _OilFormOptionalSection.carWash => OilOptionalExtraKind.carWash,
     };
   }
 
   bool _isOptionalSectionEnabled(_OilFormOptionalSection section) {
     // الزيت متاح دائماً؛ إعدادات الإضافات لا تخفيه.
     if (section == _OilFormOptionalSection.oil) return true;
+    // الغسيل يظهر فقط إن كان في المحل أنواع غسيل فعّالة.
+    if (section == _OilFormOptionalSection.carWash && _washCatalog.isEmpty) {
+      return false;
+    }
     return _optionalExtraVisible[section] ?? true;
   }
 
@@ -786,6 +807,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       _OilFormOptionalSection.hydraulicGear => _hydraulicSlotHasData(_gearHydraulic),
       _OilFormOptionalSection.hydraulicPower => _hydraulicSlotHasData(_powerHydraulic),
       _OilFormOptionalSection.services => _selectedOilServiceIds.isNotEmpty,
+      _OilFormOptionalSection.carWash => _cardWashSelected.isNotEmpty,
     };
   }
 
@@ -1499,6 +1521,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
   }
 
   Future<void> _loadOilCatalog() async {
+    unawaited(_loadCardWashCatalog());
     try {
       final results = await Future.wait([
         OilChangeSettings.loadCardSettings(),
@@ -2056,6 +2079,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       _hydraulicLaborFilsFor(_powerHydraulic) +
       _filtersTotalFils() +
       _oilProductLinesTotalFils() +
+      _cardWashNetFils() +
       _notesExtrasFils;
 
   String? _hydraulicSizeValueForSaveFor(OilChangeHydraulicCardSlot slot) => slot.sizeValueForSave(
@@ -2864,6 +2888,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     _engineSize.text = (row['engineSize'] ?? '').toString();
 
     _odometerUnit = OilOdometerUnit.of(row);
+    _hydrateCardWash(row);
     _assignOdometerText(_odometerCurrent, (row['odometerCurrent'] ?? '').toString());
     _assignOdometerText(_odometerNext, (row['odometerNext'] ?? '').toString());
     if (_odometerDigits(_odometerNext.text).isNotEmpty) {}
@@ -3306,6 +3331,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       _selectedOilBrand = null;
       _selectedOilFamilyKey = null;
       _selectedOilServiceIds.clear();
+      _clearCardWash();
       _oilProductLines.clear();
       _orderGlobalId = null;
 
@@ -3404,6 +3430,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
       _oilLitersStock.text.trim(),
       // الخدمات، اللزوجة، الهيدروليك، والمبلغ المستلم: تغييرها يستحق التحذير.
       (_selectedOilServiceIds.toList()..sort()).join(','),
+      _cardWashLeaveSig(),
       _selectedViscosity ?? '',
       _hydraulicLeaveSig(_gearHydraulic),
       _hydraulicLeaveSig(_powerHydraulic),
@@ -3496,6 +3523,9 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     if (_selectedOilServiceIds.isNotEmpty) {
       _expandedOptional.add(_OilFormOptionalSection.services);
     }
+    if (_cardWashSelected.isNotEmpty) {
+      _expandedOptional.add(_OilFormOptionalSection.carWash);
+    }
     _ensureDeferredCatalogsForExpanded();
   }
 
@@ -3560,6 +3590,7 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     _advance.dispose();
     _issue.dispose();
     _technicianName.dispose();
+    _cardWashWasher.dispose();
     _oilSizeAmount.dispose();
     _barcodeBridge?.clearBarcodePriorityHandler(this);
     super.dispose();

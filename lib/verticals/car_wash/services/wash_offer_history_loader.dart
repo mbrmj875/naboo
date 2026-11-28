@@ -22,7 +22,8 @@ abstract final class WashOfferHistoryLoader {
     final rows = await db.rawQuery(
       '''
       SELECT so.id, so.orderKind, so.createdAt, so.deviceSerial,
-             so.requestedServices, so.washOfferCode
+             so.requestedServices, so.washOfferCode,
+             so.agreedPriceFils
       FROM service_orders so
       LEFT JOIN invoices i ON i.id = so.invoiceId AND i.tenantId = so.tenantId
       WHERE so.tenantId = ?
@@ -66,6 +67,12 @@ abstract final class WashOfferHistoryLoader {
             .where((e) => e.isNotEmpty)
             .toList();
         final code = (r['washOfferCode'] ?? '').toString().trim();
+        // الغسلة المجانية مع الغيار لا تُحسب في «تكرار الغسل» حتى لا يجتمع
+        // عرضان؛ المدفوعة منها تُحسب.
+        if (code == WashOfferCodes.withOil &&
+            ((r['agreedPriceFils'] as num?)?.toInt() ?? 0) <= 0) {
+          continue;
+        }
         washes.add(
           WashVisit(
             at: at,

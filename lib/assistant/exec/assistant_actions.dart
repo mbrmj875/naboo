@@ -25,6 +25,9 @@ enum AssistantActionState {
 
   /// ع11: رُجع بعملية عكسية مسجّلة. لا شيء يُمحى، فالسجل يبقى صادقاً.
   undone,
+
+  /// صحّحه المستخدم («لا قصدي التوتال»): بطاقة أحدث حلّت محله، فلا يُنفَّذ.
+  replaced,
 }
 
 /// العملية العكسية (ع11): null نجاح، وإلا رسالة.
@@ -111,6 +114,7 @@ abstract final class AssistantActions {
     final s = a.state.value;
     if (s == AssistantActionState.running ||
         s == AssistantActionState.cancelled ||
+        s == AssistantActionState.replaced ||
         s == AssistantActionState.undoing ||
         s == AssistantActionState.undone) {
       return;
@@ -141,6 +145,30 @@ abstract final class AssistantActions {
   static const _kReopen = '\u0000reopen';
   static String get reopen => _kReopen;
 
+  /// آخر بيع أو بطاقة جُهّزت ولم تُحفظ بعد. «اطبع الوصل» بلا رقم قبل حفظها كان
+  /// يفتح وصل آخر فاتورة قديمة، فصار ينبّه أن الحفظ أولاً.
+  static String? pendingUnsaved;
+
+  /// بطاقات كل أداة بترتيب ظهورها، حتى يلغي التصحيح ما سبقه.
+  static final Map<String, List<String>> _byTool = {};
+
+  static void track(String tool, String id) => (_byTool[tool] ??= []).add(id);
+
+  /// يلغي بطاقات الأداة السابقة التي لم تُنفَّذ بعد. ما نُفّذ يبقى كما هو.
+  static int replacePrevious(String tool) {
+    var n = 0;
+    for (final id in _byTool[tool] ?? const <String>[]) {
+      final a = _all[id];
+      if (a == null) continue;
+      final s = a.state.value;
+      if (s == AssistantActionState.ready || s == AssistantActionState.failed) {
+        a.state.value = AssistantActionState.replaced;
+        n++;
+      }
+    }
+    return n;
+  }
+
   static void cancel(String id) {
     final a = _all[id];
     if (a == null || a.state.value == AssistantActionState.running) return;
@@ -151,6 +179,8 @@ abstract final class AssistantActions {
   static void reset() {
     _all.clear();
     _doneOrder.clear();
+    _byTool.clear();
+    pendingUnsaved = null;
     _seq = 0;
   }
 }

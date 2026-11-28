@@ -16,6 +16,32 @@ abstract final class AuthUserMessages {
 
   static const wrongPin = 'رمز الدخول غير صحيح.';
 
+  /// رمز خاطئ مع عدد المحاولات الباقية قبل القفل (من السيرفر).
+  static String wrongPinRemaining(int? remaining) {
+    if (remaining == null || remaining > 2) return wrongPin;
+    if (remaining <= 0) {
+      return 'رمز الدخول غير صحيح. أُقفل الدخول مؤقتاً بعد محاولات كثيرة.';
+    }
+    final left = remaining == 1 ? 'محاولة واحدة' : 'محاولتان';
+    return 'رمز الدخول غير صحيح. بقيت $left قبل القفل المؤقت.';
+  }
+
+  /// الحساب مقفل مؤقتاً بعد محاولات خاطئة كثيرة.
+  static String pinLocked(DateTime? until, {DateTime? now}) {
+    const tail = 'أو أعد تعيين الرمز عبر البريد.';
+    if (until == null) return 'أُقفل الدخول مؤقتاً بعد محاولات كثيرة. حاول لاحقاً $tail';
+    final left = until.difference(now ?? DateTime.now());
+    final mins = left.inMinutes + 1;
+    if (left.inMinutes >= 60) {
+      final h = (left.inSeconds / 3600).ceil();
+      final hours = h == 1 ? 'ساعة' : (h == 2 ? 'ساعتين' : '$h ساعات');
+      return 'أُقفل الدخول مؤقتاً بعد محاولات كثيرة. حاول بعد $hours $tail';
+    }
+    final m = mins < 1 ? 1 : mins;
+    final minutes = m == 1 ? 'دقيقة' : (m == 2 ? 'دقيقتين' : (m <= 10 ? '$m دقائق' : '$m دقيقة'));
+    return 'أُقفل الدخول مؤقتاً بعد محاولات كثيرة. حاول بعد $minutes $tail';
+  }
+
   static const googleUnavailable =
       'تعذر فتح Google على هذا الجهاز. استخدم البريد ورمز PIN أو أنشئ حساباً جديداً.';
 

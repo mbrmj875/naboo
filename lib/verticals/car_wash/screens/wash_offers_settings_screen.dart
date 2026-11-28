@@ -19,10 +19,12 @@ class _WashOffersSettingsScreenState extends State<WashOffersSettingsScreen> {
   StorePolicy? _saved;
   late WashRepeatOffer _r;
   late OilCustomerWashDiscount _o;
+  late WithOilWashOffer _w;
   List<CarWashServiceItem> _catalog = const [];
   bool _saving = false;
   final _rewardValue = TextEditingController();
   final _maxDiscount = TextEditingController();
+  final _withOilValue = TextEditingController();
 
   @override
   void initState() {
@@ -34,6 +36,7 @@ class _WashOffersSettingsScreenState extends State<WashOffersSettingsScreen> {
   void dispose() {
     _rewardValue.dispose();
     _maxDiscount.dispose();
+    _withOilValue.dispose();
     super.dispose();
   }
 
@@ -48,6 +51,8 @@ class _WashOffersSettingsScreenState extends State<WashOffersSettingsScreen> {
       _saved = s;
       _r = s.washRepeat;
       _o = s.oilWash;
+      _w = s.withOilWash;
+      _withOilValue.text = _w.rewardValue == 0 ? '' : _fmt(_w.rewardValue);
       _catalog = cat;
       _rewardValue.text = _r.rewardValue == 0 ? '' : _fmt(_r.rewardValue);
       _maxDiscount.text = _r.maxDiscount == 0 ? '' : _fmt(_r.maxDiscount);
@@ -60,7 +65,11 @@ class _WashOffersSettingsScreenState extends State<WashOffersSettingsScreen> {
   static double _num(String s) =>
       double.tryParse(s.replaceAll(RegExp(r'[^0-9.]'), '')) ?? 0;
 
-  StorePolicy get _draft => _saved!.copyWith(washRepeat: _r, oilWash: _o);
+  StorePolicy get _draft => _saved!.copyWith(
+    washRepeat: _r,
+    oilWash: _o,
+    withOilWash: _w,
+  );
 
   bool get _dirty =>
       _saved != null && _draft.toJsonString() != _saved!.toJsonString();
@@ -76,6 +85,15 @@ class _WashOffersSettingsScreenState extends State<WashOffersSettingsScreen> {
       }
     }
     if (_o.enabled && _o.tiers.isEmpty) return 'أضف شريحة واحدة على الأقل.';
+    if (_w.enabled) {
+      if (_w.rewardType == WashRewardType.percent &&
+          (_w.rewardValue <= 0 || _w.rewardValue > 100)) {
+        return 'نسبة خصم «غسلة مع الغيار» بين 1 و100.';
+      }
+      if (_w.rewardType == WashRewardType.fixed && _w.rewardValue <= 0) {
+        return 'اكتب سعر «غسلة مع الغيار».';
+      }
+    }
     return null;
   }
 
@@ -91,6 +109,7 @@ class _WashOffersSettingsScreenState extends State<WashOffersSettingsScreen> {
       slice: (s) => {
         'washRepeat': s.washRepeat.toJson(),
         'oilWash': s.oilWash.toJson(),
+        'withOilWash': s.withOilWash.toJson(),
       },
     );
     if (!mounted) return;
@@ -205,6 +224,102 @@ class _WashOffersSettingsScreenState extends State<WashOffersSettingsScreen> {
     }
     tiers.sort((a, b) => a.minOilChanges.compareTo(b.minOilChanges));
     setState(() => _o = _o.copyWith(tiers: tiers));
+  }
+
+  List<Widget> _withOilSection(ColorScheme cs) {
+    final on = _w.enabled;
+    return [
+      _sectionTitle('غسلة مع الغيار'),
+      SwitchListTile(
+        value: on,
+        title: const Text('تفعيل العرض'),
+        subtitle: Text(
+          'الغسلة داخل بطاقة غيار الزيت ${switch (_w.rewardType) {
+            WashRewardType.free => 'مجانية',
+            WashRewardType.percent => 'بخصم نسبة',
+            WashRewardType.fixed => 'بسعر ثابت',
+          }}',
+        ),
+        onChanged: (v) => setState(() => _w = _w.copyWith(enabled: v)),
+      ),
+      Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        child: SegmentedButton<WashRewardType>(
+          segments: const [
+            ButtonSegment(value: WashRewardType.free, label: Text('مجانية')),
+            ButtonSegment(value: WashRewardType.percent, label: Text('نسبة %')),
+            ButtonSegment(value: WashRewardType.fixed, label: Text('سعر ثابت')),
+          ],
+          selected: {_w.rewardType},
+          onSelectionChanged: on
+              ? (s) => setState(() => _w = _w.copyWith(rewardType: s.first))
+              : null,
+        ),
+      ),
+      if (_w.rewardType != WashRewardType.free)
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+          child: TextField(
+            controller: _withOilValue,
+            enabled: on,
+            keyboardType: TextInputType.number,
+            decoration: InputDecoration(
+              labelText: _w.rewardType == WashRewardType.percent
+                  ? 'نسبة الخصم %'
+                  : 'سعر الغسلة مع الغيار (د.ع)',
+              border: const OutlineInputBorder(),
+            ),
+            onChanged: (v) =>
+                setState(() => _w = _w.copyWith(rewardValue: _num(v))),
+          ),
+        ),
+      if (_catalog.isNotEmpty)
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                _w.coveredServiceNames.isEmpty
+                    ? 'الأنواع المشمولة: كل الأنواع'
+                    : 'الأنواع المشمولة:',
+                style: TextStyle(color: cs.onSurfaceVariant),
+              ),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 8,
+                runSpacing: 6,
+                children: [
+                  for (final item in _catalog)
+                    FilterChip(
+                      label: Text(item.name),
+                      selected: _w.coveredServiceNames.contains(item.name),
+                      onSelected: !on
+                          ? null
+                          : (v) {
+                              final set = {..._w.coveredServiceNames};
+                              v ? set.add(item.name) : set.remove(item.name);
+                              setState(
+                                () => _w = _w.copyWith(
+                                  coveredServiceNames: set.toList(),
+                                ),
+                              );
+                            },
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      const Padding(
+        padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+        child: Text(
+          'يُطبَّق على أي بطاقة غيار. لا يجتمع مع عرض آخر. '
+          'الغسلة المجانية مع الغيار لا تُحسب في «تكرار الغسل»، والمدفوعة تُحسب.',
+          style: TextStyle(fontSize: 12),
+        ),
+      ),
+    ];
   }
 
   @override
@@ -437,6 +552,8 @@ class _WashOffersSettingsScreenState extends State<WashOffersSettingsScreen> {
                       style: TextStyle(fontSize: 12),
                     ),
                   ),
+                  const Divider(height: 28),
+                  ..._withOilSection(cs),
                   if (err != null)
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),

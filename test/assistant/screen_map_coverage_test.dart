@@ -17,10 +17,10 @@ void main() {
   final anchorValues = anchorConsts.values.toSet();
   final settingsIds = kSettingsEntries.map((e) => e.id).toSet();
 
-  test('العدد: خمسون شاشة تقريباً، بلا تكرار', () {
+  test('العدد: نحو 87 شاشة بعد ك2-ب (كانت 54)، بلا تكرار', () {
     final ids = AppScreenMap.all.map((s) => s.routeId).toList();
     expect(ids.toSet().length, ids.length);
-    expect(ids.length, inInclusiveRange(48, 56));
+    expect(ids.length, inInclusiveRange(84, 92));
   });
 
   test('1. كل مسار في كتالوج القائمة له وصف', () {

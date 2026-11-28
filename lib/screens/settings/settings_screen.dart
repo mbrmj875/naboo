@@ -102,6 +102,11 @@ AppBar _settingsAppBar(
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
 
+  /// بند يطلب المساعد فتحه («افتح إعدادات الطباعة»). كان المساعد يفتح الإعدادات
+  /// ويضع «اضغط هنا» فوق المحادثة وينتظر ضغطة لا تأتي، فينتهي الوقت ويعتذر.
+  /// الآن الشاشة تفتح البند بنفسها حالما تظهر.
+  static final ValueNotifier<String?> requestedEntry = ValueNotifier<String?>(null);
+
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
 }
@@ -116,9 +121,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
   BuildContext? _oilSheetContext;
 
   @override
+  void initState() {
+    super.initState();
+    SettingsScreen.requestedEntry.addListener(_openRequested);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _openRequested());
+  }
+
+  @override
   void dispose() {
+    SettingsScreen.requestedEntry.removeListener(_openRequested);
     _search.dispose();
     super.dispose();
+  }
+
+  void _openRequested() {
+    final id = SettingsScreen.requestedEntry.value;
+    if (id == null || !mounted) return;
+    SettingsScreen.requestedEntry.value = null;
+    final e = kSettingsEntries.where((x) => x.id == id).firstOrNull;
+    if (e == null || !e.enabled) return;
+    unawaited(_open(context, e));
   }
 
   SettingsAccess _access(BuildContext context) {

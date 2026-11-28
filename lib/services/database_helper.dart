@@ -555,6 +555,31 @@ class DatabaseHelper {
     }
   }
 
+  /// الإصدار 54: الغسيل داخل بطاقة الغيار (`cardWashJson`، `cardWashNetFils`)،
+  /// وربط طلب الغسيل ببطاقته (`parentOrderGlobalId`).
+  Future<void> _ensureServiceOrdersCardWash(Database db) async {
+    try {
+      for (final (col, type) in const [
+        ('cardWashJson', 'TEXT'),
+        ('cardWashNetFils', 'INTEGER'),
+        ('parentOrderGlobalId', 'TEXT'),
+        // عروض الغسيل: كانت تُضاف فقط عند فتح شاشة العروض أو تقرير الغسيل.
+        ('washOfferCode', 'TEXT'),
+        ('washOfferNote', 'TEXT'),
+      ]) {
+        if (!await _tableHasColumn(db, 'service_orders', col)) {
+          await db.execute('ALTER TABLE service_orders ADD COLUMN $col $type');
+        }
+      }
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_service_orders_parent_gid '
+        'ON service_orders(parentOrderGlobalId)',
+      );
+    } catch (e, st) {
+      AppLogger.error('DatabaseHelper', 'service_orders card wash', e, st);
+    }
+  }
+
   Future<void> _ensureServiceOrdersOilChangeFilterColumns(Database db) async {
     try {
       final cols = <(String, String)>[
@@ -586,7 +611,7 @@ class DatabaseHelper {
     String path = join(await getDatabasesPath(), 'business_app.db');
     return await openDatabase(
       path,
-      version: 53,
+      version: 54,
       onConfigure: (db) async {
         await db.execute('PRAGMA foreign_keys = ON');
         // Reduce "database locked" warnings under concurrent access.
@@ -663,6 +688,7 @@ class DatabaseHelper {
     await _ensureServiceOrdersOilChangeFilterColumns(db);
     await _ensureCustomerDebtExceptionColumns(db);
     await _ensureServiceOrdersOdometerUnit(db);
+    await _ensureServiceOrdersCardWash(db);
     await ensureOilProductGradesSchema(db);
     await ensureBusinessAuditEventsTable(db);
     await ensureOwnerDashboardQueryIndexes(db);
@@ -2511,6 +2537,9 @@ class DatabaseHelper {
     }
     if (oldVersion < 53) {
       await _ensureServiceOrdersOdometerUnit(db);
+    }
+    if (oldVersion < 54) {
+      await _ensureServiceOrdersCardWash(db);
     }
     await _ensureRbacFoundation(db);
     await _ensureBranchTopology(db);

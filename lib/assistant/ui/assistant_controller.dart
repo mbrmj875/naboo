@@ -239,6 +239,15 @@ class AssistantController extends ChangeNotifier {
         return;
       }
       await _runModel(q, ctx, allowed.toList()..sort(), image: image);
+    } catch (e) {
+      // لا يبقى رد فارغ: أي خلل غير متوقع يظهر كرسالة يمكن إعادتها.
+      debugPrint('assistant: turn failed: $e');
+      final last = messages.isNotEmpty ? messages.last : null;
+      if (last != null && !last.fromUser) {
+        last.runningTool = null;
+        if (last.text.trim().isEmpty) last.text = 'صار خلل وما كملت الجواب. أعد السؤال.';
+        last.status = AssistantMessageStatus.error;
+      }
     } finally {
       // الصورة تُرسل مع خطوات سؤالها فقط؛ بعده يبقى مكانها نصاً، فلا تُدفع كلفتها مرة ثانية.
       if (image != null) _dropImagesFromHistory();
@@ -577,7 +586,14 @@ class AssistantController extends ChangeNotifier {
         m.runningTool = c.name;
         notifyListeners();
         final server = c.serverResult == null ? null : AssistantToolResult.fromStore(c.serverResult);
-        final res = server ?? await _runUiOrTool(c.name, c.arguments, ctx);
+        // خطأ في أداة لا يوقف الجولة بلا جواب: يرجع للنموذج فشلاً فيكمل.
+        AssistantToolResult res;
+        try {
+          res = server ?? await _runUiOrTool(c.name, c.arguments, ctx);
+        } catch (e) {
+          debugPrint('assistant: tool ${c.name} threw: $e');
+          res = AssistantToolResult.failure(c.name, 'failed');
+        }
         // memory_full يظهر للمستخدم كتنبيه، فيُحفظ رغم فشله.
         if ((res.ok || c.name == 'memory_save') && !c.name.startsWith('ui_')) m.results.add(res);
         if (c.name == 'ui_navigate' && res.ok) m.routeId = c.arguments['route_id']?.toString();

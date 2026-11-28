@@ -138,6 +138,39 @@ class FakeExecPort implements AssistantExecPort {
         ? AssistantDebtPaymentOutcome(appliedFils: amountFils)
         : AssistantDebtPaymentOutcome.failed(applyError!);
   }
+
+  @override
+  Future<String?> openEntity(String kind, int id) async {
+    calls.add('open:$kind:$id');
+    return applyError;
+  }
+
+  final entities = <String, List<Map<String, Object?>>>{
+    'supplier': [
+      {'id': 3, 'name': 'شركة الرافدين'},
+    ],
+    'installment': [
+      {'id': 5, 'name': 'علي حسن'},
+      {'id': 6, 'name': 'علي كريم'},
+    ],
+  };
+
+  @override
+  Future<List<Map<String, Object?>>> findEntities(String kind, String q) async =>
+      [for (final e in entities[kind] ?? const <Map<String, Object?>>[]) if ('${e['name']}'.contains(q)) e];
+
+  final settings = <String, Object>{'dark_mode': false, 'compact_snack': true, 'debts_enabled': true, 'color_palette': 'royal'};
+
+  @override
+  Future<Object?> readSetting(String key) async => settings[key];
+
+  @override
+  Future<String?> writeSetting(String key, Object value) async {
+    calls.add('setting:$key:$value');
+    if (applyError != null) return applyError;
+    settings[key] = value;
+    return null;
+  }
 }
 
 bool _none(String _) => false;
@@ -193,6 +226,44 @@ void main() {
     expect(port.calls, ['openForm:prepare_oil_card']);
     expect(port.lastPrefill!.str('plate'), '14 B 64190');
     expect(saved, ['prepare_oil_card:t1'], reason: 'م4-5: s_action_saved على دور المحادثة نفسه');
+  });
+
+  test('ح2: البيع المباشر سلة معبّأة بلا سعر من المساعد، والبيع بزر الشاشة فقط', () async {
+    final r = await reg.execute('prepare_direct_sale', {
+      'items': [
+        {'product': 'زيت شل 10W-40', 'qty': 4},
+        {'product': 'فلتر زيت النترا', 'qty': 1},
+      ],
+      'customer': 'ابو علي',
+      'payment': 'credit',
+    }, staff(const {}));
+    expect(r.ok, isTrue);
+    expect(port.calls, isEmpty, reason: 'لا يفتح ولا يبيع بنفسه');
+    await AssistantActions.run(actionOf(r));
+    expect(port.calls, ['openForm:prepare_direct_sale']);
+    final p = port.lastPrefill!;
+    expect(p.values['lines'], [
+      {'product_id': 3, 'qty': 4},
+      {'product_id': 6, 'qty': 1},
+    ]);
+    expect(p.values['customer_id'], 1);
+    expect(p.values['credit'], isTrue);
+    expect(p.values.containsKey('price'), isFalse);
+    // نقص المخزون يُنبَّه عليه، ولا يمنع التجهيز.
+    final short = await reg.execute('prepare_direct_sale', {
+      'items': [
+        {'product': 'فلتر زيت كورولا', 'qty': 2},
+      ],
+    }, staff(const {}));
+    expect((short.extra['stock_short'] as List).single['available'], 0);
+    expect(port.lastPrefill!.values['credit'], isTrue, reason: 'الأولى لم تتغير قبل الضغط');
+    final denied = AssistantToolRegistry(tools: buildExecTools(data, port, canOpen: (_) => false));
+    final no = await denied.execute('prepare_direct_sale', {
+      'items': [
+        {'product': 'زيت شل 10W-40', 'qty': 1},
+      ],
+    }, staff(const {}));
+    expect(no.error, 'forbidden');
   });
 
   test('م4-4: الإلغاء لا يترك أثراً، والإغلاق بلا حفظ يبقي البطاقة جاهزة', () async {
@@ -519,6 +590,77 @@ void main() {
       expect(none.rows.single['none_inactive'], isTrue);
     });
 
+    test('ك1: الإعداد ببطاقة قبل ← بعد، بلا حفظ قبل التأكيد، والتراجع يرجع القيمة', () async {
+      final r = await reg.execute('propose_setting_change', {'setting': 'dark_mode', 'value': 'true'}, staff(const {}));
+      expect(r.ok, isTrue);
+      expect(r.extra['before'], 'فاتح (نهاري)');
+      expect(r.extra['after'], 'داكن');
+      expect(port.calls, isEmpty, reason: 'لا حفظ قبل الضغط');
+      await AssistantActions.run(actionOf(r));
+      expect(port.calls, ['setting:dark_mode:true']);
+      await AssistantActions.undo(actionOf(r));
+      expect(port.calls.last, 'setting:dark_mode:false');
+      final card = AssistantCardMapper.fromResult(r);
+      expect(card, isA<AssistantConfirmCard>());
+
+      final same = await reg.execute('propose_setting_change', {'setting': 'dark_mode', 'value': 'نهاري'}, staff(const {}));
+      expect(same.rows.single['unchanged'], isTrue);
+
+      final color = await reg.execute('propose_setting_change', {'setting': 'color_palette', 'value': 'نحاسي'}, staff(const {}));
+      expect(color.extra['after'], 'نحاسي');
+      await AssistantActions.run(actionOf(color));
+      expect(port.calls.last, 'setting:color_palette:copper');
+      final ask = await reg.execute('propose_setting_change', {'setting': 'color_palette', 'value': 'بنفسجي'}, staff(const {}));
+      expect(ask.rows.single['ask_value'], isTrue);
+    });
+
+    test('ك2: فتح حساب زبون ودينه وبطاقة سيارة بالاسم، بلا كتابة، والممنوعة لا تُفتح', () async {
+      final c = await reg.execute('open_entity', {'kind': 'customer', 'name': 'ابو علي'}, staff(const {}));
+      expect(c.rows.single['opened'], isTrue);
+      final d = await reg.execute('open_entity', {'kind': 'debt', 'name': 'ابو علي'}, staff(const {}));
+      expect(d.ok, isTrue);
+      final card = await reg.execute('open_entity', {'kind': 'oil_card', 'name': '12345'}, staff(const {}));
+      expect(card.ok, isTrue);
+      expect(port.calls, ['open:customer:1', 'open:debt:1', 'open:oil_card:7']);
+      final bad = await reg.execute('open_entity', {'kind': 'invoice', 'id': '3'}, staff(const {}));
+      expect(bad.error, 'bad_args:kind');
+      final denied = AssistantToolRegistry(tools: buildExecTools(data, port, canOpen: (_) => false));
+      final no = await denied.execute('open_entity', {'kind': 'debt', 'id': '1'}, staff(const {}));
+      expect(no.error, 'forbidden');
+      expect(port.calls.length, 3);
+    });
+
+    test('ك2-ب: مورد وخطة تقسيط وتعديل بطاقة ومرتجع برقم الفاتورة فقط', () async {
+      final sup = await reg.execute('open_entity', {'kind': 'supplier', 'name': 'الرافدين'}, staff(const {}));
+      expect(sup.rows.single['name'], 'شركة الرافدين');
+      final two = await reg.execute('open_entity', {'kind': 'installment', 'name': 'علي'}, staff(const {}));
+      expect(two.rows.single['ask_plan'], isTrue, reason: 'اسمان متشابهان فيسأل');
+      final one = await reg.execute('open_entity', {'kind': 'installment', 'name': 'علي كريم'}, staff(const {}));
+      expect(one.ok, isTrue);
+      final edit = await reg.execute('open_entity', {'kind': 'oil_card_edit', 'name': '12345'}, staff(const {}));
+      expect(edit.ok, isTrue);
+      final ret = await reg.execute('open_entity', {'kind': 'invoice_return', 'name': 'فاتورة علي'}, staff(const {}));
+      expect(ret.error, 'bad_args:id');
+      final retId = await reg.execute('open_entity', {'kind': 'invoice_return', 'id': '42'}, staff(const {}));
+      expect(retId.ok, isTrue);
+      final none = await reg.execute('open_entity', {'kind': 'supplier', 'name': 'زيد'}, staff(const {}));
+      expect(none.rows.single['not_found'], isTrue);
+      expect(port.calls, ['open:supplier:3', 'open:installment:6', 'open:oil_card_edit:7', 'open:invoice_return:42']);
+    });
+
+    test('ك1: تفعيل الديون للمالك وحده، ولا يظهر لغيره في القراءة', () async {
+      final denied = await reg.execute('propose_setting_change', {'setting': 'debts_enabled', 'value': 'false'}, staff(const {}));
+      expect(denied.error, 'forbidden');
+      final list = await reg.execute('settings_get', const {}, staff(const {}));
+      expect(list.rows.map((r) => r['setting']), isNot(contains('debts_enabled')));
+      final mine = await reg.execute('settings_get', const {}, owner);
+      expect(mine.rows.map((r) => r['setting']), contains('debts_enabled'));
+      final ok = await reg.execute('propose_setting_change', {'setting': 'debts_enabled', 'value': 'false'}, owner);
+      expect(ok.extra['after'], 'مطفأ');
+      final bad = await reg.execute('propose_setting_change', {'setting': 'language', 'value': 'en'}, owner);
+      expect(bad.error, 'bad_args:setting');
+    });
+
     test('ع11: التراجع عملية عكسية بدالة التطبيق، مرة واحدة، ويُسجَّل', () async {
       final price = await reg.execute('propose_price_change', {'product_id': '1', 'new_sell_price': 16000}, owner);
       expect(AssistantActions.of(actionOf(price)).canUndo, isFalse, reason: 'لا تراجع قبل التنفيذ');
@@ -583,4 +725,64 @@ void main() {
       expect(AssistantCardMapperB4.choicesFrom([ask]), ['الرئيسي', 'المخزن الخلفي']);
     });
   });
+
+  test('التصحيح يلغي بطاقة الأداة نفسها السابقة، وما نُفّذ يبقى', () async {
+    final shell = await reg.execute('propose_price_change', {'product_id': '3', 'new_sell_price': 9500}, owner);
+    final total = await reg.execute(
+      'propose_price_change',
+      {'product_id': '6', 'new_sell_price': 9500, 'replaces_previous': true},
+      owner,
+    );
+    expect(AssistantActions.of(actionOf(shell)).state.value, AssistantActionState.replaced);
+    expect(AssistantActions.of(actionOf(total)).state.value, AssistantActionState.ready);
+    await AssistantActions.run(actionOf(shell));
+    expect(port.calls, isEmpty, reason: 'البطاقة الملغاة لا تُنفَّذ');
+
+    // طلب ثانٍ بلا تصحيح لا يلغي الأول (سعران لصنفين).
+    final again = await reg.execute('propose_price_change', {'product_id': '3', 'new_sell_price': 9800}, owner);
+    expect(AssistantActions.of(actionOf(total)).state.value, AssistantActionState.ready);
+    expect(AssistantActions.of(actionOf(again)).state.value, AssistantActionState.ready);
+  });
+
+  test('«اطبع الوصل» قبل حفظ البيع لا يفتح وصلاً قديماً', () async {
+    await reg.execute('prepare_direct_sale', {
+      'items': [
+        {'product': 'زيت شل 10W-40', 'qty': 1},
+      ],
+    }, staff(const {}));
+    final p = await reg.execute('open_print_preview', {'kind': 'receipt'}, owner);
+    expect(p.ok, isTrue);
+    expect(p.rows.single['unsaved_draft'], 'prepare_direct_sale');
+    expect(port.calls, isEmpty);
+  });
+
+  test('اسمان متشابهان: زر لكل زبون، والزر يختار زبونه', () async {
+    final twin = _TwinData();
+    final r2 = AssistantToolRegistry(tools: buildExecTools(twin, port, canOpen: (_) => true));
+    final ask = await r2.execute('prepare_direct_sale', {
+      'items': [
+        {'product': 'زيت شل 10W-40', 'qty': 1},
+      ],
+      'customer': 'ابو علي',
+    }, staff(const {}));
+    final choices = AssistantCardMapperB4.choicesFrom([ask]);
+    expect(choices.length, 2);
+    expect(choices.toSet().length, 2);
+    final pick = await r2.execute('prepare_direct_sale', {
+      'items': [
+        {'product': 'زيت شل 10W-40', 'qty': 1},
+      ],
+      'customer': choices.last,
+    }, staff(const {}));
+    await AssistantActions.run(actionOf(pick));
+    expect(port.lastPrefill!.values['customer_id'], 2);
+  });
+}
+
+class _TwinData extends FakeShopData {
+  @override
+  Future<List<Map<String, Object?>>> customers(String query, {int limit = 8}) async => [
+    {'id': 1, 'name': 'ابو علي', 'phone': '07700000000', 'last_visit': '2026-11-20'},
+    {'id': 2, 'name': 'ابو علي', 'phone': '07800000000', 'last_visit': '2026-10-02'},
+  ];
 }

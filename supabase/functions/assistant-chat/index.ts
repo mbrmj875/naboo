@@ -31,6 +31,7 @@ import { knownToolNames, toolDefsFor } from './tools.ts';
 import { lastSearchDebug } from './car_spec.ts';
 import { carPhotoMessages, cleanCarImages, parseCarPhoto } from './car_photo.ts';
 import { runServerTool, SERVER_TOOLS } from './server_tools.ts';
+import { lastImage } from './invoice_read.ts';
 import { type Lesson, MAX_RULES, notesMessage, pickNotes } from './lessons.ts';
 import { cleanConversation, type InMsg, MAX_TOOLS_PER_STEP, parseArgs } from './conversation.ts';
 
@@ -458,6 +459,7 @@ Deno.serve(async (req) => {
         roleKey: input.roleKey,
         routeId: input.routeId,
         createdBy: input.isOwner ? 'المالك' : 'موظف',
+        image: c.name === 'read_supplier_invoice' ? lastImage(conv.messages as Record<string, unknown>[]) : null,
       });
       if (c.name === 'memory_save') cache.delete(`mem:${tenantId}`);
       side = { usage: addUsage(side.usage, r.usage), web: side.web + (r.usedWeb ? 1 : 0) };

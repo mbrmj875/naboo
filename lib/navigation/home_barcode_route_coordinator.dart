@@ -14,6 +14,7 @@ import '../providers/sale_draft_provider.dart';
 import '../screens/debts/customer_debt_detail_screen.dart';
 import '../screens/inventory/add_product_screen.dart';
 import '../screens/invoices/add_invoice_screen.dart';
+import '../printing/public_receipt.dart';
 import '../screens/invoices/process_return_screen.dart';
 import '../services/database_helper.dart';
 import '../services/returns/return_history.dart';
@@ -80,6 +81,30 @@ abstract final class HomeBarcodeRouteCoordinator {
           return;
         }
         await _openScannedReceipt(context, ref, openRoute);
+        return;
+      }
+      // رابط صفحة الفاتورة على naboo.fun: نفس توجيه رمز الإيصال.
+      final pub = PublicReceiptLink.parse(deepInvoiceUri);
+      if (pub != null) {
+        if (!context.mounted || !context.read<AuthProvider>().isLoggedIn) {
+          return;
+        }
+        final messenger = ScaffoldMessenger.maybeOf(context);
+        final gid = await PublicReceiptLinks.globalIdFor(pub);
+        if (!context.mounted) return;
+        if (gid == null) {
+          messenger?.showSnackBar(
+            const SnackBar(
+              content: Text(
+                'هذا الإيصال غير موجود في محلك. إن كان من جهاز آخر في المحل، '
+                'تأكد من الإنترنت ثم امسحه مرة ثانية.',
+              ),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+          return;
+        }
+        await _openScannedReceipt(context, InvoiceLinkRef(0, gid), openRoute);
         return;
       }
     }

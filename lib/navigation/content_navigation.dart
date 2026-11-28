@@ -86,6 +86,27 @@ abstract class AppContentRoutes {
   static const settingsHelp = 'app_settings_help';
   static const settingsOilHub = 'app_settings_oil_hub';
   static const subscriptionPlans = 'app_subscription_plans';
+
+  // ك2-ب: شاشات داخلية بمعرّف، يفتحها المساعد والإرشاد مباشرة.
+  static const inventoryStockVoucher = 'app_inventory_stock_voucher';
+  static const inventoryCategories = 'app_inventory_categories';
+  static const inventoryBrands = 'app_inventory_brands';
+  static const inventoryBarcodeSettings = 'app_inventory_barcode_settings';
+  static const inventoryUnitTemplates = 'app_inventory_unit_templates';
+  static const inventoryProductSettings = 'app_inventory_product_settings';
+  static const inventoryPolicyCenter = 'app_inventory_policy_center';
+  static const inventoryPurchaseOrderNew = 'app_inventory_purchase_order_new';
+  static const shiftOpen = 'app_shift_open';
+  static const workShiftsCalendar = 'app_work_shifts_calendar';
+  static const cashLedgerAudit = 'app_cash_ledger_audit';
+  static const debtLinking = 'app_debt_linking';
+  static const pushSettings = 'app_push_settings';
+  static const pushRecipients = 'app_push_recipients';
+  // شاشات شيء محدد، يفتحها المساعد بـ open_entity فقط.
+  static const productEdit = 'app_inventory_product_edit';
+  static const supplierDetail = 'app_supplier_detail';
+  static const invoiceReturn = 'app_invoice_return';
+  static const oilCardEdit = 'app_oil_card_edit';
   static const reportsPrefix = 'app_reports_';
   static String reports(int section) => '$reportsPrefix$section';
   static String processReturn(int invoiceId) => 'app_process_return_$invoiceId';
@@ -229,11 +250,12 @@ const Map<FeatureGateId, List<String>> featureRouteMapping = {
     AppContentRoutes.installments,
     AppContentRoutes.installmentSettings,
   ],
-  FeatureGateId.debts: [AppContentRoutes.debts, AppContentRoutes.debtSettings],
+  FeatureGateId.debts: [AppContentRoutes.debts, AppContentRoutes.debtSettings, AppContentRoutes.debtLinking],
   FeatureGateId.pos: [
     AppContentRoutes.invoices,
     AppContentRoutes.addInvoice,
     AppContentRoutes.parkedSales,
+    AppContentRoutes.invoiceReturn,
     AppContentRoutes.salePosSettings,
     AppContentRoutes.onlineOrders,
     AppContentRoutes.settingsSalePosAppearance,
@@ -246,6 +268,7 @@ const Map<FeatureGateId, List<String>> featureRouteMapping = {
     AppContentRoutes.oilChangeServices,
     AppContentRoutes.oilChangeHub,
     AppContentRoutes.oilChangeCreate,
+    AppContentRoutes.oilCardEdit,
     AppContentRoutes.oilInvoices,
     AppContentRoutes.oilDirectSale,
     AppContentRoutes.oilWhatsappConnect,
@@ -768,6 +791,42 @@ String breadcrumbFallbackTitleForRouteId(String id) {
       return 'ميزات المتجر';
     case AppContentRoutes.subscriptionPlans:
       return 'خطط الاشتراك';
+    case AppContentRoutes.inventoryStockVoucher:
+      return 'سند مخزني';
+    case AppContentRoutes.inventoryCategories:
+      return 'الأصناف';
+    case AppContentRoutes.inventoryBrands:
+      return 'العلامات التجارية';
+    case AppContentRoutes.inventoryBarcodeSettings:
+      return 'إعدادات الباركود';
+    case AppContentRoutes.inventoryUnitTemplates:
+      return 'قوالب الوحدات';
+    case AppContentRoutes.inventoryProductSettings:
+      return 'إعدادات المنتجات';
+    case AppContentRoutes.inventoryPolicyCenter:
+      return 'سياسات المخزون';
+    case AppContentRoutes.inventoryPurchaseOrderNew:
+      return 'أمر شراء جديد';
+    case AppContentRoutes.shiftOpen:
+      return 'فتح الوردية';
+    case AppContentRoutes.workShiftsCalendar:
+      return 'تقويم الورديات';
+    case AppContentRoutes.cashLedgerAudit:
+      return 'فحص قيود الصندوق';
+    case AppContentRoutes.debtLinking:
+      return 'ربط الديون بالعملاء';
+    case AppContentRoutes.pushSettings:
+      return 'إشعارات المحل على الهاتف';
+    case AppContentRoutes.pushRecipients:
+      return 'مستلمو الإشعارات';
+    case AppContentRoutes.productEdit:
+      return 'تعديل منتج';
+    case AppContentRoutes.supplierDetail:
+      return 'حساب المورد';
+    case AppContentRoutes.invoiceReturn:
+      return 'مرتجع فاتورة';
+    case AppContentRoutes.oilCardEdit:
+      return 'تعديل بطاقة';
     case AppContentRoutes.servicesHub:
       return 'الخدمات والصيانة';
     case AppContentRoutes.servicesAdd:
@@ -1018,6 +1077,7 @@ const Map<String, String> routeParentMapping = {
   // Debts & Installments
   AppContentRoutes.debts: AppContentRoutes.home,
   AppContentRoutes.debtSettings: AppContentRoutes.debts,
+  AppContentRoutes.debtLinking: AppContentRoutes.debts,
   AppContentRoutes.installments: AppContentRoutes.home,
   AppContentRoutes.installmentSettings: AppContentRoutes.installments,
 
@@ -1034,10 +1094,27 @@ const Map<String, String> routeParentMapping = {
   AppContentRoutes.inventoryAnalytics: AppContentRoutes.inventory,
   AppContentRoutes.inventorySettings: AppContentRoutes.inventory,
   AppContentRoutes.inventoryBarcodeLabels: AppContentRoutes.inventoryProducts,
+  AppContentRoutes.inventoryStockVoucher: AppContentRoutes.inventoryManagement,
+  AppContentRoutes.inventoryCategories: AppContentRoutes.inventorySettings,
+  AppContentRoutes.inventoryBrands: AppContentRoutes.inventorySettings,
+  AppContentRoutes.inventoryBarcodeSettings: AppContentRoutes.inventorySettings,
+  AppContentRoutes.inventoryUnitTemplates: AppContentRoutes.inventorySettings,
+  AppContentRoutes.inventoryProductSettings: AppContentRoutes.inventorySettings,
+  AppContentRoutes.inventoryPolicyCenter: AppContentRoutes.inventorySettings,
+  AppContentRoutes.inventoryPurchaseOrderNew: AppContentRoutes.inventoryPurchaseOrders,
+  AppContentRoutes.productEdit: AppContentRoutes.inventoryProducts,
+  AppContentRoutes.supplierDetail: AppContentRoutes.inventoryPurchaseOrders,
 
   // Cash / Expenses
   AppContentRoutes.cash: AppContentRoutes.home,
   AppContentRoutes.expenses: AppContentRoutes.home,
+  AppContentRoutes.shiftOpen: AppContentRoutes.home,
+  AppContentRoutes.workShiftsCalendar: AppContentRoutes.staffShiftsWeek,
+  AppContentRoutes.cashLedgerAudit: AppContentRoutes.settings,
+  AppContentRoutes.pushSettings: AppContentRoutes.settingsNotifications,
+  AppContentRoutes.pushRecipients: AppContentRoutes.pushSettings,
+  AppContentRoutes.invoiceReturn: AppContentRoutes.invoices,
+  AppContentRoutes.oilCardEdit: AppContentRoutes.oilServicesLog,
 
   // Users & Printing
   AppContentRoutes.users: AppContentRoutes.home,

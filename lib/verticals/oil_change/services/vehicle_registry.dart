@@ -69,6 +69,19 @@ abstract final class VehicleRegistry {
         'ALTER TABLE vehicles ADD COLUMN last_odometer_unit TEXT',
       );
     }
+    final cols = await db.rawQuery('PRAGMA table_info(service_orders)');
+    if (cols.isEmpty) return;
+    final has = cols.any((c) => c['name'] == 'vehicle_global_id');
+    if (!has) {
+      await db.execute(
+        'ALTER TABLE service_orders ADD COLUMN vehicle_global_id TEXT',
+      );
+    }
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_service_orders_vehicle '
+      'ON service_orders(tenantId, vehicle_global_id)',
+    );
+    // بعد إضافة vehicle_global_id: التصحيح يقرأه.
     try {
       await db.execute('''
         UPDATE vehicles SET last_odometer_unit = (
@@ -89,18 +102,6 @@ abstract final class VehicleRegistry {
     } catch (e) {
       AppLogger.warn('VehicleRegistry', 'odometer unit backfill: $e');
     }
-    final cols = await db.rawQuery('PRAGMA table_info(service_orders)');
-    if (cols.isEmpty) return;
-    final has = cols.any((c) => c['name'] == 'vehicle_global_id');
-    if (!has) {
-      await db.execute(
-        'ALTER TABLE service_orders ADD COLUMN vehicle_global_id TEXT',
-      );
-    }
-    await db.execute(
-      'CREATE INDEX IF NOT EXISTS idx_service_orders_vehicle '
-      'ON service_orders(tenantId, vehicle_global_id)',
-    );
   }
 
   static String vehicleGlobalId(int tenantId, String plateKey) =>

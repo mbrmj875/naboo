@@ -208,8 +208,7 @@ class SupplierStatement {
   }
 
   ReceiptDocument toReceipt() => ReceiptDocument(
-    kind: ReceiptKind.expense,
-    titleOverride: 'كشف حساب مورد',
+    kind: ReceiptKind.supplierStatement,
     date: date,
     fields: [ReceiptField('المورد', supplierName.trim(), bold: true)],
     lines: [

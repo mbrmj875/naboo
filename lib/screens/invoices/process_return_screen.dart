@@ -15,7 +15,9 @@ import '../../providers/product_provider.dart';
 import '../../providers/shift_provider.dart';
 import '../../owner/services/business_audit_log_service.dart';
 import '../../printing/receipt_builders.dart';
+import '../../printing/public_receipt.dart';
 import '../../printing/receipt_printer.dart';
+import '../../services/returns/return_history.dart';
 import '../../services/database_helper.dart';
 import '../../services/permission_service.dart';
 import '../../services/returns/return_approval.dart';
@@ -567,6 +569,7 @@ class _ProcessReturnScreenState extends State<ProcessReturnScreen> {
         ),
       );
       unawaited(ReceiptPrinter.autoPrintAfterSave(context, invoiceId: newId));
+      unawaited(_markPublicReceiptIfFullyReturned(o));
       Navigator.of(context).pop(true);
     } catch (e) {
       if (!mounted) return;
@@ -579,6 +582,17 @@ class _ProcessReturnScreenState extends State<ProcessReturnScreen> {
         ),
       );
     }
+  }
+
+  /// صفحة الفاتورة على naboo.fun تُظهر «مرتجعة» بعد استرجاعها كاملة.
+  static Future<void> _markPublicReceiptIfFullyReturned(Invoice o) async {
+    final gid = (o.globalId ?? '').trim().toLowerCase();
+    if (gid.isEmpty) return;
+    try {
+      if ((await ReturnHistory.of(o)).fullyReturned) {
+        await PublicReceiptLinks.setState(gid, 'returned');
+      }
+    } catch (_) {}
   }
 
   void _snack(String msg, {bool error = true}) {

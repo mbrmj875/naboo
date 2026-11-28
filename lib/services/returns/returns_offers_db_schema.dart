@@ -30,6 +30,17 @@ Future<void> ensureReturnsAndOffersSchema(Database db) async {
   await addCol('service_orders', 'washOfferCode', 'TEXT');
   // سبب الخصم والسطر التشجيعي كما طُبعا على الإيصال.
   await addCol('service_orders', 'washOfferNote', 'TEXT');
+  // الغسيل داخل بطاقة الغيار: الغسلة المختارة ومبلغها في البطاقة نفسها،
+  // وطلب الغسيل المرتبط يحمل global_id البطاقة.
+  await addCol('service_orders', 'cardWashJson', 'TEXT');
+  await addCol('service_orders', 'cardWashNetFils', 'INTEGER');
+  await addCol('service_orders', 'parentOrderGlobalId', 'TEXT');
+  try {
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_service_orders_parent_gid '
+      'ON service_orders(parentOrderGlobalId)',
+    );
+  } catch (_) {}
 
   await db.execute('''
     CREATE TABLE IF NOT EXISTS store_policy_settings (

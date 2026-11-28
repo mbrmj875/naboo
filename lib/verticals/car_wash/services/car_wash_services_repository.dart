@@ -8,6 +8,7 @@ import '../../../services/database_helper.dart';
 import '../../../services/service_order_kinds.dart';
 import '../../../services/service_orders_sql_ops.dart';
 import '../../../services/tenant_context_service.dart';
+import '../../oil_change/services/card_wash_order_sync.dart';
 
 /// كتالوج أنواع غسيل السيارات — اسم وسعر يُختار عند إنشاء بطاقة غسيل.
 class CarWashServicesRepository {
@@ -44,6 +45,8 @@ class CarWashServicesRepository {
     String plate, {
     required DateTime since,
   }) async {
+    // غسلة بطاقة غيار أُرجعت فاتورتها لا تُحسب في العروض.
+    await CardWashOrderSync.instance.reconcileLinked();
     final db = await _db;
     return WashOfferHistoryLoader.load(
       db,

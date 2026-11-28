@@ -379,6 +379,28 @@ extension DbExpenses on DatabaseHelper {
     ''', [...args, limit]);
   }
 
+  /// مصروف واحد برقمه مع اسم الفئة والموظف (لطباعة سنده بعد الحفظ).
+  Future<Map<String, dynamic>?> getExpenseJoinedById(
+    int id, {
+    int tenantId = 1,
+  }) async {
+    final db = await database;
+    await ensureExpensesSchema(db);
+    final rows = await db.rawQuery('''
+      SELECT 
+        e.*,
+        c.name AS categoryName,
+        u.displayName AS employeeDisplayName,
+        u.username AS employeeUsername
+      FROM expenses e
+      JOIN expense_categories c ON c.id = e.categoryId
+      LEFT JOIN users u ON u.id = e.employeeUserId
+      WHERE e.id = ? AND e.tenantId = ?
+      LIMIT 1
+    ''', [id, tenantId]);
+    return rows.isEmpty ? null : rows.first;
+  }
+
   Future<double> sumExpensesFiltered({
     required DateTime from,
     required DateTime to,

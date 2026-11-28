@@ -3,6 +3,9 @@ import 'dart:async' show unawaited;
 import 'package:flutter/material.dart';
 
 import '../../../theme/sale_brand.dart';
+import '../../../utils/iqd_money.dart';
+import '../../../utils/iraqi_currency_format.dart';
+import '../models/oil_card_wash.dart';
 import '../utils/oil_change_finance.dart';
 import '../utils/oil_change_filter_format.dart';
 import '../utils/oil_order_has_oil.dart';
@@ -115,6 +118,9 @@ class _OilChangeLogDetailSheetState extends State<OilChangeLogDetailSheet> {
     return lines.map((line) => _detailRow(cs, 'فلتر', line)).toList();
   }
 
+  static String _iqd(int fils) =>
+      IraqiCurrencyFormat.formatIqd(IqdMoney.fromFils(fils));
+
   Widget _section(
     ColorScheme cs, {
     required String title,
@@ -176,6 +182,7 @@ class _OilChangeLogDetailSheetState extends State<OilChangeLogDetailSheet> {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final r = widget.row;
+    final wash = OilCardWash.fromOrder(r);
     final layout = context.screenLayout;
     final maxH = MediaQuery.sizeOf(context).height * 0.88;
     final maxW = layout.isHandsetForLayout ? double.infinity : 520.0;
@@ -373,6 +380,41 @@ class _OilChangeLogDetailSheetState extends State<OilChangeLogDetailSheet> {
                                         ),
                                       )
                                       .toList(),
+                                ),
+                              ],
+                            ),
+                          if (wash != null)
+                            _section(
+                              cs,
+                              title: 'الغسيل',
+                              icon: Icons.local_car_wash_outlined,
+                              children: [
+                                _detailRow(
+                                  cs,
+                                  'الأنواع',
+                                  wash.serviceNames.join('، '),
+                                ),
+                                _detailRow(
+                                  cs,
+                                  'السعر',
+                                  _iqd(wash.netFils),
+                                  valueDirection: TextDirection.ltr,
+                                ),
+                                if (wash.discountFils > 0)
+                                  _detailRow(
+                                    cs,
+                                    'الخصم',
+                                    _iqd(wash.discountFils),
+                                    valueDirection: TextDirection.ltr,
+                                  ),
+                                if ((wash.offerNote ?? '').trim().isNotEmpty)
+                                  _detailRow(cs, 'العرض', wash.offerNote!.trim()),
+                                _detailRow(
+                                  cs,
+                                  'عامل الغسيل',
+                                  wash.washerName.trim().isEmpty
+                                      ? '—'
+                                      : wash.washerName.trim(),
                                 ),
                               ],
                             ),

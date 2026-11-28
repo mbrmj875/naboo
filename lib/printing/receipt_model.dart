@@ -9,6 +9,8 @@ enum ReceiptKind {
   debtPayment('إيصال تسديد دين', 'تسديد دين عميل'),
   expense('سند صرف', 'المصروفات'),
   saleReturn('إيصال استرجاع', 'الاسترجاع'),
+  customerStatement('كشف حساب عميل', 'كشف حساب العميل'),
+  supplierStatement('كشف حساب مورد', 'كشف حساب المورد'),
   sale('إيصال بيع', 'فاتورة عامة');
 
   const ReceiptKind(this.title, this.workLabel);
@@ -27,10 +29,19 @@ enum ReceiptKind {
     saleReturn,
     debtPayment,
     expense,
+    customerStatement,
+    supplierStatement,
   ];
 
   /// أقسام اختيارية يستطيع المالك إخفاءها من هذا القالب.
-  List<ReceiptSection> get sections => switch (this) {
+  List<ReceiptSection> get sections => [
+    ..._baseSections,
+    if (this != customerStatement && this != supplierStatement)
+      ReceiptSection.amountWords,
+    ReceiptSection.signature,
+  ];
+
+  List<ReceiptSection> get _baseSections => switch (this) {
     oilChange => const [
       ReceiptSection.plate,
       ReceiptSection.car,
@@ -39,24 +50,42 @@ enum ReceiptKind {
       ReceiptSection.oil,
       ReceiptSection.filters,
       ReceiptSection.technician,
+      ReceiptSection.wash,
       ReceiptSection.customer,
+      ReceiptSection.payment,
       ReceiptSection.accountBalance,
+      ReceiptSection.loyalty,
+      ReceiptSection.storeExtras,
     ],
-    directSale => const [ReceiptSection.customer, ReceiptSection.payment],
+    directSale => const [
+      ReceiptSection.customer,
+      ReceiptSection.payment,
+      ReceiptSection.storeExtras,
+    ],
     carWash => const [
       ReceiptSection.plate,
       ReceiptSection.car,
       ReceiptSection.technician,
       ReceiptSection.customer,
+      ReceiptSection.payment,
       ReceiptSection.accountBalance,
+      ReceiptSection.loyalty,
+      ReceiptSection.storeExtras,
     ],
-    debtPayment => const [ReceiptSection.cashier],
+    debtPayment => const [ReceiptSection.cashier, ReceiptSection.storeExtras],
     expense => const [ReceiptSection.cashier],
-    saleReturn => const [ReceiptSection.customer, ReceiptSection.cashier],
+    saleReturn => const [
+      ReceiptSection.customer,
+      ReceiptSection.cashier,
+      ReceiptSection.storeExtras,
+    ],
+    customerStatement => const [ReceiptSection.storeExtras],
+    supplierStatement => const [],
     sale => const [
       ReceiptSection.customer,
       ReceiptSection.payment,
       ReceiptSection.accountBalance,
+      ReceiptSection.storeExtras,
     ],
   };
 
@@ -78,6 +107,8 @@ enum ReceiptKind {
     debtPayment => 'تسديد دين',
     expense => 'مصروف',
     saleReturn => 'استرجاع',
+    customerStatement => 'كشف عميل',
+    supplierStatement => 'كشف مورد',
     sale => 'بيع',
   };
 
@@ -98,12 +129,29 @@ enum ReceiptSection {
   oil('الزيت المستخدم'),
   filters('الفلاتر'),
   technician('الفني / العامل'),
+  wash('الغسيل داخل البطاقة'),
   customer('اسم العميل'),
-  payment('طريقة الدفع والمتبقي'),
+  payment('المدفوع والمتبقي'),
   accountBalance('رصيد حساب العميل (الدين)'),
-  cashier('المستلم / المسجِّل');
+  cashier('المستلم / المسجِّل'),
+  storeExtras('معلومات المحل الإضافية'),
+  loyalty('العروض والزيارات'),
+  amountWords('المبلغ كتابةً (الورق الكبير)'),
+  signature('الختم والتوقيع (الورق الكبير)');
 
   const ReceiptSection(this.label);
+  final String label;
+}
+
+/// شكل الطباعة على الورق الكبير (A5 وA4).
+enum ReceiptSheetStyle {
+  /// تخطيط صفحة: رأس بعمودين، جدول بالسعر، المبلغ كتابةً، الختم والتوقيع.
+  formal('فاتورة رسمية'),
+
+  /// الإيصال نفسه بشكله الطويل، مكبَّراً على عرض الصفحة.
+  enlarged('إيصال مكبَّر');
+
+  const ReceiptSheetStyle(this.label);
   final String label;
 }
 
@@ -117,6 +165,9 @@ class ReceiptTemplate {
     this.showQr = true,
     this.hidden = const {},
     this.footer = '',
+    this.showThanks,
+    this.nextServiceMonths = 0,
+    this.sheetStyle = ReceiptSheetStyle.formal,
   });
 
   factory ReceiptTemplate.defaultsFor(ReceiptKind kind) => ReceiptTemplate(
@@ -149,6 +200,14 @@ class ReceiptTemplate {
       showQr: raw['showQr'] is bool ? raw['showQr'] as bool : d.showQr,
       hidden: hidden,
       footer: raw['footer'] is String ? (raw['footer'] as String) : d.footer,
+      showThanks: raw['showThanks'] is bool ? raw['showThanks'] as bool : null,
+      nextServiceMonths: raw['nextServiceMonths'] is num
+          ? (raw['nextServiceMonths'] as num).toInt().clamp(0, 24)
+          : 0,
+      sheetStyle: ReceiptSheetStyle.values.firstWhere(
+        (e) => e.name == raw['sheetStyle'],
+        orElse: () => ReceiptSheetStyle.formal,
+      ),
     );
   }
 
@@ -167,6 +226,21 @@ class ReceiptTemplate {
   /// نص أسفل الإيصال خاص بهذا العمل (يُضاف بعد النص العام).
   final String footer;
 
+  /// سطر «شكراً لزيارتكم». `null` = السلوك القديم: يُطبع فقط إن لم يوجد
+  /// نص تذييل؛ بعد أن يلمس المالك المفتاح يصير اختياره صريحاً.
+  final bool? showThanks;
+
+  /// هل يُطبع سطر الشكر، مع [hasFooterText] = يوجد نص تذييل (عام أو خاص).
+  bool thanksShown({required bool hasFooterText}) =>
+      showThanks ?? !hasFooterText;
+
+  /// غيار الزيت: تاريخ تقريبي للغيار القادم بعد هذا العدد من الأشهر
+  /// (0 = لا يُطبع).
+  final int nextServiceMonths;
+
+  /// شكل الطباعة على A5 وA4: فاتورة رسمية أو الإيصال نفسه مكبَّراً.
+  final ReceiptSheetStyle sheetStyle;
+
   bool shows(ReceiptSection s) => !hidden.contains(s);
 
   @override
@@ -178,6 +252,9 @@ class ReceiptTemplate {
       other.showStoreContact == showStoreContact &&
       other.showQr == showQr &&
       other.footer == footer &&
+      other.showThanks == showThanks &&
+      other.nextServiceMonths == nextServiceMonths &&
+      other.sheetStyle == sheetStyle &&
       other.hidden.length == hidden.length &&
       other.hidden.containsAll(hidden);
 
@@ -189,6 +266,9 @@ class ReceiptTemplate {
     showStoreContact,
     showQr,
     footer,
+    showThanks,
+    nextServiceMonths,
+    sheetStyle,
     Object.hashAllUnordered(hidden),
   );
 
@@ -200,6 +280,9 @@ class ReceiptTemplate {
     'showQr': showQr,
     'hidden': [for (final s in hidden) s.name],
     'footer': footer,
+    if (showThanks != null) 'showThanks': showThanks,
+    if (nextServiceMonths > 0) 'nextServiceMonths': nextServiceMonths,
+    if (sheetStyle != ReceiptSheetStyle.formal) 'sheetStyle': sheetStyle.name,
   };
 
   ReceiptTemplate copyWith({
@@ -210,6 +293,9 @@ class ReceiptTemplate {
     bool? showQr,
     Set<ReceiptSection>? hidden,
     String? footer,
+    bool? showThanks,
+    int? nextServiceMonths,
+    ReceiptSheetStyle? sheetStyle,
   }) => ReceiptTemplate(
     autoPrint: autoPrint ?? this.autoPrint,
     copies: copies ?? this.copies,
@@ -218,6 +304,9 @@ class ReceiptTemplate {
     showQr: showQr ?? this.showQr,
     hidden: hidden ?? this.hidden,
     footer: footer ?? this.footer,
+    showThanks: showThanks ?? this.showThanks,
+    nextServiceMonths: nextServiceMonths ?? this.nextServiceMonths,
+    sheetStyle: sheetStyle ?? this.sheetStyle,
   );
 }
 
@@ -229,13 +318,21 @@ class ReceiptTemplates {
 
   Map<String, dynamic> get _rawMap => _raw;
 
+  /// الحقل كما حُفظ (للتصميم في `receipt_design.dart`).
+  Map<String, dynamic> get rawMap => _raw;
+
   ReceiptTemplate of(ReceiptKind kind) =>
       ReceiptTemplate.fromJson(kind, _raw[kind.name]);
 
-  Map<String, dynamic> withTemplate(ReceiptKind kind, ReceiptTemplate t) => {
-    ..._raw,
-    kind.name: t.toJson(),
-  };
+  /// يحفظ إعدادات القالب ويُبقي تصميمه الخاص (`design`) إن وُجد.
+  Map<String, dynamic> withTemplate(ReceiptKind kind, ReceiptTemplate t) {
+    final old = _raw[kind.name];
+    final design = old is Map ? old['design'] : null;
+    return {
+      ..._raw,
+      kind.name: {...t.toJson(), if (design is Map) 'design': design},
+    };
+  }
 }
 
 /// سطر معلومة في رأس الإيصال: «اللوحة: بصرة 12345».
@@ -305,6 +402,7 @@ class ReceiptDocument {
     this.notes = const [],
     this.qrData,
     this.titleOverride,
+    this.loyalty,
   });
 
   final ReceiptKind kind;
@@ -323,7 +421,44 @@ class ReceiptDocument {
   final String? qrData;
   final String? titleOverride;
 
+  /// العروض والزيارات (قسم [ReceiptSection.loyalty]).
+  final ReceiptLoyalty? loyalty;
+
   String get title => titleOverride ?? kind.title;
+
+  /// الإيصال نفسه برمز QR آخر (رابط صفحة الفاتورة على naboo.fun).
+  ReceiptDocument withQr(String? qr) => ReceiptDocument(
+    kind: kind,
+    date: date,
+    number: number,
+    status: status,
+    fields: fields,
+    lines: lines,
+    totals: totals,
+    highlights: highlights,
+    notes: notes,
+    qrData: qr,
+    titleOverride: titleOverride,
+    loyalty: loyalty,
+  );
+}
+
+/// سطر العروض والزيارات: نص العرض ونقاط تقدّمه، وعدد زيارات السيارة.
+class ReceiptLoyalty {
+  const ReceiptLoyalty({this.line, this.done, this.total, this.visit});
+
+  /// «غسلتان من 3 — الغسلة القادمة مجانية».
+  final String? line;
+
+  /// التقدّم في العرض: [done] من [total] (نقاط ●●○).
+  final int? done;
+  final int? total;
+
+  /// رقم زيارة السيارة لتبديل الزيت (1 = أول زيارة).
+  final int? visit;
+
+  bool get hasProgress =>
+      done != null && total != null && total! >= 2 && total! <= 20;
 }
 
 // ------------------------------------------------------------- نمط الإيصال
@@ -335,7 +470,9 @@ enum ReceiptFont {
   almarai('Almarai', 'المراعي'),
   plex('IBMPlexSansArabic', 'بلكس'),
   naskh('NotoNaskhArabic', 'نسخ'),
-  amiri('Amiri', 'أميري');
+  amiri('Amiri', 'أميري'),
+  reemKufi('ReemKufi', 'ريم كوفي'),
+  changa('Changa', 'شنغا');
 
   const ReceiptFont(this.family, this.label);
   final String family;
@@ -357,7 +494,8 @@ enum ReceiptTextSize {
 enum ReceiptHeaderShape {
   filled('شريط ممتلئ'),
   outlined('إطار'),
-  plain('خط تحت النص');
+  plain('خط تحت النص'),
+  ribbon('شريطة بأطراف مشقوقة');
 
   const ReceiptHeaderShape(this.label);
   final String label;

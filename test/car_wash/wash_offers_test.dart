@@ -202,6 +202,60 @@ void main() {
     });
   });
 
+  group('غسلة مع الغيار', () {
+    const two = {'داخلي': 6000000, 'خارجي': 4000000};
+    WashOfferResult w(WithOilWashOffer o, [Map<String, int> p = two]) =>
+        WashOfferEngine.withOil(offer: o, currentServicePrices: p);
+
+    test('مطفأ افتراضياً: لا خصم', () {
+      expect(w(const WithOilWashOffer()).hasDiscount, isFalse);
+      expect(const StorePolicy().withOilWash.enabled, isFalse);
+    });
+
+    test('مجانية: الخصم كامل السعر', () {
+      final r = w(const WithOilWashOffer(enabled: true));
+      expect(r.discountFils, 10000000);
+      expect(r.code, WashOfferCodes.withOil);
+      expect(r.reasonAr, 'غسلة مجانية مع الغيار');
+    });
+
+    test('نسبة على الأنواع المشمولة فقط', () {
+      final r = w(
+        const WithOilWashOffer(
+          enabled: true,
+          rewardType: WashRewardType.percent,
+          rewardValue: 50,
+          coveredServiceNames: ['داخلي'],
+        ),
+      );
+      expect(r.discountFils, 3000000);
+    });
+
+    test('سعر ثابت: الخصم هو الفرق، ولا خصم إن كان السعر أقل منه', () {
+      const o = WithOilWashOffer(
+        enabled: true,
+        rewardType: WashRewardType.fixed,
+        rewardValue: 3000,
+      );
+      expect(w(o).discountFils, 7000000);
+      expect(w(o, {'داخلي': 2000000}).hasDiscount, isFalse);
+    });
+
+    test('يُحفظ ويُقرأ مع سياسة المحل', () {
+      const p = StorePolicy(
+        withOilWash: WithOilWashOffer(
+          enabled: true,
+          rewardType: WashRewardType.percent,
+          rewardValue: 50,
+          coveredServiceNames: ['داخلي'],
+        ),
+      );
+      final back = StorePolicy.fromJsonString(p.toJsonString());
+      expect(back.withOilWash.toJson(), p.withOilWash.toJson());
+      expect(StorePolicy.fromJsonString('{}').withOilWash.enabled, isFalse);
+    });
+  });
+
   group('قراءة سجل السيارة', () {
     late Database db;
     setUpAll(sqfliteFfiInit);
@@ -211,7 +265,7 @@ void main() {
         CREATE TABLE service_orders (
           id INTEGER PRIMARY KEY, tenantId INTEGER, orderKind TEXT, status TEXT,
           deviceSerial TEXT, deletedAt TEXT, createdAt TEXT, requestedServices TEXT,
-          washOfferCode TEXT, invoiceId INTEGER
+          washOfferCode TEXT, invoiceId INTEGER, agreedPriceFils INTEGER
         )''');
       await db.execute('''
         CREATE TABLE invoices (
@@ -227,6 +281,7 @@ void main() {
         String? deleted,
         int? invoiceId,
         String? code,
+        int? agreed,
       }) => db.insert('service_orders', {
         'id': ++id,
         'tenantId': 1,
@@ -238,6 +293,7 @@ void main() {
         'requestedServices': 'داخلي,خارجي',
         'washOfferCode': code,
         'invoiceId': invoiceId,
+        'agreedPriceFils': agreed,
       });
       await db.insert('invoices', {'id': 100});
       await db.insert('invoices', {'id': 101});
@@ -265,6 +321,13 @@ void main() {
       await add(ServiceOrderKinds.carWash, ago(2), plate: '999 بغداد');
       await add(ServiceOrderKinds.carWash, ago(40)); // قبل الفترة
       await add(ServiceOrderKinds.oilChange, ago(3), plate: ' 12345  بصرة ');
+      // غسلة مجانية مع الغيار: لا تُحسب في «تكرار الغسل».
+      await add(
+        ServiceOrderKinds.carWash,
+        ago(3),
+        code: WashOfferCodes.withOil,
+        agreed: 0,
+      );
     });
     tearDown(() => db.close());
 
@@ -283,6 +346,27 @@ void main() {
         expect(h.oilChanges, hasLength(1));
       },
     );
+
+    test('الغسلة مع الغيار المدفوعة تُحسب، والمجانية لا', () async {
+      await db.insert('service_orders', {
+        'id': 50,
+        'tenantId': 1,
+        'orderKind': ServiceOrderKinds.carWash,
+        'status': 'delivered',
+        'deviceSerial': '12345 بصرة',
+        'createdAt': ago(4).toUtc().toIso8601String(),
+        'requestedServices': 'داخلي',
+        'washOfferCode': WashOfferCodes.withOil,
+        'agreedPriceFils': 5000000,
+      });
+      final h = await WashOfferHistoryLoader.load(
+        db,
+        1,
+        plate: '12345 بصرة',
+        since: ago(30),
+      );
+      expect(h.washes.map((w) => w.offerCode), ['with_oil', 'repeat']);
+    });
 
     test('محل آخر لا يرى شيئاً', () async {
       final h = await WashOfferHistoryLoader.load(

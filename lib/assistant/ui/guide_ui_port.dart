@@ -2,6 +2,8 @@ import 'package:flutter/widgets.dart';
 
 import '../../guides/guide_controller.dart';
 import '../../guides/guide_tour.dart';
+import '../../navigation/content_navigation.dart';
+import '../../screens/settings/settings_screen.dart';
 import '../tools/ui_tools.dart';
 import 'assistant_return_chip.dart';
 import 'assistant_session.dart';
@@ -53,4 +55,12 @@ class GuideUiPort implements AssistantUiPort {
 
   @override
   bool tourExists(String tourId) => guide.tourById(tourId) != null;
+
+  @override
+  Future<bool> openSettingsEntry(String entryId) async {
+    // الطلب قبل الفتح: الشاشة تقرؤه حين تظهر، أو فوراً إن كانت ظاهرة.
+    SettingsScreen.requestedEntry.value = entryId;
+    await navigate(AppContentRoutes.settings);
+    return true;
+  }
 }
