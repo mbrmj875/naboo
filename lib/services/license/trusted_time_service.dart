@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -44,19 +45,28 @@ class TrustedTimeService {
   /// لتفعيل ذلك في الإنتاج نضيف function مثل:
   /// `create or replace function app_server_time() returns timestamptz as $$ select now(); $$ language sql stable;`
   Future<DateTime?> tryFetchServerTime() async {
-    final client = _getClient();
-    final candidates = const ['app_server_time', 'server_time', 'now'];
-    for (final fn in candidates) {
-      try {
-        final res = await client.rpc(fn);
-        final dt = _parseServerTime(res);
-        if (dt != null) return dt;
-      } catch (_) {
-        // تجاهل وجرب التالي
+    // دالة واحدة فقط. كانت هنا ثلاث محاولات لا توجد منها أي دالة على الخادم،
+    // فكانت كل فحص ترخيص يرسل ثلاثة طلبات فاشلة.
+    if (_serverTimeFunctionMissing) return null;
+    try {
+      final res = await _getClient().rpc('app_server_time');
+      return _parseServerTime(res);
+    } on PostgrestException catch (e) {
+      // الدالة غير موجودة: لا نعيد المحاولة حتى يُعاد تشغيل التطبيق.
+      if (e.code == 'PGRST202' || e.code == '42883') {
+        _serverTimeFunctionMissing = true;
       }
+      return null;
+    } catch (_) {
+      return null;
     }
-    return null;
   }
+
+  static bool _serverTimeFunctionMissing = false;
+
+  @visibleForTesting
+  static void resetServerTimeLookupForTesting() =>
+      _serverTimeFunctionMissing = false;
 
   DateTime? _parseServerTime(dynamic res) {
     // Supabase RPC might return:

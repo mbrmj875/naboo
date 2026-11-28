@@ -6,7 +6,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../utils/app_logger.dart';
-import 'wa_oil_followup_copy.dart';
 
 /// ما سبق تسجيله لهذا الزبون عند هذا المتجر.
 enum WaRecipientConsentStatus { none, staffDeclined, customerOptedOut }

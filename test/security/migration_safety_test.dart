@@ -179,4 +179,38 @@ void main() {
       },
     );
   });
+
+  group('DbMigrationSafety.noteIgnored', () {
+    setUp(DbMigrationSafety.resetForTesting);
+    tearDown(DbMigrationSafety.resetForTesting);
+
+    test('T12: الخطأ الحميد لا يُحفظ', () {
+      DbMigrationSafety.noteIgnored(
+        'x#1',
+        Exception('duplicate column name: amountFils'),
+      );
+      expect(DbMigrationSafety.pendingIssues, isEmpty);
+    });
+
+    test('T13: الخطأ الحقيقي يُحفظ ثم يُسلَّم مرة واحدة', () {
+      DbMigrationSafety.noteIgnored(
+        '_ensureOilChangeFilterKindsTable#1',
+        Exception('UNIQUE constraint failed: oil_change_filter_kinds.code'),
+      );
+      final first = DbMigrationSafety.takePending();
+      expect(first, hasLength(1));
+      expect(first.single.label, '_ensureOilChangeFilterKindsTable#1');
+      expect(first.single.error, contains('UNIQUE constraint failed'));
+      expect(DbMigrationSafety.takePending(), isEmpty);
+    });
+
+    test('T14: لا يتجاوز الحد ولا يطول النص', () {
+      for (var i = 0; i < DbMigrationSafety.maxStoredIssues + 50; i++) {
+        DbMigrationSafety.noteIgnored('l#$i', Exception('x' * 600));
+      }
+      final all = DbMigrationSafety.takePending();
+      expect(all, hasLength(DbMigrationSafety.maxStoredIssues));
+      expect(all.first.error.length, lessThanOrEqualTo(500));
+    });
+  });
 }

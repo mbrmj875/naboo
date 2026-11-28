@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../../_contract/vertical_manifest.dart';
 import '../../_contract/vertical_registry.dart';
 import '../../../owner/owner_command_center_refresh_bridge.dart';
 import '../../../services/reports_repository.dart';

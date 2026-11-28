@@ -167,6 +167,8 @@ abstract class VerticalFluidInventoryEditor {
     required bool isOilFamily,
     required List<Object> grades,
     required VoidCallback onChanged,
+    /// عنوان خانة الكمية (من قائمة المشتريات: «الكمية المشتراة (لتر)»).
+    String? qtyLabel,
   });
 
   FluidFamilyEditorLabels labels({required bool isOilFamily});

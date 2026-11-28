@@ -4,7 +4,6 @@ import '../../utils/screen_layout.dart';
 import 'inventory_products_screen.dart';
 import 'stock_voucher_screen.dart';
 import 'warehouses_screen.dart';
-import 'price_lists_screen.dart';
 import 'stocktaking_screen.dart';
 import 'inventory_management_screen.dart';
 
@@ -359,16 +358,6 @@ class _ModulesGrid extends StatelessWidget {
         sub: 'إيداع وصرف ونقل',
         onTap: () => Navigator.push(context,
             MaterialPageRoute(builder: (_) => const StockVoucherScreen())),
-      ),
-      _ModDef(
-        icon: Icons.price_change_outlined,
-        color: _green,
-        bg: const Color(0xFFD1FAE5),
-        title: 'فوائم الأسعار',
-        sub: 'تجزئة وجملة وخاصة',
-        badge: '2',
-        onTap: () => Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const PriceListsScreen())),
       ),
       _ModDef(
         icon: Icons.fact_check_outlined,

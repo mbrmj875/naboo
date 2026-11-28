@@ -22,7 +22,8 @@ class _InMemorySecureKv implements SecureKvStore {
 
   @override
   Future<void> write(String key, String value) async {
-    writes++;
+    // فحص Keychain عند الإقلاع ليس كتابة جلسة.
+    if (key != '__secure_local_storage_probe__') writes++;
     store[key] = value;
   }
 }
@@ -158,4 +159,76 @@ void main() {
       expect(prefs.getString(_kKey), isNull);
     });
   });
+
+  group('Keychain بطيء أو متعطل مؤقتاً لا يُضيّع الجلسة', () {
+    String session(int exp) =>
+        '{"access_token":"a.b.c","refresh_token":"r$exp","expires_at":$exp}';
+
+    test('فشل القراءة مرتين ثم نجاحها يعيد الجلسة', () async {
+      final secure = _FlakySecureKv(failReads: 2);
+      secure.store[_kKey] = session(100);
+      final storage = SecureLocalStorage(persistSessionKey: _kKey, secureStore: secure);
+      await storage.initialize();
+      expect(await storage.accessToken(), session(100));
+    });
+
+    test('تعطل الكتابة يحفظ نسخة احتياطية تُقرأ عند التشغيل التالي', () async {
+      final secure = _FlakySecureKv(failWrites: 100);
+      final storage = SecureLocalStorage(persistSessionKey: _kKey, secureStore: secure);
+      await storage.initialize();
+      await storage.persistSession(session(200));
+      final again = SecureLocalStorage(persistSessionKey: _kKey, secureStore: secure);
+      await again.initialize();
+      expect(await again.accessToken(), session(200));
+    });
+
+    test('النسخة الاحتياطية الأحدث تغلب نسخة Keychain القديمة', () async {
+      final secure = _InMemorySecureKv();
+      secure.store[_kKey] = session(100);
+      SharedPreferences.setMockInitialValues({_kKey: session(300)});
+      final storage = SecureLocalStorage(persistSessionKey: _kKey, secureStore: secure);
+      await storage.initialize();
+      expect(await storage.accessToken(), session(300));
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.containsKey(_kKey), isFalse, reason: 'نُقلت إلى Keychain');
+    });
+
+    test('نجاح الكتابة الآمنة يحذف النسخة النصية', () async {
+      final secure = _InMemorySecureKv();
+      SharedPreferences.setMockInitialValues({});
+      final storage = SecureLocalStorage(persistSessionKey: _kKey, secureStore: secure);
+      await storage.initialize();
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_kKey, session(1));
+      await storage.persistSession(session(2));
+      expect(prefs.containsKey(_kKey), isFalse);
+      expect(secure.store[_kKey], session(2));
+    });
+  });
 }
+
+class _FlakySecureKv extends _InMemorySecureKv {
+  _FlakySecureKv({this.failReads = 0, this.failWrites = 0});
+  int failReads;
+  int failWrites;
+  static const _probe = '__secure_local_storage_probe__';
+
+  @override
+  Future<String?> read(String key) async {
+    if (key != _probe && failReads > 0) {
+      failReads--;
+      throw Exception('keychain locked');
+    }
+    return super.read(key);
+  }
+
+  @override
+  Future<void> write(String key, String value) async {
+    if (key != _probe && failWrites > 0) {
+      failWrites--;
+      throw Exception('keychain locked');
+    }
+    return super.write(key, value);
+  }
+}
+

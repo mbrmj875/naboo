@@ -95,7 +95,6 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
 
   /// أيقونة منع سريعة: إيقاف التعامل بالضريبة في شاشة إضافة المنتج (إخفاء الحقل).
   Widget _addProductTaxRow(ColorScheme cs) {
-    final canUse = _d.addShowAdvancedPricing;
     final on = _d.addShowTaxField;
     return ListTile(
       contentPadding: EdgeInsets.zero,
@@ -104,24 +103,22 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
         tooltip: 'عدم التعامل بالضريبة — إيقاف إظهار حقل الضريبة',
         icon: Icon(
           Icons.block_rounded,
-          color: canUse && on
+          color: on
               ? cs.error
               : cs.onSurfaceVariant.withValues(alpha: 0.35),
         ),
-        onPressed: canUse && on
+        onPressed: on
             ? () => _patch(_d.copyWith(addShowTaxField: false))
             : null,
       ),
-      title: const Text('إظهار حقل الضريبة'),
+      title: const Text('تفعيل الضريبة'),
       subtitle: const Text(
-        'في «إضافة منتج جديد». أيقونة المنع تعطّل الضريبة دفعة واحدة.',
+        'للمحل كله: عند الإيقاف تختفي حقول الضريبة من كل الشاشات.',
         style: TextStyle(fontSize: 12, height: 1.25),
       ),
       trailing: Switch(
         value: on,
-        onChanged: canUse
-            ? (v) => _patch(_d.copyWith(addShowTaxField: v))
-            : null,
+        onChanged: (v) => _patch(_d.copyWith(addShowTaxField: v)),
       ),
     );
   }
@@ -137,7 +134,7 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
         tooltip: 'عدم التعامل بالخصم — إيقاف إظهار حقول الخصم',
         icon: Icon(
           Icons.money_off_rounded,
-          color: canUse && on
+          color: on
               ? cs.error
               : cs.onSurfaceVariant.withValues(alpha: 0.35),
         ),
@@ -583,10 +580,21 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
                   contentPadding: EdgeInsets.zero,
                   title: const Text('إظهار الحقول الإضافية'),
                   subtitle: const Text(
-                    'مثل: ملاحظات داخلية، وسوم، الوزن، وتواريخ الإنتاج/الانتهاء.',
+                    'مثل: ملاحظات داخلية، ووسوم، والوزن والتواريخ.',
                   ),
                   value: _d.addShowExtraFields,
                   onChanged: (v) => _patch(_d.copyWith(addShowExtraFields: v)),
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('إظهار الوزن وتواريخ الإنتاج والانتهاء'),
+                  subtitle: const Text(
+                    'مع تنبيه الصلاحية. مخفية افتراضياً في محل الزيت.',
+                  ),
+                  value: _d.addShowDatesWeight,
+                  onChanged: _d.addShowExtraFields
+                      ? (v) => _patch(_d.copyWith(addShowDatesWeight: v))
+                      : null,
                 ),
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
@@ -1207,12 +1215,35 @@ class _ProductSettingsScreenState extends State<ProductSettingsScreen> {
     );
   }
 
+  /// إعدادات تُحفظ ولا يقرؤها التطبيق بعد (ع-10): مخفية حتى تُربط، فلا يظن
+  /// المالك أنها تعمل. تبقى قيمها محفوظة كما هي.
+  static const _unwiredTitles = {
+    'استخدام وحدات متعددة لكل صنف',
+    'الوحدة الافتراضية لعرض المخزون',
+    'التجميعات والوحدات المركبة',
+    'تتبع بواسطة الرقم المسلسل، رقم التوصيلة، أو تاريخ الانتهاء',
+    'المخزون السالب',
+    'عرض الكمية الإجمالية والمتوفرة',
+    'الطلبات المخزنية',
+    'الرقم التسلسلي لإذن التحويل المخزني التالي',
+    'الأذون المخزنية لفواتير المبيعات',
+    'الأذون المخزنية لفواتير الشراء',
+    'الحساب الفرعي الافتراضي',
+    'المستودع الافتراضي',
+    'قائمة الأسعار الافتراضية',
+    'الضريبة الافتراضية 1',
+    'الضريبة الافتراضية 2',
+    'طريقة احتساب تكلفة المرتجعات',
+    'طبيعة مبيعات النشاط',
+  };
+
   Widget _sectionCard(
     ColorScheme cs, {
     required String title,
     required Widget child,
     String footer = '',
   }) {
+    if (_unwiredTitles.contains(title)) return const SizedBox.shrink();
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(

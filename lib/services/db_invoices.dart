@@ -397,7 +397,40 @@ extension DbInvoices on DatabaseHelper {
   }
 
   /// إدراج فاتورة داخل معاملة مفتوحة (بيع، أو سند قبض دين/قسط).
+  /// كل فاتورة تكتب حركات مخزونها بنوعها («بيع»، «إرجاع»، «بيع مباشر»)
+  /// واسم الموظف ورقم الفاتورة، فتظهر بأسمائها في «حركات المخزون».
   Future<int> _insertInvoiceInTransaction(
+    Transaction txn,
+    Invoice invoice,
+    LoyaltySettingsData loyaltySettings, {
+    required bool enforceStockNonZero,
+    bool syncWarehouseStock = false,
+  }) async {
+    final actor = (invoice.createdByUserName ?? '').trim();
+    final before = await StockLedgerRefs.lastRowId(txn);
+    final id = await StockEngine.withContext(
+      txn,
+      StockMoveContext(
+        kind: invoice.isReturned
+            ? StockMoveKind.saleReturn
+            : (syncWarehouseStock
+                ? StockMoveKind.directSale
+                : StockMoveKind.sale),
+        actor: actor.isEmpty ? null : actor,
+      ),
+      () => _insertInvoiceInTransactionBody(
+        txn,
+        invoice,
+        loyaltySettings,
+        enforceStockNonZero: enforceStockNonZero,
+        syncWarehouseStock: syncWarehouseStock,
+      ),
+    );
+    await StockLedgerRefs.stampSince(txn, before, 'invoice:$id');
+    return id;
+  }
+
+  Future<int> _insertInvoiceInTransactionBody(
     Transaction txn,
     Invoice invoice,
     LoyaltySettingsData loyaltySettings, {
@@ -489,32 +522,10 @@ extension DbInvoices on DatabaseHelper {
     );
 
     for (final item in invoice.items) {
-      // تثبيت تكلفة الشراء لحظة البيع (Cost Stamping) — السلسلة:
-      // 1) WAC من product_batches (المتوسط المرجّح للدفعات حتى تاريخ الفاتورة)
-      // 2) products.buyPrice (آخر سعر شراء حالي)
-      // 3) 0 (يُعلَّم كسطر بدون تكلفة في تقارير الجودة)
+      // تثبيت تكلفة الشراء لحظة البيع: المتوسط المرجّح في buyPrice (ق-9).
+      // product_batches لا يكتبه أي مسار (ع-7)، فلا يُقرأ.
       double stampedUnitCost = 0.0;
       if (item.productId != null) {
-        try {
-          final wacRows = await txn.rawQuery(
-            '''
-            SELECT SUM(unitCost * qty) AS totalCost, SUM(qty) AS totalQty
-            FROM product_batches
-            WHERE productId = ? AND createdAt <= ?
-            ''',
-            [item.productId, invoice.date.toIso8601String()],
-          );
-          if (wacRows.isNotEmpty) {
-            final tc = (wacRows.first['totalCost'] as num?)?.toDouble() ?? 0.0;
-            final tq = (wacRows.first['totalQty'] as num?)?.toDouble() ?? 0.0;
-            if (tq > 0) stampedUnitCost = tc / tq;
-          }
-        } catch (e) {
-          AppLogger.warn(
-            'DbInvoices',
-            'WAC cost stamp skipped for product ${item.productId}: $e',
-          );
-        }
         if (stampedUnitCost <= 0) {
           try {
             final p = await txn.query(
@@ -743,6 +754,7 @@ extension DbInvoices on DatabaseHelper {
               ? 'مورد'
               : invoice.customerName;
           await txn.insert('cash_ledger', {
+            ...SyncSafety.newCashGlobalIdField(),
             'tenantId': tenantId,
             'transactionType': 'supplier_payment',
             'amount': -invoice.total,
@@ -788,6 +800,7 @@ extension DbInvoices on DatabaseHelper {
                     : 'سند تسديد قسط #$id — $cust')
               : 'فاتورة بيع #${id.toString()} — $cust';
           await txn.insert('cash_ledger', {
+            ...SyncSafety.newCashGlobalIdField(),
             'tenantId': tenantId,
             'transactionType': typeLabel,
             'amount': cashAmount,
@@ -915,6 +928,7 @@ extension DbInvoices on DatabaseHelper {
       final refund = _cashAmountForInvoice(invoice);
       if (refund > 0) {
         await txn.insert('cash_ledger', {
+            ...SyncSafety.newCashGlobalIdField(),
           'tenantId': tenantId,
           'transactionType': 'sale_return',
           'amount': -refund,
@@ -997,50 +1011,20 @@ extension DbInvoices on DatabaseHelper {
       'createdAt': nowIso,
     });
 
+    // الرصيد خُصم من «المحل» قبل هذا، و`product_warehouse_stock` مرآة له.
+    // السند هنا وثيقة فقط بالرصيد قبل وبعد.
     for (final line in lines) {
       if (line.qty <= 1e-12) continue;
-      final held = await txn.query(
-        'product_warehouse_stock',
-        columns: ['warehouseId', 'qty'],
-        where: 'tenantId = ? AND productId = ?',
-        whereArgs: [tenantId, line.productId],
-        orderBy: 'qty DESC',
+      final bookRows = await txn.query(
+        'products',
+        columns: ['qty'],
+        where: 'id = ?',
+        whereArgs: [line.productId],
+        limit: 1,
       );
-      if (held.isEmpty) {
-        final bookRows = await txn.query(
-          'products',
-          columns: ['qty'],
-          where: 'id = ?',
-          whereArgs: [line.productId],
-          limit: 1,
-        );
-        final book = bookRows.isEmpty
-            ? -line.qty
-            : (bookRows.first['qty'] as num?)?.toDouble() ?? -line.qty;
-        final before = book + line.qty;
-        await txn.insert('stock_voucher_items', {
-          'tenantId': tenantId,
-          'voucherId': voucherId,
-          'productId': line.productId,
-          'qty': line.qty,
-          'unitPrice': line.unitPrice,
-          'total': line.qty * line.unitPrice,
-          'stockBefore': before,
-          'stockAfter': book,
-          'baseQty': line.qty,
-        });
-        await txn.insert('product_warehouse_stock', {
-          'tenantId': tenantId,
-          'productId': line.productId,
-          'warehouseId': fallbackWarehouseId,
-          'qty': book,
-          'updatedAt': nowIso,
-        });
-        continue;
-      }
-      final warehouseId = (held.first['warehouseId'] as num).toInt();
-      final before = (held.first['qty'] as num?)?.toDouble() ?? 0.0;
-      final after = before - line.qty;
+      final book = bookRows.isEmpty
+          ? -line.qty
+          : (bookRows.first['qty'] as num?)?.toDouble() ?? -line.qty;
       await txn.insert('stock_voucher_items', {
         'tenantId': tenantId,
         'voucherId': voucherId,
@@ -1048,27 +1032,10 @@ extension DbInvoices on DatabaseHelper {
         'qty': line.qty,
         'unitPrice': line.unitPrice,
         'total': line.qty * line.unitPrice,
-        'stockBefore': before,
-        'stockAfter': after,
+        'stockBefore': book + line.qty,
+        'stockAfter': book,
         'baseQty': line.qty,
       });
-      final updated = await txn.rawUpdate(
-        '''
-        UPDATE product_warehouse_stock
-        SET qty = qty - ?, updatedAt = ?
-        WHERE tenantId = ? AND productId = ? AND warehouseId = ?
-        ''',
-        [line.qty, nowIso, tenantId, line.productId, warehouseId],
-      );
-      if (updated < 1) {
-        await txn.insert('product_warehouse_stock', {
-          'tenantId': tenantId,
-          'productId': line.productId,
-          'warehouseId': warehouseId,
-          'qty': after,
-          'updatedAt': nowIso,
-        });
-      }
     }
   }
 
@@ -1090,7 +1057,47 @@ extension DbInvoices on DatabaseHelper {
       ),
     );
     CloudSyncService.instance.scheduleSyncSoon();
+    // ق-6: البيع المباشر بلا رصيد يمر، ويصل للمالك تنبيه «رصيد سالب».
+    // البيع العادي ينبّه من شاشته (add_invoice_screen).
+    if (syncWarehouseStock && !invoice.isReturned) {
+      unawaited(_notifyNegativeAfterSale(db, invoice, id));
+    }
     return id;
+  }
+
+  Future<void> _notifyNegativeAfterSale(
+    Database db,
+    Invoice invoice,
+    int invoiceId,
+  ) async {
+    try {
+      final ids = {
+        for (final i in invoice.items)
+          if ((i.productId ?? 0) > 0) i.productId!,
+      };
+      if (ids.isEmpty) return;
+      final rows = await db.rawQuery(
+        'SELECT id, name, qty FROM products WHERE trackInventory = 1 '
+        'AND qty < 0 AND id IN (${List.filled(ids.length, '?').join(',')})',
+        ids.toList(),
+      );
+      if (rows.isEmpty) return;
+      await NegativeStockAlerts.notify(
+        source: 'direct_sale',
+        ref: '$invoiceId',
+        staffName: (invoice.createdByUserName ?? '').trim(),
+        lines: [
+          for (final r in rows)
+            (
+              productId: (r['id'] as num).toInt(),
+              name: (r['name'] ?? '').toString(),
+              after: (r['qty'] as num?)?.toDouble() ?? 0,
+            ),
+        ],
+      );
+    } catch (e) {
+      AppLogger.warn('DbInvoices', 'negative stock notice skipped: $e');
+    }
   }
 
   void _validateInvoiceForSave(Invoice invoice) {

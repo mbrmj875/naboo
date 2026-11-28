@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:naboo/services/cloud_sync_service.dart';
+import 'package:naboo/services/sync_safety.dart';
 import 'package:naboo/services/sync_queue_service.dart';
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -91,6 +92,9 @@ class FleetDevice {
 
   final String name;
   final String file;
+
+  /// جهاز بنسخة قديمة: يعمل بلا إصلاحات [SyncSafety].
+  bool legacy = false;
   String get userId => 'baseline-$name';
 }
 
@@ -116,6 +120,8 @@ class Fleet {
     await harness.reset();
     await harness.configureServiceOnly();
     final db = await harness.database;
+    // الأجهزة نسخ من قاعدة أساس: ما التُقط أثناء تجهيزها ليس تعديلاً من جهاز.
+    await db.execute('DELETE FROM sync_outbox');
     final base = p.join(dir.path, 'base.db');
     await File(base).parent.create(recursive: true);
     await db.execute('VACUUM INTO ?', [base]);
@@ -175,6 +181,8 @@ class Fleet {
 
   /// يبدّل الجهاز النشط بنسخ ملفه إلى مسار [DatabaseHelper] الوحيد.
   Future<Database> activate(FleetDevice d) async {
+    // كل عملية على الجهاز تعمل بإصلاحات نسخته هو.
+    SyncSafety.enabled = !d.legacy;
     if (!identical(_active, d)) {
       if (_active != null) {
         final db = await _helper.database;
@@ -207,6 +215,11 @@ class Fleet {
     await prefs.setInt(
       'sync.last_remote_content_version.$userId',
       await this.remote.currentVersion(),
+    );
+    // كما في السحب الحقيقي: لا يُعاد رفع ما وصل للتو إن لم يبقَ جديد محلي.
+    await _sync.skipEchoPushIfNothingNewForTesting(
+      userId: userId,
+      payload: copy,
     );
   }
 

@@ -34,9 +34,11 @@ class OilGradeDraft {
     String qtyLiters = '0',
     String buy = '0',
     String sell = '0',
+    String low = '0',
     this.gradeRowId,
     this.linkedProductId,
   })  : viscosityCtrl = TextEditingController(text: viscosity),
+        lowCtrl = TextEditingController(text: low),
         qtyCtrl = TextEditingController(text: qtyLiters),
         buyCtrl = TextEditingController(text: buy),
         sellCtrl = TextEditingController(text: sell),
@@ -54,6 +56,9 @@ class OilGradeDraft {
   final TextEditingController buyCtrl;
   final TextEditingController sellCtrl;
   final TextEditingController barcodeCtrl;
+
+  /// حدّ تنبيه النقص لهذه اللزوجة باللتر (0 = بلا تنبيه).
+  final TextEditingController lowCtrl;
   final List<OilGradePackDraft> packs;
 
   void dispose() {
@@ -62,6 +67,7 @@ class OilGradeDraft {
     buyCtrl.dispose();
     sellCtrl.dispose();
     barcodeCtrl.dispose();
+    lowCtrl.dispose();
     for (final p in packs) {
       p.dispose();
     }
@@ -93,12 +99,12 @@ const kCommonHydraulicGrades = [
   'ATF DEXRON',
 ];
 
-/// قوالب عبوات شائعة (الاسم + معامل لتر).
+/// قوالب عبوات شائعة (الاسم + معامل لتر). اللتر نفسه مضمّن تلقائياً.
 const kOilPackPresets = <({String name, String symbol, String factor})>[
-  (name: 'علبة واحدة', symbol: 'L', factor: '1'),
-  (name: 'علبتين', symbol: '', factor: '2'),
-  (name: 'ثلاث علب', symbol: '', factor: '3'),
-  (name: 'علبة 4 لتر', symbol: 'L', factor: '4'),
-  (name: 'علبة 5 لتر', symbol: 'L', factor: '5'),
+  (name: 'لتران', symbol: 'L', factor: '2'),
+  (name: '3 لترات', symbol: 'L', factor: '3'),
+  (name: '4 لترات', symbol: 'L', factor: '4'),
+  (name: '5 لترات', symbol: 'L', factor: '5'),
   (name: 'كوارت', symbol: 'qt', factor: '0.946'),
 ];
+

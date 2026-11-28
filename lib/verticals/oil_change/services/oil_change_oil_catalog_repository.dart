@@ -1,3 +1,4 @@
+import '../../../services/catalog_identity.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../models/oil_change_oil_catalog_entry.dart';
@@ -166,6 +167,7 @@ class OilChangeOilCatalogRepository {
     );
     final nextSort = ((maxRow.first['m'] as num?)?.toInt() ?? 0) + 1;
     final id = await db.insert('oil_change_oil_catalog', {
+      'global_id': CatalogIdentity.newId(),
       'tenantId': tid,
       'brandName': brand,
       'viscosity': vis,

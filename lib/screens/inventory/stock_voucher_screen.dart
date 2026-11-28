@@ -64,7 +64,6 @@ class _StockVoucherScreenState extends State<StockVoucherScreen> {
     'إذن إضافة مخزن',
     'إذن صرف مخزن',
     'نقل بين مخازن',
-    'جرد مخزن',
   ];
 
   static const _sourceTypes = <String, String>{

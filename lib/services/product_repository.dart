@@ -1,3 +1,4 @@
+import 'stock/stock_engine.dart';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -542,7 +543,8 @@ class ProductRepository {
     final where = <String>['p.tenantId = ?'];
     final args = <Object?>[tid];
 
-    const effQtyExpr = 'COALESCE(v.sumQty, p.qty)';
+    // الرصيد = المحل + المخزن (خطة المخزون، ع-13): صنف في المخزن ليس «نفد».
+    const effQtyExpr = '(COALESCE(v.sumQty, p.qty) + IFNULL(p.store_qty, 0))';
 
     void addStatusAndActive() {
       switch (statusArabic) {
@@ -645,6 +647,7 @@ class ProductRepository {
         p.sellPrice AS sell,
         p.buyPrice AS buy,
         $effQtyExpr AS qty,
+        IFNULL(p.store_qty, 0) AS storeQty,
         p.status,
         p.isActive AS isActive,
         p.lowStockThreshold AS lowStockThreshold,
@@ -684,7 +687,8 @@ class ProductRepository {
     final where = <String>['p.tenantId = ?'];
     final args = <Object?>[tid];
 
-    const effQtyExpr = 'COALESCE(v.sumQty, p.qty)';
+    // الرصيد = المحل + المخزن (خطة المخزون، ع-13): صنف في المخزن ليس «نفد».
+    const effQtyExpr = '(COALESCE(v.sumQty, p.qty) + IFNULL(p.store_qty, 0))';
 
     void addStatusAndActive() {
       switch (statusArabic) {
@@ -1560,6 +1564,62 @@ class ProductRepository {
   }
 
   /// تحديث سريع لحقول المنتج الأساسية (لشاشة التعديل السريعة).
+  /// يغيّر الحد الأدنى وحده (اعتماد الحد المقترح، ق-13).
+  Future<void> updateLowStockThreshold(int productId, double threshold) async {
+    final db = await _db;
+    await db.transaction((txn) async {
+      await txn.update(
+        'products',
+        {
+          'lowStockThreshold': threshold < 0 ? 0 : threshold,
+          'updatedAt': DateTime.now().toIso8601String(),
+        },
+        where: 'id = ? AND isActive = 1',
+        whereArgs: [productId],
+      );
+      await _enqueueProductMutation(txn, productId, 'UPDATE');
+    });
+    CloudSyncService.instance.scheduleSyncSoon();
+  }
+
+  /// يغيّر سعر البيع وحده (قائمة المشتريات): لا يمس الكمية ولا الكلفة.
+  Future<void> updateSellPrice(int productId, double sellPrice) async {
+    if (sellPrice <= 0) return;
+    final db = await _db;
+    final rows = await db.query(
+      'products',
+      columns: ['name', 'sellPrice', 'global_id'],
+      where: 'id = ? AND isActive = 1',
+      whereArgs: [productId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return;
+    final oldSell = (rows.first['sellPrice'] as num?)?.toDouble() ?? 0;
+    if ((oldSell - sellPrice).abs() < 0.0001) return;
+    await db.transaction((txn) async {
+      await txn.update(
+        'products',
+        {'sellPrice': sellPrice, 'updatedAt': DateTime.now().toIso8601String()},
+        where: 'id = ?',
+        whereArgs: [productId],
+      );
+      await _enqueueProductMutation(txn, productId, 'UPDATE');
+    });
+    CloudSyncService.instance.scheduleSyncSoon();
+    final gid = rows.first['global_id'] as String?;
+    if (gid != null) {
+      MarketplaceSyncService.instance.syncPrice(gid, IqdMoney.toFils(sellPrice));
+    }
+    await BusinessAuditLogService.instance.record(
+      eventType: 'price_change',
+      entityType: 'product',
+      entityId: '$productId',
+      oldValueJson: jsonEncode({'name': rows.first['name'], 'sellPrice': oldSell}),
+      newValueJson: jsonEncode({'name': rows.first['name'], 'sellPrice': sellPrice}),
+      tenantId: _tenant.activeTenantId,
+    );
+  }
+
   Future<void> updateProductBasic({
     required int productId,
     required String name,
@@ -1567,7 +1627,8 @@ class ProductRepository {
     required double buyPrice,
     required double sellPrice,
     required double minSellPrice,
-    required double qty,
+    /// null = لا تُكتب الكمية (ع-4، ع-5): تتغير بـ«استلام بضاعة» أو الجرد.
+    double? qty,
     required double lowStockThreshold,
     required bool trackInventory,
     int? stockBaseKind,
@@ -1589,14 +1650,15 @@ class ProductRepository {
       }
     }
 
-    final status = qty <= lowStockThreshold ? 'low' : 'instock';
+    final effQty = qty ?? (oldRow?['qty'] as num?)?.toDouble() ?? 0.0;
+    final status = effQty <= lowStockThreshold ? 'low' : 'instock';
     final patch = <String, Object?>{
       'name': name.trim(),
       'barcode': (bc != null && bc.isNotEmpty) ? bc : null,
       'buyPrice': buyPrice,
       'sellPrice': sellPrice,
       'minSellPrice': minSellPrice,
-      'qty': trackInventory ? qty : 0.0,
+      if (qty != null) 'qty': trackInventory ? qty : 0.0,
       'lowStockThreshold': trackInventory ? lowStockThreshold : 0.0,
       'status': trackInventory ? status : 'instock',
       'trackInventory': trackInventory ? 1 : 0,
@@ -1628,7 +1690,7 @@ class ProductRepository {
         if (oldSell != sellPrice) {
           MarketplaceSyncService.instance.syncPrice(globalId, IqdMoney.toFils(sellPrice));
         }
-        if (oldQty != qty && trackInventory) {
+        if (qty != null && oldQty != qty && trackInventory) {
           MarketplaceSyncService.instance.syncStock(globalId, qty.toInt());
         }
         if (oldName != name.trim()) {
@@ -2459,14 +2521,19 @@ class ProductRepository {
         await _ensureInternalBarcodeIfMissing(txn, id);
       }
 
+      // الرصيد الافتتاحي يدخل «المحل»؛ إن اختير «المخزن» يُنقل إليه.
+      // `product_warehouse_stock` مرآة يكتبها المشغّل.
       if (warehouseId != null && tiEffective && qtyF > 0) {
-        await upsertProductWarehouseStock(
-          productId: id,
-          warehouseId: warehouseId,
-          qty: qtyF,
-          executor: txn,
-          tenantId: tid,
-        );
+        final place = await StockEngine.placeOfWarehouse(txn, tid, warehouseId);
+        if (place == StockPlace.store) {
+          await StockEngine.transfer(
+            txn,
+            productId: id,
+            from: StockPlace.shop,
+            qty: qtyF,
+            ctx: const StockMoveContext(kind: StockMoveKind.opening),
+          );
+        }
       }
 
       return id;

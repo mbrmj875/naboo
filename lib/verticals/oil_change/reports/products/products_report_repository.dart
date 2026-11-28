@@ -5,6 +5,9 @@ import 'package:sqflite/sqflite.dart';
 import '../../../../models/product_variant_kind.dart';
 import '../../../../services/database_helper.dart';
 import '../../../../services/reports_repository.dart';
+import '../../../../services/stock/stock_engine.dart';
+import '../../../../services/stock/stock_metrics.dart';
+import '../../../../services/stock_ledger.dart';
 import '../../../../services/service_order_kinds.dart';
 import '../../../../services/tenant_context_service.dart';
 import '../../../../utils/stock_quantity_kind.dart';
@@ -25,6 +28,8 @@ class ProductReportRow {
     required this.soldQtyByChannel,
     required this.revenueFils,
     required this.costFils,
+    this.cardCostFils = 0,
+    this.lastExit,
   });
 
   final int id;
@@ -39,6 +44,13 @@ class ProductReportRow {
   final Map<OilShopChannel, double> soldQtyByChannel;
   final int revenueFils;
   final int costFils;
+
+  /// كلفة ما صُرف على بطاقات الغيار في الفترة (بتاريخ الصرف). إيرادها في سعر
+  /// البطاقة بتقرير غيار الزيت، فلا تُطرح هنا من ربح الصنف (ع-14).
+  final int cardCostFils;
+
+  /// آخر خروج للصنف (بيع أو بطاقة) من حركات المخزون، أياً كانت الفترة.
+  final DateTime? lastExit;
 
   double get soldQty => soldQtyByChannel.values.fold(0, (a, b) => a + b);
   int get profitFils => revenueFils - costFils;
@@ -122,10 +134,24 @@ class ProductsReportSnapshot {
   int get stockCostFils => products.fold(0, (a, p) => a + p.stockCostFils);
   int get shortageCount => products.where((p) => p.isShort).length;
 
-  /// في المخزون ولم يخرج منه شيء طوال الفترة.
-  List<ProductReportRow> get idle =>
-      products.where((p) => p.qty > 0 && p.soldQty <= 0).toList()
-        ..sort((a, b) => b.stockCostFils.compareTo(a.stockCostFils));
+  /// أيام بلا خروج قبل أن يُعدّ الصنف راكداً.
+  static const int stagnantDays = 60;
+
+  /// راكد (ع-14): في المخزون ولم يخرج منه شيء منذ [stagnantDays] يوماً من آخر
+  /// خروج، لا «في الفترة المختارة» (فلا يصير المحل كله راكداً في تقرير اليوم).
+  List<ProductReportRow> get idle {
+    final cut = DateTime.now().subtract(const Duration(days: stagnantDays));
+    return products
+        .where((p) =>
+            p.qty > 0 &&
+            p.soldQty <= 0 &&
+            (p.lastExit == null || p.lastExit!.isBefore(cut)))
+        .toList()
+      ..sort((a, b) => b.stockCostFils.compareTo(a.stockCostFils));
+  }
+
+  /// كلفة ما صرفته البطاقات من المخزون في الفترة.
+  int get cardCostFils => products.fold(0, (a, p) => a + p.cardCostFils);
 
   int get idleCostFils => idle.fold(0, (a, p) => a + p.stockCostFils);
 }
@@ -150,8 +176,8 @@ class ProductsReportRepository {
 
     final stock = await db.rawQuery(
       '''
-      SELECT id, name, qty, lowStockThreshold, buyPrice, sellPrice,
-             IFNULL(stockBaseKind, 0) AS stockBaseKind
+      SELECT id, name, ${StockMetrics.total} AS qty, lowStockThreshold,
+             buyPrice, sellPrice, IFNULL(stockBaseKind, 0) AS stockBaseKind
       FROM products
       WHERE tenantId = ? AND isActive = 1 AND IFNULL(isService, 0) = 0
         AND IFNULL(trackInventory, 1) = 1
@@ -209,13 +235,24 @@ class ProductsReportRepository {
     // (إيرادهما ضمن سعر البطاقة في تقرير غيار الزيت).
     // وكذلك فلاتر المخزون على البطاقة: سطرها في الفاتورة بلا منتج لأن سند
     // البطاقة هو الذي صرفها.
+    //
+    // منذ المرحلة 2 يكتب كل صرف بطاقة حركة باسمه وكلفته وتاريخ الصرف (ع-14)،
+    // فتُقرأ الحركات. البطاقات قبل ذلك (بلا حركة مسمّاة) تُقرأ من البطاقة.
+    final cardCostBy = <int, int>{};
+    final namedSince = await _namedMovesSince(db);
+    for (final (pid, qty, costFils) in await _cardMoves(db, tid, range)) {
+      final m = qtyBy[pid] ??= {};
+      m[OilShopChannel.oilCard] = (m[OilShopChannel.oilCard] ?? 0) + qty;
+      cardCostBy[pid] = (cardCostBy[pid] ?? 0) + costFils;
+    }
     for (final (pid, qty) in [
-      ...await _cardFluids(db, tid, range),
-      ...await _cardFilters(db, tid, range),
+      ...await _cardFluids(db, tid, range, before: namedSince),
+      ...await _cardFilters(db, tid, range, before: namedSince),
     ]) {
       final m = qtyBy[pid] ??= {};
       m[OilShopChannel.oilCard] = (m[OilShopChannel.oilCard] ?? 0) + qty;
     }
+    final lastExit = await StockMetrics.lastExitByProduct(db, tid);
 
     final products = <ProductReportRow>[
       for (final s in stock)
@@ -232,8 +269,15 @@ class ProductsReportRepository {
           soldQtyByChannel: qtyBy[(s['id'] as num).toInt()] ?? const {},
           revenueFils: revenueBy[(s['id'] as num).toInt()] ?? 0,
           costFils: costBy[(s['id'] as num).toInt()] ?? 0,
+          cardCostFils: cardCostBy[(s['id'] as num).toInt()] ?? 0,
+          lastExit: lastExit[(s['id'] as num).toInt()],
         ),
-    ]..sort((a, b) => b.revenueFils.compareTo(a.revenueFils));
+    ]..sort((a, b) {
+        // الترتيب بالكمية الخارجة أولاً ثم الإيراد (ع-14): الزيت المصروف على
+        // البطاقات أكثر ما يتحرك ولا إيراد له هنا.
+        final q = b.soldQty.compareTo(a.soldQty);
+        return q != 0 ? q : b.revenueFils.compareTo(a.revenueFils);
+      });
 
     var prevRevenue = 0;
     var prevCost = 0;
@@ -318,8 +362,9 @@ class ProductsReportRepository {
   Future<List<(int, double)>> _cardFluids(
     Database db,
     int tenantId,
-    ReportDateRange range,
-  ) async {
+    ReportDateRange range, {
+    String? before,
+  }) async {
     final cols = {
       for (final r in await db.rawQuery('PRAGMA table_info(service_orders)'))
         (r['name'] ?? '').toString(),
@@ -343,8 +388,9 @@ class ProductsReportRepository {
       FROM service_orders so
       WHERE so.tenantId = ? AND ${OilShopReportSql.aliveOrder('so')}
         AND so.createdAt >= ? AND so.createdAt < ? $kind
+        ${before == null ? '' : 'AND so.createdAt < ?'}
       ''',
-      [tenantId, fromUtc, toUtc],
+      [tenantId, fromUtc, toUtc, if (before != null) before],
     );
     final out = <(int, double)>[];
     for (final r in rows) {
@@ -364,8 +410,9 @@ class ProductsReportRepository {
   Future<List<(int, double)>> _cardFilters(
     Database db,
     int tenantId,
-    ReportDateRange range,
-  ) async {
+    ReportDateRange range, {
+    String? before,
+  }) async {
     final cols = {
       for (final r in await db.rawQuery('PRAGMA table_info(service_orders)'))
         (r['name'] ?? '').toString(),
@@ -382,13 +429,59 @@ class ProductsReportRepository {
       WHERE so.tenantId = ? AND ${OilShopReportSql.aliveOrder('so')}
         AND so.createdAt >= ? AND so.createdAt < ? $kind
         AND IFNULL(so.oilFiltersJson, '') != ''
+        ${before == null ? '' : 'AND so.createdAt < ?'}
       ''',
-      [tenantId, fromUtc, toUtc],
+      [tenantId, fromUtc, toUtc, if (before != null) before],
     );
     return [
       for (final r in rows)
         for (final line in parseOilFiltersJson(r['j']?.toString()))
           if (line.issuesStock) (line.productId!, line.qty.toDouble()),
+    ];
+  }
+
+  /// أول حركة مسمّاة في دفتر المخزون: قبلها تُقرأ البطاقات من سجلها.
+  Future<String?> _namedMovesSince(Database db) async {
+    try {
+      final r = await db.rawQuery(
+        'SELECT MIN(created_at) AS m FROM ${StockLedger.table} '
+        'WHERE kind IS NOT NULL',
+      );
+      final m = r.first['m']?.toString();
+      return (m == null || m.isEmpty) ? null : m;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// (المنتج، الكمية الصافية، الكلفة بالفلس) لصرف البطاقات في الفترة بتاريخ
+  /// الصرف، بعد طرح ما أعادته البطاقات الملغاة.
+  Future<List<(int, double, int)>> _cardMoves(
+    Database db,
+    int tenantId,
+    ReportDateRange range,
+  ) async {
+    final (fromUtc, toUtc) = ReportMath.utcBounds(range);
+    final rows = await db.rawQuery(
+      '''
+      SELECT p.id AS pid, SUM(-l.delta) AS q,
+             SUM(-l.delta * COALESCE(l.unit_cost_fils,
+                 CAST(ROUND(IFNULL(p.buyPrice, 0) * 1000) AS INTEGER))) AS c
+      FROM ${StockLedger.table} l
+      JOIN products p ON p.global_id = l.product_global_id
+      WHERE p.tenantId = ? AND l.kind IN (?, ?)
+        AND l.created_at >= ? AND l.created_at < ?
+      GROUP BY p.id
+      ''',
+      [tenantId, StockMoveKind.card, StockMoveKind.cardReturn, fromUtc, toUtc],
+    );
+    return [
+      for (final r in rows)
+        (
+          (r['pid'] as num).toInt(),
+          (r['q'] as num?)?.toDouble() ?? 0,
+          ((r['c'] as num?) ?? 0).round(),
+        ),
     ];
   }
 
@@ -406,7 +499,8 @@ class ProductsReportRepository {
     );
     return db.rawQuery(
       '''
-      SELECT ii.productId, ii.quantity, inv.date,
+      SELECT ii.productId,
+             COALESCE(NULLIF(ii.baseQty, 0), ii.quantity) AS quantity, inv.date,
              IFNULL(inv.isReturned, 0) AS isReturned,
              CAST(ROUND(CASE WHEN IFNULL(ii.totalFils, 0) > 0 THEN ii.totalFils
                ELSE IFNULL(ii.total, 0) * 1000 END) AS INTEGER) AS lineFils,

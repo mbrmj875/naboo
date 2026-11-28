@@ -156,6 +156,42 @@ void main() {
       expect(IqdMoney.toFils(report.revenueTotalIqd), ownerKpi.revenueFils);
     });
 
+    test('A6b: card after local midnight counts today, one before does not',
+        () async {
+      await harness.configureServiceOnly();
+      final afterMidnight =
+          await builder.createPending(plate: 'A6B-NIGHT', agreedPriceFils: 40000);
+      final lateYesterday =
+          await builder.createPending(plate: 'A6B-LATE', agreedPriceFils: 60000);
+
+      // createdAt يُحفظ بـ UTC. 1:00 فجراً محلياً تقع في «أمس» بتوقيت UTC
+      // في بغداد، وكان التقرير يسقطها.
+      final now = DateTime.now();
+      final todayOneAm = DateTime(now.year, now.month, now.day, 1);
+      final yesterdayLate = DateTime(now.year, now.month, now.day - 1, 23, 30);
+      final db = await harness.database;
+      await db.rawUpdate('UPDATE service_orders SET createdAt = ? WHERE id = ?',
+          [todayOneAm.toUtc().toIso8601String(), afterMidnight]);
+      await db.rawUpdate('UPDATE service_orders SET createdAt = ? WHERE id = ?',
+          [yesterdayLate.toUtc().toIso8601String(), lateYesterday]);
+
+      final range = OwnerDateRange.today();
+      final report = await OilChangeReportsRepository.instance.loadSnapshot(
+        ReportDateRange(
+          from: range.startLocal,
+          to: range.endExclusiveLocal.subtract(const Duration(seconds: 1)),
+        ),
+      );
+      final ownerKpi = await ownerRepo.loadOilChangesInRange(
+        tenantId: oilTestTenantId,
+        range: range,
+      );
+
+      expect(report.visitCount, 1);
+      expect(ownerKpi.changeCount, 1);
+      expect(IqdMoney.toFils(report.revenueTotalIqd), ownerKpi.revenueFils);
+    });
+
     // ── B: وضع هجين ─────────────────────────────────────────────────
 
     test('B1: quick POS invoice is not bound to service order', () async {

@@ -1,5 +1,4 @@
 import '../models/owner_command_center_snapshot.dart';
-import '../models/owner_section_result.dart';
 import '../specs/owner_dashboard_l10n_keys.dart';
 
 /// ملخص صباحي — سوبرماركت v3.1.

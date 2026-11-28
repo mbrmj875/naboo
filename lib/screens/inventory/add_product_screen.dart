@@ -16,6 +16,9 @@ import '../../platform/persist_local_bytes.dart';
 import '../../widgets/product_media_image.dart';
 
 import '../../models/new_product_extra_unit.dart';
+import '../../services/stock/purchase_product_draft.dart';
+import '../../widgets/oil_variants/oil_grade_draft.dart';
+import '../../widgets/oil_variants/oil_viscosity_editor.dart' show oilGradesFromDrafts;
 import '../../providers/product_provider.dart';
 import '../../providers/notification_provider.dart';
 import '../../services/app_settings_repository.dart';
@@ -128,7 +131,25 @@ class AddProductScreen extends StatefulWidget {
     this.initialBarcode,
     this.autoFillFromScan = false,
     this.assistantPrefill,
+    this.forPurchase = false,
+    this.purchaseDraft,
+    this.purchaseStockType,
+    this.purchaseName,
   });
+
+  /// مفتوحة من قائمة المشتريات: «حفظ» لا ينشئ المنتج، بل يرجع
+  /// `({PurchaseProductDraft draft, bool another})` إلى القائمة، ويُنشأ
+  /// المنتج منها عند «حفظ واستلام».
+  final bool forPurchase;
+
+  /// سطر جديد سبق حفظه في القائمة: تُفتح الشاشة بما كُتب فيه.
+  final PurchaseProductDraft? purchaseDraft;
+
+  /// نوع المخزون عند الفتح (0 عدد، 4 هيدروليك عائلة، 5 زيت عائلة).
+  final int? purchaseStockType;
+
+  /// ما كتبه صاحب المحل في بحث القائمة، اسماً مبدئياً.
+  final String? purchaseName;
 
   /// صنف جديد عبّأه المساعد (م4-2). يُراجع ويُحفظ بزر الشاشة نفسه.
   final AssistantPrefill? assistantPrefill;
@@ -181,6 +202,10 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
   final List<Object> _oilFamilyGradeDrafts = [];
 
   bool get _isDark => Theme.of(context).brightness == Brightness.dark;
+
+  /// الوزن والتواريخ وتنبيه الصلاحية: مع «الحقول الإضافية» وإعدادها الخاص.
+  bool get _showDatesWeight =>
+      _uiSettings.addShowExtraFields && _uiSettings.addShowDatesWeight;
 
   VerticalFluidInventoryEditor? get _fluidInventoryEditor =>
       VerticalRegistry.instance
@@ -724,8 +749,283 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
     }
   }
 
+  // ── وضع «سطر شراء» (قائمة المشتريات) ─────────────────────────────────
+
+  Map<String, TextEditingController> get _purchaseFormCtrls => {
+        'name': _nameCtrl,
+        'desc': _descCtrl,
+        'barcode': _barcodeCtrl,
+        'supplier_code': _supplierCodeCtrl,
+        'category': _categoryCtrl,
+        'brand': _brandCtrl,
+        'supplier': _supplierCtrl,
+        'buy': _buyPriceCtrl,
+        'sell': _sellPriceCtrl,
+        'min_sell': _minSellPriceCtrl,
+        'discount': _discountCtrl,
+        'custom_tax': _customTaxCtrl,
+        'qty': _qtyCtrl,
+        'low': _lowStockCtrl,
+        'notes': _internalNotesCtrl,
+        'tags': _tagsCtrl,
+        'net_weight': _netWeightGramsCtrl,
+        'mfg': _mfgDateCtrl,
+        'exp': _expDateCtrl,
+        'expiry_days': _expiryAlertDaysCtrl,
+      };
+
+  Map<String, dynamic> _purchaseFormSnapshot() => {
+        for (final e in _purchaseFormCtrls.entries) e.key: e.value.text,
+        'stock_type_ui': _stockTypeUi,
+        'stock_base_kind': _stockBaseKind,
+        'track': _trackInventory,
+        'discount_type': _discountType,
+        'tax_mode': _taxMode,
+        'grade': _grade,
+        'image_path': _imagePath,
+        'warehouse_id': _warehouseId,
+        'extra_units': [
+          for (final r in _extraUnitVariants)
+            {
+              'unit_name': r.unitName.text,
+              'unit_symbol': r.unitSymbol.text,
+              'factor': r.factor.text,
+              'barcode': r.barcode.text,
+              'sell': r.sell.text,
+              'min_sell': r.minSell.text,
+            },
+        ],
+        if (_isFluidFamilyUi)
+          'grades': [
+            for (final g in _activeFluidGradeDrafts.whereType<OilGradeDraft>())
+              {
+                'viscosity': g.viscosityCtrl.text,
+                'qty': g.qtyCtrl.text,
+                'buy': g.buyCtrl.text,
+                'sell': g.sellCtrl.text,
+                'barcode': g.barcodeCtrl.text,
+                'low': g.lowCtrl.text,
+                'packs': [
+                  for (final pk in g.packs)
+                    {
+                      'unit_name': pk.unitNameCtrl.text,
+                      'unit_symbol': pk.unitSymbolCtrl.text,
+                      'factor': pk.factorCtrl.text,
+                      'sell': pk.sellCtrl.text,
+                      'barcode': pk.barcodeCtrl.text,
+                    },
+                ],
+              },
+          ],
+      };
+
+  /// يفتح الشاشة بما حُفظ في سطر القائمة، أو بنوع المخزون والاسم المبدئيين.
+  void _restorePurchaseDraft() {
+    final d = widget.purchaseDraft;
+    if (d == null) {
+      final t = widget.purchaseStockType;
+      if (t != null && t != _stockTypeUi) _applyStockTypeUi(t);
+      final n = widget.purchaseName?.trim();
+      if (n != null && n.isNotEmpty && _nameCtrl.text.trim().isEmpty) {
+        setState(() => _nameCtrl.text = n);
+      }
+      return;
+    }
+    final f = d.form;
+    String t(Object? v) => v == null ? '' : v.toString();
+    final type = (f['stock_type_ui'] as num?)?.toInt() ?? 0;
+    if (type == 4 || type == 5) {
+      final list = type == 5 ? _oilFamilyGradeDrafts : _hydraulicGradeDrafts;
+      for (final g in list.whereType<OilGradeDraft>()) {
+        g.dispose();
+      }
+      list.clear();
+      for (final raw in (f['grades'] as List? ?? const [])) {
+        if (raw is! Map) continue;
+        final gd = OilGradeDraft(
+          viscosity: t(raw['viscosity']),
+          qtyLiters: t(raw['qty']),
+          buy: t(raw['buy']),
+          sell: t(raw['sell']),
+          low: t(raw['low']).isEmpty ? '0' : t(raw['low']),
+        );
+        gd.barcodeCtrl.text = t(raw['barcode']);
+        for (final pk in (raw['packs'] as List? ?? const [])) {
+          if (pk is! Map) continue;
+          final pd = OilGradePackDraft(
+            unitName: t(pk['unit_name']),
+            unitSymbol: t(pk['unit_symbol']),
+            factor: t(pk['factor']).isEmpty ? '1' : t(pk['factor']),
+          );
+          pd.sellCtrl.text = t(pk['sell']);
+          pd.barcodeCtrl.text = t(pk['barcode']);
+          gd.packs.add(pd);
+        }
+        list.add(gd);
+      }
+    }
+    _applyStockTypeUi(type);
+    setState(() {
+      for (final e in _purchaseFormCtrls.entries) {
+        if (f.containsKey(e.key)) e.value.text = t(f[e.key]);
+      }
+      _stockBaseKind = (f['stock_base_kind'] as num?)?.toInt() ?? _stockBaseKind;
+      _trackInventory = f['track'] != false;
+      _discountType = t(f['discount_type']).isEmpty ? _discountType : t(f['discount_type']);
+      _taxMode = t(f['tax_mode']).isEmpty ? _taxMode : t(f['tax_mode']);
+      _grade = f['grade']?.toString();
+      _imagePath = f['image_path']?.toString();
+      _warehouseId = (f['warehouse_id'] as num?)?.toInt() ?? _warehouseId;
+      for (final r in _extraUnitVariants) {
+        r.dispose();
+      }
+      _extraUnitVariants.clear();
+      for (final raw in (f['extra_units'] as List? ?? const [])) {
+        if (raw is! Map) continue;
+        final r = _ExtraUnitVariantDraft();
+        r.unitName.text = t(raw['unit_name']);
+        r.unitSymbol.text = t(raw['unit_symbol']);
+        r.factor.text = t(raw['factor']).isEmpty ? '1' : t(raw['factor']);
+        r.barcode.text = t(raw['barcode']);
+        r.sell.text = t(raw['sell']);
+        r.minSell.text = t(raw['min_sell']);
+        _extraUnitVariants.add(r);
+      }
+    });
+  }
+
+  void _purchaseError(String m) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(m),
+        backgroundColor: Colors.red.shade700,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  /// «حفظ» من قائمة المشتريات: لا يُنشأ شيء، تُرجع المسودة إلى القائمة.
+  Future<void> _returnPurchaseDraft({
+    required bool popAfter,
+    required double buy,
+    required double sell,
+    required double? minSell,
+    required double qty,
+    required double low,
+    required String barcode,
+    required String category,
+    required String brand,
+    required String supplier,
+    required double disc,
+    required double? netWeightGrams,
+    required int? expiryAlertDaysBefore,
+    required List<NewProductExtraUnit> extraUnits,
+  }) async {
+    if (_stockTypeUi == 2) {
+      _purchaseError('الأصناف بالألوان والمقاسات تُضاف من «المنتجات».');
+      return;
+    }
+    final PurchaseProductDraft draft;
+    if (_isFluidFamilyUi) {
+      final grades = oilGradesFromDrafts(
+        _activeFluidGradeDrafts.whereType<OilGradeDraft>().toList(),
+      );
+      if (!grades.any((g) => g.openingQtyLiters > 1e-9)) {
+        _purchaseError('اكتب الكمية المشتراة (لتر) لِلزوجة واحدة على الأقل.');
+        return;
+      }
+      draft = PurchaseProductDraft(
+        kind: PurchaseProductDraft.kindFluid,
+        form: _purchaseFormSnapshot(),
+        isOil: _stockTypeUi == 5,
+        familyName: _nameCtrl.text.trim(),
+        categoryName: category.isEmpty ? null : category,
+        brandName: brand.isEmpty ? null : brand,
+        lowStockThreshold: low,
+        grades: [
+          for (final g in grades)
+            {
+              'viscosity': g.viscosity,
+              'qty': g.openingQtyLiters,
+              'buy': g.buyPrice,
+              'sell': g.sellPrice,
+              'min_sell': g.minSellPrice,
+              'barcode': g.barcode,
+              'low_stock': g.lowStockThreshold,
+              'packs': [
+                for (final pk in g.packs) PurchaseProductDraft.packToJson(pk),
+              ],
+            },
+        ],
+      );
+    } else {
+      if (qty <= 1e-9) {
+        _purchaseError('اكتب الكمية المشتراة.');
+        return;
+      }
+      final bc = _uiSettings.addShowBarcodeField ? barcode : '';
+      if (bc.isNotEmpty && await _productRepo.isBarcodeTakenAnywhere(bc)) {
+        _purchaseError('هذا الباركود مستخدم لمنتج آخر.');
+        return;
+      }
+      if (!mounted) return;
+      final adv = _uiSettings.addShowAdvancedPricing;
+      final extra = _uiSettings.addShowExtraFields;
+      final dates = _showDatesWeight;
+      draft = PurchaseProductDraft(
+        kind: PurchaseProductDraft.kindProduct,
+        form: _purchaseFormSnapshot(),
+        qty: qty,
+        unitCost: buy,
+        create: {
+          'name': _nameCtrl.text.trim(),
+          'barcode': bc.isEmpty ? null : bc,
+          'category_name': category.isEmpty ? null : category,
+          'brand_name': brand.isEmpty ? null : brand,
+          'sell_price': sell,
+          'min_sell_price': minSell,
+          'low_stock': low,
+          'description': _descCtrl.text.trim().isEmpty ? null : _descCtrl.text,
+          'image_path': _uiSettings.addShowImageField ? _imagePath : null,
+          'internal_notes': extra && _internalNotesCtrl.text.trim().isNotEmpty
+              ? _internalNotesCtrl.text
+              : null,
+          'tags': extra && _tagsCtrl.text.trim().isNotEmpty
+              ? _tagsCtrl.text
+              : null,
+          'tax_percent': adv && _uiSettings.addShowTaxField
+              ? _effectiveTaxPercent
+              : 0,
+          'discount_type': adv && _uiSettings.addShowDiscountFields
+              ? _discountType
+              : '%',
+          'discount_value': disc,
+          'track_inventory': _trackInventory,
+          'supplier_item_code': _supplierCodeCtrl.text.trim().isEmpty
+              ? null
+              : _supplierCodeCtrl.text.trim(),
+          'stock_base_kind': _stockBaseKind,
+          'supplier_name': supplier.isEmpty ? null : supplier,
+          'net_weight_grams': dates ? netWeightGrams : null,
+          'manufacturing_date':
+              dates ? _isoFromDateField(_mfgDateCtrl.text) : null,
+          'expiry_date': dates ? _isoFromDateField(_expDateCtrl.text) : null,
+          'grade': _policy.enableProductGrade ? _grade : null,
+          'expiry_alert_days': expiryAlertDaysBefore,
+          'extra_units': [
+            for (final u in extraUnits) PurchaseProductDraft.extraUnitToJson(u),
+          ],
+          'warehouse_id': _warehouseId,
+        },
+      );
+    }
+    if (!mounted) return;
+    Navigator.of(context).pop((draft: draft, another: !popAfter));
+  }
+
   void _reconcilePharmacySession() {
-    final pharmacyEditor = _pharmacyEditor;
+    // دفعات الصيدلية لا تدخل قائمة المشتريات.
+    final pharmacyEditor = widget.forPurchase ? null : _pharmacyEditor;
     if (pharmacyEditor == null) {
       _pharmacySession?.dispose();
       _pharmacySession = null;
@@ -748,7 +1048,9 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
     _sellPriceCtrl.addListener(_onSellOrMinManualEdit);
     _minSellPriceCtrl.addListener(_onSellOrMinManualEdit);
     _reconcilePharmacySession();
-    _loadRefs();
+    _loadRefs().then((_) {
+      if (mounted && widget.forPurchase) _restorePurchaseDraft();
+    });
     final ap = widget.assistantPrefill;
     if (ap != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1254,7 +1556,7 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
 
     final mfgD = _parseDateField(_mfgDateCtrl.text);
     final expD = _parseDateField(_expDateCtrl.text);
-    if (_uiSettings.addShowExtraFields) {
+    if (_showDatesWeight) {
       if (_mfgDateCtrl.text.trim().isNotEmpty && mfgD == null) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -1299,7 +1601,7 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
         : double.tryParse(nwText.replaceAll(',', '.'));
 
     int? expiryAlertDaysBefore;
-    if (_uiSettings.addShowExtraFields && expD != null) {
+    if (_showDatesWeight && expD != null) {
       final parsed = int.tryParse(_expiryAlertDaysCtrl.text.trim());
       if (parsed != null && parsed >= 1 && parsed <= 365) {
         expiryAlertDaysBefore = parsed;
@@ -1477,6 +1779,26 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
       );
     }
 
+    if (widget.forPurchase) {
+      await _returnPurchaseDraft(
+        popAfter: popAfter,
+        buy: buy,
+        sell: sell,
+        minSell: minSell,
+        qty: qty,
+        low: low,
+        barcode: barcode,
+        category: category,
+        brand: brand,
+        supplier: supplier,
+        disc: disc,
+        netWeightGrams: netWeightGrams,
+        expiryAlertDaysBefore: expiryAlertDaysBefore,
+        extraUnits: extraUnits,
+      );
+      return;
+    }
+
     setState(() => _saving = true);
     String? err;
     int? createdProductId;
@@ -1571,11 +1893,11 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
               : _supplierCodeCtrl.text.trim(),
           stockBaseKind: _stockBaseKind,
           supplierName: supplier.isEmpty ? null : supplier,
-          netWeightGrams: _uiSettings.addShowExtraFields ? netWeightGrams : null,
-          manufacturingDate: _uiSettings.addShowExtraFields
+          netWeightGrams: _showDatesWeight ? netWeightGrams : null,
+          manufacturingDate: _showDatesWeight
               ? _isoFromDateField(_mfgDateCtrl.text)
               : null,
-          expiryDate: _uiSettings.addShowExtraFields
+          expiryDate: _showDatesWeight
               ? _isoFromDateField(_expDateCtrl.text)
               : null,
           grade: _policy.enableProductGrade ? _grade : null,
@@ -1661,12 +1983,12 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
               : _supplierCodeCtrl.text.trim(),
           stockBaseKind: _stockBaseKind,
           supplierName: supplier.isEmpty ? null : supplier,
-          netWeightGrams: _uiSettings.addShowExtraFields ? netWeightGrams : null,
-          manufacturingDate: _uiSettings.addShowExtraFields
+          netWeightGrams: _showDatesWeight ? netWeightGrams : null,
+          manufacturingDate: _showDatesWeight
               ? _isoFromDateField(_mfgDateCtrl.text)
               : null,
           expiryDate: _pharmacySession!.suggestedExpiryIso() ??
-              (_uiSettings.addShowExtraFields
+              (_showDatesWeight
                   ? _isoFromDateField(_expDateCtrl.text)
                   : null),
           grade: _policy.enableProductGrade ? _grade : null,
@@ -1713,11 +2035,11 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
               : _supplierCodeCtrl.text.trim(),
           stockBaseKind: _stockBaseKind,
           supplierName: supplier.isEmpty ? null : supplier,
-          netWeightGrams: _uiSettings.addShowExtraFields ? netWeightGrams : null,
-          manufacturingDate: _uiSettings.addShowExtraFields
+          netWeightGrams: _showDatesWeight ? netWeightGrams : null,
+          manufacturingDate: _showDatesWeight
               ? _isoFromDateField(_mfgDateCtrl.text)
               : null,
-          expiryDate: _uiSettings.addShowExtraFields
+          expiryDate: _showDatesWeight
               ? _isoFromDateField(_expDateCtrl.text)
               : null,
           grade: _policy.enableProductGrade ? _grade : null,
@@ -2365,7 +2687,7 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
             elevation: 0,
             iconTheme: IconThemeData(color: _isDark ? Colors.white : AppColors.primaryDark),
             title: Text(
-              'إضافة منتج جديد',
+              widget.forPurchase ? 'صنف جديد في القائمة' : 'إضافة منتج جديد',
               style: theme.textTheme.titleMedium?.copyWith(
                 color: _isDark ? Colors.white : AppColors.primaryDark,
                 fontWeight: FontWeight.w700,
@@ -2461,8 +2783,14 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
     final isDark = theme.brightness == Brightness.dark;
     final surfaceColor = isDark ? AppColors.primary : Colors.white;
     final narrow = layout.isNarrowWidth;
-    final saveLabel = _saving ? 'جاري…' : (narrow ? 'حفظ' : 'حفظ المنتج');
-    final saveNewLabel = narrow ? 'حفظ+' : 'حفظ وجديد';
+    final saveLabel = _saving
+        ? 'جاري…'
+        : (widget.forPurchase
+              ? 'حفظ في القائمة'
+              : (narrow ? 'حفظ' : 'حفظ المنتج'));
+    final saveNewLabel = widget.forPurchase
+        ? 'حفظ وإضافة صنف آخر'
+        : (narrow ? 'حفظ+' : 'حفظ وجديد');
 
     final compactShape = RoundedRectangleBorder(
       borderRadius: BorderRadius.circular(10),
@@ -2626,7 +2954,11 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
                           ),
                         )
                       : const Icon(Icons.check_rounded, size: 20),
-                  label: Text(_saving ? 'جاري الحفظ…' : 'حفظ المنتج'),
+                  label: Text(
+                    _saving
+                        ? 'جاري الحفظ…'
+                        : (widget.forPurchase ? 'حفظ في القائمة' : 'حفظ المنتج'),
+                  ),
                 ),
                 ),
                 FilledButton.tonalIcon(
@@ -2643,7 +2975,10 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
                     ),
                   ),
                   icon: const Icon(Icons.add_circle_outline_rounded, size: 20, color: Colors.white),
-                  label: const Text('حفظ وإضافة جديد', style: TextStyle(color: Colors.white)),
+                  label: Text(
+                    widget.forPurchase ? 'حفظ وإضافة صنف آخر' : 'حفظ وإضافة جديد',
+                    style: const TextStyle(color: Colors.white),
+                  ),
                 ),
               ],
             ),
@@ -2984,7 +3319,7 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
                         value: 1,
                         child: Text('وزن (كيلوغرام كأساس)'),
                       ),
-                    if (_enableClothingVariants)
+                    if (_enableClothingVariants && !widget.forPurchase)
                       const DropdownMenuItem(
                         value: 2,
                         child: Text('ملابس (ألوان ومقاسات)'),
@@ -3085,6 +3420,7 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
                 isOilFamily: _stockTypeUi == 5,
                 grades: _activeFluidGradeDrafts,
                 onChanged: () => setState(() {}),
+                qtyLabel: widget.forPurchase ? 'الكمية المشتراة (لتر)' : null,
               ),
             ),
           ],
@@ -4310,7 +4646,7 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
 
     final qty = _labeledField(
       context,
-      label: 'الكمية',
+      label: widget.forPurchase ? 'الكمية المشتراة' : 'الكمية',
       subtitle: qtyHint,
       child: AppInput(
         label: '',
@@ -4437,32 +4773,66 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
     final showQtyLow =
         _trackInventory && !_multiVariantEnabled && !_isFluidFamilyUi;
     final showExtra = _uiSettings.addShowExtraFields;
-    final handsetSixGrid = isHandset && showQtyLow && showExtra;
+    final showDates = _showDatesWeight;
+    final handsetSixGrid = isHandset && showQtyLow && showDates;
     return _sectionCard(
       context,
       title: 'إدارة المخزون',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          GuideAnchor(
-            id: OilGuideAnchors.productFormTrackInventory,
-            child: SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text(
-                'تتبع المخزون',
-                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+          if (_isFluidFamilyUi)
+            // الزيوت والهيدروليك تُباع باللتر من الرصيد: التتبع دائماً مشغّل،
+            // وحدّ التنبيه في بطاقة كل لزوجة.
+            Padding(
+              padding: const EdgeInsetsDirectional.only(bottom: 12),
+              child: Row(
+              children: [
+                const Icon(
+                  Icons.inventory_2_outlined,
+                  size: 18,
+                  color: AppColors.accentGold,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'التتبع مشغّل دائماً لكل لزوجة. حدّ تنبيه النقص تكتبه في بطاقة كل لزوجة.',
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      height: 1.35,
+                      color: cs.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ],
               ),
-              subtitle: Text(
-                'عند الإيقاف لا تُسجَّل كميات لهذا المنتج',
-                style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+            )
+          else
+            GuideAnchor(
+              id: OilGuideAnchors.productFormTrackInventory,
+              child: SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text(
+                  'تتبع المخزون',
+                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                ),
+                subtitle: Text(
+                  _trackInventory
+                      ? 'مشغّل: تُسجَّل كميات هذا المنتج وتنبيه نقصه'
+                      : 'مطفأ: لا تُسجَّل كميات لهذا المنتج',
+                  style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+                ),
+                value: _trackInventory,
+                // مشغّل: دائرة بيضاء على مسار ذهبي؛ مطفأ: مسار فاتح بحدّ.
+                activeThumbColor: Colors.white,
+                activeTrackColor: AppColors.accentGold,
+                inactiveThumbColor: cs.outline,
+                inactiveTrackColor: cs.surfaceContainerHighest,
+                onChanged: _multiVariantEnabled
+                    ? null
+                    : (v) => setState(() => _trackInventory = v),
               ),
-              value: _trackInventory,
-              activeThumbColor: cs.primary,
-              onChanged: _multiVariantEnabled
-                  ? null
-                  : (v) => setState(() => _trackInventory = v),
             ),
-          ),
           if (showQtyLow && !handsetSixGrid) ...[
             const SizedBox(height: 8),
             LayoutBuilder(
@@ -4479,7 +4849,7 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
                   id: OilGuideAnchors.productFormQty,
                   child: _labeledField(
                   context,
-                  label: 'الكمية في المخزون',
+                  label: widget.forPurchase ? 'الكمية المشتراة' : 'الكمية في المخزون',
                   child: AppInput(
                     label: '',
                     showLabel: false,
@@ -4547,7 +4917,7 @@ class _AddProductScreenState extends State<AddProductScreen> with RouteAware {
             ),
           ],
           if (showExtra) ...[
-            if (!handsetSixGrid) ...[
+            if (!handsetSixGrid && showDates) ...[
               const SizedBox(height: 12),
               _labeledField(
                 context,

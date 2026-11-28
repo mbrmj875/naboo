@@ -8,8 +8,11 @@ import '../../../models/invoice.dart';
 import '../../../owner/services/business_audit_log_service.dart';
 import '../../../services/cloud_sync_service.dart';
 import '../../../services/database_helper.dart';
+import '../../../services/paid_card_lock.dart';
 import '../../../services/sale_debt_caps_validator.dart';
 import '../../../services/service_orders_sql_ops.dart';
+import '../../../services/stock/stock_engine.dart';
+import '../../../services/sync_safety.dart';
 import '../../../services/tenant_context_service.dart';
 import '../../../utils/app_logger.dart';
 import '../../../utils/invoice_validation.dart';
@@ -21,6 +24,32 @@ import 'oil_change_invoice_builder.dart';
 import 'oil_change_orders_repository.dart';
 import 'oil_change_stock_service.dart';
 import 'oil_change_whatsapp_outbox.dart';
+
+/// بند مخزون صُرف على بطاقة، يُسأل عنه عند إرجاع فاتورتها (ع-16، ق-14).
+class CardStockReturnLine {
+  CardStockReturnLine({
+    required this.voucherId,
+    required this.productId,
+    required this.name,
+    required this.qty,
+    required this.warehouseId,
+    required this.unitCostIqd,
+    required this.isFilter,
+    required this.alreadyReturned,
+  }) : returnToStock = isFilter && !alreadyReturned;
+
+  final int voucherId;
+  final int productId;
+  final String name;
+  final double qty;
+  final int warehouseId;
+  final double unitCostIqd;
+  final bool isFilter;
+  final bool alreadyReturned;
+
+  /// اختيار الموظف. الافتراضي: الفلتر يرجع، والزيت والهيدروليك لا.
+  bool returnToStock;
+}
 
 /// فشل تعديل/إبطال بطاقة مفوترة — رسالة عربية للمستخدم.
 class OilChangePostSaleException implements Exception {
@@ -90,6 +119,9 @@ class OilChangePostSaleService {
     }
     if (existing.isReturned) {
       throw OilChangePostSaleException('لا يمكن تعديل فاتورة مرتجعة.');
+    }
+    if (await PaidCardLock.isLocked(await _db.database, invoiceId)) {
+      throw OilChangePostSaleException(PaidCardLock.message);
     }
 
     await _assertNoBlockingDebtActivity(
@@ -334,6 +366,9 @@ class OilChangePostSaleService {
     if (existing.isReturned) {
       throw OilChangePostSaleException('الفاتورة مرتجعة مسبقاً.');
     }
+    if (await PaidCardLock.isLocked(await _db.database, invoiceId)) {
+      throw OilChangePostSaleException(PaidCardLock.message);
+    }
 
     await _assertNoBlockingDebtActivity(
       invoice: existing,
@@ -346,14 +381,32 @@ class OilChangePostSaleService {
     final plate = (order['deviceSerial'] ?? '').toString().trim();
     final tenantId = await _tenantId();
 
-    // عكس سندات المخزن قبل معاملة الفاتورة (مسارات السندات منفصلة).
-    await _returnLinkedStockVouchers(orderId, order);
+    // ع-17: إرجاع المخزون داخل معاملة الإلغاء نفسها. إن تعذّر إرجاع أي صرف
+    // لا يُلغى شيء، ويظهر السبب.
+    final stockLines = await _linkedStockLines(order);
 
     final db = await _db.database;
     final nowIso = DateTime.now().toUtc().toIso8601String();
     try {
       await db.transaction((txn) async {
-        await _restoreInvoiceItemStock(txn, existing.items);
+        for (final l in stockLines) {
+          await OilChangeStockService.instance.returnVoucherLineInTxn(
+            txn,
+            tenantId: tenantId,
+            orderId: orderId,
+            stockVoucherId: l.$1,
+            line: l.$2,
+          );
+        }
+        await StockEngine.withContext(
+          txn,
+          StockMoveContext(
+            kind: StockMoveKind.cardReturn,
+            ref: 'card:$orderId',
+            actor: actorUsername,
+          ),
+          () => _restoreInvoiceItemStock(txn, existing.items),
+        );
 
         await txn.update(
           'cash_ledger',
@@ -415,6 +468,90 @@ class OilChangePostSaleService {
     CloudSyncService.instance.scheduleSyncSoon();
   }
 
+  /// بنود المخزون المصروفة على البطاقة المربوطة بالفاتورة [invoiceId]، أو
+  /// قائمة فارغة إن لم تكن فاتورة بطاقة.
+  Future<List<CardStockReturnLine>> cardStockLinesForInvoice(
+    int invoiceId,
+  ) async {
+    final db = await _db.database;
+    final rows = await db.query(
+      'service_orders',
+      columns: ['id'],
+      where: 'invoiceId = ? AND deletedAt IS NULL',
+      whereArgs: [invoiceId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return const [];
+    final order = await OilChangeOrdersRepository.instance
+        .getOilChangeOrderById((rows.first['id'] as num).toInt());
+    if (order == null) return const [];
+    final filterVouchers = {
+      for (final line in oilFilterLinesDataFromRow(order))
+        if ((line.stockVoucherId ?? 0) > 0) line.stockVoucherId!,
+    };
+    final linked = await _linkedStockLines(order);
+    final out = <CardStockReturnLine>[];
+    for (final (vid, l) in linked) {
+      final p = await db.query('products',
+          columns: ['name'], where: 'id = ?', whereArgs: [l.productId]);
+      final done = await db.rawQuery(
+        "SELECT COUNT(*) AS c FROM stock_vouchers WHERE voucherType = 'in' "
+        "AND sourceType IN ('oil_change_return', 'oil_card_invoice_return') "
+        'AND notes LIKE ?',
+        ['%(سند صرف #$vid)%'],
+      );
+      out.add(CardStockReturnLine(
+        voucherId: vid,
+        productId: l.productId,
+        name: p.isEmpty ? 'صنف #${l.productId}' : (p.first['name'] ?? '').toString(),
+        qty: l.liters,
+        warehouseId: l.warehouseId,
+        unitCostIqd: l.unitCostIqd,
+        isFilter: filterVouchers.contains(vid),
+        alreadyReturned: ((done.first['c'] as num?)?.toInt() ?? 0) > 0,
+      ));
+    }
+    return out;
+  }
+
+  /// يُرجع إلى المخزون البنود التي اختارها الموظف بعد حفظ المرتجع، في معاملة
+  /// واحدة. البند الذي رجع من قبل لا يتكرر.
+  Future<int> returnCardStockLines({
+    required int invoiceId,
+    required int returnInvoiceId,
+    required List<CardStockReturnLine> lines,
+  }) async {
+    final chosen =
+        lines.where((l) => l.returnToStock && !l.alreadyReturned).toList();
+    if (chosen.isEmpty) return 0;
+    final db = await _db.database;
+    final orderRow = await db.query('service_orders',
+        columns: ['id'], where: 'invoiceId = ?', whereArgs: [invoiceId]);
+    final orderId =
+        orderRow.isEmpty ? 0 : (orderRow.first['id'] as num).toInt();
+    final tenantId = await _tenantId();
+    await db.transaction((txn) async {
+      for (final l in chosen) {
+        await OilChangeStockService.instance.returnVoucherLineInTxn(
+          txn,
+          tenantId: tenantId,
+          orderId: orderId,
+          stockVoucherId: l.voucherId,
+          line: (
+            productId: l.productId,
+            liters: l.qty,
+            warehouseId: l.warehouseId,
+            unitCostIqd: l.unitCostIqd,
+          ),
+          reason: 'مرتجع فاتورة البطاقة #$invoiceId (مرتجع #$returnInvoiceId)',
+          sourceType: 'oil_card_invoice_return',
+        );
+      }
+    });
+    CloudSyncService.instance.scheduleSyncSoon();
+    return chosen.length;
+  }
+
   Future<void> _assertNoBlockingDebtActivity({
     required Invoice invoice,
     required int invoiceId,
@@ -465,28 +602,43 @@ class OilChangePostSaleService {
     }
   }
 
-  Future<void> _returnLinkedStockVouchers(
-    int orderId,
-    Map<String, dynamic> order,
-  ) async {
-    Future<void> ret(int? vid) async {
-      if (vid == null || vid <= 0) return;
-      try {
-        await OilChangeStockService.instance.returnStockForOilChangeOrder(
-          orderId: orderId,
-          stockVoucherId: vid,
+  /// سطور الصرف المرتبطة بالبطاقة (الزيت، الهيدروليك، الفلاتر). سند لا يُقرأ
+  /// يوقف الإلغاء بدل أن يُتجاوز بصمت.
+  Future<
+      List<
+          (
+            int,
+            ({
+              int productId,
+              double liters,
+              int warehouseId,
+              double unitCostIqd,
+            }),
+          )>> _linkedStockLines(Map<String, dynamic> order) async {
+    final ids = <int>[
+      (order['stockVoucherId'] as num?)?.toInt() ?? 0,
+      (order['hydraulicStockVoucherId'] as num?)?.toInt() ?? 0,
+      (order['powerHydraulicStockVoucherId'] as num?)?.toInt() ?? 0,
+      for (final line in oilFilterLinesDataFromRow(order))
+        line.stockVoucherId ?? 0,
+    ];
+    final out = <(
+      int,
+      ({int productId, double liters, int warehouseId, double unitCostIqd}),
+    )>[];
+    for (final vid in ids) {
+      if (vid <= 0) continue;
+      final line =
+          await OilChangeStockService.instance.readOutboundVoucherLine(vid);
+      if (line == null) {
+        AppLogger.warn('oil_post_sale', 'voucher #$vid unreadable');
+        throw OilChangePostSaleException(
+          'تعذّر قراءة صرف المخزون المرتبط بالبطاقة (سند #$vid)، فلم تُلغَ.',
         );
-      } catch (e) {
-        AppLogger.warn('oil_post_sale', 'return voucher #$vid failed: $e');
       }
+      out.add((vid, line));
     }
-
-    await ret((order['stockVoucherId'] as num?)?.toInt());
-    await ret((order['hydraulicStockVoucherId'] as num?)?.toInt());
-    await ret((order['powerHydraulicStockVoucherId'] as num?)?.toInt());
-    for (final line in oilFilterLinesDataFromRow(order)) {
-      await ret(line.stockVoucherId);
-    }
+    return out;
   }
 
   double _cashAmountForInvoice(Invoice invoice) {
@@ -698,6 +850,7 @@ class OilChangePostSaleService {
 
     if (rows.isEmpty) {
       await txn.insert('cash_ledger', {
+        ...SyncSafety.newCashGlobalIdField(),
         'tenantId': tenantId,
         'transactionType': typeLabel,
         'amount': cashAmount,

@@ -1,3 +1,5 @@
+import 'package:provider/provider.dart';
+import '../../providers/auth_provider.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -254,7 +256,13 @@ class _StocktakingScreenState extends State<StocktakingScreen>
     if (ok != true || !mounted) return;
     try {
       if (postDiffs) {
-        await _repo.postStocktakingAdjustments((s['id'] as num).toInt());
+        // المالك يطبّق الفروق، وعدّ الموظف ينتظر موافقته (ق-17).
+        final auth = context.read<AuthProvider>();
+        await _repo.postStocktakingAdjustments(
+          (s['id'] as num).toInt(),
+          approveNow: auth.isOwner || auth.isAdmin,
+          actor: auth.displayName,
+        );
       }
       await _repo.closeStocktakingSession((s['id'] as num).toInt());
       await _load();

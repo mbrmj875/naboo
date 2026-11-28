@@ -15,11 +15,13 @@ import '../../utils/screen_layout.dart';
 import 'add_product_screen.dart';
 import 'quick_product_update_screen.dart';
 import 'inventory_products_screen.dart';
-import 'inventory_management_screen.dart';
 import 'warehouses_screen.dart';
-import 'price_lists_screen.dart';
 import 'stocktaking_screen.dart';
-import 'purchase_orders_screen.dart';
+import '../../services/stock/stock_actions_repository.dart';
+import '../../services/stock/stock_engine.dart';
+import '../../verticals/oil_change/widgets/oil_change_form_theme.dart';
+import 'stock/purchase_lists_screen.dart';
+import 'stock/stock_moves_screen.dart';
 import 'stock_analytics_screen.dart';
 
 class InventoryHubScreen extends StatefulWidget {
@@ -69,10 +71,10 @@ class _InventoryHubScreenState extends State<InventoryHubScreen> {
     _InvModule(
       id: 'vouchers',
       title: 'حركات المخزون',
-      subtitle: 'وارد، صادر، تحويل بين المستودعات',
+      subtitle: 'كل دخول وخروج باسمه، والجرد المنتظر موافقتك',
       icon: Icons.swap_horiz_outlined,
       color: Colors.indigo,
-      builder: (_) => const InventoryManagementScreen(),
+      builder: (_) => const StockMovesScreen(),
     ),
     _InvModule(
       id: 'warehouses',
@@ -83,14 +85,6 @@ class _InventoryHubScreenState extends State<InventoryHubScreen> {
       builder: (_) => const WarehousesScreen(),
     ),
     _InvModule(
-      id: 'price_lists',
-      title: 'قوائم الأسعار',
-      subtitle: 'أسعار مخصصة للعملاء والمجموعات',
-      icon: Icons.price_change_outlined,
-      color: Colors.green,
-      builder: (_) => const PriceListsScreen(),
-    ),
-    _InvModule(
       id: 'stocktaking',
       title: 'الجرد الدوري',
       subtitle: 'مطابقة المخزون الفعلي بالنظام',
@@ -99,12 +93,12 @@ class _InventoryHubScreenState extends State<InventoryHubScreen> {
       builder: (_) => const StocktakingScreen(),
     ),
     _InvModule(
-      id: 'purchase_orders',
-      title: 'أوامر الشراء',
-      subtitle: 'إنشاء وتتبع طلبات الشراء من الموردين',
+      id: 'purchase_lists',
+      title: 'قوائم المشتريات',
+      subtitle: 'كل شراء من مورد: الأصناف والكلفة والدفع',
       icon: Icons.receipt_long_outlined,
       color: Colors.purple,
-      builder: (_) => const PurchaseOrdersScreen(),
+      builder: (_) => const PurchaseListsScreen(),
     ),
     _InvModule(
       id: 'analytics',
@@ -182,7 +176,7 @@ class _InventoryHubScreenState extends State<InventoryHubScreen> {
     await check('warehouses', PermissionKeys.inventoryView);
     await check('price_lists', PermissionKeys.inventoryView);
     await check('stocktaking', PermissionKeys.inventoryStocktakingManage);
-    await check('purchase_orders', PermissionKeys.inventoryProductsManage);
+    await check('purchase_lists', PermissionKeys.inventoryProductsManage);
     await check('analytics', PermissionKeys.inventoryView);
     return denied;
   }
@@ -393,35 +387,91 @@ class _InventoryHubScreenState extends State<InventoryHubScreen> {
                   return ListView(
                     padding: EdgeInsets.all(gap),
                     children: [
-                      GridView.builder(
-                        shrinkWrap: true,
-                        physics: const NeverScrollableScrollPhysics(),
-                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: cols,
-                          childAspectRatio: cols == 1 ? 3.5 : 2.8,
-                          mainAxisSpacing: 12,
-                          crossAxisSpacing: 12,
-                        ),
-                        itemCount: visible.length,
-                        itemBuilder: (_, i) {
-                          final m = visible[i];
-                          return _ModuleCard(
-                            module: m,
-                            onTap: () async {
-                              await Navigator.of(
-                                context,
-                              ).push(MaterialPageRoute(builder: m.builder));
-                              // أعد التحميل عند العودة (قد تغيرت الإعدادات)
-                              unawaited(_load());
-                            },
-                          );
-                        },
-                      ),
+                      const _FirstCountBanner(),
+                      ..._hubBody(visible, cols, gap),
                     ],
                   );
                 },
               ),
       ),
+    );
+  }
+
+  List<Widget> _hubBody(List<_InvModule> visible, int cols, double gap) {
+    return <Widget>[
+      GridView.builder(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: cols,
+          childAspectRatio: cols == 1 ? 3.5 : 2.8,
+          mainAxisSpacing: 12,
+          crossAxisSpacing: 12,
+        ),
+        itemCount: visible.length,
+        itemBuilder: (_, i) {
+          final m = visible[i];
+          return _ModuleCard(
+            module: m,
+            onTap: () async {
+              await Navigator.of(
+                context,
+              ).push(MaterialPageRoute(builder: m.builder));
+              // أعد التحميل عند العودة (قد تغيرت الإعدادات)
+              unawaited(_load());
+            },
+          );
+        },
+      ),
+    ];
+  }
+}
+
+/// تنبيه «الجرد الأول» بعد التثبيت (ق-11) حتى يُعتمد جرد شامل للمحل والمخزن.
+class _FirstCountBanner extends StatelessWidget {
+  const _FirstCountBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<List<StockPlace>>(
+      future: StockActionsRepository.instance.placesNeedingFirstCount(),
+      builder: (context, snap) {
+        final places = snap.data ?? const <StockPlace>[];
+        if (places.isEmpty) return const SizedBox.shrink();
+        final gold = OilChangeFormTheme.goldOf(context);
+        final names = places.map((p) => p.label).join(' و');
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: Container(
+            padding: const EdgeInsets.all(12),
+            decoration: OilChangeFormTheme.fieldContainerDecoration(context),
+            child: Row(
+              children: [
+                Icon(Icons.fact_check_outlined, color: gold),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    'ابدأ بجرد $names: العدّ يصير الرصيد الافتتاحي، والفروق '
+                    'تُحفظ في «حركات المخزون».',
+                    style: TextStyle(
+                      color: OilChangeFormTheme.emphasisText(context),
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const StocktakingScreen(),
+                    ),
+                  ),
+                  child: const Text('جرد الآن'),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }

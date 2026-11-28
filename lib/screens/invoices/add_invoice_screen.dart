@@ -1,3 +1,6 @@
+import '../../services/stock/stock_actions_repository.dart';
+import '../../services/stock/stock_engine.dart';
+import '../inventory/stock/stock_action_sheets.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
@@ -64,6 +67,7 @@ import '../installments/add_installment_plan_screen.dart';
 import '../inventory/add_product_screen.dart';
 import '../customers/customer_form_screen.dart';
 import 'process_return_screen.dart';
+import '../../services/store_tax_settings.dart';
 
 class _CartUndoOp {
   const _CartUndoOp({
@@ -1139,6 +1143,9 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     if (l.productId == null) return true;
     if (!l.trackInventory) return true;
     if (l.allowNegativeStock) return true;
+    // ق-6: الأصناف العادية تُباع بلا رصيد مع تنبيه (عند الإضافة، وإشعار بعد
+    // الحفظ). مقاسات الملابس خارج هذه الخطة وتبقى على الإعداد.
+    if (l.productVariantId == null) return true;
     if (!_salePos.enforceAvailableQtyAtSale) return true;
     return false;
   }
@@ -1252,13 +1259,9 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
     double? knownOnHandQty,
   }) async {
     if (productId == null) return true;
-    if (!trackInventory || allowNegativeStock) return true;
-    if (!context
-        .read<SalePosSettingsProvider>()
-        .data
-        .enforceAvailableQtyAtSale) {
-      return true;
-    }
+    // ق-6: البيع بلا رصيد يمر في كل المسارات وينبّه فقط، ويصل للمالك إشعار
+    // «بيع أدى إلى رصيد سالب» بعد الحفظ.
+    if (!trackInventory) return true;
     double stock;
     if (knownOnHandQty != null) {
       stock = knownOnHandQty;
@@ -1283,16 +1286,43 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
         : _totalQtyForProduct(productId, excludeLineId: null);
     if (already + baseQtyToAdd <= stock + 1e-9) return true;
     final maxAdd = stock - already;
+    final short = already + baseQtyToAdd - stock;
+    // ق-3: المحل نفد وفي المخزن رصيد → زر «انقل من المخزن» بالكمية الناقصة.
+    double inStore = 0;
+    String name = '';
+    if (productVariantId == null) {
+      try {
+        final b = await StockActionsRepository.instance.balancesOf(productId);
+        inStore = b.store;
+        final m =
+            await context.read<ProductProvider>().getProductById(productId);
+        name = (m?['name'] ?? '').toString();
+      } catch (_) {}
+    }
+    if (!mounted) return true;
+    final moveQty = inStore <= 0 ? 0.0 : (short < inStore ? short : inStore);
     _showSaleSnackBar(
       SnackBar(
+        duration: const Duration(seconds: 6),
         content: Text(
-          maxAdd <= 0
-              ? 'لا توجد كمية متوفرة في المخزون لهذا المنتج.'
-              : 'الكمية غير متوفرة. المتاح للبيع (أساس المخزون): ${IraqiCurrencyFormat.formatDecimal2(maxAdd)} فقط.',
+          '${maxAdd <= 0 ? 'لا رصيد في المحل لهذا الصنف' : 'رصيد المحل ${IraqiCurrencyFormat.formatDecimal2(maxAdd)} فقط'}'
+          '${inStore > 0 ? '، وفي المخزن ${IraqiCurrencyFormat.formatDecimal2(inStore)}' : ''}. '
+          'البيع يتم والرصيد يصير سالباً، ويصل تنبيه للمالك.',
         ),
+        action: moveQty > 0
+            ? SnackBarAction(
+                label: 'انقل من المخزن',
+                onPressed: () => showTransferSheet(
+                  context,
+                  StockSheetProduct(id: productId, name: name),
+                  from: StockPlace.store,
+                  qty: moveQty,
+                ),
+              )
+            : null,
       ),
     );
-    return false;
+    return true;
   }
 
   bool _sameCatalogLinePrices(
@@ -1613,6 +1643,8 @@ class _AddInvoiceScreenState extends State<AddInvoiceScreen> {
   @override
   void initState() {
     super.initState();
+    // قيمة «تفعيل الضريبة» قد تكون وصلت من جهاز آخر.
+    unawaited(StoreTaxSettings.load());
     _loadClothingSetting();
     _loadDefaultPriceList();
     _loyaltyRedeemController.addListener(() {

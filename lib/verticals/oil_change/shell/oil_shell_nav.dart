@@ -12,9 +12,9 @@ import '../../../screens/expenses/expenses_screen.dart';
 import '../../../screens/inventory/add_product_screen.dart';
 import '../../../screens/inventory/barcode_labels_screen.dart';
 import '../../../screens/inventory/inventory_hub_screen.dart';
-import '../../../screens/inventory/inventory_management_screen.dart';
 import '../../../screens/inventory/inventory_products_screen.dart';
-import '../../../screens/inventory/purchase_orders_screen.dart';
+import '../../../screens/inventory/stock/purchase_lists_screen.dart';
+import '../../../screens/inventory/stock/stock_moves_screen.dart';
 import '../../../screens/inventory/quick_product_update_screen.dart';
 import '../../../screens/inventory/stock_analytics_screen.dart';
 import '../../../screens/inventory/stocktaking_screen.dart';
@@ -143,7 +143,7 @@ List<ShellNavItem> _catalog() => [
       ShellNavSubItem(
         title: 'حركات المخزون',
         routeId: AppContentRoutes.inventoryManagement,
-        destination: (_) => const InventoryManagementScreen(),
+        destination: (_) => const StockMovesScreen(),
       ),
       ShellNavSubItem(
         title: 'المستودعات',
@@ -156,9 +156,9 @@ List<ShellNavItem> _catalog() => [
         destination: (_) => const StocktakingScreen(),
       ),
       ShellNavSubItem(
-        title: 'أوامر الشراء',
+        title: 'قوائم المشتريات',
         routeId: AppContentRoutes.inventoryPurchaseOrders,
-        destination: (_) => const PurchaseOrdersScreen(),
+        destination: (_) => const PurchaseListsScreen(),
       ),
       ShellNavSubItem(
         title: 'تحليلات المخزون',

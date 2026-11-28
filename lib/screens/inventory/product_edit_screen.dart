@@ -1,3 +1,5 @@
+import '../../utils/stock_qty_format.dart';
+import 'stock/stock_action_sheets.dart';
 import 'dart:async' show unawaited;
 
 import 'package:flutter/material.dart';
@@ -361,7 +363,13 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
     _buy.text = dnum(p['buyPrice']).toStringAsFixed(0);
     _sell.text = dnum(p['sellPrice']).toStringAsFixed(0);
     _minSell.text = dnum(p['minSellPrice']).toStringAsFixed(0);
-    _qty.text = dnum(p['qty']).toStringAsFixed(0);
+    // الكمية كما هي بكسورها وسالبها (ع-4)، والحقل للعرض فقط (ق-8).
+    // مع المخزن يظهر المكانان، فلا يبدو الصنف «صفراً» وهو في المخزن.
+    final shopQty = dnum(p['qty']);
+    final storeQty = dnum(p['store_qty']);
+    _qty.text = storeQty.abs() > 1e-9
+        ? 'المحل ${StockQtyFormat.format(shopQty)} · المخزن ${StockQtyFormat.format(storeQty)}'
+        : StockQtyFormat.format(shopQty);
     _low.text = dnum(p['lowStockThreshold']).toStringAsFixed(0);
     _track = ((p['trackInventory'] as num?)?.toInt() ?? 1) == 1;
     _stockBaseKind = (p['stockBaseKind'] as num?)?.toInt() ?? 0;
@@ -496,6 +504,7 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
         qtyLiters: g.openingQtyLiters.toString(),
         buy: IraqiCurrencyFormat.formatInt(g.buyPrice),
         sell: IraqiCurrencyFormat.formatInt(g.sellPrice),
+        low: _fmtLow(g.lowStockThreshold),
         gradeRowId: s.gradeRowId,
         linkedProductId: s.linkedProductId,
       );
@@ -625,7 +634,6 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
       final buy = _parseMoney(_buy);
       final sell = _parseMoney(_sell);
       final minSell = _parseMoney(_minSell);
-      final qty = _multiVariantEnabled ? 0.0 : _parseMoney(_qty);
       final low = _multiVariantEnabled ? 0.0 : _parseMoney(_low);
       await _repo.updateProductBasic(
         productId: widget.productId,
@@ -634,7 +642,8 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
         buyPrice: buy,
         sellPrice: sell,
         minSellPrice: minSell,
-        qty: qty,
+        // الكمية للعرض (ق-8): «استلام بضاعة» أو «جرد هذا الصنف».
+        qty: null,
         lowStockThreshold: low,
         trackInventory: _track,
         stockBaseKind: _stockBaseKind,
@@ -1266,18 +1275,33 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
                             ),
                           ],
                           const SizedBox(height: 10),
-                          SwitchListTile.adaptive(
-                            value: _track,
-                            onChanged: _multiVariantEnabled || _isFluidFamilyUi
-                                ? null
-                                : (v) => setState(() => _track = v),
-                            contentPadding: EdgeInsets.zero,
-                            title: const Text('تتبع المخزون', style: TextStyle(fontWeight: FontWeight.w800)),
-                            subtitle: Text(
-                              _track ? 'يحسب الكمية والتنبيه منخفض' : 'الكمية تُصبح 0 ولا تظهر تنبيهات مخزون',
-                              style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
+                          if (_isFluidFamilyUi)
+                            // الزيوت تُباع باللتر من الرصيد: التتبع دائماً مشغّل لكل لزوجة.
+                            Row(
+                              children: [
+                                Icon(Icons.inventory_2_outlined, size: 18, color: cs.primary),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    'التتبع مشغّل دائماً لكل لزوجة. حدّ تنبيه النقص تكتبه في بطاقة كل لزوجة.',
+                                    style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12.5, height: 1.35),
+                                  ),
+                                ),
+                              ],
+                            )
+                          else
+                            SwitchListTile.adaptive(
+                              value: _track,
+                              onChanged: _multiVariantEnabled || _isFluidFamilyUi
+                                  ? null
+                                  : (v) => setState(() => _track = v),
+                              contentPadding: EdgeInsets.zero,
+                              title: const Text('تتبع المخزون', style: TextStyle(fontWeight: FontWeight.w800)),
+                              subtitle: Text(
+                                _track ? 'يحسب الكمية والتنبيه منخفض' : 'الكمية تُصبح 0 ولا تظهر تنبيهات مخزون',
+                                style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
+                              ),
                             ),
-                          ),
                         ],
                       ),
                     ),
@@ -1759,10 +1783,11 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
                               children: [
                                 Expanded(
                                   child: _field(
-                                    label: 'الكمية',
+                                    label: 'الرصيد (للعرض)',
                                     controller: _qty,
                                     hint: '0',
                                     keyboard: TextInputType.number,
+                                    readOnly: true,
                                   ),
                                 ),
                                 const SizedBox(width: 10),
@@ -1776,6 +1801,10 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
                                 ),
                               ],
                             ),
+                          if (!_multiVariantEnabled && _track) ...[
+                            const SizedBox(height: 10),
+                            _stockActionsRow(),
+                          ],
                           const SizedBox(height: 10),
                           FilledButton(
                             onPressed: _saving ? null : _save,
@@ -1791,12 +1820,50 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
     );
   }
 
+  /// «استلام بضاعة» و«جرد هذا الصنف» و«تحويل» بدل تغيير الكمية مباشرة (ق-8).
+  Widget _stockActionsRow() {
+    final product = StockSheetProduct(
+      id: widget.productId,
+      name: _name.text.trim(),
+      unitLabel: _stockBaseKind == 3 ? 'لتر' : '',
+    );
+    Future<void> after(bool? changed) async {
+      if (changed == true && mounted) await _bootstrap();
+    }
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        OutlinedButton.icon(
+          onPressed: () async =>
+              after(await showReceiveGoodsSheet(context, product)),
+          icon: const Icon(Icons.move_to_inbox_rounded),
+          label: const Text('استلام بضاعة'),
+        ),
+        OutlinedButton.icon(
+          onPressed: () async =>
+              after(await showQuickCountSheet(context, product)),
+          icon: const Icon(Icons.fact_check_rounded),
+          label: const Text('جرد هذا الصنف'),
+        ),
+        OutlinedButton.icon(
+          onPressed: () async =>
+              after(await showTransferSheet(context, product)),
+          icon: const Icon(Icons.swap_horiz_rounded),
+          label: const Text('تحويل'),
+        ),
+      ],
+    );
+  }
+
   Widget _field({
     required String label,
     required TextEditingController controller,
     required String hint,
     TextInputType keyboard = TextInputType.text,
     String? Function(String?)? validator,
+    bool readOnly = false,
   }) {
     final cs = Theme.of(context).colorScheme;
     final ac = context.appCorners;
@@ -1809,6 +1876,7 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
           controller: controller,
           validator: validator,
           keyboardType: keyboard,
+          readOnly: readOnly,
           textDirection: TextDirection.rtl,
           decoration: InputDecoration(
             hintText: hint,
@@ -1822,3 +1890,8 @@ class _ProductEditScreenState extends State<ProductEditScreen> {
   }
 }
 
+/// حدّ تنبيه لزوجة للعرض: 20 لا 20.0.
+String _fmtLow(double? v) {
+  final x = v ?? 0;
+  return x == x.roundToDouble() ? x.toInt().toString() : x.toString();
+}

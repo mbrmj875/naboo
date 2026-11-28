@@ -1,3 +1,4 @@
+import '../../utils/stock_qty_format.dart';
 import 'dart:async' show Timer, unawaited;
 
 import 'package:flutter/material.dart';
@@ -363,7 +364,6 @@ class _QuickProductUpdateScreenState extends State<QuickProductUpdateScreen> {
     final buy = NumericFormat.parseNumber(d.buy.text);
     final sell = NumericFormat.parseNumber(d.sell.text);
     final minSell = NumericFormat.parseNumber(d.minSell.text);
-    final qty = NumericFormat.parseNumber(d.qty.text);
     final low = NumericFormat.parseNumber(d.low.text);
     final bcUpper = d.barcode.text.trim().toUpperCase();
     if (d.duplicateBarcodeProductId != null) {
@@ -393,7 +393,8 @@ class _QuickProductUpdateScreenState extends State<QuickProductUpdateScreen> {
         buyPrice: _moneyToDb(buy),
         sellPrice: _moneyToDb(sell),
         minSellPrice: _moneyToDb(minSell),
-        qty: d.track ? qty.toDouble() : 0,
+        // الكمية للعرض: تتغير بـ«استلام بضاعة» أو الجرد (ق-8).
+        qty: null,
         lowStockThreshold: d.track ? low.toDouble() : 0,
         trackInventory: d.track,
       );
@@ -748,10 +749,8 @@ String _formattedMoney(dynamic v) {
   return NumericFormat.formatNumber(n.round().clamp(0, 999999999));
 }
 
-String _formattedQty(dynamic v) {
-  final n = (v as num?)?.toDouble() ?? 0.0;
-  return NumericFormat.formatNumber(n.round().clamp(0, 999999999));
-}
+/// الكمية كما هي بكسورها وسالبها (ع-4). الحقل للعرض فقط (ق-8).
+String _formattedQty(dynamic v) => StockQtyFormat.format(v as num?);
 
 class _RowDraft {
   _RowDraft(Map<String, dynamic> m)
@@ -1151,7 +1150,7 @@ class _QuickProductCardState extends State<_QuickProductCard> {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       AppNumberInput(
-                        label: 'الكمية',
+                        label: 'الكمية (تتغير بالاستلام أو الجرد)',
                         suffixText: unitSuffix,
                         controller: d.qty,
                         focusNode: d.qtyFn,
@@ -1159,7 +1158,7 @@ class _QuickProductCardState extends State<_QuickProductCard> {
                         warningText:
                             qtyWarn.isEmpty ? null : qtyWarn,
                         textInputAction: TextInputAction.next,
-                        enabled: d.track,
+                        enabled: false,
                         onParsedChanged: (_) => setState(() {}),
                         onFieldSubmitted: (_) =>
                             FocusScope.of(context).requestFocus(d.lowFn),
@@ -1185,7 +1184,7 @@ class _QuickProductCardState extends State<_QuickProductCard> {
                     children: [
                       Expanded(
                         child: AppNumberInput(
-                          label: 'الكمية',
+                          label: 'الكمية (تتغير بالاستلام أو الجرد)',
                           suffixText: unitSuffix,
                           controller: d.qty,
                           focusNode: d.qtyFn,
@@ -1193,7 +1192,7 @@ class _QuickProductCardState extends State<_QuickProductCard> {
                           warningText:
                               qtyWarn.isEmpty ? null : qtyWarn,
                           textInputAction: TextInputAction.next,
-                          enabled: d.track,
+                          enabled: false,
                           onParsedChanged: (_) => setState(() {}),
                           onFieldSubmitted: (_) =>
                               FocusScope.of(context).requestFocus(d.lowFn),

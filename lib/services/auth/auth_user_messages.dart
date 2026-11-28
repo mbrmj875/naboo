@@ -15,6 +15,8 @@ abstract final class AuthUserMessages {
       'البريد الإلكتروني أو رمز PIN غير صحيح.';
 
   static const wrongPin = 'رمز الدخول غير صحيح.';
+  static const wrongPinAfterEmailVerified =
+      'رمز البريد صحيح، لكن رمز PIN غير صحيح. ارجع وأدخل رمز PIN الصحيح.';
 
   /// رمز خاطئ مع عدد المحاولات الباقية قبل القفل (من السيرفر).
   static String wrongPinRemaining(int? remaining) {

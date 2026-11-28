@@ -36,6 +36,7 @@ import '../../../screens/customers/customer_form_screen.dart';
 import '../../../services/customer_search_index.dart';
 import '../../../services/database_helper.dart';
 import '../../../services/shared_db_transaction.dart';
+import '../../../services/paid_card_lock.dart';
 import '../../../services/tenant_context_service.dart';
 import '../../../services/product_repository.dart';
 import '../services/card_wash_order_sync.dart';
@@ -1865,8 +1866,17 @@ class _OilChangeOrderFormScreenState extends State<OilChangeOrderFormScreen> {
     }
     final id = slot.catalogEntryId;
     if (id != null && id > 0) {
-      final entry = OilChangeFilterCatalogRepository.entryById(_filterProductCatalog, id);
-      if (entry == null || entry.kind.code != kind.code) {
+      final entry = OilChangeFilterCatalogRepository.entryById(
+        _filterProductCatalog,
+        id,
+      );
+      // الرقم محلي لكل جهاز: بطاقة وصلت من جهاز آخر قد يشير رقمها لفلتر
+      // آخر هنا، فالاسم المحفوظ في البطاقة هو الحكم.
+      final savedName = (slot.name ?? '').trim().toLowerCase();
+      if (entry == null ||
+          entry.kind.code != kind.code ||
+          (savedName.isNotEmpty &&
+              entry.name.trim().toLowerCase() != savedName)) {
         slot.catalogEntryId = null;
       } else {
         slot.applyEntry(entry);

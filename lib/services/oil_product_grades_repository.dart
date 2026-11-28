@@ -325,6 +325,69 @@ class OilProductGradesRepository {
       warehouseId: warehouseId,
     );
 
+    await _insertGrades(
+      parentId: parentId,
+      familyName: name,
+      grades: grades,
+      tid: tid,
+      now: now,
+      categoryId: categoryId,
+      brandId: brandId,
+      warehouseId: warehouseId,
+      lowStockThreshold: lowStockThreshold,
+      sortStart: 0,
+    );
+
+    return parentId;
+  }
+
+  /// يضيف لزوجات/درجات جديدة إلى عائلة موجودة دون أن يمس ما فيها (قائمة
+  /// المشتريات). يعيد رقم صنف المخزون لكل لزوجة بالترتيب.
+  Future<List<int>> addGradesToFamily({
+    required int parentProductId,
+    required List<OilGradeInput> grades,
+    int? warehouseId,
+  }) async {
+    if (grades.isEmpty) return const [];
+    final tid = await _tenantId();
+    final db = await _dbHelper.database;
+    final parent = await db.query(
+      'products',
+      columns: ['name', 'categoryId', 'brandId', 'lowStockThreshold'],
+      where: 'id = ?',
+      whereArgs: [parentProductId],
+      limit: 1,
+    );
+    if (parent.isEmpty) throw StateError('family_not_found');
+    final existing = await listGradesForParent(parentProductId);
+    return _insertGrades(
+      parentId: parentProductId,
+      familyName: (parent.first['name'] ?? '').toString().trim(),
+      grades: grades,
+      tid: tid,
+      now: DateTime.now().toUtc().toIso8601String(),
+      categoryId: (parent.first['categoryId'] as num?)?.toInt(),
+      brandId: (parent.first['brandId'] as num?)?.toInt(),
+      warehouseId: warehouseId,
+      lowStockThreshold:
+          (parent.first['lowStockThreshold'] as num?)?.toDouble() ?? 0,
+      sortStart: existing.length,
+    );
+  }
+
+  Future<List<int>> _insertGrades({
+    required int parentId,
+    required String familyName,
+    required List<OilGradeInput> grades,
+    required int tid,
+    required String now,
+    int? categoryId,
+    int? brandId,
+    int? warehouseId,
+    required double lowStockThreshold,
+    required int sortStart,
+  }) async {
+    final ids = <int>[];
     final db = await _dbHelper.database;
     for (var i = 0; i < grades.length; i++) {
       final g = grades[i];
@@ -348,13 +411,13 @@ class OilProductGradesRepository {
       ].map(_toNewProductExtraUnit).toList();
 
       final linkedId = await _products.insertProductComplete(
-        name: '$name — $vis',
+        name: '$familyName — $vis',
         tenantId: tid,
         buyPrice: g.buyPrice,
         sellPrice: g.sellPrice,
         minSellPrice: g.minSellPrice,
         qty: g.openingQtyLiters < 0 ? 0 : g.openingQtyLiters,
-        lowStockThreshold: lowStockThreshold,
+        lowStockThreshold: g.lowStockThreshold ?? lowStockThreshold,
         trackInventory: 1,
         stockBaseKind: 3,
         variantKind: ProductVariantKind.none,
@@ -371,15 +434,16 @@ class OilProductGradesRepository {
         'parentProductId': parentId,
         'viscosity': vis,
         'linkedProductId': linkedId,
-        'sortOrder': i,
+        'sortOrder': sortStart + i,
         'createdAt': now,
         'updatedAt': now,
         'global_id': const Uuid().v4(),
       });
+      ids.add(linkedId);
     }
-
-    return parentId;
+    return ids;
   }
+
 
   /// تحميل لزوجات/درجات العائلة للتعديل (مع أصناف المخزون المرتبطة).
   Future<List<FluidGradeEditSnapshot>> loadGradeSnapshotsForParent(
@@ -396,7 +460,14 @@ class OilProductGradesRepository {
       final db = await _dbHelper.database;
       final prodRows = await db.query(
         'products',
-        columns: ['buyPrice', 'sellPrice', 'minSellPrice', 'qty', 'barcode'],
+        columns: [
+          'buyPrice',
+          'sellPrice',
+          'minSellPrice',
+          'qty',
+          'barcode',
+          'lowStockThreshold',
+        ],
         where: _aliveProductWhere,
         whereArgs: [linkedId, tid],
         limit: 1,
@@ -444,6 +515,8 @@ class OilProductGradesRepository {
                 ? null
                 : (pr['barcode'] ?? '').toString(),
             packs: packs,
+            lowStockThreshold:
+                (pr['lowStockThreshold'] as num?)?.toDouble() ?? 0,
           ),
         ),
       );
@@ -535,8 +608,9 @@ class OilProductGradesRepository {
           buyPrice: g.buyPrice,
           sellPrice: g.sellPrice,
           minSellPrice: g.minSellPrice ?? g.buyPrice,
-          qty: g.openingQtyLiters < 0 ? 0 : g.openingQtyLiters,
-          lowStockThreshold: lowStockThreshold,
+          // تعديل العائلة لا يغيّر رصيد لزوجة موجودة (ع-4، ق-8).
+          qty: null,
+          lowStockThreshold: g.lowStockThreshold ?? lowStockThreshold,
           trackInventory: true,
           stockBaseKind: 3,
         );
@@ -567,7 +641,7 @@ class OilProductGradesRepository {
           sellPrice: g.sellPrice,
           minSellPrice: g.minSellPrice,
           qty: g.openingQtyLiters < 0 ? 0 : g.openingQtyLiters,
-          lowStockThreshold: lowStockThreshold,
+          lowStockThreshold: g.lowStockThreshold ?? lowStockThreshold,
           trackInventory: 1,
           stockBaseKind: 3,
           variantKind: ProductVariantKind.none,
@@ -614,7 +688,6 @@ class OilProductGradesRepository {
     required List<NewProductExtraUnit> extraUnits,
   }) async {
     final db = await _dbHelper.database;
-    final now = DateTime.now().toIso8601String();
     final rows = await db.query(
       'product_unit_variants',
       where: 'productId = ? AND isActive = 1',
@@ -634,9 +707,10 @@ class OilProductGradesRepository {
           minSellPrice: minSellPerLiter,
         );
       } else {
+        // جدول الوحدات بلا عمود updatedAt: كتابته كانت توقف تعديل العائلة.
         await db.update(
           'product_unit_variants',
-          {'isActive': 0, 'updatedAt': now},
+          {'isActive': 0},
           where: 'id = ?',
           whereArgs: [id],
         );

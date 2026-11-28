@@ -4,20 +4,9 @@ part of 'database_helper.dart';
 int _notifToFils(double value) => (value * 1000).round();
 
 extension DbNotifications on DatabaseHelper {
-  static const String _lowStockProductsWhere = '''
-    tenantId = ? AND isActive = 1 AND IFNULL(trackInventory, 1) = 1
-      AND ${ProductVariantKind.sqlNotFluidFamilyParent}
-      AND (
-        qty <= 0
-        OR (IFNULL(lowStockThreshold, 0) > 0 AND qty <= lowStockThreshold)
-        OR (
-          IFNULL(stockBaseKind, 0) = 1
-          AND IFNULL(lowStockThreshold, 0) <= 0
-          AND qty > 0
-          AND qty < 1
-        )
-      )
-  ''';
+  /// تعريف «الناقص» الواحد من [StockMetrics] (ع-13): المحل + المخزن.
+  static const String _lowStockProductsWhere =
+      'tenantId = ? AND ${StockMetrics.trackedWhere} AND ${StockMetrics.outOrLowWhere}';
 
   /// عدد الأصناف الناقصة — COUNT كامل دون حد [LIMIT].
   Future<int> countProductsForLowStockNotifications({
@@ -58,10 +47,11 @@ extension DbNotifications on DatabaseHelper {
     args.add(limit);
     return db.rawQuery(
       '''
-      SELECT id, name, qty, lowStockThreshold, stockBaseKind
+      SELECT id, name, ${StockMetrics.total} AS qty, lowStockThreshold,
+             stockBaseKind
       FROM products
       WHERE $_lowStockProductsWhere$extra
-      ORDER BY qty ASC, name COLLATE NOCASE ASC
+      ORDER BY ${StockMetrics.total} ASC, name COLLATE NOCASE ASC
       LIMIT ?
     ''',
       args,
